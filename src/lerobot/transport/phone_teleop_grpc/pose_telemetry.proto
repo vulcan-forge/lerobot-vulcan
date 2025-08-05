@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package com.arpose;
+
+option java_package = "com.arpose.grpc";
+option java_outer_classname = "PoseTelemetryProto";
+
+service PoseTelemetry {
+  rpc StreamPoses (stream PoseData) returns (PoseResponse);
+}
+
+message PoseData {
+  repeated float translation = 2;
+  repeated float rotation = 3;
+  float gripper_value = 5;
+  bool start_stream = 6;
+  bool precision_mode = 7;
+  bool reset_mapping = 8;
+  bool is_resetting = 9;
+}
+
+message PoseResponse {
+  bool success = 1;
+  string message = 2;
+}

@@ -91,22 +91,18 @@ class BiSO100Leader(Teleoperator):
     def get_action(self) -> dict[str, float]:
         action_dict = {}
 
-        # Add "left_" prefix
         left_action = self.left_arm.get_action()
         action_dict.update({f"left_{key}": value for key, value in left_action.items()})
 
-        # Add "right_" prefix
         right_action = self.right_arm.get_action()
         action_dict.update({f"right_{key}": value for key, value in right_action.items()})
 
         return action_dict
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
-        # Remove "left_" prefix
         left_feedback = {
             key.removeprefix("left_"): value for key, value in feedback.items() if key.startswith("left_")
         }
-        # Remove "right_" prefix
         right_feedback = {
             key.removeprefix("right_"): value for key, value in feedback.items() if key.startswith("right_")
         }

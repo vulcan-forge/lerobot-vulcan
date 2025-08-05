@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import logging
+import shutil
 from pathlib import Path
 
 from termcolor import colored
@@ -64,7 +65,21 @@ def update_last_checkpoint(checkpoint_dir: Path) -> Path:
     if last_checkpoint_dir.is_symlink():
         last_checkpoint_dir.unlink()
     relative_target = checkpoint_dir.relative_to(checkpoint_dir.parent)
-    last_checkpoint_dir.symlink_to(relative_target)
+    try:
+        last_checkpoint_dir.symlink_to(relative_target)
+    except OSError:
+        # Windows fix: Copy instead of symlink if symlinks are not supported
+        if last_checkpoint_dir.exists():
+            shutil.rmtree(last_checkpoint_dir)
+        # Ensure absolute paths are used
+        absolute_target = checkpoint_dir.resolve()
+        # Check if the source directory exists before copying
+        if absolute_target.exists():
+            shutil.copytree(str(absolute_target), str(last_checkpoint_dir))
+        else:
+            print(f"Warning: Checkpoint directory {absolute_target} does not exist. Skipping copy.")
+
+
 
 
 def save_checkpoint(

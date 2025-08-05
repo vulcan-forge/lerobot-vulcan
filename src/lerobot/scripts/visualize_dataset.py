@@ -74,13 +74,19 @@ import torch
 import torch.utils.data
 import tqdm
 
+<<<<<<< HEAD:lerobot/scripts/visualize_dataset.py
+from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.common.datasets.utils import translate_episode_index_to_position
+=======
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
+>>>>>>> upstream/main:src/lerobot/scripts/visualize_dataset.py
 
 class EpisodeSampler(torch.utils.data.Sampler):
     def __init__(self, dataset: LeRobotDataset, episode_index: int):
-        from_idx = dataset.episode_data_index["from"][episode_index].item()
-        to_idx = dataset.episode_data_index["to"][episode_index].item()
+        index_position = translate_episode_index_to_position(dataset.meta.episodes, episode_index)
+        from_idx = dataset.episode_data_index["from"][index_position].item()
+        to_idx = dataset.episode_data_index["to"][index_position].item()
         self.frame_ids = range(from_idx, to_idx)
 
     def __iter__(self) -> Iterator:
@@ -158,21 +164,21 @@ def visualize_dataset(
             # display each dimension of action space (e.g. actuators command)
             if "action" in batch:
                 for dim_idx, val in enumerate(batch["action"][i]):
-                    rr.log(f"action/{dim_idx}", rr.Scalar(val.item()))
+                    rr.log(f"action/{dim_idx}", rr.Scalars(val.item()))
 
             # display each dimension of observed state space (e.g. agent position in joint space)
             if "observation.state" in batch:
                 for dim_idx, val in enumerate(batch["observation.state"][i]):
-                    rr.log(f"state/{dim_idx}", rr.Scalar(val.item()))
+                    rr.log(f"state/{dim_idx}", rr.Scalars(val.item()))
 
             if "next.done" in batch:
-                rr.log("next.done", rr.Scalar(batch["next.done"][i].item()))
+                rr.log("next.done", rr.Scalars(batch["next.done"][i].item()))
 
             if "next.reward" in batch:
-                rr.log("next.reward", rr.Scalar(batch["next.reward"][i].item()))
+                rr.log("next.reward", rr.Scalars(batch["next.reward"][i].item()))
 
             if "next.success" in batch:
-                rr.log("next.success", rr.Scalar(batch["next.success"][i].item()))
+                rr.log("next.success", rr.Scalars(batch["next.success"][i].item()))
 
     if mode == "local" and save:
         # save .rrd locally

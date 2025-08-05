@@ -140,7 +140,7 @@ def init_logging(
         logger.removeHandler(handler)
 
     # Write logs to console
-    console_handler = logging.StreamHandler()
+    console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     console_handler.setLevel(console_level.upper())
     logger.addHandler(console_handler)

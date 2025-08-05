@@ -105,6 +105,11 @@ dynamixel = ["dynamixel-sdk>=3.7.31"]
 gamepad = ["lerobot[pygame-dep]", "hidapi>=0.14.0"]
 hopejr = ["lerobot[feetech]", "lerobot[pygame-dep]"]
 lekiwi = ["lerobot[feetech]", "pyzmq>=26.2.1"]
+sourccey = [
+    "lerobot[feetech]",
+    "pyzmq>=26.2.1",
+    "RPi.GPIO>=0.7.1 ; sys_platform == 'linux'"
+]
 kinematics = ["lerobot[placo-dep]"]
 intelrealsense = [
     "pyrealsense2>=2.55.1.6486 ; sys_platform != 'darwin'",
@@ -123,6 +128,16 @@ hilserl = ["lerobot[transformers-dep]", "gym-hil>=0.1.9", "lerobot[grpcio-dep]",
 
 # Features
 async = ["lerobot[grpcio-dep]", "matplotlib>=3.10.3"]
+
+# Teleop
+teleop-phone = [
+    "pyroki @ git+https://github.com/chungmin99/pyroki.git@f234516",  # lightweight IK library
+    "viser>=0.2",          # 3-D visualiser (optional but used in demo)
+    "yourdfpy>=0.0.57",    # URDF parsing
+    "scipy>=1.7",          # quaternion helpers with scalar_first support
+    "pyzmq>=26.2.1",       # ZeroMQ for robot communication
+    "grpcio>=1.56",        # gRPC for phone teleop communication
+]
 
 # Development
 dev = ["pre-commit>=3.7.0", "debugpy>=1.8.1", "lerobot[grpcio-dep]", "grpcio-tools==1.73.1"]

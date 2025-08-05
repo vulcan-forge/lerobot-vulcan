@@ -53,6 +53,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> Teleoperator:
         from .keyboard.teleop_keyboard import KeyboardEndEffectorTeleop
 
         return KeyboardEndEffectorTeleop(config)
+    elif config.type == "phone":
+        from .phone_teleoperator import PhoneTeleoperator
+
+        return PhoneTeleoperator(config)
     elif config.type == "homunculus_glove":
         from .homunculus import HomunculusGlove
 
@@ -65,5 +69,13 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> Teleoperator:
         from .bi_so100_leader import BiSO100Leader
 
         return BiSO100Leader(config)
+    elif config.type == "sourccey_v3beta_leader":
+        from .sourccey_v3beta.sourccey_v3beta_leader import SourcceyV3BetaLeader
+
+        return SourcceyV3BetaLeader(config)
+    elif config.type == "bi_sourccey_v3beta_leader":
+        from .sourccey_v3beta.bi_sourccey_v3beta_leader import BiSourcceyV3BetaLeader
+
+        return BiSourcceyV3BetaLeader(config)
     else:
         raise ValueError(config.type)

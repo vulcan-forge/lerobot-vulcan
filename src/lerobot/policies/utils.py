@@ -27,10 +27,15 @@ def populate_queues(
     if exclude_keys is None:
         exclude_keys = []
     for key in batch:
+        # Skip excluded keys
+        if key in exclude_keys:
+            continue
+
         # Ignore keys not in the queues already (leaving the responsibility to the caller to make sure the
         # queues have the keys they want).
         if key not in queues or key in exclude_keys:
             continue
+
         if len(queues[key]) != queues[key].maxlen:
             # initialize by copying the first observation several times until the queue is full
             while len(queues[key]) != queues[key].maxlen:

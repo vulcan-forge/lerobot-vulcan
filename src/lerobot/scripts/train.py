@@ -110,6 +110,7 @@ def train(cfg: TrainPipelineConfig):
     cfg.validate()
     logging.info(pformat(cfg.to_dict()))
 
+    # Set up logging first
     if cfg.wandb.enable and cfg.wandb.project:
         wandb_logger = WandBLogger(cfg)
     else:
@@ -119,8 +120,29 @@ def train(cfg: TrainPipelineConfig):
     if cfg.seed is not None:
         set_seed(cfg.seed)
 
-    # Check device is available
-    device = get_safe_torch_device(cfg.policy.device, log=True)
+    # Set up distributed training if enabled
+    if cfg.distributed_training:
+        if not torch.cuda.is_available():
+            raise RuntimeError("Distributed training requires CUDA")
+
+        # Initialize the process group
+        torch.distributed.init_process_group(backend='nccl')
+        local_rank = torch.distributed.get_rank()
+        world_size = torch.distributed.get_world_size()
+
+        # Set device for this process
+        torch.cuda.set_device(local_rank)
+        device = torch.device(f'cuda:{local_rank}')
+
+        # Only log on main process
+        if local_rank == 0:
+            logging.info(f"Initialized distributed training with {world_size} GPUs")
+    else:
+        device = get_safe_torch_device(cfg.policy.device, log=True)
+        local_rank = 0
+        world_size = 1
+
+    # Set CUDA configurations
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -141,26 +163,24 @@ def train(cfg: TrainPipelineConfig):
         ds_meta=dataset.meta,
     )
 
+    # Create optimizer, scheduler, and grad scaler BEFORE DDP wrapping
     logging.info("Creating optimizer and scheduler")
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
     grad_scaler = GradScaler(device.type, enabled=cfg.policy.use_amp)
+
+    # Wrap model with DDP if using distributed training
+    if cfg.distributed_training:
+        policy = torch.nn.parallel.DistributedDataParallel(
+            policy,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=cfg.ddp_find_unused_parameters
+        )
 
     step = 0  # number of policy updates (forward + backward + optim)
 
     if cfg.resume:
         step, optimizer, lr_scheduler = load_training_state(cfg.checkpoint_path, optimizer, lr_scheduler)
-
-    num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
-    num_total_params = sum(p.numel() for p in policy.parameters())
-
-    logging.info(colored("Output dir:", "yellow", attrs=["bold"]) + f" {cfg.output_dir}")
-    if cfg.env is not None:
-        logging.info(f"{cfg.env.task=}")
-    logging.info(f"{cfg.steps=} ({format_big_number(cfg.steps)})")
-    logging.info(f"{dataset.num_frames=} ({format_big_number(dataset.num_frames)})")
-    logging.info(f"{dataset.num_episodes=}")
-    logging.info(f"{num_learnable_params=} ({format_big_number(num_learnable_params)})")
-    logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
     # create dataloader for offline training
     if hasattr(cfg.policy, "drop_n_last_frames"):
@@ -174,14 +194,40 @@ def train(cfg: TrainPipelineConfig):
         shuffle = True
         sampler = None
 
+    # Create distributed sampler if using distributed training
+    if cfg.distributed_training:
+        # Ensure batch size is divisible by number of GPUs
+        if cfg.batch_size % world_size != 0:
+            raise ValueError(f"Batch size ({cfg.batch_size}) must be divisible by number of GPUs ({world_size})")
+        per_gpu_batch_size = cfg.batch_size // world_size
+
+        if sampler is not None:
+            # If we have a custom sampler, we need to wrap it
+            sampler = torch.utils.data.distributed.DistributedSampler(
+                sampler,
+                num_replicas=world_size,
+                rank=local_rank
+            )
+        else:
+            sampler = torch.utils.data.distributed.DistributedSampler(
+                dataset,
+                num_replicas=world_size,
+                rank=local_rank
+            )
+        shuffle = False  # DistributedSampler handles shuffling
+    else:
+        per_gpu_batch_size = cfg.batch_size
+
     dataloader = torch.utils.data.DataLoader(
         dataset,
         num_workers=cfg.num_workers,
-        batch_size=cfg.batch_size,
+        batch_size=per_gpu_batch_size,
         shuffle=shuffle,
         sampler=sampler,
         pin_memory=device.type == "cuda",
         drop_last=False,
+        persistent_workers=(cfg.num_workers > 0 and cfg.dataloader_persistent_workers),
+        prefetch_factor=cfg.dataloader_prefetch_factor,
     )
     dl_iter = cycle(dataloader)
 
@@ -199,7 +245,10 @@ def train(cfg: TrainPipelineConfig):
         cfg.batch_size, dataset.num_frames, dataset.num_episodes, train_metrics, initial_step=step
     )
 
-    logging.info("Start offline training on a fixed dataset")
+    # Only log on main process
+    if local_rank == 0:
+        logging.info("Start offline training on a fixed dataset")
+
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
         batch = next(dl_iter)
@@ -228,58 +277,69 @@ def train(cfg: TrainPipelineConfig):
         is_saving_step = step % cfg.save_freq == 0 or step == cfg.steps
         is_eval_step = cfg.eval_freq > 0 and step % cfg.eval_freq == 0
 
-        if is_log_step:
-            logging.info(train_tracker)
-            if wandb_logger:
-                wandb_log_dict = train_tracker.to_dict()
-                if output_dict:
-                    wandb_log_dict.update(output_dict)
-                wandb_logger.log_dict(wandb_log_dict, step)
-            train_tracker.reset_averages()
+        # Only log, save, and eval on the main process
+        if local_rank == 0:
+            if is_log_step:
+                logging.info(train_tracker)
+                if wandb_logger:
+                    wandb_log_dict = train_tracker.to_dict()
+                    if output_dict:
+                        wandb_log_dict.update(output_dict)
+                    wandb_logger.log_dict(wandb_log_dict, step)
+                train_tracker.reset_averages()
 
-        if cfg.save_checkpoint and is_saving_step:
-            logging.info(f"Checkpoint policy after step {step}")
-            checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
-            save_checkpoint(checkpoint_dir, step, cfg, policy, optimizer, lr_scheduler)
-            update_last_checkpoint(checkpoint_dir)
-            if wandb_logger:
-                wandb_logger.log_policy(checkpoint_dir)
+            if cfg.save_checkpoint and is_saving_step:
+                logging.info(f"Checkpoint policy after step {step}")
+                checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
 
-        if cfg.env and is_eval_step:
-            step_id = get_step_identifier(step, cfg.steps)
-            logging.info(f"Eval policy at step {step}")
-            with (
-                torch.no_grad(),
-                torch.autocast(device_type=device.type) if cfg.policy.use_amp else nullcontext(),
-            ):
-                eval_info = eval_policy(
-                    eval_env,
-                    policy,
-                    cfg.eval.n_episodes,
-                    videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
-                    max_episodes_rendered=4,
-                    start_seed=cfg.seed,
+                # Get the underlying model if using DDP
+                policy_to_save = policy.module if isinstance(policy, torch.nn.parallel.DistributedDataParallel) else policy
+
+                save_checkpoint(checkpoint_dir, step, cfg, policy_to_save, optimizer, lr_scheduler)
+                update_last_checkpoint(checkpoint_dir)
+                if wandb_logger:
+                    wandb_logger.log_policy(checkpoint_dir)
+
+            if cfg.env and is_eval_step:
+                step_id = get_step_identifier(step, cfg.steps)
+                logging.info(f"Eval policy at step {step}")
+                with (
+                    torch.no_grad(),
+                    torch.autocast(device_type=device.type) if cfg.policy.use_amp else nullcontext(),
+                ):
+                    eval_info = eval_policy(
+                        eval_env,
+                        policy,
+                        cfg.eval.n_episodes,
+                        videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
+                        max_episodes_rendered=4,
+                        start_seed=cfg.seed,
+                    )
+
+                eval_metrics = {
+                    "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
+                    "pc_success": AverageMeter("success", ":.1f"),
+                    "eval_s": AverageMeter("eval_s", ":.3f"),
+                }
+                eval_tracker = MetricsTracker(
+                    cfg.batch_size, dataset.num_frames, dataset.num_episodes, eval_metrics, initial_step=step
                 )
-
-            eval_metrics = {
-                "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
-                "pc_success": AverageMeter("success", ":.1f"),
-                "eval_s": AverageMeter("eval_s", ":.3f"),
-            }
-            eval_tracker = MetricsTracker(
-                cfg.batch_size, dataset.num_frames, dataset.num_episodes, eval_metrics, initial_step=step
-            )
-            eval_tracker.eval_s = eval_info["aggregated"].pop("eval_s")
-            eval_tracker.avg_sum_reward = eval_info["aggregated"].pop("avg_sum_reward")
-            eval_tracker.pc_success = eval_info["aggregated"].pop("pc_success")
-            logging.info(eval_tracker)
-            if wandb_logger:
-                wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
-                wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
-                wandb_logger.log_video(eval_info["video_paths"][0], step, mode="eval")
+                eval_tracker.eval_s = eval_info["aggregated"].pop("eval_s")
+                eval_tracker.avg_sum_reward = eval_info["aggregated"].pop("avg_sum_reward")
+                eval_tracker.pc_success = eval_info["aggregated"].pop("pc_success")
+                logging.info(eval_tracker)
+                if wandb_logger:
+                    wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
+                    wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
+                    wandb_logger.log_video(eval_info["video_paths"][0], step, mode="eval")
 
     if eval_env:
         eval_env.close()
+
+    # Clean up distributed training
+    if cfg.distributed_training:
+        torch.distributed.destroy_process_group()
+
     logging.info("End of training")
 
     if cfg.policy.push_to_hub:

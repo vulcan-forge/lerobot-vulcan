@@ -1,0 +1,203 @@
+---List of commands to help train Sourccey V3 Beta
+
+###
+Sourccey Commands
+###
+
+```bash
+uv run -m lerobot.auto_calibrate \
+    --robot.type=sourccey_v3beta\
+    --robot.id=sourccey_v3beta
+```
+
+# For hard reset:
+```bash
+uv run -m lerobot.auto_calibrate \
+    --robot.type=sourccey_v3beta\
+    --robot.id=sourccey_v3beta \
+    --full_reset=True
+```
+
+To teleoperate, SSH into your Raspberry Pi, navigate to the lerobot repo and run this command:
+
+```
+uv run -m lerobot.robots.sourccey.sourccey_v3beta.sourccey_v3beta.sourccey_v3beta_host
+```
+
+```
+nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_v3beta_follower/sourccey_v3beta_left.json
+nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_v3beta_follower/sourccey_v3beta_right.json
+```
+
+###
+Computer Commands
+###
+
+Then on your computer run the below source command then the teleoperate command
+
+```
+source .venv/bin/activate
+```
+
+```
+python examples/sourccey/sourccey_v3beta/teleoperate.py
+```
+
+```
+python examples/sourccey/sourccey_v3beta/record.py
+```
+
+```
+python examples/sourccey/sourccey_v3beta/replay.py
+```
+
+```
+python examples/sourccey/sourccey_v3beta/evaluate.py
+```
+
+--- ACT Training
+
+```bash
+python lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey_v2beta-001__tape-a__set000 \
+  --policy.type=act \
+  --output_dir=outputs/train/act__sourccey_v2beta-001__tape-a__set000 \
+  --job_name=act__sourccey_v2beta-001__tape-a__set000 \
+  --policy.device=cuda \
+  --wandb.enable=false \
+  --steps=20000
+```
+
+
+
+
+
+```bash
+torchrun --nproc_per_node=2 lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey_v2beta_001_tape_a  \
+  --policy.type=act \
+  --output_dir=outputs/train/act_sourccey_v2beta_001_tape_a \
+  --job_name=act_sourccey_v2beta_001_tape_a  \
+  --policy.device=cuda \
+  --wandb.enable=false \
+  --steps=100000 \
+  --save_freq=10000 \
+  --batch_size=64 \
+  --distributed_training=true \
+  --num_gpus=2
+```
+
+---- Train on Pretrained SmolVLA model
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
+ --dataset.repo_id=local/sourccey_v2beta_towel_010_a \
+ --policy.path=lerobot/smolvla_base \
+ --policy.device=cuda \
+ --output_dir=outputs/train/smolvla_base_sourccey_v2beta_towel_010_a \
+ --job_name=smolvla_base_sourccey_v2beta_towel_010_a \
+ --wandb.enable=false \
+ --steps=100000 \
+ --batch_size=4
+```
+
+```bash
+torchrun --nproc_per_node=2 lerobot/scripts/train.py \
+ --dataset.repo_id=local/sourccey_v2beta_towel_010_a \
+ --policy.path=lerobot/smolvla_base \
+ --policy.device=cuda \
+ --output_dir=outputs/train/smolvla_base_sourccey_v2beta_towel_010_a \
+ --job_name=smolvla_base_sourccey_v2beta_towel_010_a \
+ --wandb.enable=false \
+ --steps=100000 \
+ --batch_size=8 \
+ --distributed_training=true \
+ --num_gpus=2
+```
+
+---
+
+--steps=200000 \
+ --batch_size=64 \
+
+----- Combine Dataset functions
+
+```bash
+python lerobot/scripts/combine_dataset.py \
+    --repo_ids local/sourccey_v2beta_towel_010_a local/sourccey_v2beta_towel_010_b local/sourccey_v2beta_towel_010_2b local/sourccey_v2beta_towel_010_c local/sourccey_v2beta_towel_010_2c local/sourccey_v2beta_towel_010_3c \
+    --output_repo_id=local/sourccey_v2beta_towel_010_a_2b_3c_combined \
+    --push_to_hub=0
+```
+
+```bash
+python lerobot/scripts/combine_dataset.py \
+    --repo_ids local/sourccey_v2beta_towel_010_d local/sourccey_v2beta_towel_010_e \
+    --output_repo_id=local/sourccey_v2beta_towel_010_d_e_combined \
+    --push_to_hub=0
+```
+
+---
+
+## -- SO100
+
+python -m lerobot.find_port
+python -m lerobot.find_cameras
+
+python -m lerobot.record \
+ --robot.type=so100_follower \
+ --robot.port=/dev/ttyUSB0 \
+ --robot.id=so100_follower \
+ --robot.cameras="{laptop: {type: opencv, index_or_path: /dev/video0, width: 640, height: 480, fps: 30}}" \
+ --teleop.type=so100_leader \
+ --teleop.port=/dev/ttyUSB1 \
+ --teleop.id=so100_leader \
+ --dataset.repo_id=local/so100-001-test \
+ --dataset.num_episodes=10 \
+ --dataset.single_task="Grab the tap and put it in the cup" \
+ --dataset.push_to_hub=false \
+ --display_data=true
+
+python -m lerobot.record \
+ --robot.type=so100_follower \
+ --robot.port=COM28 \
+ --robot.id=so100_follower \
+ --robot.cameras="{laptop: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+ --teleop.type=so100_leader \
+ --teleop.port=COM29 \
+ --teleop.id=so100_leader \
+ --dataset.repo_id=local/so100-001-test \
+ --dataset.num_episodes=10 \
+ --dataset.single_task="Grab the tap and put it in the cup" \
+ --dataset.push_to_hub=false \
+ --display_data=true
+
+torchrun --nproc_per_node=2 lerobot/scripts/train.py \
+ --dataset.repo_id=local/so100-001-test \
+ --policy.type=act \
+ --output_dir=outputs/train/act_so100-001-test \
+ --job_name=act_so100-001-test \
+ --policy.device=cuda \
+ --wandb.enable=false \
+ --steps=100000 \
+ --save_freq=10000 \
+ --batch_size=32 \
+ --distributed_training=true \
+ --num_gpus=2
+
+python -m lerobot.record \
+ --robot.type=so100_follower \
+ --robot.port=/dev/ttyUSB0 \
+ --robot.id=so100_follower \
+ --robot.cameras="{laptop: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+ --dataset.repo_id=local/eval_so100-001-test \
+ --dataset.num_episodes=1 \
+ --dataset.single_task="Grab the tap and put it in the cup" \
+ --dataset.push_to_hub=false \
+ --policy.path=outputs/train/act_so100-001-test/checkpoints/040000/pretrained_model \
+ --display_data=true
+
+## -- Server SO100
+
+```
+
+```

@@ -56,6 +56,16 @@ class TrainPipelineConfig(HubMixin):
     eval_freq: int = 20_000
     log_freq: int = 200
     save_checkpoint: bool = True
+
+    # Distributed training settings
+    distributed_training: bool = False
+    num_gpus: int = 1
+    ddp_find_unused_parameters: bool = False
+
+    # DataLoader optimization settings
+    dataloader_persistent_workers: bool = True  # Enable persistent workers by default
+    dataloader_prefetch_factor: int = 4  # Default prefetch factor
+
     # Checkpoint is saved every `save_freq` training iterations and after the last training step.
     save_freq: int = 20_000
     use_policy_training_preset: bool = True

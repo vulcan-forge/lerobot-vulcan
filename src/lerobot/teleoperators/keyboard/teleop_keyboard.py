@@ -123,6 +123,7 @@ class KeyboardTeleop(Teleoperator):
         before_read_t = time.perf_counter()
 
         if not self.is_connected:
+            return {}
             raise DeviceNotConnectedError(
                 "KeyboardTeleop is not connected. You need to run `connect()` before `get_action()`."
             )

@@ -61,6 +61,10 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .bi_so100_follower import BiSO100Follower
 
         return BiSO100Follower(config)
+    elif config.type == "sourccey_v3beta":
+        from .sourccey.sourccey_v3beta.sourccey_v3beta import SourcceyV3Beta
+
+        return SourcceyV3Beta(config)
     elif config.type == "mock_robot":
         from tests.mocks.mock_robot import MockRobot
 

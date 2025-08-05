@@ -58,6 +58,7 @@ from lerobot.datasets.utils import (
     load_info,
     load_stats,
     load_tasks,
+    translate_episode_index_to_position,
     validate_episode_buffer,
     validate_frame,
     write_episode,
@@ -92,7 +93,11 @@ class LeRobotDatasetMetadata:
             if force_cache_sync:
                 raise FileNotFoundError
             self.load_metadata()
-        except (FileNotFoundError, NotADirectoryError):
+        except FileNotFoundError:
+            # 6/22/2025, only attempt to pull from repo if explicitly asking for it
+            # This is to avoid pulling from repo if the dataset is not found locally
+            pass
+        except NotADirectoryError:
             if is_valid_version(self.revision):
                 self.revision = get_safe_version(self.repo_id, self.revision)
 
@@ -311,7 +316,7 @@ class LeRobotDatasetMetadata:
         obj.repo_id = repo_id
         obj.root = Path(root) if root is not None else HF_LEROBOT_HOME / repo_id
 
-        obj.root.mkdir(parents=True, exist_ok=False)
+        obj.root.mkdir(parents=True, exist_ok=True)
 
         # TODO(aliberts, rcadene): implement sanity check for features
         features = {**features, **DEFAULT_FEATURES}
@@ -582,7 +587,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.pull_from_repo(allow_patterns=files, ignore_patterns=ignore_patterns)
 
     def get_episodes_file_paths(self) -> list[Path]:
-        episodes = self.episodes if self.episodes is not None else list(range(self.meta.total_episodes))
+        episodes = self.episodes if self.episodes is not None else list(self.meta.episodes)
         fpaths = [str(self.meta.get_data_file_path(ep_idx)) for ep_idx in episodes]
         if len(self.meta.video_keys) > 0:
             video_files = [
@@ -644,13 +649,16 @@ class LeRobotDataset(torch.utils.data.Dataset):
             return get_hf_features_from_features(self.features)
 
     def _get_query_indices(self, idx: int, ep_idx: int) -> tuple[dict[str, list[int | bool]]]:
-        ep_start = self.episode_data_index["from"][ep_idx]
-        ep_end = self.episode_data_index["to"][ep_idx]
+        index_position = translate_episode_index_to_position(self.meta.episodes, ep_idx)
+        ep_start = self.episode_data_index["from"][index_position]
+        ep_end = self.episode_data_index["to"][index_position]
+
         query_indices = {
             key: [max(ep_start.item(), min(ep_end.item() - 1, idx + delta)) for delta in delta_idx]
             for key, delta_idx in self.delta_indices.items()
         }
-        padding = {  # Pad values outside of current episode range
+
+        padding = {
             f"{key}_is_pad": torch.BoolTensor(
                 [(idx + delta < ep_start.item()) | (idx + delta >= ep_end.item()) for delta in delta_idx]
             )
@@ -681,11 +689,6 @@ class LeRobotDataset(torch.utils.data.Dataset):
         }
 
     def _query_videos(self, query_timestamps: dict[str, list[float]], ep_idx: int) -> dict[str, torch.Tensor]:
-        """Note: When using data workers (e.g. DataLoader with num_workers>0), do not call this function
-        in the main process (e.g. by using a second Dataloader with num_workers=0). It will result in a
-        Segmentation Fault. This probably happens because a memory reference to the video loader is created in
-        the main process and a subprocess fails to access it.
-        """
         item = {}
         for vid_key, query_ts in query_timestamps.items():
             video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)

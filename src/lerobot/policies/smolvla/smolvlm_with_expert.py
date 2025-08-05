@@ -76,7 +76,7 @@ class SmolVLMWithExpertModel(nn.Module):
             print(f"Loading  {model_id} weights ...")
             self.vlm = AutoModelForImageTextToText.from_pretrained(
                 model_id,
-                device_map="auto",
+                device_map=None,
                 torch_dtype="bfloat16",
                 low_cpu_mem_usage=True,
             )

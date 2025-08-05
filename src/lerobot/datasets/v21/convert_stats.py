@@ -31,8 +31,9 @@ def sample_episode_video_frames(dataset: LeRobotDataset, episode_index: int, ft_
 
 
 def convert_episode_stats(dataset: LeRobotDataset, ep_idx: int):
-    ep_start_idx = dataset.episode_data_index["from"][ep_idx]
-    ep_end_idx = dataset.episode_data_index["to"][ep_idx]
+    index_position = translate_episode_index_to_position(dataset.meta.episodes, ep_idx)
+    ep_start_idx = dataset.episode_data_index["from"][index_position]
+    ep_end_idx = dataset.episode_data_index["to"][index_position]
     ep_data = dataset.hf_dataset.select(range(ep_start_idx, ep_end_idx))
 
     ep_stats = {}

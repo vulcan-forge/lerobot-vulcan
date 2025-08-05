@@ -43,7 +43,7 @@ from lerobot.datasets.backward_compatibility import (
 )
 from lerobot.utils.utils import is_valid_numpy_dtype_string
 
-DEFAULT_CHUNK_SIZE = 1000  # Max number of episodes per chunk
+DEFAULT_CHUNK_SIZE = 10 # Max number of episodes per chunk
 
 INFO_PATH = "meta/info.json"
 EPISODES_PATH = "meta/episodes.jsonl"
@@ -432,12 +432,21 @@ def build_dataset_frame(
         if key in DEFAULT_FEATURES or not key.startswith(prefix):
             continue
         elif ft["dtype"] == "float32" and len(ft["shape"]) == 1:
-            frame[key] = np.array([values[name] for name in ft["names"]], dtype=np.float32)
+            # Check if the key exists directly in values (already aggregated)
+            if key in values:
+                frame[key] = values[key]
+            else:
+                # Fall back to the old format for individual values
+                frame[key] = np.array([values[name] for name in ft["names"]], dtype=np.float32)
         elif ft["dtype"] in ["image", "video"]:
-            frame[key] = values[key.removeprefix(f"{prefix}.images.")]
+            # Check if the full key exists in values first
+            if key in values:
+                frame[key] = values[key]
+            else:
+                # Fall back to the old format with prefix removal
+                frame[key] = values[key.removeprefix(f"{prefix}.images.")]
 
     return frame
-
 
 def dataset_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFeature]:
     # TODO(aliberts): Implement "type" in dataset features and simplify this
@@ -847,3 +856,27 @@ def validate_episode_buffer(episode_buffer: dict, total_episodes: int, features:
             f"In episode_buffer not in features: {buffer_keys - set(features)}"
             f"In features not in episode_buffer: {set(features) - buffer_keys}"
         )
+
+def translate_episode_index_to_position(episode_dicts: dict[dict], episode_index: int) -> int:
+    """
+    Translates an actual episode index to its position in the sequential episode_data_index tensors.
+    When episodes are removed from a dataset, the remaining episode indices may no longer be sequential
+    (e.g., they could be [0, 3, 7, 10]). However, the dataset's episode_data_index tensors are always
+    indexed sequentially from 0 to len(episodes)-1. This function provides the mapping between these
+    two indexing schemes.
+    Example:
+        If a dataset originally had episodes [0, 1, 2, 3, 4] but episodes 1 and 3 were removed,
+        the remaining episodes would be [0, 2, 4]. In this case:
+        - Episode index 0 would be at position 0
+        - Episode index 2 would be at position 1
+        - Episode index 4 would be at position 2
+        So translate_episode_index_to_position(episode_dicts, 4) would return 2.
+    Args:
+        episode_dicts (dict[dict]): Dictionary of episode dictionaries or list of episode indices
+        episode_index (int): The actual episode index to translate
+    Returns:
+        int: The position of the episode in the episode_data_index tensors
+    """
+    episode_to_position = {ep_idx: i for i, ep_idx in enumerate(episode_dicts)}
+    position = episode_to_position[episode_index]
+    return position

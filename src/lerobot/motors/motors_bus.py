@@ -469,10 +469,35 @@ class MotorsBus(abc.ABC):
         if disable_torque:
             self.port_handler.clearPort()
             self.port_handler.is_using = False
-            self.disable_torque(num_retry=5)
+            self._safe_disable_torque()
 
         self.port_handler.closePort()
         logger.debug(f"{self.__class__.__name__} disconnected.")
+
+    def _safe_disable_torque(self, num_retry: int = 10) -> None:
+        """Safely disable torque on all motors, gracefully handling communication failures.
+
+        This method is designed to handle cases where the communication with motors
+        has been disrupted (e.g., during program interruption) and prevents the
+        "There is no status packet!" error from locking up the 340 chip.
+
+        Args:
+            num_retry (int, optional): Number of retry attempts. Defaults to 10.
+        """
+        try:
+            self.disable_torque(num_retry=num_retry)
+        except (ConnectionError, RuntimeError) as e:
+            # Log the error but don't let it prevent disconnection
+            logger.warning(
+                f"Failed to disable torque during disconnect: {e}. "
+                "This is normal if the program was interrupted. Proceeding with disconnect."
+            )
+        except Exception as e:
+            # Catch any other unexpected errors during torque disable
+            logger.error(
+                f"Unexpected error while disabling torque during disconnect: {e}. "
+                "Proceeding with disconnect to prevent hardware lockup."
+            )
 
     @classmethod
     def scan_port(cls, port: str, *args, **kwargs) -> dict[int, list[int]]:
@@ -709,6 +734,7 @@ class MotorsBus(abc.ABC):
             raise TypeError(motors)
 
         self.reset_calibration(motors)
+        print(f"Resetting calibration for {motors}")
         actual_positions = self.sync_read("Present_Position", motors, normalize=False)
         homing_offsets = self._get_half_turn_homings(actual_positions)
         for motor, offset in homing_offsets.items():
@@ -716,8 +742,50 @@ class MotorsBus(abc.ABC):
 
         return homing_offsets
 
+    def set_position_homings(self, positions: dict[NameOrID, Value]) -> None:
+        """Set homing offsets to make current positions match the specified target positions.
+
+        This function computes and writes homing offsets such that the present position of each motor
+        becomes exactly the specified target position.
+
+        Args:
+            positions: Dictionary mapping motor names/IDs to their target positions.
+        """
+        if not positions:
+            return
+
+        motors = list(positions.keys())
+
+        # Reset calibration first
+        self.reset_calibration(motors)
+        print(f"Resetting calibration for {motors}")
+
+        # Read positions AFTER resetting calibration (to get raw encoder positions)
+        actual_positions = self.sync_read("Present_Position", motors, normalize=False)
+
+        # Calculate homing offsets using the raw encoder positions
+        homing_offsets = self._get_position_homings(actual_positions, positions)
+
+        for motor, offset in homing_offsets.items():
+            self.write("Homing_Offset", motor, offset)
+
+        return homing_offsets
+
     @abc.abstractmethod
     def _get_half_turn_homings(self, positions: dict[NameOrID, Value]) -> dict[NameOrID, Value]:
+        pass
+
+    @abc.abstractmethod
+    def _get_position_homings(self, actual_positions: dict[NameOrID, Value], target_positions: dict[NameOrID, Value]) -> dict[NameOrID, Value]:
+        """Calculate homing offsets to move from actual positions to target positions.
+
+        Args:
+            actual_positions: Current positions of motors (from Present_Position)
+            target_positions: Desired positions for motors
+
+        Returns:
+            Dictionary mapping motor names/IDs to homing offset values
+        """
         pass
 
     def record_ranges_of_motion(
@@ -768,8 +836,10 @@ class MotorsBus(abc.ABC):
                 move_cursor_up(len(motors) + 3)
 
         same_min_max = [motor for motor in motors if mins[motor] == maxes[motor]]
-        if same_min_max:
-            raise ValueError(f"Some motors have the same min and max values:\n{pformat(same_min_max)}")
+        # We just need the offsets for many calibrations, so we don't neccesary need range of motion to
+        # be different if we are manually settings ranges. 7-28-2025
+        # if same_min_max:
+        #     raise ValueError(f"Some motors have the same min and max values:\n{pformat(same_min_max)}")
 
         return mins, maxes
 
@@ -783,6 +853,7 @@ class MotorsBus(abc.ABC):
             min_ = self.calibration[motor].range_min
             max_ = self.calibration[motor].range_max
             drive_mode = self.apply_drive_mode and self.calibration[motor].drive_mode
+
             if max_ == min_:
                 raise ValueError(f"Invalid calibration for motor '{motor}': min and max are equal.")
 
@@ -812,6 +883,7 @@ class MotorsBus(abc.ABC):
             min_ = self.calibration[motor].range_min
             max_ = self.calibration[motor].range_max
             drive_mode = self.apply_drive_mode and self.calibration[motor].drive_mode
+
             if max_ == min_:
                 raise ValueError(f"Invalid calibration for motor '{motor}': min and max are equal.")
 
@@ -919,7 +991,7 @@ class MotorsBus(abc.ABC):
         motor: str,
         *,
         normalize: bool = True,
-        num_retry: int = 0,
+        num_retry: int = 3,
     ) -> Value:
         """Read a register from a motor.
 
@@ -928,7 +1000,7 @@ class MotorsBus(abc.ABC):
             motor (str): Motor name.
             normalize (bool, optional): When `True` (default) scale the value to a user-friendly range as
                 defined by the calibration.
-            num_retry (int, optional): Retry attempts.  Defaults to `0`.
+            num_retry (int, optional): Retry attempts.  Defaults to `3`.
 
         Returns:
             Value: Raw or normalised value depending on *normalize*.
@@ -988,7 +1060,7 @@ class MotorsBus(abc.ABC):
         return value, comm, error
 
     def write(
-        self, data_name: str, motor: str, value: Value, *, normalize: bool = True, num_retry: int = 0
+        self, data_name: str, motor: str, value: Value, *, normalize: bool = True, num_retry: int = 3
     ) -> None:
         """Write a value to a single motor's register.
 
@@ -1003,7 +1075,7 @@ class MotorsBus(abc.ABC):
             value (Value): Value to write.  If *normalize* is `True` the value is first converted to raw
                 units.
             normalize (bool, optional): Enable or disable normalisation. Defaults to `True`.
-            num_retry (int, optional): Retry attempts.  Defaults to `0`.
+            num_retry (int, optional): Retry attempts.  Defaults to `3`.
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(
@@ -1056,7 +1128,7 @@ class MotorsBus(abc.ABC):
         motors: str | list[str] | None = None,
         *,
         normalize: bool = True,
-        num_retry: int = 0,
+        num_retry: int = 3,
     ) -> dict[str, Value]:
         """Read the same register from several motors at once.
 
@@ -1064,7 +1136,7 @@ class MotorsBus(abc.ABC):
             data_name (str): Register name.
             motors (str | list[str] | None, optional): Motors to query. `None` (default) reads every motor.
             normalize (bool, optional): Normalisation flag.  Defaults to `True`.
-            num_retry (int, optional): Retry attempts.  Defaults to `0`.
+            num_retry (int, optional): Retry attempts.  Defaults to `3`.
 
         Returns:
             dict[str, Value]: Mapping *motor name → value*.
@@ -1151,7 +1223,7 @@ class MotorsBus(abc.ABC):
         values: Value | dict[str, Value],
         *,
         normalize: bool = True,
-        num_retry: int = 0,
+        num_retry: int = 3,
     ) -> None:
         """Write the same register on multiple motors.
 
@@ -1164,7 +1236,7 @@ class MotorsBus(abc.ABC):
             values (Value | dict[str, Value]): Either a single value (applied to every motor) or a mapping
                 *motor name → value*.
             normalize (bool, optional): If `True` (default) convert values from the user range to raw units.
-            num_retry (int, optional): Retry attempts.  Defaults to `0`.
+            num_retry (int, optional): Retry attempts.  Defaults to `3`.
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(
