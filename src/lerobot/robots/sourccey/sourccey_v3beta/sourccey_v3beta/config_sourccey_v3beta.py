@@ -39,7 +39,7 @@ def sourccey_v3beta_cameras_config() -> dict[str, CameraConfig]:
     }
     return config
 
-def sourccey_v3beta_dc_motors_config() -> dict[str, DCMotor]:
+def sourccey_v3beta_dc_motors() -> dict[str, DCMotor]:
     return {
         "motors": {
             "front_left": DCMotor(id=1, model="mecanum_wheel", norm_mode=MotorNormMode.RANGE_M100_100),
@@ -48,6 +48,10 @@ def sourccey_v3beta_dc_motors_config() -> dict[str, DCMotor]:
             "rear_right": DCMotor(id=4, model="mecanum_wheel", norm_mode=MotorNormMode.RANGE_M100_100),
             "actuator": DCMotor(id=5, model="linear_actuator", norm_mode=MotorNormMode.RANGE_M100_100),
         },
+    }
+
+def sourccey_v3beta_dc_motors_config() -> dict:
+    return {
         "pwm_pins": [12, 13, 14, 15, 18],
         "direction_pins": [2, 3, 4, 5, 6],
         "enable_pins": [7, 8, 9, 10, 11],
@@ -63,6 +67,11 @@ class SourcceyV3BetaConfig(RobotConfig):
     left_arm_port: str = "/dev/robotLeftArm"
     right_arm_port: str = "/dev/robotRightArm"
 
+    cameras: dict[str, CameraConfig] = field(default_factory=sourccey_v3beta_cameras_config)
+
+    dc_motors_config: dict = field(default_factory=sourccey_v3beta_dc_motors_config)
+    dc_motors: dict = field(default_factory=sourccey_v3beta_dc_motors)
+
     # Optional
     left_arm_disable_torque_on_disconnect: bool = True
     left_arm_max_relative_target: int | None = None
@@ -71,8 +80,6 @@ class SourcceyV3BetaConfig(RobotConfig):
     right_arm_max_relative_target: int | None = None
     right_arm_use_degrees: bool = False
 
-    cameras: dict[str, CameraConfig] = field(default_factory=sourccey_v3beta_cameras_config)
-    dc_motors: dict = field(default_factory=sourccey_v3beta_dc_motors_config)
 
 @dataclass
 class SourcceyV3BetaHostConfig:

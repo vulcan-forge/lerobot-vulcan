@@ -82,7 +82,8 @@ class SourcceyV3Beta(Robot):
         self.right_arm = SourcceyV3BetaFollower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
         self.dc_motors_controller = PWMDCMotorsController(
-            config=self.config.dc_motors
+            motors=self.config.dc_motors,
+            config=self.config.dc_motors_config,
         )
 
     @property

@@ -80,13 +80,13 @@ class BaseDCMotorsController(abc.ABC):
 
     def __init__(
         self,
-        motors: dict[str, DCMotor],
-        protocol: str = "pwm",
         config: dict | None = None,
+        motors: dict[str, DCMotor] | None = None,
+        protocol: str = "pwm",
     ):
-        self.motors = motors
-        self.protocol = protocol
         self.config = config or {}
+        self.motors = motors or {}
+        self.protocol = protocol
 
         self._id_to_name_dict = {m.id: motor for motor, m in self.motors.items()}
         self._name_to_id_dict = {motor: m.id for motor, m in self.motors.items()}
@@ -102,9 +102,9 @@ class BaseDCMotorsController(abc.ABC):
     def __repr__(self):
         return (
             f"{self.__class__.__name__}(\n"
-            f"    Protocol: '{self.protocol}',\n"
-            f"    Motors: {list(self.motors.keys())},\n"
             f"    Config: {self.config}\n"
+            f"    Motors: {list(self.motors.keys())}\n"
+            f"    Protocol: '{self.protocol}'\n"
             ")"
         )
 

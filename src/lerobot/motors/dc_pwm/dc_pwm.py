@@ -375,8 +375,8 @@ class PWMProtocolHandler(ProtocolHandler):
 class PWMDCMotorsController(BaseDCMotorsController):
     """PWM-based DC motor controller optimized for Raspberry Pi 5."""
 
-    def __init__(self, motors: dict[str, DCMotor], config: dict):
-        super().__init__(motors, config)
+    def __init__(self, config: dict | None = None, motors: dict[str, DCMotor] | None = None, protocol: str = "pwm"):
+        super().__init__(config, motors, protocol)
 
     def _create_protocol_handler(self) -> ProtocolHandler:
         return PWMProtocolHandler(self.config)
