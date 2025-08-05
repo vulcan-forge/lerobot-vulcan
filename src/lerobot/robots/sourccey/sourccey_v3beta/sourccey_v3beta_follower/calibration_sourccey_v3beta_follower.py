@@ -8,7 +8,7 @@ from lerobot.motors.feetech.feetech import OperatingMode
 from lerobot.motors.motors_bus import MotorCalibration
 from lerobot.robots.sourccey.sourccey_v3beta.sourccey_v3beta_follower.config_sourccey_v3beta_follower import SourcceyV3BetaFollowerConfig
 
-class SourcceyV3BetaCalibrator:
+class SourcceyV3BetaFollowerCalibrator:
     """Handles calibration operations for Sourccey V3Beta robots."""
 
     def __init__(self, robot):
@@ -62,7 +62,7 @@ class SourcceyV3BetaCalibrator:
         WARNING: This process involves moving the robot to find limits.
         Ensure the robot arm is clear of obstacles and people during calibration.
         """
-        logger.info(f"Starting automatic calibration of robot {self.robot_id}")
+        logger.info(f"Starting automatic calibration of robot {self.robot.id}")
         logger.warning("WARNING: Robot will move to detect mechanical limits. Ensure clear workspace!")
 
         # Step 1: Adjust calibration so current positions become desired logical positions

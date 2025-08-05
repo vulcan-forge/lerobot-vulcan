@@ -8,9 +8,9 @@ import numpy as np
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.motors.feetech.feetech import FeetechMotorsBus, OperatingMode
-from lerobot.motors.motors_bus import Motor, MotorCalibration, MotorNormMode
+from lerobot.motors.motors_bus import Motor, MotorNormMode
 from lerobot.robots.robot import Robot
-from lerobot.robots.sourccey.sourccey_v3beta.sourccey_v3beta_follower.calibration_sourccey_v3beta_follower import SourcceyV3BetaCalibrator
+from lerobot.robots.sourccey.sourccey_v3beta.sourccey_v3beta_follower.calibration_sourccey_v3beta_follower import SourcceyV3BetaFollowerCalibrator
 from lerobot.robots.sourccey.sourccey_v3beta.sourccey_v3beta_follower.config_sourccey_v3beta_follower import SourcceyV3BetaFollowerConfig
 from lerobot.robots.utils import ensure_safe_goal_position
 import os
@@ -44,7 +44,7 @@ class SourcceyV3BetaFollower(Robot):
         self.cameras = make_cameras_from_configs(config.cameras)
 
         # Initialize calibrator
-        self.calibrator = SourcceyV3BetaCalibrator(
+        self.calibrator = SourcceyV3BetaFollowerCalibrator(
             robot=self
         )
 
