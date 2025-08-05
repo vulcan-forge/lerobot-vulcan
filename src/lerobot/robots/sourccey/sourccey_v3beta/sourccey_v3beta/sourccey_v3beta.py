@@ -81,10 +81,10 @@ class SourcceyV3Beta(Robot):
         self.left_arm = SourcceyV3BetaFollower(left_arm_config)
         self.right_arm = SourcceyV3BetaFollower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
-        self.dc_motors_controller = PWMDCMotorsController(
-            motors=self.config.dc_motors,
-            config=self.config.dc_motors_config,
-        )
+        # self.dc_motors_controller = PWMDCMotorsController(
+        #     motors=self.config.dc_motors,
+        #     config=self.config.dc_motors_config,
+        # )
 
     @property
     def _state_ft(self) -> dict[str, type]:
@@ -114,7 +114,7 @@ class SourcceyV3Beta(Robot):
         return (
             self.left_arm.is_connected and
             self.right_arm.is_connected and
-            self.dc_motors_controller.is_connected and
+            # self.dc_motors_controller.is_connected and
             all(cam.is_connected for cam in self.cameras.values())
         )
 
@@ -123,7 +123,7 @@ class SourcceyV3Beta(Robot):
         self.right_arm.connect(calibrate)
 
         # Connect DC motors
-        self.dc_motors_controller.connect()
+        # self.dc_motors_controller.connect()
 
         for cam in self.cameras.values():
             cam.connect()
@@ -133,7 +133,7 @@ class SourcceyV3Beta(Robot):
         self.right_arm.disconnect()
 
         self.stop_base()
-        self.dc_motors_controller.disconnect()
+        # self.dc_motors_controller.disconnect()
 
         for cam in self.cameras.values():
             cam.disconnect()
@@ -216,10 +216,11 @@ class SourcceyV3Beta(Robot):
 
     # Base Functions
     def stop_base(self):
-        self.dc_motors_controller.set_velocity("base_front_left_wheel", 0)
-        self.dc_motors_controller.set_velocity("base_front_right_wheel", 0)
-        self.dc_motors_controller.set_velocity("base_rear_left_wheel", 0)
-        self.dc_motors_controller.set_velocity("base_rear_right_wheel", 0)
+        # self.dc_motors_controller.set_velocity("base_front_left_wheel", 0)
+        # self.dc_motors_controller.set_velocity("base_front_right_wheel", 0)
+        # self.dc_motors_controller.set_velocity("base_rear_left_wheel", 0)
+        # self.dc_motors_controller.set_velocity("base_rear_right_wheel", 0)
+        pass
 
     @staticmethod
     def _raw_to_degps(raw_speed: int) -> float:
