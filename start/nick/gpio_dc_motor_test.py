@@ -59,21 +59,11 @@ def test_forward_backward():
                 print("   Motor states: ", controller.protocol_handler.motor_states)
                 time.sleep(3)
 
-                # Stop briefly
-                print("   STOPPING (1 second)...")
-                controller.set_velocity("front_left", 0.0)
-                time.sleep(1)
-
                 # Backward motion (3 seconds)
                 print("   BACKWARD motion (3 seconds)...")
                 controller.set_velocity("front_left", -1.0)
                 print("   Motor states: ", controller.protocol_handler.motor_states)
                 time.sleep(3)
-
-                # Stop briefly
-                print("   STOPPING (1 second)...")
-                controller.set_velocity("front_left", 0.0)
-                time.sleep(1)
 
                 cycle += 1
                 print()
