@@ -14,7 +14,7 @@ FPS = 30
 # Create the robot and teleoperator configurations
 robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.219", id="sourccey_v3beta")
 teleop_arm_config = BiSourcceyV3BetaLeaderConfig(left_arm_port="COM41", right_arm_port="COM42", id="bi_sourccey_v3beta_leader")
-keyboard_config = KeyboardTeleopConfig(id="my_laptop_keyboard")
+keyboard_config = KeyboardTeleopConfig(id="keyboard")
 
 robot = SourcceyV3BetaClient(robot_config)
 leader_arm = BiSourcceyV3BetaLeader(teleop_arm_config)
@@ -38,6 +38,7 @@ while True:
     arm_action = leader_arm.get_action()
 
     keyboard_keys = keyboard.get_action()
+    print('keyboard_keys', keyboard_keys)
     base_action = robot._from_keyboard_to_base_action(keyboard_keys)
 
     log_rerun_data(observation, {**arm_action, **base_action})
