@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test single DRV8871DDAR motor - Forward motion only.
+Test single DRV8871DDAR motor - Forward and Backward motion.
 """
 
 import time
@@ -10,8 +10,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def test_forward_only():
-    """Test full speed forward motion and hold it."""
+def test_forward_backward():
+    """Test forward and backward motion in a loop."""
     try:
         from lerobot.motors.dc_pwm.dc_pwm import PWMDCMotorsController
         from lerobot.motors.dc_motors_controller import DCMotor, MotorNormMode
@@ -31,9 +31,10 @@ def test_forward_only():
         # Create controller
         controller = PWMDCMotorsController(config=motor_config, motors=motors)
 
-        print("=== DRV8871DDAR Forward Motion Test ===")
+        print("=== DRV8871DDAR Forward/Backward Test ===")
         print("Motor: Front Left Wheel")
         print("Pins: IN1=GPIO 12 (PWM), IN2=GPIO 22 (Direction)")
+        print("Pattern: 3s Forward → 3s Backward → Loop")
         print()
 
         # Connect
@@ -42,20 +43,41 @@ def test_forward_only():
         print("✓ Motor connected")
         print()
 
-        # Test full speed forward
-        print("2. Testing FULL SPEED FORWARD motion...")
-        print("   Setting velocity to 1.0 (100% forward)")
-        controller.set_velocity("front_left", 1.0)
-        print("Motor states: ", controller.protocol_handler.motor_states)
-        print("   Motor should be running at full speed forward")
+        # Test loop
+        print("2. Starting forward/backward test loop...")
         print("   Press Ctrl+C to stop the test")
         print()
 
-        # Hold the motor running
+        cycle = 1
         try:
             while True:
+                print(f"--- Cycle {cycle} ---")
+
+                # Forward motion (3 seconds)
+                print("   FORWARD motion (3 seconds)...")
+                controller.set_velocity("front_left", 1.0)
+                print("   Motor states: ", controller.protocol_handler.motor_states)
+                time.sleep(3)
+
+                # Stop briefly
+                print("   STOPPING (1 second)...")
+                controller.set_velocity("front_left", 0.0)
                 time.sleep(1)
-                print("   Motor still running... (Ctrl+C to stop)")
+
+                # Backward motion (3 seconds)
+                print("   BACKWARD motion (3 seconds)...")
+                controller.set_velocity("front_left", -1.0)
+                print("   Motor states: ", controller.protocol_handler.motor_states)
+                time.sleep(3)
+
+                # Stop briefly
+                print("   STOPPING (1 second)...")
+                controller.set_velocity("front_left", 0.0)
+                time.sleep(1)
+
+                cycle += 1
+                print()
+
         except KeyboardInterrupt:
             print()
             print("   Stopping motor...")
@@ -70,12 +92,12 @@ def test_forward_only():
         print()
 
         print("=== Test Complete ===")
-        print("✓ Forward motion test completed")
-        print("→ Did the motor spin forward at full speed?")
+        print("✓ Forward/backward motion test completed")
+        print("→ Did the motor alternate between forward and backward?")
 
     except Exception as e:
         print(f"✗ Test failed: {e}")
         print("→ Check wiring and connections")
 
 if __name__ == "__main__":
-    test_forward_only()
+    test_forward_backward()
