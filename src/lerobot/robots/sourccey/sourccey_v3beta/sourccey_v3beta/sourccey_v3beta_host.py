@@ -75,6 +75,12 @@ def main():
             try:
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
                 data = dict(json.loads(msg))
+
+                # Every 3 seconds print the data
+                if time.time() - last_cmd_time > 3:
+                    print('data', data)
+                    last_cmd_time = time.time()
+
                 _action_sent = robot.send_action(data)
                 last_cmd_time = time.time()
                 watchdog_active = False

@@ -34,11 +34,9 @@ while True:
     t0 = time.perf_counter()
 
     observation = robot.get_observation()
-
     arm_action = leader_arm.get_action()
 
     keyboard_keys = keyboard.get_action()
-    print('keyboard_keys', keyboard_keys)
     base_action = robot._from_keyboard_to_base_action(keyboard_keys)
 
     log_rerun_data(observation, {**arm_action, **base_action})
