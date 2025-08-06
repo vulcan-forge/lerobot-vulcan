@@ -108,7 +108,8 @@ lekiwi = ["lerobot[feetech]", "pyzmq>=26.2.1"]
 sourccey = [
     "lerobot[feetech]",
     "pyzmq>=26.2.1",
-    "gpiozero>=2.0"
+    "gpiozero>=2.0.1 ; sys_platform == 'linux'",
+    "lgpio>=0.2.2 ; sys_platform == 'linux'"
 ]
 kinematics = ["lerobot[placo-dep]"]
 intelrealsense = [
