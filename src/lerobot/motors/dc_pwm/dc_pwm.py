@@ -146,6 +146,7 @@ class PWMProtocolHandler(ProtocolHandler):
                     "enabled": False,
                     "brake_active": False
                 }
+                print(self.motor_states)
 
             total_pins = len(self.pwm_pins) + len(self.direction_pins)
             logger.info(f"DRV8871DDAR motor driver setup with {len(self.pwm_pins)} motors using {total_pins} GPIO pins")
@@ -208,6 +209,7 @@ class PWMProtocolHandler(ProtocolHandler):
         # Clamp velocity to [-1, 1]
         velocity = max(-1.0, min(1.0, velocity))
 
+        print(self.motor_states)
         self.motor_states[motor_id]["velocity"] = velocity
 
         # Convert velocity to PWM and direction
