@@ -21,7 +21,7 @@ PI5_ALL_GPIO_PINS = [
 ]
 
 # Pi 5 Optimal Settings for DRV8871DDAR
-PI5_OPTIMAL_FREQUENCY = 25000  # 25kHz - optimal for DRV8871DDAR
+PI5_OPTIMAL_FREQUENCY = 1000  # 1kHz - more compatible with gpiozero
 PI5_MAX_FREQUENCY = 50000      # 50kHz - Pi 5 can handle higher frequencies
 PI5_RESOLUTION = 12            # 12-bit resolution
 
@@ -117,15 +117,33 @@ class PWMProtocolHandler(ProtocolHandler):
             for i, pin in enumerate(self.pwm_pins):
                 motor_id = i + 1
 
+                import pdb; pdb.set_trace()
+                # Initialize motor state
+                self.motor_states[motor_id] = {
+                    "position": 0.0,
+                    "velocity": 0.0,
+                    "pwm": 0.0,
+                    "enabled": False,
+                    "brake_active": False
+                }
+
                 try:
                     # IN1 pin - PWM for speed control (hardware PWM recommended)
-                    pwm_led = self.gpiozero.PWMLED(pin, frequency=self.pwm_frequency)
+                    # Use a more compatible frequency
+                    pwm_led = self.gpiozero.PWMLED(pin, frequency=1000)
                     pwm_led.off()  # Start with 0% duty cycle
                     self.pwm_channels[motor_id] = pwm_led
                     logger.debug(f"Motor {motor_id} IN1 (PWM) setup on pin {pin}")
                 except Exception as e:
                     logger.warning(f"Could not setup IN1 (PWM) pin {pin}: {e}")
-                    continue
+                    # Try with default frequency if custom frequency fails
+                    try:
+                        pwm_led = self.gpiozero.PWMLED(pin)  # Use default frequency
+                        pwm_led.off()
+                        self.pwm_channels[motor_id] = pwm_led
+                        logger.debug(f"Motor {motor_id} IN1 (PWM) setup on pin {pin} with default frequency")
+                    except Exception as e2:
+                        logger.error(f"Failed to setup PWM pin {pin} even with default frequency: {e2}")
 
                 # IN2 pin - Direction control (regular GPIO)
                 if i < len(self.direction_pins):
@@ -138,19 +156,9 @@ class PWMProtocolHandler(ProtocolHandler):
                     except Exception as e:
                         logger.warning(f"Could not setup IN2 (direction) pin {dir_pin}: {e}")
 
-                # Initialize motor state
-                self.motor_states[motor_id] = {
-                    "position": 0.0,
-                    "velocity": 0.0,
-                    "pwm": 0.0,
-                    "enabled": False,
-                    "brake_active": False
-                }
-                print(self.motor_states)
-
             total_pins = len(self.pwm_pins) + len(self.direction_pins)
             logger.info(f"DRV8871DDAR motor driver setup with {len(self.pwm_pins)} motors using {total_pins} GPIO pins")
-            logger.info(f"PWM frequency: {self.pwm_frequency}Hz (optimal for DRV8871DDAR)")
+            logger.info(f"PWM frequency: 1kHz (compatible with gpiozero)")
 
         except Exception as e:
             logger.error(f"gpiozero setup failed: {e}")
