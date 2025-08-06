@@ -19,7 +19,7 @@ def test_single_motor():
         # Motor config for testing
         motor_config = {
             "pwm_pins": [12],           # IN1 - Front Left Wheel (PWM)
-            "direction_pins": [16],      # IN2 - Front Left Wheel (Direction) - Changed to GPIO 16
+            "direction_pins": [22],      # IN2 - Front Left Wheel (Direction)
             "pwm_frequency": 1000,
             "invert_direction": False,
         }
