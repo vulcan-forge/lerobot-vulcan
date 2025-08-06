@@ -38,6 +38,7 @@ def test_single_motor():
 
         # Connect
         print("1. Connecting motor...")
+        import pdb; pdb.set_trace()
         controller.connect()
         print("✓ Motor connected")
         print()
