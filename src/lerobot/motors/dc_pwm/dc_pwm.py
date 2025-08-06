@@ -117,7 +117,6 @@ class PWMProtocolHandler(ProtocolHandler):
             for i, pin in enumerate(self.pwm_pins):
                 motor_id = i + 1
 
-                import pdb; pdb.set_trace()
                 # Initialize motor state
                 self.motor_states[motor_id] = {
                     "position": 0.0,
