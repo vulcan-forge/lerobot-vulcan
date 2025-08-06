@@ -81,10 +81,10 @@ class SourcceyV3Beta(Robot):
         self.left_arm = SourcceyV3BetaFollower(left_arm_config)
         self.right_arm = SourcceyV3BetaFollower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
-        # self.dc_motors_controller = PWMDCMotorsController(
-        #     motors=self.config.dc_motors,
-        #     config=self.config.dc_motors_config,
-        # )
+        self.dc_motors_controller = PWMDCMotorsController(
+            motors=self.config.dc_motors,
+            config=self.config.dc_motors_config,
+        )
 
     @property
     def _state_ft(self) -> dict[str, type]:

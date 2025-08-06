@@ -153,7 +153,7 @@ class PWMProtocolHandler(ProtocolHandler):
 
         except ImportError:
             raise ImportError(
-                "RPi.GPIO not available. Install with: pip install RPi.GPIO>=0.7.1"
+                "RPi.GPIO not available. Install with: uv pip install RPi.GPIO>=0.7.1"
             )
 
     def connect(self) -> None:
