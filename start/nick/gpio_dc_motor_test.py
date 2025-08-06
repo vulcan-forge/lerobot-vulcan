@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test single DRV8871DDAR motor.
+Test single DRV8871DDAR motor - Forward motion only.
 """
 
 import time
@@ -10,8 +10,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def test_single_motor():
-    """Test the front left wheel motor."""
+def test_forward_only():
+    """Test full speed forward motion and hold it."""
     try:
         from lerobot.motors.dc_pwm.dc_pwm import PWMDCMotorsController
         from lerobot.motors.dc_motors_controller import DCMotor, MotorNormMode
@@ -31,9 +31,9 @@ def test_single_motor():
         # Create controller
         controller = PWMDCMotorsController(config=motor_config, motors=motors)
 
-        print("=== DRV8871DDAR Single Motor Test ===")
+        print("=== DRV8871DDAR Forward Motion Test ===")
         print("Motor: Front Left Wheel")
-        print("Pins: IN1=GPIO 12 (PWM), IN2=GPIO 16 (Direction)")
+        print("Pins: IN1=GPIO 12 (PWM), IN2=GPIO 22 (Direction)")
         print()
 
         # Connect
@@ -42,57 +42,39 @@ def test_single_motor():
         print("✓ Motor connected")
         print()
 
-        # Test forward
-        print("2. Testing forward motion (50% speed)...")
-        controller.set_velocity("front_left", 0.5)
-        time.sleep(3)
-        print("✓ Forward test completed")
+        # Test full speed forward
+        print("2. Testing FULL SPEED FORWARD motion...")
+        print("   Setting velocity to 1.0 (100% forward)")
+        controller.set_velocity("front_left", 1.0)
+        print("   Motor should be running at full speed forward")
+        print("   Press Ctrl+C to stop the test")
         print()
 
-        # Test stop
-        print("3. Testing stop...")
-        controller.set_velocity("front_left", 0.0)
-        time.sleep(2)
-        print("✓ Stop test completed")
-        print()
-
-        # Test backward
-        print("4. Testing backward motion (50% speed)...")
-        controller.set_velocity("front_left", -0.5)
-        time.sleep(3)
-        print("✓ Backward test completed")
-        print()
-
-        # Test stop
-        print("5. Testing stop...")
-        controller.set_velocity("front_left", 0.0)
-        time.sleep(2)
-        print("✓ Stop test completed")
-        print()
-
-        # Test variable speed
-        print("6. Testing variable speed...")
-        for speed in [0.1, 0.3, 0.5, 0.7, 0.9, 0.0]:
-            controller.set_velocity("front_left", speed)
-            print(f"   Speed: {speed*100:.0f}%")
-            time.sleep(1)
-        print("✓ Variable speed test completed")
-        print()
+        # Hold the motor running
+        try:
+            while True:
+                time.sleep(1)
+                print("   Motor still running... (Ctrl+C to stop)")
+        except KeyboardInterrupt:
+            print()
+            print("   Stopping motor...")
+            controller.set_velocity("front_left", 0.0)
+            print("✓ Motor stopped")
+            print()
 
         # Disconnect
-        print("7. Disconnecting motor...")
+        print("3. Disconnecting motor...")
         controller.disconnect()
         print("✓ Motor disconnected")
         print()
 
         print("=== Test Complete ===")
-        print("✓ All tests passed!")
-        print("→ Motor is working correctly")
-        print("→ Ready to add more motors")
+        print("✓ Forward motion test completed")
+        print("→ Did the motor spin forward at full speed?")
 
     except Exception as e:
         print(f"✗ Test failed: {e}")
         print("→ Check wiring and connections")
 
 if __name__ == "__main__":
-    test_single_motor()
+    test_forward_only()
