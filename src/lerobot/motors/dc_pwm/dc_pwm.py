@@ -44,7 +44,6 @@ class MockPWMProtocolHandler(ProtocolHandler):
         self.invert_brake = config.get("invert_brake", False)
 
         # Motor state tracking
-        self.motors: Dict[int, Dict] = config.get("motors", {})
         self.pwm_channels = {}
         self.direction_channels = {}
         self.enable_channels = {}
@@ -127,7 +126,7 @@ class PWMProtocolHandler(ProtocolHandler):
     - pwm_frequency: 25000Hz (optimal for DRV8871DDAR)
     """
 
-    def __init__(self, config: Dict):
+    def __init__(self, config: Dict, motors: Dict[str, DCMotor]):
         self.config = config
         self.pwm_pins = config.get("pwm_pins", [])
         self.direction_pins = config.get("direction_pins", [])
@@ -139,7 +138,7 @@ class PWMProtocolHandler(ProtocolHandler):
         self.invert_brake = config.get("invert_brake", False)
 
         # Motor state tracking
-        self.motors: Dict[int, Dict] = config.get("motors", {})
+        self.motors: Dict[int, Dict] = motors
         self.pwm_channels = {}
         self.direction_channels = {}
         self.enable_channels = {}
@@ -409,7 +408,7 @@ class PWMDCMotorsController(BaseDCMotorsController):
 
     def _create_protocol_handler(self) -> ProtocolHandler:
         try:
-            return PWMProtocolHandler(self.config)
+            return PWMProtocolHandler(self.config, self.motors)
         except (ImportError, RuntimeError) as e:
             if "gpiozero hardware not available" in str(e) or "gpiozero not available" in str(e):
                 logger.warning(f"Falling back to mock PWM handler: {e}")
