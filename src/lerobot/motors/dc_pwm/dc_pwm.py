@@ -217,17 +217,21 @@ class PWMProtocolHandler(ProtocolHandler):
         velocity = max(-1.0, min(1.0, velocity))
 
         self.motor_states[motor_id]["velocity"] = velocity
+        self.motor_states[motor_id]["pwm"] = abs(velocity)
 
-        # Convert velocity to PWM and direction
-        abs_velocity = abs(velocity)
-        direction = velocity >= 0
-
-        # Set direction (IN2) if available
-        if motor_id in self.direction_channels:
-            self._set_direction(motor_id, direction)
-
-        # Set PWM duty cycle (IN1) for speed
-        self.set_pwm(motor_id, abs_velocity)
+        # Simple ON/OFF DRV8871DDAR Logic:
+        if velocity > 0:  # Forward
+            # IN1 = ON, IN2 = ON
+            self.pwm_channels[motor_id].on()
+            self.direction_channels[motor_id].on()
+        elif velocity < 0:  # Backward
+            # IN1 = OFF, IN2 = ON
+            self.pwm_channels[motor_id].off()
+            self.direction_channels[motor_id].on()
+        else:  # Stop
+            # IN1 = OFF, IN2 = OFF
+            self.pwm_channels[motor_id].off()
+            self.direction_channels[motor_id].off()
 
     # PWM Functions
     def get_pwm(self, motor_id: int) -> float:
