@@ -46,6 +46,7 @@ def test_forward_only():
         print("2. Testing FULL SPEED FORWARD motion...")
         print("   Setting velocity to 1.0 (100% forward)")
         controller.set_velocity("front_left", 1.0)
+        print("Motor states: ", controller.protocol_handler.motor_states)
         print("   Motor should be running at full speed forward")
         print("   Press Ctrl+C to stop the test")
         print()

@@ -216,7 +216,6 @@ class PWMProtocolHandler(ProtocolHandler):
         # Clamp velocity to [-1, 1]
         velocity = max(-1.0, min(1.0, velocity))
 
-        print(self.motor_states)
         self.motor_states[motor_id]["velocity"] = velocity
 
         # Convert velocity to PWM and direction
