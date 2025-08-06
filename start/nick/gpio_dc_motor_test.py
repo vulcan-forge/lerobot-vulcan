@@ -18,9 +18,9 @@ def test_single_motor():
 
         # Motor config for testing
         motor_config = {
-            "pwm_pins": [12],           # IN1 - Front Left Wheel
-            "direction_pins": [2],       # IN2 - Front Left Wheel
-            "pwm_frequency": 25000,
+            "pwm_pins": [12],           # IN1 - Front Left Wheel (PWM)
+            "direction_pins": [16],      # IN2 - Front Left Wheel (Direction) - Changed to GPIO 16
+            "pwm_frequency": 1000,
             "invert_direction": False,
         }
 
@@ -33,7 +33,7 @@ def test_single_motor():
 
         print("=== DRV8871DDAR Single Motor Test ===")
         print("Motor: Front Left Wheel")
-        print("Pins: IN1=GPIO 12 (PWM), IN2=GPIO 2 (Direction)")
+        print("Pins: IN1=GPIO 12 (PWM), IN2=GPIO 16 (Direction)")
         print()
 
         # Connect
