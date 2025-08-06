@@ -138,12 +138,68 @@ def test_permissions():
 def test_lgpio_availability():
     """Test if lgpio is available."""
     try:
-        import lgpio
+        import lgpio # type: ignore
         print("✓ lgpio module available")
         return True
     except ImportError:
         print("✗ lgpio module not available")
         print("  → Install with: sudo apt install python3-lgpio")
+        return False
+
+def test_physical_led():
+    """Test the built-in ACT LED on Pi 5."""
+    try:
+        import gpiozero
+
+        # The ACT LED is on GPIO 16 by default
+        act_led = gpiozero.LED(16)
+
+        print("✓ ACT LED setup successful")
+
+        # Test the LED - you should see it blink!
+        print("  → Blinking ACT LED 3 times...")
+        for i in range(3):
+            act_led.on()
+            time.sleep(0.5)
+            act_led.off()
+            time.sleep(0.5)
+
+        print("✓ ACT LED physical test successful")
+        print("  → Did you see the green LED blink?")
+
+        # Cleanup
+        act_led.close()
+        return True
+
+    except Exception as e:
+        print(f"✗ ACT LED test failed: {e}")
+        return False
+
+def test_physical_pwm():
+    """Test PWM on a pin that might have a built-in component."""
+    try:
+        import gpiozero
+
+        # Use GPIO 18 (PWM0) - this might be connected to something
+        pwm_led = gpiozero.PWMLED(18)
+
+        print("✓ PWM setup on GPIO 18 successful")
+
+        # Test PWM with different duty cycles
+        print("  → Testing PWM with varying duty cycles...")
+        for duty in [0.1, 0.3, 0.5, 0.7, 0.9, 0.0]:
+            pwm_led.value = duty
+            time.sleep(0.5)
+
+        print("✓ PWM physical test successful")
+        print("  → Did you see any changes in brightness or hear any sounds?")
+
+        # Cleanup
+        pwm_led.close()
+        return True
+
+    except Exception as e:
+        print(f"✗ PWM physical test failed: {e}")
         return False
 
 def main():
@@ -186,11 +242,21 @@ def main():
     success = test_gpiozero_setup(gpiozero)
     print()
 
+    # Physical tests
+    print("8. Physical LED Test:")
+    test_physical_led()
+    print()
+
+    print("9. Physical PWM Test:")
+    test_physical_pwm()
+    print()
+
     # Summary
     print("=== Summary ===")
     if success:
         print("✓ All gpiozero tests passed!")
         print("  → GPIO should work with your robot code")
+        print("  → Physical tests completed - check if LEDs responded")
     else:
         print("✗ gpiozero tests failed!")
         print("  → Install lgpio: sudo apt install python3-lgpio")
