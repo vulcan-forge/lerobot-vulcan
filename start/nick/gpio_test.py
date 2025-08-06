@@ -1,75 +1,68 @@
 #!/usr/bin/env python3
 """
-Simple GPIO test to diagnose Raspberry Pi GPIO issues.
+Simple GPIO test using gpiozero (modern GPIO library for Raspberry Pi).
 """
 
 import sys
 import time
 
-def test_gpio_import():
-    """Test if RPi.GPIO can be imported."""
+def test_gpiozero_import():
+    """Test if gpiozero can be imported."""
     try:
-        import RPi.GPIO as GPIO # type: ignore
-        print("✓ RPi.GPIO imported successfully")
-        return GPIO
+        import gpiozero
+        print("✓ gpiozero imported successfully")
+        return gpiozero
     except ImportError as e:
-        print(f"✗ RPi.GPIO import failed: {e}")
+        print(f"✗ gpiozero import failed: {e}")
         return None
 
-def test_gpio_version(gpio):
-    """Test RPi.GPIO version."""
-    if gpio is None:
+def test_gpiozero_version(gpiozero):
+    """Test gpiozero version."""
+    if gpiozero is None:
         return False
 
     try:
-        version = gpio.VERSION
-        print(f"✓ RPi.GPIO version: {version}")
+        version = gpiozero.__version__
+        print(f"✓ gpiozero version: {version}")
         return True
     except AttributeError:
-        print("✗ Could not determine RPi.GPIO version")
+        print("✗ Could not determine gpiozero version")
         return False
 
-def test_gpio_setup(gpio):
-    """Test basic GPIO setup."""
-    if gpio is None:
+def test_gpiozero_setup(gpiozero):
+    """Test basic gpiozero setup."""
+    if gpiozero is None:
         return False
 
     try:
-        # Test BCM mode setup
-        gpio.setmode(gpio.BCM)
-        print("✓ GPIO BCM mode set successfully")
-
-        # Test pin setup (using a safe pin like 18)
+        # Test LED setup (using a safe pin like 18)
         test_pin = 18
-        gpio.setup(test_pin, gpio.OUT)
-        print(f"✓ GPIO pin {test_pin} setup successfully")
+        led = gpiozero.LED(test_pin)
+        print(f"✓ gpiozero LED setup on pin {test_pin} successful")
 
         # Test PWM setup
-        pwm = gpio.PWM(test_pin, 1000)  # 1kHz frequency
-        pwm.start(0)
-        print("✓ PWM setup successful")
+        pwm_led = gpiozero.PWMLED(test_pin)
+        print("✓ gpiozero PWM setup successful")
 
         # Test PWM control
-        pwm.ChangeDutyCycle(50)  # 50% duty cycle
+        pwm_led.pulse(fade_in_time=0.1, fade_out_time=0.1, n=1)
+        print("✓ gpiozero PWM control test successful")
+
+        # Test basic LED control
+        led.on()
         time.sleep(0.1)
-        pwm.ChangeDutyCycle(0)
-        print("✓ PWM control test successful")
+        led.off()
+        print("✓ gpiozero LED control test successful")
 
         # Cleanup
-        pwm.stop()
-        gpio.cleanup()
-        print("✓ GPIO cleanup successful")
+        led.close()
+        pwm_led.close()
+        print("✓ gpiozero cleanup successful")
 
         return True
 
-    except RuntimeError as e:
-        print(f"✗ GPIO setup failed: {e}")
-        if "Cannot determine SOC peripheral base address" in str(e):
-            print("  → This indicates you're not running on a Raspberry Pi")
-            print("  → Or GPIO permissions are insufficient")
-        return False
     except Exception as e:
-        print(f"✗ GPIO test failed: {e}")
+        print(f"✗ gpiozero setup failed: {e}")
         return False
 
 def test_system_info():
@@ -104,12 +97,12 @@ def test_permissions():
         print("✓ Running as root (good for GPIO)")
     else:
         print("⚠ Running as non-root user")
-        print("  → GPIO may require root permissions")
-        print("  → Try: sudo python3 gpio_test.py")
+        print("  → gpiozero should work without root permissions")
+        print("  → If it fails, try: sudo python3 gpio_test.py")
 
 def main():
     """Run all GPIO tests."""
-    print("=== GPIO Test Suite ===")
+    print("=== GPIO Test Suite (gpiozero) ===")
     print()
 
     # System info
@@ -124,27 +117,27 @@ def main():
 
     # GPIO import
     print("3. GPIO Import Test:")
-    gpio = test_gpio_import()
+    gpiozero = test_gpiozero_import()
     print()
 
     # GPIO version
     print("4. GPIO Version Test:")
-    test_gpio_version(gpio)
+    test_gpiozero_version(gpiozero)
     print()
 
     # GPIO setup
     print("5. GPIO Setup Test:")
-    success = test_gpio_setup(gpio)
+    success = test_gpiozero_setup(gpiozero)
     print()
 
     # Summary
     print("=== Summary ===")
     if success:
-        print("✓ All GPIO tests passed!")
+        print("✓ All gpiozero tests passed!")
         print("  → GPIO should work with your robot code")
     else:
-        print("✗ GPIO tests failed!")
-        print("  → Use MockPWMProtocolHandler for testing")
+        print("✗ gpiozero tests failed!")
+        print("  → Check gpiozero installation")
         print("  → Or run on actual Raspberry Pi hardware")
 
 if __name__ == "__main__":
