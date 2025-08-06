@@ -149,14 +149,14 @@ class PhoneTeleoperatorSourccey(Teleoperator):
     @cached_property
     def action_features(self) -> dict[str, type]:
         """Features for the actions produced by this teleoperator."""
-        # Assuming 6 DOF arm + gripper (adjust based on your robot)
+        # Only left arm controlled by phone
         motor_names = [
-            "shoulder_pan.pos",
-            "shoulder_lift.pos", 
-            "elbow_flex.pos",
-            "wrist_flex.pos",
-            "wrist_roll.pos",
-            "gripper.pos"
+            "left_shoulder_pan.pos",
+            "left_shoulder_lift.pos", 
+            "left_elbow_flex.pos",
+            "left_wrist_flex.pos",
+            "left_wrist_roll.pos",
+            "left_gripper.pos"
         ]
         return {name: float for name in motor_names}
 
@@ -370,26 +370,25 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected")
 
-        # Extract current robot position from observation
-        current_joint_pos_deg = None
+        # Extract current robot positions from observation (left arm only)
+        current_left_arm_pos_deg = None
         if observation is not None:
             try:
-                # Extract joint positions from observation (assumes motor names follow pattern)
-                motor_keys = ["shoulder_pan.pos", "shoulder_lift.pos", "elbow_flex.pos", 
-                             "wrist_flex.pos", "wrist_roll.pos", "gripper.pos"]
-                current_joint_pos_deg = [observation.get(key, 0.0) for key in motor_keys]
+                # Extract left arm joint positions from observation
+                left_motor_keys = ["left_shoulder_pan.pos", "left_shoulder_lift.pos", "left_elbow_flex.pos", 
+                                  "left_wrist_flex.pos", "left_wrist_roll.pos", "left_gripper.pos"]
+                current_left_arm_pos_deg = [observation.get(key, 0.0) for key in left_motor_keys]
             except Exception as e:
-                logger.warning(f"Could not extract joint positions from observation: {e}")
+                logger.warning(f"Could not extract left arm joint positions from observation: {e}")
         
         # If no observation or extraction failed, use rest pose
-        if current_joint_pos_deg is None:
-            # Phone teleoperator always works in degrees (robot is auto-configured)
-            current_joint_pos_deg = list(np.rad2deg(self.config.rest_pose))
-            logger.debug("Using rest pose as current position")
+        if current_left_arm_pos_deg is None:
+            current_left_arm_pos_deg = list(np.rad2deg(self.config.rest_pose))
+            logger.debug("Using rest pose as current left arm position")
 
         # Show initial motor positions immediately on first call (before phone connection)
         if not self.initial_positions_shown:
-            self._display_motor_positions_formatted(current_joint_pos_deg, "INITIAL ROBOT POSITION")
+            self._display_motor_positions_formatted(current_left_arm_pos_deg, "INITIAL LEFT ARM POSITION")
             self.initial_positions_shown = True
 
         try:
@@ -428,29 +427,29 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     self.motor_positions_read = False
                     
                     # Continuously return rest position until phone reconnects
-                    current_joint_pos_deg = list(np.rad2deg(self.config.rest_pose))
-                    return self._format_action_dict(current_joint_pos_deg)
+                    rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
+                    return self._format_action_dict(rest_pose_deg)
                 
                 # Get the last known data (may be stale) for continued operation
                 data = self.pose_service.get_latest_pose(block=False)
 
             # Handle phone connection
             if not self._phone_connected:
-                # Pass current position to connection setup (IK solver always expects radians)
+                # Pass current left arm position to connection setup (IK solver always expects radians)
                 # Phone teleoperator always works in degrees (robot is auto-configured)
-                curr_qpos_rad = np.deg2rad(current_joint_pos_deg)
+                curr_qpos_rad = np.deg2rad(current_left_arm_pos_deg)
                 self.quat_RP, self.translation_RP = self._open_phone_connection(curr_qpos_rad)
                 self._phone_connected = True
 
             if not self.start_teleop:
                 # Phone teleoperator always works in degrees (robot is auto-configured)
-                current_joint_pos_deg = list(np.rad2deg(self.config.rest_pose))
+                rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
                 self._phone_connected = False
                 # Reset timer when teleop stops
                 self.teleop_start_time = None
                 self.motor_positions_read = False
-                # Return current position when not teleoperating
-                return self._format_action_dict(current_joint_pos_deg)
+                # Return rest position when not teleoperating
+                return self._format_action_dict(rest_pose_deg)
             
             # Start timer when teleop becomes active
             if self.teleop_start_time is None:
@@ -458,7 +457,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             
             # Check if 5 seconds have passed and we haven't read positions yet
             if not self.motor_positions_read and time.time() - self.teleop_start_time >= 5.0:
-                self._read_and_display_motor_positions(current_joint_pos_deg)
+                self._read_and_display_motor_positions(current_left_arm_pos_deg)
                 self.motor_positions_read = True
 
             switch_state = data.get("switch", False) if data is not None else False
@@ -470,7 +469,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             
             # Check for reset transition (prev=False, current=True) - reset just started
             if self.prev_is_resetting == False and current_is_resetting == True:
-                self.reset_hold_position = current_joint_pos_deg.copy()
+                self.reset_hold_position = current_left_arm_pos_deg.copy()
             
             if current_is_resetting:
                 self.prev_is_resetting = current_is_resetting
@@ -479,7 +478,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     return self._format_action_dict(self.reset_hold_position)
                 else:
                     # Fallback if no hold position captured yet
-                    return self._format_action_dict(current_joint_pos_deg)
+                    return self._format_action_dict(current_left_arm_pos_deg)
 
             # Check for reset transition (prev=True, current=False) - reset just ended
             if self.prev_is_resetting == True and current_is_resetting == False:
@@ -492,8 +491,8 @@ class PhoneTeleoperatorSourccey(Teleoperator):
 
             # Ensure we have valid data before processing pose
             if data is None:
-                # If no data available, return current position to maintain stability
-                return self._format_action_dict(current_joint_pos_deg)
+                # If no data available, return current positions to maintain stability
+                return self._format_action_dict(current_left_arm_pos_deg)
 
             pos, quat, gripper_value = data["position"], data["rotation"], data["gripper_value"]
 
@@ -540,8 +539,8 @@ class PhoneTeleoperatorSourccey(Teleoperator):
 
         except Exception as e:
             logger.error(f"Error getting action from {self}: {e}")
-            # Return current position on error (safer than rest pose)
-            return self._format_action_dict(current_joint_pos_deg)
+            # Return current positions on error (safer than rest pose)
+            return self._format_action_dict(current_left_arm_pos_deg)
 
     def _solve_ik(self, target_position: np.ndarray, target_wxyz: np.ndarray) -> list[float]:
         """Solve inverse kinematics for target pose. Returns solution in radians."""
@@ -576,6 +575,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 joint_positions.append(0.0)
         
         return {key: pos for key, pos in zip(action_keys, joint_positions)}
+
 
     def _read_and_display_motor_positions(self, current_joint_pos: list[float]) -> None:
         """Read and display current motor positions in rest_pose format (radians)."""

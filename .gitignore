@@ -177,3 +177,5 @@ outputs/
 
 # Cython debug symbols
 cython_debug/
+CLAUDE.md
+.claude/settings.local.json
