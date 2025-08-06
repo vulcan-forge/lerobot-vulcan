@@ -26,90 +26,6 @@ PI5_MAX_FREQUENCY = 50000      # 50kHz - Pi 5 can handle higher frequencies
 PI5_RESOLUTION = 12            # 12-bit resolution
 
 
-class MockPWMProtocolHandler(ProtocolHandler):
-    """
-    Mock PWM protocol handler for when gpiozero is not available.
-    This allows the code to run on non-Raspberry Pi systems for testing.
-    """
-
-    def __init__(self, config: Dict):
-        self.config = config
-        self.pwm_pins = config.get("pwm_pins", [])
-        self.direction_pins = config.get("direction_pins", [])
-        self.enable_pins = config.get("enable_pins", [])
-        self.brake_pins = config.get("brake_pins", [])
-        self.pwm_frequency = config.get("pwm_frequency", PI5_OPTIMAL_FREQUENCY)
-        self.invert_direction = config.get("invert_direction", False)
-        self.invert_enable = config.get("invert_enable", False)
-        self.invert_brake = config.get("invert_brake", False)
-
-        # Motor state tracking
-        self.pwm_channels = {}
-        self.direction_channels = {}
-        self.enable_channels = {}
-        self.brake_channels = {}
-        self.software_pwm_channels = {}
-
-        logger.warning("Using MockPWMProtocolHandler - GPIO hardware not available")
-
-    def connect(self) -> None:
-        """Mock connection - no actual hardware initialization."""
-        # Initialize motor state
-        for i, pin in enumerate(self.pwm_pins):
-            motor_id = i + 1
-            self.motors[motor_id] = {
-                "position": 0.0,
-                "velocity": 0.0,
-                "pwm": 0.0,
-                "enabled": False,
-                "brake_active": False
-            }
-
-        logger.info(f"Mock PWM protocol handler connected with {len(self.pwm_pins)} motors")
-
-    def disconnect(self) -> None:
-        """Mock disconnection."""
-        logger.info("Mock PWM protocol handler disconnected")
-
-    def get_position(self, motor_id: int) -> Optional[float]:
-        return self.motors.get(motor_id, {}).get("position", 0.0)
-
-    def set_position(self, motor_id: int, position: float) -> None:
-        if position < 0:
-            position = 0
-        elif position > 1:
-            position = 1
-        self.motors[motor_id]["position"] = position
-        pwm_duty = position
-        self.set_pwm(motor_id, pwm_duty)
-
-    def get_velocity(self, motor_id: int) -> float:
-        return self.motors.get(motor_id, {}).get("velocity", 0.0)
-
-    def set_velocity(self, motor_id: int, velocity: float) -> None:
-        velocity = max(-1.0, min(1.0, velocity))
-        self.motors[motor_id]["velocity"] = velocity
-        abs_velocity = abs(velocity)
-        self.set_pwm(motor_id, abs_velocity)
-
-    def get_pwm(self, motor_id: int) -> float:
-        return self.motors.get(motor_id, {}).get("pwm", 0.0)
-
-    def set_pwm(self, motor_id: int, duty_cycle: float) -> None:
-        duty_cycle = max(0.0, min(1.0, duty_cycle))
-        self.motors[motor_id]["pwm"] = duty_cycle
-        logger.debug(f"Mock Motor {motor_id} PWM set to {duty_cycle:.3f}")
-
-    def enable_motor(self, motor_id: int) -> None:
-        self.motors[motor_id]["enabled"] = True
-        logger.debug(f"Mock Motor {motor_id} enabled")
-
-    def disable_motor(self, motor_id: int) -> None:
-        self.set_pwm(motor_id, 0.0)
-        self.motors[motor_id]["enabled"] = False
-        logger.debug(f"Mock Motor {motor_id} disabled")
-
-
 class PWMProtocolHandler(ProtocolHandler):
     """
     PWM protocol handler optimized for DRV8871DDAR H-bridge motor drivers.
@@ -137,9 +53,9 @@ class PWMProtocolHandler(ProtocolHandler):
         self.invert_enable = config.get("invert_enable", False)
         self.invert_brake = config.get("invert_brake", False)
 
-        # Motor state tracking
-        import pdb; pdb.set_trace()
-        self.motors: Dict[int, Dict] = motors
+        # Motor configuration and state tracking
+        self.motors: Dict[str, DCMotor] = motors
+        self.motor_states: Dict[int, Dict] = {}  # Track motor state by ID
         self.pwm_channels = {}
         self.direction_channels = {}
         self.enable_channels = {}
@@ -223,7 +139,7 @@ class PWMProtocolHandler(ProtocolHandler):
                         logger.warning(f"Could not setup IN2 (direction) pin {dir_pin}: {e}")
 
                 # Initialize motor state
-                self.motors[motor_id] = {
+                self.motor_states[motor_id] = {
                     "position": 0.0,
                     "velocity": 0.0,
                     "pwm": 0.0,
@@ -237,7 +153,7 @@ class PWMProtocolHandler(ProtocolHandler):
 
         except Exception as e:
             logger.error(f"gpiozero setup failed: {e}")
-            raise RuntimeError(f"gpiozero hardware not available - use MockPWMProtocolHandler for testing")
+            raise RuntimeError(f"gpiozero hardware not available")
 
     def disconnect(self) -> None:
         """Clean up gpiozero channels."""
@@ -260,7 +176,7 @@ class PWMProtocolHandler(ProtocolHandler):
     # Position Functions
     def get_position(self, motor_id: int) -> Optional[float]:
         """Get current motor position if encoder available."""
-        return self.motors.get(motor_id, {}).get("position", 0.0)
+        return self.motor_states.get(motor_id, {}).get("position", 0.0)
 
     def set_position(self, motor_id: int, position: float) -> None:
         """
@@ -273,7 +189,7 @@ class PWMProtocolHandler(ProtocolHandler):
         elif position > 1:
             position = 1
 
-        self.motors[motor_id]["position"] = position
+        self.motor_states[motor_id]["position"] = position
 
         # Convert position to PWM (simple linear mapping)
         pwm_duty = position
@@ -282,7 +198,7 @@ class PWMProtocolHandler(ProtocolHandler):
     # Velocity Functions
     def get_velocity(self, motor_id: int) -> float:
         """Get current motor velocity."""
-        return self.motors.get(motor_id, {}).get("velocity", 0.0)
+        return self.motor_states.get(motor_id, {}).get("velocity", 0.0)
 
     def set_velocity(self, motor_id: int, velocity: float) -> None:
         """
@@ -292,7 +208,7 @@ class PWMProtocolHandler(ProtocolHandler):
         # Clamp velocity to [-1, 1]
         velocity = max(-1.0, min(1.0, velocity))
 
-        self.motors[motor_id]["velocity"] = velocity
+        self.motor_states[motor_id]["velocity"] = velocity
 
         # Convert velocity to PWM and direction
         abs_velocity = abs(velocity)
@@ -308,7 +224,7 @@ class PWMProtocolHandler(ProtocolHandler):
     # PWM Functions
     def get_pwm(self, motor_id: int) -> float:
         """Get current PWM duty cycle."""
-        return self.motors.get(motor_id, {}).get("pwm", 0.0)
+        return self.motor_states.get(motor_id, {}).get("pwm", 0.0)
 
     def set_pwm(self, motor_id: int, duty_cycle: float) -> None:
         """
@@ -317,7 +233,7 @@ class PWMProtocolHandler(ProtocolHandler):
         # Clamp duty cycle to [0, 1]
         duty_cycle = max(0.0, min(1.0, duty_cycle))
 
-        self.motors[motor_id]["pwm"] = duty_cycle
+        self.motor_states[motor_id]["pwm"] = duty_cycle
 
         # Use gpiozero PWM for IN1 speed control
         if motor_id in self.pwm_channels:
@@ -333,13 +249,13 @@ class PWMProtocolHandler(ProtocolHandler):
     # Enable/Disable Functions
     def enable_motor(self, motor_id: int) -> None:
         """Enable motor."""
-        self.motors[motor_id]["enabled"] = True
+        self.motor_states[motor_id]["enabled"] = True
         logger.debug(f"Motor {motor_id} enabled")
 
     def disable_motor(self, motor_id: int) -> None:
         """Disable motor by setting PWM to 0."""
         self.set_pwm(motor_id, 0.0)
-        self.motors[motor_id]["enabled"] = False
+        self.motor_states[motor_id]["enabled"] = False
         logger.debug(f"Motor {motor_id} disabled")
 
     # Helper methods for DRV8871DDAR-specific functionality
@@ -380,7 +296,7 @@ class PWMProtocolHandler(ProtocolHandler):
                 # Set both IN1 and IN2 high for brake
                 self.pwm_channels[motor_id].value = 1.0
                 self.direction_channels[motor_id].on()
-                self.motors[motor_id]["brake_active"] = True
+                self.motor_states[motor_id]["brake_active"] = True
                 logger.debug(f"Motor {motor_id} brake activated")
             except Exception as e:
                 logger.warning(f"Error activating brake for motor {motor_id}: {e}")
@@ -395,7 +311,7 @@ class PWMProtocolHandler(ProtocolHandler):
                 # Set both IN1 and IN2 low for stop
                 self.pwm_channels[motor_id].value = 0.0
                 self.direction_channels[motor_id].off()
-                self.motors[motor_id]["brake_active"] = False
+                self.motor_states[motor_id]["brake_active"] = False
                 logger.debug(f"Motor {motor_id} brake released")
             except Exception as e:
                 logger.warning(f"Error releasing brake for motor {motor_id}: {e}")
@@ -408,11 +324,4 @@ class PWMDCMotorsController(BaseDCMotorsController):
         super().__init__(config, motors, protocol)
 
     def _create_protocol_handler(self) -> ProtocolHandler:
-        try:
-            return PWMProtocolHandler(self.config, self.motors)
-        except (ImportError, RuntimeError) as e:
-            if "gpiozero hardware not available" in str(e) or "gpiozero not available" in str(e):
-                logger.warning(f"Falling back to mock PWM handler: {e}")
-                return MockPWMProtocolHandler(self.config)
-            else:
-                raise
+        return PWMProtocolHandler(self.config, self.motors)
