@@ -209,6 +209,13 @@ class SourcceyV3Beta(Robot):
             prefixed_send_action_left = {f"left_{key}": value for key, value in send_action_left.items()}
             prefixed_send_action_right = {f"right_{key}": value for key, value in send_action_right.items()}
 
+            # Base velocity
+            base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
+            base_wheel_goal_vel = self._body_to_wheel_raw(
+                base_goal_vel["x.vel"], base_goal_vel["y.vel"], base_goal_vel["theta.vel"]
+            )
+            # self.bus.sync_write("Goal_Velocity", base_wheel_goal_vel)
+
             return {**prefixed_send_action_left, **prefixed_send_action_right}
         except Exception as e:
             print(f"Error sending action: {e}")

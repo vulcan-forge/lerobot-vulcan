@@ -76,10 +76,6 @@ def main():
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
                 data = dict(json.loads(msg))
 
-                print('--------------------------------')
-                print('data', data)
-                print('--------------------------------')
-
                 _action_sent = robot.send_action(data)
                 last_cmd_time = time.time()
                 watchdog_active = False
