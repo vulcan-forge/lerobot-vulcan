@@ -138,6 +138,7 @@ class PWMProtocolHandler(ProtocolHandler):
         self.invert_brake = config.get("invert_brake", False)
 
         # Motor state tracking
+        import pdb; pdb.set_trace()
         self.motors: Dict[int, Dict] = motors
         self.pwm_channels = {}
         self.direction_channels = {}
