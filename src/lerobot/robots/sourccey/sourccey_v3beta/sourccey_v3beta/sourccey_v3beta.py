@@ -122,8 +122,7 @@ class SourcceyV3Beta(Robot):
         self.left_arm.connect(calibrate)
         self.right_arm.connect(calibrate)
 
-        # Connect DC motors
-        # self.dc_motors_controller.connect()
+        self.dc_motors_controller.connect()
 
         for cam in self.cameras.values():
             cam.connect()
@@ -133,7 +132,7 @@ class SourcceyV3Beta(Robot):
         self.right_arm.disconnect()
 
         self.stop_base()
-        # self.dc_motors_controller.disconnect()
+        self.dc_motors_controller.disconnect()
 
         for cam in self.cameras.values():
             cam.disconnect()
