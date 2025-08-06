@@ -195,7 +195,6 @@ class BaseDCMotorsController(abc.ABC):
             velocity: Target velocity (-1 to 1 if normalized, otherwise in RPM)
             normalize: Whether to normalize the velocity
         """
-        import pdb; pdb.set_trace()
         if not self._is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 

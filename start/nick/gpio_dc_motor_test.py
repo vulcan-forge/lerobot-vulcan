@@ -24,6 +24,7 @@ def test_single_motor():
             "invert_direction": False,
         }
 
+        import pdb; pdb.set_trace()
         motors = {
             "front_left": DCMotor(id=1, model="mecanum_wheel", norm_mode=MotorNormMode.RANGE_M100_100)
         }
