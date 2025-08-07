@@ -142,13 +142,124 @@ class SourcceyV3BetaFollowerCalibrator:
 
     def _load_default_calibration(self, reversed: bool = False) -> Dict[str, Any]:
         """Load default calibration from file."""
+        # Get the directory of the current file
+        current_dir = Path(__file__).parent
+        # Navigate to the sourccey_v3beta directory where the calibration files are located
+        calibration_dir = current_dir.parent / "sourccey_v3beta"
+
         if reversed:
-            calibration_file = Path.home() / "Desktop/Projects/lerobot/src/lerobot/robots/sourccey/sourccey_v3beta/sourccey_v3beta/left_arm_default_calibration.json"
+            calibration_file = calibration_dir / "left_arm_default_calibration.json"
         else:
-            calibration_file = Path.home() / "Desktop/Projects/lerobot/src/lerobot/robots/sourccey/sourccey_v3beta/sourccey_v3beta/right_arm_default_calibration.json"
+            calibration_file = calibration_dir / "right_arm_default_calibration.json"
+
+        # Create the calibration directory if it doesn't exist
+        calibration_dir.mkdir(parents=True, exist_ok=True)
+
+        # If the calibration file doesn't exist, create it with default values
+        if not calibration_file.exists():
+            logger.info(f"Calibration file {calibration_file} not found. Creating default calibration...")
+            default_calibration = self._create_default_calibration(reversed)
+            with open(calibration_file, "w") as f:
+                json.dump(default_calibration, f, indent=4)
+            logger.info(f"Created default calibration file: {calibration_file}")
 
         with open(calibration_file, "r") as f:
             return json.load(f)
+
+    def _create_default_calibration(self, reversed: bool = False) -> Dict[str, Any]:
+        """Create default calibration data for the robot."""
+        if reversed:
+            # Left arm calibration (IDs 1-6)
+            return {
+                "shoulder_pan": {
+                    "id": 1,
+                    "drive_mode": 0,
+                    "homing_offset": 2035,
+                    "range_min": 970,
+                    "range_max": 3095
+                },
+                "shoulder_lift": {
+                    "id": 2,
+                    "drive_mode": 1,
+                    "homing_offset": 660,
+                    "range_min": 0,
+                    "range_max": 3800
+                },
+                "elbow_flex": {
+                    "id": 3,
+                    "drive_mode": 0,
+                    "homing_offset": -1515,
+                    "range_min": 200,
+                    "range_max": 3800
+                },
+                "wrist_flex": {
+                    "id": 4,
+                    "drive_mode": 0,
+                    "homing_offset": -1100,
+                    "range_min": 850,
+                    "range_max": 3350
+                },
+                "wrist_roll": {
+                    "id": 5,
+                    "drive_mode": 0,
+                    "homing_offset": 975,
+                    "range_min": 0,
+                    "range_max": 4095
+                },
+                "gripper": {
+                    "id": 6,
+                    "drive_mode": 0,
+                    "homing_offset": 1640,
+                    "range_min": 425,
+                    "range_max": 2047
+                }
+            }
+        else:
+            # Right arm calibration (IDs 7-12)
+            return {
+                "shoulder_pan": {
+                    "id": 7,
+                    "drive_mode": 0,
+                    "homing_offset": 2000,
+                    "range_min": 925,
+                    "range_max": 3050
+                },
+                "shoulder_lift": {
+                    "id": 8,
+                    "drive_mode": 1,
+                    "homing_offset": 1645,
+                    "range_min": 296,
+                    "range_max": 4095
+                },
+                "elbow_flex": {
+                    "id": 9,
+                    "drive_mode": 0,
+                    "homing_offset": 20,
+                    "range_min": 275,
+                    "range_max": 3850
+                },
+                "wrist_flex": {
+                    "id": 10,
+                    "drive_mode": 0,
+                    "homing_offset": 1960,
+                    "range_min": 770,
+                    "range_max": 3350
+                },
+                "wrist_roll": {
+                    "id": 11,
+                    "drive_mode": 0,
+                    "homing_offset": 1025,
+                    "range_min": 75,
+                    "range_max": 4020
+                },
+                "gripper": {
+                    "id": 12,
+                    "drive_mode": 1,
+                    "homing_offset": 515,
+                    "range_min": 425,
+                    "range_max": 2047
+                }
+            }
 
     def _detect_mechanical_limits(self, reversed: bool = False) -> Dict[str, Dict[str, float]]:
         """Detect the mechanical limits of the robot using current monitoring.
