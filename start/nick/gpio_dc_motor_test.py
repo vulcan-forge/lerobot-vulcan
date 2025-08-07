@@ -26,7 +26,7 @@ def test_four_functions():
 
         # Create motor
         motor = DCMotor(
-            motor_id=1,
+            id=1,
             name="front_left",
             norm_mode=MotorNormMode.RANGE_M100_100,  # Fixed: use correct enum value
         )
