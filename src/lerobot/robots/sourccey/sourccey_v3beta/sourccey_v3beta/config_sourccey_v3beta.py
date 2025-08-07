@@ -41,11 +41,11 @@ def sourccey_v3beta_cameras_config() -> dict[str, CameraConfig]:
 
 def sourccey_v3beta_dc_motors() -> dict[str, DCMotor]:
     return {
-        "front_left": DCMotor(id=1, model="mecanum_wheel", norm_mode=MotorNormMode.RANGE_M100_100),
-        "front_right": DCMotor(id=2, model="mecanum_wheel", norm_mode=MotorNormMode.RANGE_M100_100),
-        "rear_left": DCMotor(id=3, model="mecanum_wheel", norm_mode=MotorNormMode.RANGE_M100_100),
-        "rear_right": DCMotor(id=4, model="mecanum_wheel", norm_mode=MotorNormMode.RANGE_M100_100),
-        "actuator": DCMotor(id=5, model="linear_actuator", norm_mode=MotorNormMode.RANGE_M100_100),
+        "front_left": DCMotor(id=1, model="mecanum_wheel", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
+        "front_right": DCMotor(id=2, model="mecanum_wheel", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
+        "rear_left": DCMotor(id=3, model="mecanum_wheel", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
+        "rear_right": DCMotor(id=4, model="mecanum_wheel", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
+        "actuator": DCMotor(id=5, model="linear_actuator", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
     }
 
 def sourccey_v3beta_dc_motors_config() -> dict:

@@ -27,8 +27,8 @@ def test_four_functions():
         # Create motor
         motor = DCMotor(
             id=1,
-            name="front_left",
-            norm_mode=MotorNormMode.RANGE_M100_100,  # Fixed: use correct enum value
+            model="mecanum_wheel",
+            norm_mode=MotorNormMode.PWM_DUTY_CYCLE,  # Fixed: use correct enum value
         )
 
         # Create controller

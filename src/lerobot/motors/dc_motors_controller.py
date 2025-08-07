@@ -12,9 +12,6 @@ logger = logging.getLogger(__name__)
 
 
 class MotorNormMode(str, Enum):
-    RANGE_0_100 = "range_0_100"
-    RANGE_M100_100 = "range_m100_100"
-    DEGREES = "degrees"
     PWM_DUTY_CYCLE = "pwm_duty_cycle"  # 0 to 1 for PWM control
 
 
