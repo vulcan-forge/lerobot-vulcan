@@ -219,17 +219,17 @@ class PWMProtocolHandler(ProtocolHandler):
         self.motor_states[motor_id]["velocity"] = velocity
         self.motor_states[motor_id]["pwm"] = abs(velocity)
 
-        # Simple ON/OFF DRV8871DDAR Logic:
+        # Correct DRV8871DDAR Logic (from datasheet):
         if velocity > 0:  # Forward
-            # IN1 = ON, IN2 = ON
+            # IN1 = 1, IN2 = 0 (Forward)
             self.pwm_channels[motor_id].on()
-            self.direction_channels[motor_id].on()
+            self.direction_channels[motor_id].off()
         elif velocity < 0:  # Backward
-            # IN1 = OFF, IN2 = ON
+            # IN1 = 0, IN2 = 1 (Reverse)
             self.pwm_channels[motor_id].off()
             self.direction_channels[motor_id].on()
         else:  # Stop
-            # IN1 = OFF, IN2 = OFF
+            # IN1 = 0, IN2 = 0 (Coast/Stop)
             self.pwm_channels[motor_id].off()
             self.direction_channels[motor_id].off()
 
@@ -301,12 +301,12 @@ class PWMProtocolHandler(ProtocolHandler):
     def activate_brake(self, motor_id: int) -> None:
         """
         Activate motor brake for DRV8871DDAR.
-        Brake: IN1=HIGH, IN2=HIGH
+        Brake: IN1=1, IN2=1 (both inputs high)
         """
         if motor_id in self.pwm_channels and motor_id in self.direction_channels:
             try:
                 # Set both IN1 and IN2 high for brake
-                self.pwm_channels[motor_id].value = 1.0
+                self.pwm_channels[motor_id].on()
                 self.direction_channels[motor_id].on()
                 self.motor_states[motor_id]["brake_active"] = True
                 logger.debug(f"Motor {motor_id} brake activated")
@@ -316,12 +316,12 @@ class PWMProtocolHandler(ProtocolHandler):
     def release_brake(self, motor_id: int) -> None:
         """
         Release motor brake for DRV8871DDAR.
-        Stop: IN1=LOW, IN2=LOW
+        Stop: IN1=0, IN2=0 (coast mode)
         """
         if motor_id in self.pwm_channels and motor_id in self.direction_channels:
             try:
                 # Set both IN1 and IN2 low for stop
-                self.pwm_channels[motor_id].value = 0.0
+                self.pwm_channels[motor_id].off()
                 self.direction_channels[motor_id].off()
                 self.motor_states[motor_id]["brake_active"] = False
                 logger.debug(f"Motor {motor_id} brake released")
