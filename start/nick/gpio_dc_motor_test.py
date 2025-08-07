@@ -28,12 +28,12 @@ def test_four_functions():
         motor = DCMotor(
             id=1,
             model="mecanum_wheel",
-            norm_mode=MotorNormMode.PWM_DUTY_CYCLE,  # Fixed: use correct enum value
+            norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
         )
 
-        # Create controller
+        # Create controller with motors as a dictionary
         controller = PWMDCMotorsController(
-            motors=[motor],
+            motors={"front_left": motor},  # Fixed: pass as dictionary
             config=motor_config,
         )
 
