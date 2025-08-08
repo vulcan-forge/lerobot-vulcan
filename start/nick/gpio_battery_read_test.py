@@ -37,7 +37,8 @@ def read_adc(channel):
 
 def calculate_battery_voltage(adc_value, r1, r2):
     v_ref = 3.3
-    v_out = adc_value * (v_ref / 1023.0)
+    # Fix: Use 4095 for 12-bit ADC instead of 1023 for 10-bit
+    v_out = adc_value * (v_ref / 4095.0)
     v_in = v_out * ((r1 + r2) / r2)
     return v_in
 
