@@ -218,6 +218,8 @@ class PWMProtocolHandler(ProtocolHandler):
 
         self.motor_states[motor_id]["velocity"] = velocity
         self.motor_states[motor_id]["pwm"] = abs(velocity)
+        # Reset brake state when setting velocity
+        self.motor_states[motor_id]["brake_active"] = False
 
         # Correct DRV8871DDAR Logic (from datasheet):
         if velocity > 0:  # Forward
