@@ -18,8 +18,8 @@ def test_four_functions():
 
         # Motor config for testing
         motor_config = {
-            "pwm_pins": [25],           # IN1 - Front Left Wheel (PWM)
-            "direction_pins": [5],      # IN2 - Front Left Wheel (Direction)
+            "pwm_pins": [23],           # IN1 - Front Left Wheel (PWM)
+            "direction_pins": [24],      # IN2 - Front Left Wheel (Direction)
             "pwm_frequency": 1000,
             "invert_direction": False,
         }
