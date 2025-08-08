@@ -38,8 +38,12 @@ def read_adc(channel):
 if __name__ == "__main__":
     try:
         while True:
+            # Print raw GPIO pin states
+            print(f"CLK: {CLK.value} | MISO: {MISO.value} | MOSI: {MOSI.value} | CS: {CS.value}")
+
             adc_val = read_adc(0)
             print(f"ADC Value: {adc_val}")
+            print("-" * 50)
             time.sleep(1)
     except KeyboardInterrupt:
         print("Exiting.")
