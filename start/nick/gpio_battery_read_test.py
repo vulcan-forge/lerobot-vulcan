@@ -2,10 +2,10 @@ import time
 from gpiozero import DigitalInputDevice, DigitalOutputDevice
 
 # GPIO pin setup for bit-banged SPI
-CLK  = DigitalOutputDevice(13)
-MISO = DigitalInputDevice(19)
-MOSI = DigitalOutputDevice(16)
-CS   = DigitalOutputDevice(26)
+CLK  = DigitalOutputDevice(11)  # GPIO 11 (Pin 23) - SCLK
+MISO = DigitalInputDevice(9)    # GPIO 9 (Pin 21) - MISO
+MOSI = DigitalOutputDevice(10)  # GPIO 10 (Pin 19) - MOSI
+CS   = DigitalOutputDevice(8)   # GPIO 8 (Pin 24) - CS (CE0)
 
 def read_adc(channel):
     if not 0 <= channel <= 7:
