@@ -90,9 +90,9 @@ class SourcceyV3Beta(Robot):
     def _state_ft(self) -> dict[str, type]:
         return {f"{motor}.pos": float for motor in self.left_arm.bus.motors} | {
             f"{motor}.pos": float for motor in self.right_arm.bus.motors} | {
-            "x.vel": float,
-            "y.vel": float,
-            "theta.vel": float,
+            # "x.vel": float,
+            # "y.vel": float,
+            # "theta.vel": float,
         }
 
     @property
@@ -209,10 +209,10 @@ class SourcceyV3Beta(Robot):
             prefixed_send_action_right = {f"right_{key}": value for key, value in send_action_right.items()}
 
             # Base velocity
-            base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
-            base_wheel_goal_vel = self._body_to_wheel_raw(
-                base_goal_vel["x.vel"], base_goal_vel["y.vel"], base_goal_vel["theta.vel"]
-            )
+            # base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
+            # base_wheel_goal_vel = self._body_to_wheel_raw(
+            #     base_goal_vel["x.vel"], base_goal_vel["y.vel"], base_goal_vel["theta.vel"]
+            # )
             # self.bus.sync_write("Goal_Velocity", base_wheel_goal_vel)
 
             return {**prefixed_send_action_left, **prefixed_send_action_right}
