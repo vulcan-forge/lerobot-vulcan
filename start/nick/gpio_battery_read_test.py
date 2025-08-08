@@ -36,25 +36,20 @@ def read_adc(channel):
     # Extract only the 10 data bits (bits 2-11)
     return (result >> 2) & 0x3FF  # Mask to get only 10 bits
 
-def calculate_battery_voltage(adc_value):
+def calculate_voltage(adc_value):
     v_ref = 3.3
-    v_out = adc_value * (v_ref / 1023.0)
-    # Use the actual measured ratio: 13.15V / 2.514V = 5.23
-    voltage_divider_ratio = 13.15 / 2.514
-    v_in = v_out * voltage_divider_ratio
-    return v_in
+    return adc_value * (v_ref / 1023.0)
 
 if __name__ == "__main__":
     try:
         while True:
             adc_val = read_adc(0)
-            voltage = calculate_battery_voltage(adc_val)
+            voltage_at_adc = calculate_voltage(adc_val)
 
-            # Debug: Show intermediate calculations
-            v_out = adc_val * (3.3 / 1023.0)
-            voltage_divider_ratio = 13.15 / 2.514
+            # Calculate what ADC should read for 2.514V
+            expected_adc = 2.514 / 3.3 * 1023
 
-            print(f"Raw: {adc_val}, V_out: {v_out:.3f}V, Ratio: {voltage_divider_ratio:.2f}, Voltage: {voltage:.3f} V | CLK: {CLK.value} | MISO: {MISO.value} | MOSI: {MOSI.value} | CS: {CS.value}")
+            print(f"Raw: {adc_val}, Expected: {expected_adc:.0f}, ADC Input: {voltage_at_adc:.3f}V | CLK: {CLK.value} | MISO: {MISO.value} | MOSI: {MOSI.value} | CS: {CS.value}")
             time.sleep(1)
     except KeyboardInterrupt:
         print("Exiting.")
