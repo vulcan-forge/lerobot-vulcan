@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 """
-Test 5 DRV8871DDAR motors using custom GPIO pin configuration.
-Custom Pin Configuration:
-Motor 1: IN1=GPIO 17, IN2=GPIO 18
-Motor 2: IN1=GPIO 27, IN2=GPIO 22
-Motor 3: IN1=GPIO 23, IN2=GPIO 24
-Motor 4: IN1=GPIO 25, IN2=GPIO 5
-Motor 5: IN1=GPIO 6, IN2=GPIO 12
+Test DRV8871DDAR motors with custom GPIO pins - 4 functions, 3 seconds each.
+Generic function to test any motor by passing GPIO pins.
 """
 
 import time
@@ -16,53 +11,49 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def test_five_motors():
-    """Test 5 DRV8871DDAR motors with custom GPIO pins."""
+def test_motor(pwm_pin, direction_pin, motor_name="Motor"):
+    """
+    Test a single DRV8871DDAR motor with specified GPIO pins.
+
+    Args:
+        pwm_pin (int): GPIO pin for PWM (IN1)
+        direction_pin (int): GPIO pin for direction (IN2)
+        motor_name (str): Name for the motor (for display)
+    """
     try:
         from lerobot.motors.dc_pwm.dc_pwm import PWMDCMotorsController
         from lerobot.motors.dc_motors_controller import DCMotor, MotorNormMode
 
-        # Motor configuration using custom GPIO pins
-        # Each motor uses 2 pins: PWM (IN1) and Direction (IN2)
+        # Motor config for testing
         motor_config = {
-            # PWM pins (IN1) - Speed control
-            "pwm_pins": [17, 27, 23, 25, 6],  # GPIO 17, 27, 23, 25, 6
-
-            # Direction pins (IN2) - Direction control
-            "direction_pins": [18, 22, 24, 5, 12],  # GPIO 18, 22, 24, 5, 12
-
-            "pwm_frequency": 1000,  # 1kHz - compatible with gpiozero
+            "pwm_pins": [pwm_pin],           # IN1 - PWM control
+            "direction_pins": [direction_pin], # IN2 - Direction control
+            "pwm_frequency": 1000,
             "invert_direction": False,
         }
 
-        # Create 5 motors
-        motors = {
-            "motor_1": DCMotor(id=1, model="drv8871", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
-            "motor_2": DCMotor(id=2, model="drv8871", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
-            "motor_3": DCMotor(id=3, model="drv8871", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
-            "motor_4": DCMotor(id=4, model="drv8871", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
-            "motor_5": DCMotor(id=5, model="drv8871", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
-        }
+        # Create motor
+        motor = DCMotor(
+            id=1,
+            model="drv8871",
+            norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
+        )
 
         # Create controller
         controller = PWMDCMotorsController(
-            motors=motors,
+            motors={"test_motor": motor},
             config=motor_config,
         )
 
-        print("=== 5 Motor DRV8871DDAR GPIO Test ===")
-        print("Using custom GPIO pin configuration:")
-        print("Motor 1: IN1=GPIO 17, IN2=GPIO 18")
-        print("Motor 2: IN1=GPIO 27, IN2=GPIO 22")
-        print("Motor 3: IN1=GPIO 23, IN2=GPIO 24")
-        print("Motor 4: IN1=GPIO 25, IN2=GPIO 5")
-        print("Motor 5: IN1=GPIO 6, IN2=GPIO 12")
+        print(f"=== DRV8871DDAR {motor_name} Test ===")
+        print(f"Motor: {motor_name}")
+        print(f"Pins: IN1=GPIO {pwm_pin} (PWM), IN2=GPIO {direction_pin} (Direction)")
         print()
 
         # Connect
-        print("1. Connecting motors...")
+        print("1. Connecting motor...")
         controller.connect()
-        print("✓ All motors connected")
+        print("✓ Motor connected")
         print()
 
         # Test loop
@@ -71,75 +62,29 @@ def test_five_motors():
             while True:
                 print(f"--- Cycle {cycle} ---")
 
-                # Test 1: All motors forward (2 seconds)
-                print("   1. ALL MOTORS FORWARD (2 seconds)...")
-                for motor_name in motors.keys():
-                    controller.set_velocity(motor_name, 0.5)  # 50% speed forward
-                print("   Motor states: ", controller.protocol_handler.motor_states)
-                time.sleep(2)
-
-                # Test 2: All motors backward (2 seconds)
-                print("   2. ALL MOTORS BACKWARD (2 seconds)...")
-                for motor_name in motors.keys():
-                    controller.set_velocity(motor_name, -0.5)  # 50% speed backward
-                print("   Motor states: ", controller.protocol_handler.motor_states)
-                time.sleep(2)
-
-                # Test 3: Stop all motors (1 second)
-                print("   3. STOP ALL MOTORS (1 second)...")
-                for motor_name in motors.keys():
-                    controller.set_velocity(motor_name, 0.0)
-                print("   Motor states: ", controller.protocol_handler.motor_states)
-                time.sleep(1)
-
-                # Test 4: Individual motor test (3 seconds each)
-                print("   4. INDIVIDUAL MOTOR TEST...")
-                for i, motor_name in enumerate(motors.keys(), 1):
-                    print(f"      Testing Motor {i} ({motor_name})...")
-
-                    # Forward
-                    controller.set_velocity(motor_name, 0.7)
-                    print(f"        Forward at 70% speed")
-                    time.sleep(1)
-
-                    # Backward
-                    controller.set_velocity(motor_name, -0.7)
-                    print(f"        Backward at 70% speed")
-                    time.sleep(1)
-
-                    # Stop
-                    controller.set_velocity(motor_name, 0.0)
-                    print(f"        Stop")
-                    time.sleep(1)
-
-                    print(f"      ✓ Motor {i} test complete")
-                    print()
-
-                # Test 5: Brake test (2 seconds)
-                print("   5. BRAKE TEST (2 seconds)...")
-                for motor_id in range(1, 6):
-                    controller.protocol_handler.activate_brake(motor_id)
-                print("   Motor states: ", controller.protocol_handler.motor_states)
-                time.sleep(2)
-
-                # Release brakes
-                for motor_id in range(1, 6):
-                    controller.protocol_handler.release_brake(motor_id)
-
-                # Test 6: Alternating pattern (3 seconds)
-                print("   6. ALTERNATING PATTERN (3 seconds)...")
-                # Even motors forward, odd motors backward
-                for i, motor_name in enumerate(motors.keys(), 1):
-                    if i % 2 == 0:  # Even motors
-                        controller.set_velocity(motor_name, 0.6)
-                    else:  # Odd motors
-                        controller.set_velocity(motor_name, -0.6)
+                # 1. Forward motion (3 seconds)
+                print("   1. FORWARD motion (3 seconds)...")
+                controller.set_velocity("test_motor", 1.0)
                 print("   Motor states: ", controller.protocol_handler.motor_states)
                 time.sleep(3)
 
-                # Stop all
-                for motor_name in motors.keys():
-                    controller.set_velocity(motor_name, 0.0)
+                # 2. Backward motion (3 seconds)
+                print("   2. BACKWARD motion (3 seconds)...")
+                controller.set_velocity("test_motor", -1.0)
+                print("   Motor states: ", controller.protocol_handler.motor_states)
+                time.sleep(3)
+
+                # 3. Stop (3 seconds)
+                print("   3. STOP (3 seconds)...")
+                controller.set_velocity("test_motor", 0.0)
+                print("   Motor states: ", controller.protocol_handler.motor_states)
+                time.sleep(3)
+
+                # 4. Brake (3 seconds)
+                print("   4. BRAKE (3 seconds)...")
+                controller.protocol_handler.activate_brake(1)
+                print("   Motor states: ", controller.protocol_handler.motor_states)
+                time.sleep(3)
 
                 cycle += 1
                 print()
@@ -147,73 +92,66 @@ def test_five_motors():
         except KeyboardInterrupt:
             print()
             print("Stopping test...")
-            # Stop all motors
-            for motor_name in motors.keys():
-                controller.set_velocity(motor_name, 0.0)
+            controller.set_velocity("test_motor", 0.0)
             time.sleep(1)
 
         # Disconnect
-        print("2. Disconnecting motors...")
+        print("2. Disconnecting motor...")
         controller.disconnect()
-        print("✓ All motors disconnected")
+        print("✓ Motor disconnected")
         print()
 
         print("=== Test Complete ===")
-        print("✓ All 5 motors tested successfully!")
-        print("→ GPIO pins are working correctly")
-        print("→ DRV8871DDAR drivers are functioning")
-        print("→ Ready for multi-motor applications")
+        print("✓ All tests passed!")
+        print(f"→ {motor_name} is working correctly")
 
     except Exception as e:
         print(f"✗ Test failed: {e}")
         raise
 
-def test_individual_motor():
-    """Test individual motor for debugging."""
-    try:
-        from lerobot.motors.dc_pwm.dc_pwm import PWMDCMotorsController
-        from lerobot.motors.dc_motors_controller import DCMotor, MotorNormMode
+def test_all_motors():
+    """Test all 5 motors in sequence."""
+    # Motor configurations: (pwm_pin, direction_pin, motor_name)
+    motors = [
+        (17, 18, "Motor 1"),
+        (27, 22, "Motor 2"),
+        (23, 24, "Motor 3"),
+        (25, 5, "Motor 4"),
+        (6, 12, "Motor 5"),
+    ]
 
-        # Test single motor with first set of pins
-        motor_config = {
-            "pwm_pins": [17],           # IN1 - PWM control
-            "direction_pins": [18],      # IN2 - Direction control
-            "pwm_frequency": 1000,
-            "invert_direction": False,
-        }
+    print("=== Testing All 5 Motors ===")
+    print("Motor configurations:")
+    for i, (pwm, dir_pin, name) in enumerate(motors, 1):
+        print(f"  {name}: IN1=GPIO {pwm}, IN2=GPIO {dir_pin}")
+    print()
 
-        motor = DCMotor(id=1, model="drv8871", norm_mode=MotorNormMode.PWM_DUTY_CYCLE)
-        controller = PWMDCMotorsController(motors={"test_motor": motor}, config=motor_config)
+    for pwm_pin, direction_pin, motor_name in motors:
+        print(f"\n{'='*50}")
+        print(f"Testing {motor_name}...")
+        print(f"{'='*50}")
 
-        print("=== Individual Motor Test ===")
-        print("Motor: Test Motor")
-        print("Pins: IN1=GPIO 17 (PWM), IN2=GPIO 18 (Direction)")
-        print()
+        try:
+            test_motor(pwm_pin, direction_pin, motor_name)
+            print(f"✓ {motor_name} test completed successfully!")
+        except Exception as e:
+            print(f"✗ {motor_name} test failed: {e}")
+            break
 
-        controller.connect()
-        print("✓ Motor connected")
+        # Pause between motors
+        if motor_name != "Motor 5":  # Don't pause after the last motor
+            print("\nPress Enter to test next motor, or Ctrl+C to stop...")
+            try:
+                input()
+            except KeyboardInterrupt:
+                print("\nStopping motor tests...")
+                break
 
-        # Simple test sequence
-        print("Testing forward...")
-        controller.set_velocity("test_motor", 0.5)
-        time.sleep(2)
-
-        print("Testing backward...")
-        controller.set_velocity("test_motor", -0.5)
-        time.sleep(2)
-
-        print("Testing stop...")
-        controller.set_velocity("test_motor", 0.0)
-        time.sleep(1)
-
-        controller.disconnect()
-        print("✓ Individual motor test complete")
-
-    except Exception as e:
-        print(f"✗ Individual motor test failed: {e}")
-        raise
+    print("\n=== All Motor Tests Complete ===")
 
 if __name__ == "__main__":
-    # Uncomment the function you want to run:
-    test_five_motors()  # Test all 5 motors
-    # test_individual_motor()  # Test single motor for debugging
+    # Test individual motor
+    # test_motor(17, 18, "Motor 1")  # Test Motor 1
+
+    # Test all motors in sequence
+    test_all_motors()
