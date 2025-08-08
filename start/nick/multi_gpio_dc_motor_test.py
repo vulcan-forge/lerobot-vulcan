@@ -126,15 +126,6 @@ def test_all_motors():
             print(f"✗ {motor_name} test failed: {e}")
             break
 
-        # Pause between motors
-        if motor_name != "Motor 5":  # Don't pause after the last motor
-            print("\nPress Enter to test next motor, or Ctrl+C to stop...")
-            try:
-                input()
-            except KeyboardInterrupt:
-                print("\nStopping motor tests...")
-                break
-
     print("\n=== All Motor Tests Complete ===")
 
 if __name__ == "__main__":
