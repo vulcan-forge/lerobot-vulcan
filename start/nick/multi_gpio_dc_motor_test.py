@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def test_motor(pwm_pin, direction_pin, motor_name="Motor"):
     """
-    Test a single DRV8871DDAR motor with specified GPIO pins.
+    Test a single DRV8871DDAR motor with specified GPIO pins - 1 cycle only.
 
     Args:
         pwm_pin (int): GPIO pin for PWM (IN1)
@@ -56,44 +56,32 @@ def test_motor(pwm_pin, direction_pin, motor_name="Motor"):
         print("✓ Motor connected")
         print()
 
-        # Test loop
-        cycle = 1
-        try:
-            while True:
-                print(f"--- Cycle {cycle} ---")
+        # Single test cycle
+        print("--- Single Test Cycle ---")
 
-                # 1. Forward motion (3 seconds)
-                print("   1. FORWARD motion (3 seconds)...")
-                controller.set_velocity("test_motor", 1.0)
-                print("   Motor states: ", controller.protocol_handler.motor_states)
-                time.sleep(3)
+        # 1. Forward motion (3 seconds)
+        print("   1. FORWARD motion (3 seconds)...")
+        controller.set_velocity("test_motor", 1.0)
+        print("   Motor states: ", controller.protocol_handler.motor_states)
+        time.sleep(3)
 
-                # 2. Backward motion (3 seconds)
-                print("   2. BACKWARD motion (3 seconds)...")
-                controller.set_velocity("test_motor", -1.0)
-                print("   Motor states: ", controller.protocol_handler.motor_states)
-                time.sleep(3)
+        # 2. Backward motion (3 seconds)
+        print("   2. BACKWARD motion (3 seconds)...")
+        controller.set_velocity("test_motor", -1.0)
+        print("   Motor states: ", controller.protocol_handler.motor_states)
+        time.sleep(3)
 
-                # 3. Stop (3 seconds)
-                print("   3. STOP (3 seconds)...")
-                controller.set_velocity("test_motor", 0.0)
-                print("   Motor states: ", controller.protocol_handler.motor_states)
-                time.sleep(3)
+        # 3. Stop (3 seconds)
+        print("   3. STOP (3 seconds)...")
+        controller.set_velocity("test_motor", 0.0)
+        print("   Motor states: ", controller.protocol_handler.motor_states)
+        time.sleep(3)
 
-                # 4. Brake (3 seconds)
-                print("   4. BRAKE (3 seconds)...")
-                controller.protocol_handler.activate_brake(1)
-                print("   Motor states: ", controller.protocol_handler.motor_states)
-                time.sleep(3)
-
-                cycle += 1
-                print()
-
-        except KeyboardInterrupt:
-            print()
-            print("Stopping test...")
-            controller.set_velocity("test_motor", 0.0)
-            time.sleep(1)
+        # 4. Brake (3 seconds)
+        print("   4. BRAKE (3 seconds)...")
+        controller.protocol_handler.activate_brake(1)
+        print("   Motor states: ", controller.protocol_handler.motor_states)
+        time.sleep(3)
 
         # Disconnect
         print("2. Disconnecting motor...")
@@ -110,7 +98,7 @@ def test_motor(pwm_pin, direction_pin, motor_name="Motor"):
         raise
 
 def test_all_motors():
-    """Test all 5 motors in sequence."""
+    """Test all 5 motors in sequence - 1 cycle each."""
     # Motor configurations: (pwm_pin, direction_pin, motor_name)
     motors = [
         (17, 18, "Motor 1"),
