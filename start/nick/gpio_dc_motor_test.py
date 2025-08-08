@@ -39,7 +39,7 @@ def test_four_functions():
 
         print("=== DRV8871DDAR Single Motor Test ===")
         print("Motor: Front Left Wheel")
-        print("Pins: IN1=GPIO 12 (PWM), IN2=GPIO 22 (Direction)")
+        print(f"Pins: IN1=GPIO {motor_config['pwm_pins'][0]} (PWM), IN2=GPIO {motor_config['direction_pins'][0]} (Direction)")
         print()
 
         # Connect
