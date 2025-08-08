@@ -1,55 +1,51 @@
 import time
-from gpiozero import DigitalOutputDevice, DigitalInputDevice
+from gpiozero import DigitalInputDevice, DigitalOutputDevice
 
-# GPIO pin setup
-CLK  = DigitalOutputDevice(13)  # GPIO13 → CLK
-MISO = DigitalInputDevice(19)   # GPIO19 → DOUT
-MOSI = DigitalOutputDevice(16)  # GPIO16 → DIN
-CS   = DigitalOutputDevice(26)  # GPIO26 → CS/SHDN
+# GPIO pin setup for bit-banged SPI
+CLK  = DigitalOutputDevice(13)
+MISO = DigitalInputDevice(19)
+MOSI = DigitalOutputDevice(16)
+CS   = DigitalOutputDevice(26)
 
 def read_adc(channel):
-    if channel < 0 or channel > 7:
-        raise ValueError("Channel must be 0-7")
+    if not 0 <= channel <= 7:
+        raise ValueError("Channel must be 0–7")
 
     CS.on()
     CLK.off()
     CS.off()
 
-    # Start bit + single-ended + channel (3 bits)
-    command = channel
-    command |= 0b00011000  # Start bit + single-ended
+    # Start + single-ended + channel (5-bit command)
+    command = 0b11 << 6                 # Start bit + single-ended
+    command |= (channel & 0x07) << 3    # Channel number
+
+    # Send command (5 bits)
     for i in range(5):
-        MOSI.value = (command >> (4 - i)) & 1
+        MOSI.value = (command >> (7 - i)) & 0x01
         CLK.on()
         CLK.off()
 
-    # Read 12 bits total for MCP3008 (2 null bits + 10 data bits)
+    # Read null bit
+    CLK.on()
+    CLK.off()
+
+    # Read 10 data bits
     result = 0
-    for _ in range(12):  # Changed back to 12 bits
+    for _ in range(10):
         CLK.on()
         CLK.off()
-        result <<= 1
-        if MISO.value:
-            result |= 1
+        result = (result << 1) | MISO.value
 
     CS.on()
-    # Extract only the 10 data bits (bits 2-11)
-    return (result >> 2) & 0x3FF  # Mask to get only 10 bits
+    return result
 
-def calculate_voltage(adc_value):
-    v_ref = 3.3
-    return adc_value * (v_ref / 1023.0)
+# Main loop to read CH0
+try:
+    while True:
+        raw = read_adc(0)
+        voltage = (raw / 1023.0) * 3.3  # MCP3008 uses VREF = 3.3V
+        print(f"Raw ADC: {raw} | Voltage: {voltage:.3f} V")
+        time.sleep(1)
 
-if __name__ == "__main__":
-    try:
-        while True:
-            adc_val = read_adc(0)
-            voltage_at_adc = calculate_voltage(adc_val)
-
-            # Calculate what ADC should read for 2.514V
-            expected_adc = 2.514 / 3.3 * 1023
-
-            print(f"Raw: {adc_val}, Expected: {expected_adc:.0f}, ADC Input: {voltage_at_adc:.3f}V | CLK: {CLK.value} | MISO: {MISO.value} | MOSI: {MOSI.value} | CS: {CS.value}")
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("Exiting.")
+except KeyboardInterrupt:
+    print("Stopped.")
