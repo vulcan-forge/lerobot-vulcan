@@ -35,15 +35,48 @@ def read_adc(channel):
     CS.on()
     return result  # No need to shift right for MCP3008
 
+def read_adc_with_debug(channel):
+    if channel < 0 or channel > 7:
+        raise ValueError("Channel must be 0-7")
+
+    print("Starting ADC read...")
+    CS.on()
+    CLK.off()
+    CS.off()
+    print(f"CS activated - CLK: {CLK.value} | MISO: {MISO.value} | MOSI: {MOSI.value} | CS: {CS.value}")
+
+    # Start bit + single-ended + channel (3 bits)
+    command = channel
+    command |= 0b00011000  # Start bit + single-ended
+    print(f"Command: {bin(command)}")
+
+    for i in range(5):
+        MOSI.value = (command >> (4 - i)) & 1
+        print(f"Bit {i}: MOSI={MOSI.value}")
+        CLK.on()
+        CLK.off()
+
+    # Read 10 bits for MCP3008
+    result = 0
+    print("Reading 10 bits...")
+    for bit in range(10):
+        CLK.on()
+        CLK.off()
+        result <<= 1
+        if MISO.value:
+            result |= 1
+        print(f"Bit {bit}: MISO={MISO.value}, Result so far: {bin(result)}")
+
+    CS.on()
+    print(f"CS deactivated - CLK: {CLK.value} | MISO: {MISO.value} | MOSI: {MOSI.value} | CS: {CS.value}")
+    return result
+
 if __name__ == "__main__":
     try:
         while True:
-            # Print raw GPIO pin states
-            print(f"CLK: {CLK.value} | MISO: {MISO.value} | MOSI: {MOSI.value} | CS: {CS.value}")
-
-            adc_val = read_adc(0)
-            print(f"ADC Value: {adc_val}")
-            print("-" * 50)
-            time.sleep(1)
+            adc_val = read_adc_with_debug(0)
+            print(f"Final ADC Value: {adc_val}")
+            print("=" * 60)
+            time.sleep(2)
     except KeyboardInterrupt:
         print("Exiting.")
