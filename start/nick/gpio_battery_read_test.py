@@ -36,16 +36,23 @@ def read_adc(channel):
     # Extract only the 10 data bits (bits 2-11)
     return (result >> 2) & 0x3FF  # Mask to get only 10 bits
 
-def calculate_voltage(adc_value):
+def calculate_battery_voltage(adc_value, r1, r2):
     v_ref = 3.3
-    return adc_value * (v_ref / 1023.0)
+    v_out = adc_value * (v_ref / 1023.0)
+    v_in = v_out * ((r1 + r2) / r2)  # Account for voltage divider
+    return v_in
 
 if __name__ == "__main__":
+    R1 = 390_000  # Ohms
+    R2 = 100_000  # Ohms
+
     try:
         while True:
             adc_val = read_adc(0)
-            voltage = calculate_voltage(adc_val)
-            print(f"Raw: {adc_val}, Voltage: {voltage:.3f} V")
+            voltage = calculate_battery_voltage(adc_val, R1, R2)
+
+            # Print GPIO pin states
+            print(f"Raw: {adc_val}, Voltage: {voltage:.3f} V | CLK: {CLK.value} | MISO: {MISO.value} | MOSI: {MOSI.value} | CS: {CS.value}")
             time.sleep(1)
     except KeyboardInterrupt:
         print("Exiting.")
