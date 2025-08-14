@@ -1,8 +1,10 @@
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any, Dict
-from venv import logger
+
+logger = logging.getLogger(__name__)
 
 from lerobot.motors.feetech.feetech import OperatingMode
 from lerobot.motors.motors_bus import MotorCalibration
@@ -19,14 +21,14 @@ class SourcceyV3BetaFollowerCalibrator:
         if self.robot.calibration:
             # Calibration file exists, ask user whether to use it or run new calibration
             user_input = input(
-                f"Press ENTER to use provided calibration file associated with the id {self.robot_id}, or type 'c' and press ENTER to run calibration: "
+                f"Press ENTER to use provided calibration file associated with the id {self.robot.id}, or type 'c' and press ENTER to run calibration: "
             )
             if user_input.strip().lower() != "c":
-                logger.info(f"Writing calibration file associated with the id {self.robot_id} to the motors")
+                logger.info(f"Writing calibration file associated with the id {self.robot.id} to the motors")
                 self.robot.bus.write_calibration(self.robot.calibration)
                 return self.robot.calibration
 
-        logger.info(f"\nRunning calibration of robot {self.robot_id}")
+        logger.info(f"\nRunning calibration of robot {self.robot.id}")
         self.robot.bus.disable_torque()
         for motor in self.robot.bus.motors:
             self.robot.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
