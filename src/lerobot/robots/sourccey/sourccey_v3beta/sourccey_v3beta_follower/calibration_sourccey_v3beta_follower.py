@@ -349,6 +349,7 @@ class SourcceyV3BetaFollowerCalibrator:
                     # Check current draw with retry logic
                     current, limit_reached = self._read_calibration_current(motor_name)
                     if limit_reached:
+                        print(f"Hit positive limit for {motor_name} at position {target_pos} (current: {current}mA)")
                         self._relieve_overload(motor_name, "positive", target_pos)
 
                     if current > config["max_current"]:
@@ -387,6 +388,7 @@ class SourcceyV3BetaFollowerCalibrator:
                     # Check current draw with retry logic
                     current, limit_reached = self._read_calibration_current(motor_name)
                     if limit_reached:
+                        print(f"Hit negative limit for {motor_name} at position {target_pos} (current: {current}mA)")
                         self._relieve_overload(motor_name, "negative", target_pos)
 
                     if current > config["max_current"]:
