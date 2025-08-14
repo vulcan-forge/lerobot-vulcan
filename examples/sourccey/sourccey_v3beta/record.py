@@ -19,7 +19,7 @@ TASK_DESCRIPTION = "Grab the tape and put it in the cup"
 
 # Create the robot and teleoperator configurations
 robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.219", id="sourccey_v3beta")
-teleop_arm_config = BiSourcceyV3BetaLeaderConfig(left_arm_port="COM41", right_arm_port="COM42", id="bi_sourccey_v3beta_leader")
+teleop_arm_config = BiSourcceyV3BetaLeaderConfig(left_arm_port="COM41", right_arm_port="COM42", id="sourccey_v3beta")
 keyboard_config = KeyboardTeleopConfig()
 
 robot = SourcceyV3BetaClient(robot_config)

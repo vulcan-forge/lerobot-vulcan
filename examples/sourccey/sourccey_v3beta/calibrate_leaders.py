@@ -24,19 +24,19 @@ Example commands:
 python examples/sourccey/sourccey_v3beta/calibrate_leaders.py \
   --arms left \
   --left-port COM28 \
-  --left-id sourccey_v3beta_leader_left
+  --left-id sourccey_v3beta_left
 
 # Calibrate RIGHT only
 python examples/sourccey/sourccey_v3beta/calibrate_leaders.py \
   --arms right \
   --right-port COM23 \
-  --right-id sourccey_v3beta_leader_right
+  --right-id sourccey_v3beta_right
 
 # Calibrate BOTH
 python examples/sourccey/sourccey_v3beta/calibrate_leaders.py \
   --arms both \
-  --left-port COM28 --left-id sourccey_v3beta_leader_left \
-  --right-port COM23 --right-id sourccey_v3beta_leader_right
+  --left-port COM28 --left-id sourccey_v3beta_left \
+  --right-port COM23 --right-id sourccey_v3beta_right
 
 Notes:
 - Leader arms are NOT geared down like followers, so calibration is more direct
@@ -66,8 +66,8 @@ def main():
     parser.add_argument("--arms", choices=["left", "right", "both"], default="both")
     parser.add_argument("--left-port", type=str, default=None, help="Serial port for left leader arm (e.g., COM28 or /dev/ttyUSB0)")
     parser.add_argument("--right-port", type=str, default=None, help="Serial port for right leader arm (e.g., COM23 or /dev/ttyUSB1)")
-    parser.add_argument("--left-id", type=str, default="sourccey_v3beta_leader_left", help="Calibration ID for left leader arm")
-    parser.add_argument("--right-id", type=str, default="sourccey_v3beta_leader_right", help="Calibration ID for right leader arm")
+    parser.add_argument("--left-id", type=str, default="sourccey_v3beta_left", help="Calibration ID for left leader arm")
+    parser.add_argument("--right-id", type=str, default="sourccey_v3beta_right", help="Calibration ID for right leader arm")
     args = parser.parse_args()
 
     if args.arms in ("left", "both") and not args.left_port:
