@@ -291,7 +291,7 @@ class SourcceyV3BetaFollowerCalibrator:
 
         # Base parameters
         base_step_size = 50
-        settle_time = 0.1
+        settle_time = 0.25
 
         # Motor-specific configuration
         motor_configs = {
@@ -362,7 +362,7 @@ class SourcceyV3BetaFollowerCalibrator:
                     max_pos = actual_pos
 
                 self._move_calibration_slow(motor_name, reset_pos, duration=3.0)
-                time.sleep(settle_time * 10)
+                time.sleep(settle_time * 5)
             else:
                 logger.info(f"  Skipping positive direction for {motor_name}")
                 max_pos = start_pos
@@ -397,7 +397,8 @@ class SourcceyV3BetaFollowerCalibrator:
                     min_pos = actual_pos
 
                 self._move_calibration_slow(motor_name, reset_pos, duration=3.0)
-                time.sleep(settle_time * 10)
+                print(f"Moving {motor_name} to {reset_pos}")
+                time.sleep(settle_time * 5)
             else:
                 logger.info(f"  Skipping negative direction for {motor_name}")
                 min_pos = start_pos
