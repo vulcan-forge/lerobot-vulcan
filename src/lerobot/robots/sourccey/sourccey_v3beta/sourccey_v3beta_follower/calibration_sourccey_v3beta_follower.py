@@ -352,7 +352,7 @@ class SourcceyV3BetaFollowerCalibrator:
                 while steps_taken < max_steps:
                     if direction == "positive":
                         target_pos = current_pos + config["search_step"]
-                    else:  # direction == "negative"
+                    else:
                         target_pos = current_pos - config["search_step"]
 
                     self.robot.bus.write("Goal_Position", motor_name, target_pos, normalize=False)
@@ -383,7 +383,6 @@ class SourcceyV3BetaFollowerCalibrator:
 
                 # Reset to middle position after each direction test
                 self._move_calibration_slow(motor_name, reset_pos, duration=3.0)
-                print(f"Moving {motor_name} to {reset_pos}")
                 time.sleep(settle_time * 5)
 
             # Store detected range
@@ -412,10 +411,9 @@ class SourcceyV3BetaFollowerCalibrator:
         Returns:
             Current reading in mA, and a boolean indicating if the limit was reached
         """
-        for attempt in range(max_retries + 1):  # +1 to include initial attempt
+        for attempt in range(max_retries + 1):
             try:
                 current = self.robot.bus.read("Present_Current", motor_name, normalize=False)
-                print(f"Current for {motor_name}: {current}mA")
                 return current, False
             except Exception as e:
                 if "Overload error" in str(e):
