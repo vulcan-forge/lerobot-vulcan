@@ -347,12 +347,23 @@ class SourcceyV3BetaFollowerCalibrator:
                     time.sleep(settle_time)
 
                     # Check current draw with retry logic
-                    current = self._read_calibration_current(motor_name)
-                    if current > config["max_current"]:
-                        actual_pos = self.robot.bus.read("Present_Position", motor_name, normalize=False)
-                        logger.info(f"    Hit positive limit for {motor_name} at position {actual_pos} (current: {current}mA)")
-                        max_pos = actual_pos
-                        break
+                    try:
+                        current = self._read_calibration_current(motor_name)
+                        if current > config["max_current"]:
+                            actual_pos = self.robot.bus.read("Present_Position", motor_name, normalize=False)
+                            logger.info(f"    Hit positive limit for {motor_name} at position {actual_pos} (current: {current}mA)")
+                            max_pos = actual_pos
+                            break
+                    except Exception as e:
+                        if "Overload error" in str(e):
+                            # Overload error indicates mechanical limit reached
+                            actual_pos = self.robot.bus.read("Present_Position", motor_name, normalize=False)
+                            logger.info(f"    Hit positive limit for {motor_name} at position {actual_pos} (overload error)")
+                            max_pos = actual_pos
+                            break
+                        else:
+                            # Re-raise other exceptions
+                            raise
 
                     current_pos = target_pos
                     steps_taken += 1
@@ -382,12 +393,24 @@ class SourcceyV3BetaFollowerCalibrator:
                     time.sleep(settle_time)
 
                     # Check current draw with retry logic
-                    current = self._read_calibration_current(motor_name)
-                    if current > config["max_current"]:
-                        actual_pos = self.robot.bus.read("Present_Position", motor_name, normalize=False)
-                        logger.info(f"    Hit negative limit for {motor_name} at position {actual_pos} (current: {current}mA)")
-                        min_pos = actual_pos
-                        break
+                    try:
+                        current = self._read_calibration_current(motor_name)
+                        if current > config["max_current"]:
+                            actual_pos = self.robot.bus.read("Present_Position", motor_name, normalize=False)
+                            logger.info(f"    Hit negative limit for {motor_name} at position {actual_pos} (current: {current}mA)")
+                            min_pos = actual_pos
+                            break
+                    except Exception as e:
+                        print(f"Error reading current for {motor_name}: {e}")
+                        if "Overload error" in str(e):
+                            # Overload error indicates mechanical limit reached
+                            actual_pos = self.robot.bus.read("Present_Position", motor_name, normalize=False)
+                            logger.info(f"    Hit negative limit for {motor_name} at position {actual_pos} (overload error)")
+                            min_pos = actual_pos
+                            break
+                        else:
+                            # Re-raise other exceptions
+                            raise
 
                     current_pos = target_pos
                     steps_taken += 1
