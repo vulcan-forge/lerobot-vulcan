@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -19,14 +20,14 @@ class SourcceyV3BetaFollowerCalibrator:
         if self.robot.calibration:
             # Calibration file exists, ask user whether to use it or run new calibration
             user_input = input(
-                f"Press ENTER to use provided calibration file associated with the id {self.robot_id}, or type 'c' and press ENTER to run calibration: "
+                f"Press ENTER to use provided calibration file associated with the id {self.robot.id}, or type 'c' and press ENTER to run calibration: "
             )
             if user_input.strip().lower() != "c":
-                logger.info(f"Writing calibration file associated with the id {self.robot_id} to the motors")
+                logger.info(f"Writing calibration file associated with the id {self.robot.id} to the motors")
                 self.robot.bus.write_calibration(self.robot.calibration)
                 return self.robot.calibration
 
-        logger.info(f"\nRunning calibration of robot {self.robot_id}")
+        logger.info(f"\nRunning calibration of robot {self.robot.id}")
         self.robot.bus.disable_torque()
         for motor in self.robot.bus.motors:
             self.robot.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
@@ -102,26 +103,31 @@ class SourcceyV3BetaFollowerCalibrator:
         return self.robot.calibration
 
     def _create_calibration_dict(self, homing_offsets: Dict[str, int],
-                                range_data: Dict[str, Any]) -> Dict[str, MotorCalibration]:
-        """Create calibration dictionary from homing offsets and range data."""
+                                range_data: Dict[str, Any], range_maxes: Dict[str, int] = None) -> Dict[str, MotorCalibration]:
+        """Create calibration dictionary from homing offsets and range data.
+        
+        Supports both formats:
+        - Old format: range_data=range_mins, range_maxes=range_maxes
+        - New format: range_data=detected_ranges (with {"min": x, "max": y} structure)
+        """
         calibration = {}
         for motor, m in self.robot.bus.motors.items():
             drive_mode = 1 if motor == "shoulder_lift" or (self.robot.config.orientation == "right" and motor == "gripper") else 0
 
             # Handle both old format (range_mins/range_maxes) and new format (detected_ranges)
-            if isinstance(range_data, dict) and motor in range_data:
+            if range_maxes is not None:
+                # Old format: range_data is range_mins, range_maxes is provided
+                range_min = range_data[motor]
+                range_max = range_maxes[motor]
+            else:
+                # New format: range_data is detected_ranges with {"min": x, "max": y} structure
                 if isinstance(range_data[motor], dict):
-                    # New format: detected_ranges[motor] = {"min": x, "max": y}
                     range_min = range_data[motor]["min"]
                     range_max = range_data[motor]["max"]
                 else:
-                    # Old format: range_mins[motor] = x, range_maxes[motor] = y
+                    # Fallback: assume range_data[motor] is the value itself
                     range_min = range_data[motor]
                     range_max = range_data[motor]
-            else:
-                # Fallback for old format
-                range_min = range_data[motor]
-                range_max = range_data[motor]
 
             calibration[motor] = MotorCalibration(
                 id=m.id,
