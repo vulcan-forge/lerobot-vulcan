@@ -348,10 +348,6 @@ class SourcceyV3BetaFollowerCalibrator:
 
                     # Check current draw with retry logic
                     current, limit_reached = self._read_calibration_current(motor_name)
-                    if limit_reached:
-                        print(f"Hit positive limit for {motor_name} at position {target_pos} (current: {current}mA)")
-                        self._relieve_overload(motor_name, "positive", target_pos)
-
                     if current > config["max_current"]:
                         actual_pos = self.robot.bus.read("Present_Position", motor_name, normalize=False)
                         logger.info(f"    Hit positive limit for {motor_name} at position {actual_pos} (current: {current}mA)")
@@ -387,10 +383,6 @@ class SourcceyV3BetaFollowerCalibrator:
 
                     # Check current draw with retry logic
                     current, limit_reached = self._read_calibration_current(motor_name)
-                    if limit_reached:
-                        print(f"Hit negative limit for {motor_name} at position {target_pos} (current: {current}mA)")
-                        self._relieve_overload(motor_name, "negative", target_pos)
-
                     if current > config["max_current"]:
                         actual_pos = self.robot.bus.read("Present_Position", motor_name, normalize=False)
                         logger.info(f"    Hit negative limit for {motor_name} at position {actual_pos} (current: {current}mA)")
@@ -440,6 +432,7 @@ class SourcceyV3BetaFollowerCalibrator:
         for attempt in range(max_retries + 1):  # +1 to include initial attempt
             try:
                 current = self.robot.bus.read("Present_Current", motor_name, normalize=False)
+                print(f"Current for {motor_name}: {current}mA")
                 return current, False
             except Exception as e:
                 if "Overload error" in str(e):
@@ -511,45 +504,6 @@ class SourcceyV3BetaFollowerCalibrator:
         except Exception as e:
             logger.error(f"Error during slow movement of {motor_name}: {e}")
             return False
-
-    def _relieve_overload(self, motor_name: str, direction: str, current_position: int, step_size: int = 200) -> int:
-        """Move motor back to relieve overload stress.
-
-        When a motor hits a mechanical limit, it can get stuck in an overload state.
-        This function moves it back slightly to relieve the stress.
-
-        Args:
-            motor_name: Name of the motor to relieve
-            direction: Direction being tested ('positive' or 'negative')
-            current_position: Current position of the motor
-            step_size: Number of steps to move back (default: 200)
-
-        Returns:
-            The relief position that the motor was moved to
-        """
-        step_size_multiplier = 3
-        try:
-            if direction == "positive":
-                # Moving back from positive limit (decrease position)
-                relief_pos = current_position - step_size * step_size_multiplier
-            else:  # direction == "negative"
-                # Moving back from negative limit (increase position)
-                relief_pos = current_position + step_size * step_size_multiplier
-
-            logger.info(f"Relieving overload for {motor_name}: moving from {current_position} to {relief_pos}")
-
-            # Move back to relieve stress
-            self.robot.bus.write("Goal_Position", motor_name, relief_pos, normalize=False)
-            time.sleep(0.5)  # Wait for movement to settle
-
-            logger.info(f"Overload relieved for {motor_name} at position {relief_pos}")
-            return relief_pos
-
-        except Exception as e:
-            logger.warning(f"Failed to relieve overload for {motor_name}: {e}")
-            # Return the original position if relief fails
-            return current_position
-
 
     def _save_calibration(self) -> None:
         """Save calibration to file."""
