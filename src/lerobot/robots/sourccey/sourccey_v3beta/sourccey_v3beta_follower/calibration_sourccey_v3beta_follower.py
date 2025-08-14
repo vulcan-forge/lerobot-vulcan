@@ -349,7 +349,7 @@ class SourcceyV3BetaFollowerCalibrator:
                     # Check current draw with retry logic
                     current = self._read_calibration_current(motor_name)
                     if current > config["max_current"]:
-                        actual_pos = self.bus.read("Present_Position", motor_name, normalize=False)
+                        actual_pos = self.robot.bus.read("Present_Position", motor_name, normalize=False)
                         logger.info(f"    Hit positive limit for {motor_name} at position {actual_pos} (current: {current}mA)")
                         max_pos = actual_pos
                         break
@@ -358,7 +358,7 @@ class SourcceyV3BetaFollowerCalibrator:
                     steps_taken += 1
                 else:
                     logger.info(f"    Reached search range limit ({config['search_range']}) for {motor_name} positive direction")
-                    actual_pos = self.bus.read("Present_Position", motor_name, normalize=False)
+                    actual_pos = self.robot.bus.read("Present_Position", motor_name, normalize=False)
                     max_pos = actual_pos
 
                 self._move_calibration_slow(motor_name, reset_pos, duration=3.0)
@@ -376,7 +376,7 @@ class SourcceyV3BetaFollowerCalibrator:
 
                 while steps_taken < max_steps:
                     target_pos = current_pos - config["search_step"]
-                    self.bus.write("Goal_Position", motor_name, target_pos, normalize=False)
+                    self.robot.bus.write("Goal_Position", motor_name, target_pos, normalize=False)
 
                     # Wait for movement to settle
                     time.sleep(settle_time)
@@ -384,7 +384,7 @@ class SourcceyV3BetaFollowerCalibrator:
                     # Check current draw with retry logic
                     current = self._read_calibration_current(motor_name)
                     if current > config["max_current"]:
-                        actual_pos = self.bus.read("Present_Position", motor_name, normalize=False)
+                        actual_pos = self.robot.bus.read("Present_Position", motor_name, normalize=False)
                         logger.info(f"    Hit negative limit for {motor_name} at position {actual_pos} (current: {current}mA)")
                         min_pos = actual_pos
                         break
@@ -393,7 +393,7 @@ class SourcceyV3BetaFollowerCalibrator:
                     steps_taken += 1
                 else:
                     logger.info(f"    Reached search range limit ({config['search_range']}) for {motor_name} negative direction")
-                    actual_pos = self.bus.read("Present_Position", motor_name, normalize=False)
+                    actual_pos = self.robot.bus.read("Present_Position", motor_name, normalize=False)
                     min_pos = actual_pos
 
                 self._move_calibration_slow(motor_name, reset_pos, duration=3.0)
@@ -430,7 +430,7 @@ class SourcceyV3BetaFollowerCalibrator:
         """
         for attempt in range(max_retries + 1):  # +1 to include initial attempt
             try:
-                current = self.bus.read("Present_Current", motor_name, normalize=False)
+                current = self.robot.bus.read("Present_Current", motor_name, normalize=False)
                 return current
             except Exception as e:
                 if attempt == max_retries:
@@ -465,7 +465,7 @@ class SourcceyV3BetaFollowerCalibrator:
         """
         try:
             # Get current position
-            current_position = self.bus.read("Present_Position", motor_name, normalize=False)
+            current_position = self.robot.bus.read("Present_Position", motor_name, normalize=False)
 
             # Calculate movement parameters
             total_steps = int(duration * steps_per_second)
@@ -485,7 +485,7 @@ class SourcceyV3BetaFollowerCalibrator:
                 interpolated_position_int = int(round(interpolated_position))
 
                 # Write position with retry logic
-                self.bus.write("Goal_Position", motor_name, interpolated_position_int, normalize=False)
+                self.robot.bus.write("Goal_Position", motor_name, interpolated_position_int, normalize=False)
 
                 # Wait for next step (except on final step)
                 if step < total_steps:
