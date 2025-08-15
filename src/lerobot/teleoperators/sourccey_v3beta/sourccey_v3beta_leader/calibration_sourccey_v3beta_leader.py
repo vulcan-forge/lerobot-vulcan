@@ -60,7 +60,7 @@ class SourcceyV3BetaLeaderCalibrator:
         elbow_flex_homing_offset = self.teleop.bus.set_position_homings({"elbow_flex": 3884 if reversed else 151})
         wrist_flex_homing_offset = self.teleop.bus.set_position_homings({"wrist_flex": 6086 if reversed else 2144})
         wrist_roll_homing_offset = self.teleop.bus.set_position_homings({"wrist_roll": 2078 if reversed else 2069})
-        gripper_homing_offset = self.teleop.bus.set_position_homings({"gripper": 5559 if reversed else 2406})
+        gripper_homing_offset = self.teleop.bus.set_position_homings({"gripper": 5571 if reversed else 2725})
         homing_offsets["shoulder_pan"] = shoulder_pan_homing_offset["shoulder_pan"]
         homing_offsets["shoulder_lift"] = shoulder_lift_homing_offset["shoulder_lift"]
         homing_offsets["elbow_flex"] = elbow_flex_homing_offset["elbow_flex"]
