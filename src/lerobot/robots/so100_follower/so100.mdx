@@ -649,3 +649,19 @@ python src/lerobot/teleoperate.py \
     --teleop.port=COM37 \
     --teleop.id=so100_leader-001
 ```
+
+```bash
+uv run src/lerobot/record.py \
+    --robot.type=so100_follower \
+    --robot.port=COM38 \
+    --robot.id=so100_follower-001 \
+    --robot.cameras="{}" \
+    --teleop.type=so100_leader \
+    --teleop.port=COM37 \
+    --teleop.id=so100_leader-001 \
+    --dataset.repo_id=local/dataset_test \
+    --dataset.num_episodes=1 \
+    --dataset.episode_time_s=10 \
+    --dataset.single_task="Grab towel and fold it" \
+    --dataset.push_to_hub=false
+```

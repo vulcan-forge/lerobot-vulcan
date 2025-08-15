@@ -30,7 +30,7 @@ python -m lerobot.record \
     # --teleop.type=so100_leader \
     # --teleop.port=/dev/tty.usbmodem58760431551 \
     # --teleop.id=blue \
-    # <- Policy optional if you want to record with a policy \
+    # <- Policy optional if you want to record with a policy  \
     # --policy.path=${HF_USER}/my_policy \
 ```
 
