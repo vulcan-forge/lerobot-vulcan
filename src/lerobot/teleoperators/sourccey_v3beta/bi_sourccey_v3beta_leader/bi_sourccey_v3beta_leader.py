@@ -16,6 +16,7 @@
 
 from functools import cached_property
 import logging
+import threading
 
 from lerobot.teleoperators.sourccey_v3beta.bi_sourccey_v3beta_leader.config_bi_sourccey_v3beta_leader import BiSourcceyV3BetaLeaderConfig
 from lerobot.teleoperators.sourccey_v3beta.sourccey_v3beta_leader.config_sourccey_v3beta_leader import SourcceyV3BetaLeaderConfig
@@ -38,14 +39,14 @@ class BiSourcceyV3BetaLeader(Teleoperator):
         self.config = config
 
         left_arm_config = SourcceyV3BetaLeaderConfig(
-            id=f"{config.id}_left" if config.id else None,
+            id="sourccey_v3beta_left",
             calibration_dir=config.calibration_dir,
             port=config.left_arm_port,
             orientation="left",
         )
 
         right_arm_config = SourcceyV3BetaLeaderConfig(
-            id=f"{config.id}_right" if config.id else None,
+            id="sourccey_v3beta_right",
             calibration_dir=config.calibration_dir,
             port=config.right_arm_port,
             orientation="right",
@@ -79,6 +80,28 @@ class BiSourcceyV3BetaLeader(Teleoperator):
     def calibrate(self) -> None:
         self.left_arm.calibrate()
         self.right_arm.calibrate()
+
+    def auto_calibrate(self, full_reset: bool = False) -> None:
+        """
+        Auto-calibrate both arms simultaneously using threading.
+        """
+        # Create threads for each arm
+        left_thread = threading.Thread(
+            target=self.left_arm.auto_calibrate,
+            kwargs={"reversed": False}
+        )
+        right_thread = threading.Thread(
+            target=self.right_arm.auto_calibrate,
+            kwargs={"reversed": True}
+        )
+
+        # Start both threads
+        left_thread.start()
+        right_thread.start()
+
+        # Wait for both threads to complete
+        left_thread.join()
+        right_thread.join()
 
     def configure(self) -> None:
         self.left_arm.configure()
