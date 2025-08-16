@@ -7,10 +7,10 @@ from lerobot.utils.utils import log_say
 
 EPISODE_IDX = 0
 
-robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.219", id="sourccey_v3beta")
+robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.227", id="sourccey_v3beta")
 robot = SourcceyV3BetaClient(robot_config)
 
-dataset = LeRobotDataset("local/sourccey_v3beta-001__towel-a__set000__nickm", episodes=[EPISODE_IDX])
+dataset = LeRobotDataset("local/sourccey_v3beta-001__stiction_tape-a__set000__chrism", episodes=[EPISODE_IDX])
 actions = dataset.hf_dataset.select_columns("action")
 
 robot.connect()

@@ -18,8 +18,8 @@ RESET_TIME_SEC = 5
 TASK_DESCRIPTION = "Grab the tape and put it in the cup"
 
 # Create the robot and teleoperator configurations
-robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.219", id="sourccey_v3beta")
-teleop_arm_config = BiSourcceyV3BetaLeaderConfig(left_arm_port="COM41", right_arm_port="COM42", id="sourccey_v3beta")
+robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.227", id="sourccey_v3beta")
+teleop_arm_config = BiSourcceyV3BetaLeaderConfig(left_arm_port="COM28", right_arm_port="COM23", id="sourccey_v3beta")
 keyboard_config = KeyboardTeleopConfig()
 
 robot = SourcceyV3BetaClient(robot_config)
@@ -32,11 +32,16 @@ obs_features = hw_to_dataset_features(robot.observation_features, "observation")
 dataset_features = {**action_features, **obs_features}
 
 # Create the dataset
+from lerobot.constants import HF_LEROBOT_HOME
+
+repo_id = "sourccey_v3beta-001__stiction_tape-a__set000__chrism"
+
 dataset = LeRobotDataset.create(
-    repo_id="local/sourccey_v3beta-001__tape-a__set000__nickm",
+    repo_id=repo_id,
     fps=FPS,
     features=dataset_features,
     robot_type=robot.name,
+    root=HF_LEROBOT_HOME / "local" / repo_id,
     use_videos=True,
     image_writer_threads=4,
 )
