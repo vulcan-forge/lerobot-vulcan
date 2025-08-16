@@ -18,7 +18,7 @@ Helper to set motor ids and baudrate.
 Example:
 
 ```shell
-python -m lerobot.setup_motors \
+lerobot-setup-motors \
     --teleop.type=so100_leader \
     --teleop.port=/dev/ttyUSB0
 ```
