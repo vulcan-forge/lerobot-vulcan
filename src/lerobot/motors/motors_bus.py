@@ -80,8 +80,7 @@ MOTOR_MOVEMENT_DATA_NAMES = [
     "Present_Position",
     "Goal_Position",
     "Present_Velocity",
-    "Goal_Velocity",
-    "Homing_Offset",
+    "Goal_Velocity"
 ]
 
 class MotorNormMode(str, Enum):
@@ -104,6 +103,7 @@ class Motor:
     id: int
     model: str
     norm_mode: MotorNormMode
+    gear_ratio: float = 1.0
 
 
 class JointOutOfRangeError(Exception):
@@ -850,7 +850,7 @@ class MotorsBus(abc.ABC):
 
         return mins, maxes
 
-    def _normalize(self, ids_values: dict[int, int]) -> dict[int, float]:
+    def _normalize(self, ids_values: dict[int, int], gear_space: bool = False) -> dict[int, float]:
         if not self.calibration:
             raise RuntimeError(f"{self} has no calibration registered.")
 
@@ -860,9 +860,16 @@ class MotorsBus(abc.ABC):
             min_ = self.calibration[motor].range_min
             max_ = self.calibration[motor].range_max
             drive_mode = self.apply_drive_mode and self.calibration[motor].drive_mode
+            gear_ratio = self.motors[motor].gear_ratio
 
             if max_ == min_:
                 raise ValueError(f"Invalid calibration for motor '{motor}': min and max are equal.")
+
+            if gear_space:
+                # Convert motor space values to gear space for normalization
+                val = self._motor_space_to_gear_space(val, gear_ratio)
+                min_ = self._motor_space_to_gear_space(min_, gear_ratio)
+                max_ = self._motor_space_to_gear_space(max_, gear_ratio)
 
             bounded_val = min(max_, max(min_, val))
             if self.motors[motor].norm_mode is MotorNormMode.RANGE_M100_100:
@@ -880,7 +887,7 @@ class MotorsBus(abc.ABC):
 
         return normalized_values
 
-    def _unnormalize(self, ids_values: dict[int, float]) -> dict[int, int]:
+    def _unnormalize(self, ids_values: dict[int, float], gear_space: bool = False) -> dict[int, int]:
         if not self.calibration:
             raise RuntimeError(f"{self} has no calibration registered.")
 
@@ -890,9 +897,16 @@ class MotorsBus(abc.ABC):
             min_ = self.calibration[motor].range_min
             max_ = self.calibration[motor].range_max
             drive_mode = self.apply_drive_mode and self.calibration[motor].drive_mode
+            gear_ratio = self.motors[motor].gear_ratio
 
             if max_ == min_:
                 raise ValueError(f"Invalid calibration for motor '{motor}': min and max are equal.")
+
+            if gear_space:
+                # Convert motor space values to gear space for normalization
+                val = self._motor_space_to_gear_space(val, gear_ratio)
+                min_ = self._motor_space_to_gear_space(min_, gear_ratio)
+                max_ = self._motor_space_to_gear_space(max_, gear_ratio)
 
             if self.motors[motor].norm_mode is MotorNormMode.RANGE_M100_100:
                 val = -val if drive_mode else val
@@ -1145,11 +1159,12 @@ class MotorsBus(abc.ABC):
         model = self.motors[motor].model
         addr, length = get_address(self.model_ctrl_table, model, data_name)
 
+        use_gear_space = gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES
         if normalize and data_name in self.normalized_data:
-            value = self._unnormalize({id_: value})[id_]
+            value = self._unnormalize({id_: value}, use_gear_space)[id_]
         value = self._encode_sign(data_name, {id_: value})[id_]
 
-        if gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES:
+        if use_gear_space:
             value = self._gear_space_to_motor_space(value, self.motors[motor].gear_ratio)
 
         err_msg = f"Failed to write '{data_name}' on {id_=} with '{value}' after {num_retry + 1} tries."
