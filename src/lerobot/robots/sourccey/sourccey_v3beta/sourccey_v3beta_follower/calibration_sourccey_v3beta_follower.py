@@ -15,6 +15,25 @@ class SourcceyV3BetaFollowerCalibrator:
     def __init__(self, robot):
         self.robot = robot
 
+    def default_calibrate(self, reversed: bool = False) -> Dict[str, MotorCalibration]:
+        """Perform default calibration."""
+
+        homing_offsets = self._initialize_calibration(reversed)
+
+        detected_ranges = {}
+        default_calibration = self._load_default_calibration(reversed)
+        for motor, m in self.robot.bus.motors.items():
+            detected_ranges[motor] = {
+                "min": default_calibration[motor]["range_min"],
+                "max": default_calibration[motor]["range_max"],
+            }
+
+        self.robot.calibration = self._create_calibration_dict(homing_offsets, detected_ranges)
+        self.robot.bus.write_calibration(self.robot.calibration)
+        self._save_calibration()
+        logger.info(f"Default calibration completed and saved to {self.robot.calibration_fpath}")
+        return self.robot.calibration
+
     def manual_calibrate(self) -> Dict[str, MotorCalibration]:
         """Perform manual calibration with user interaction."""
         if self.robot.calibration:
@@ -51,7 +70,7 @@ class SourcceyV3BetaFollowerCalibrator:
         print("Calibration saved to", self.robot.calibration_fpath)
         return self.robot.calibration
 
-    def auto_calibrate(self, reversed: bool = False, full_reset: bool = False) -> Dict[str, MotorCalibration]:
+    def auto_calibrate(self, reversed: bool = False) -> Dict[str, MotorCalibration]:
         """Automatically calibrate the robot using current monitoring to detect mechanical limits.
 
         This method performs automatic calibration by:
@@ -64,34 +83,25 @@ class SourcceyV3BetaFollowerCalibrator:
         Ensure the robot arm is clear of obstacles and people during calibration.
         """
         logger.info(f"Starting automatic calibration of robot {self.robot.id}")
+        if (not self.robot.is_calibrated):
+            logger.info("Performing preliminary default calibration...")
+            self.default_calibrate(reversed)
+
+        # Set all motors to half turn homings except shoulder_lift
         logger.warning("WARNING: Robot will move to detect mechanical limits. Ensure clear workspace!")
 
         # Step 1: Adjust calibration so current positions become desired logical positions
         logger.info("Adjusting calibration to align current positions with desired logical positions...")
         homing_offsets = self._initialize_calibration(reversed)
 
-        # If hard_reset is False, we don't need to detect mechanical limits
-        # Only detect mechanical limits if the customer is doing a hard reset
-        detected_ranges = {}
-        if full_reset:
-            # Step 2: Detect actual mechanical limits using current monitoring
-            # Note: Torque will be enabled during limit detection
-            logger.info("Detecting mechanical limits using current monitoring...")
-            detected_ranges = self._detect_mechanical_limits(reversed)
+        # Step 2: Detect actual mechanical limits using current monitoring
+        # Note: Torque will be enabled during limit detection
+        logger.info("Detecting mechanical limits using current monitoring...")
+        detected_ranges = self._detect_mechanical_limits(reversed)
 
-            # Step 3: Disable torque for safety before setting homing offsets
-            logger.info("Disabling torque for safety...")
-            self.robot.bus.disable_torque()
-        else:
-            # If we are not doing a full reset, we should manually set the range of motions
-            # the homing offsets are set in the _initialize_calibration function
-            # Manually get range of motions from the default calibration file
-            default_calibration = self._load_default_calibration(reversed)
-            for motor, m in self.robot.bus.motors.items():
-                detected_ranges[motor] = {
-                    "min": default_calibration[motor]["range_min"],
-                    "max": default_calibration[motor]["range_max"],
-                }
+        # Step 3: Disable torque for safety before setting homing offsets
+        logger.info("Disabling torque for safety...")
+        self.robot.bus.disable_torque()
 
         # Step 4: Create calibration dictionary
         self.robot.calibration = self._create_calibration_dict(homing_offsets, detected_ranges)
@@ -105,7 +115,7 @@ class SourcceyV3BetaFollowerCalibrator:
     def _create_calibration_dict(self, homing_offsets: Dict[str, int],
                                 range_data: Dict[str, Any], range_maxes: Dict[str, int] = None) -> Dict[str, MotorCalibration]:
         """Create calibration dictionary from homing offsets and range data.
-        
+
         Supports both formats:
         - Old format: range_data=range_mins, range_maxes=range_maxes
         - New format: range_data=detected_ranges (with {"min": x, "max": y} structure)

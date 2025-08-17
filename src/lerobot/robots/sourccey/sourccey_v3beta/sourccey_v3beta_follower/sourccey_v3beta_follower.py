@@ -101,7 +101,10 @@ class SourcceyV3BetaFollower(Robot):
 
     def auto_calibrate(self, reversed: bool = False, full_reset: bool = False) -> None:
         """Perform automatic calibration."""
-        self.calibration = self.calibrator.auto_calibrate(reversed=reversed, full_reset=full_reset)
+        if full_reset:
+            self.calibration = self.calibrator.auto_calibrate(reversed=reversed)
+        else:
+            self.calibration = self.calibrator.default_calibrate(reversed=reversed)
 
     def configure(self) -> None:
         self.bus.disable_torque()
