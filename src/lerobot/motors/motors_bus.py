@@ -866,8 +866,6 @@ class MotorsBus(abc.ABC):
                 raise ValueError(f"Invalid calibration for motor '{motor}': min and max are equal.")
 
             if gear_space:
-                # Convert motor space values to gear space for normalization
-                # val = self._motor_space_to_gear_space(val, gear_ratio)
                 min_ = self._motor_space_to_gear_space(min_, gear_ratio)
                 max_ = self._motor_space_to_gear_space(max_, gear_ratio)
 
@@ -903,8 +901,6 @@ class MotorsBus(abc.ABC):
                 raise ValueError(f"Invalid calibration for motor '{motor}': min and max are equal.")
 
             if gear_space:
-                # Convert motor space values to gear space for normalization
-                # val = self._motor_space_to_gear_space(val, gear_ratio)
                 min_ = self._motor_space_to_gear_space(min_, gear_ratio)
                 max_ = self._motor_space_to_gear_space(max_, gear_ratio)
 
