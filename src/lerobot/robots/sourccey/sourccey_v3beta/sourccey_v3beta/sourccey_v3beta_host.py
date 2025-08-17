@@ -79,17 +79,18 @@ def main():
 
                 _action_sent = robot.send_action(data)
 
+                # Uncomment to test position issues
                 # Every 10 seconds, print the data and the present positions of the motors
-                if time.time() - last_print_time > 10:
-                    print(f"Data: {data}")
-                    print()
-                    print()
-                    print()
-                    print(f"Left arm present positions gear space: {robot.left_arm.bus.sync_read('Present_Position', gear_space=True)}")
-                    print(f"Right arm present positions gear space: {robot.right_arm.bus.sync_read('Present_Position', gear_space=True)}")
-                    print(f"Left arm present positions motor space: {robot.left_arm.bus.sync_read('Present_Position', gear_space=False)}")
-                    print(f"Right arm present positions motor space: {robot.right_arm.bus.sync_read('Present_Position', gear_space=False)}")
-                    last_print_time = time.time()
+                # if time.time() - last_print_time > 10:
+                #     print()
+                #     print(f"Data: {data}")
+                #     print()
+                #     print(f"Left arm present positions gear space: {robot.left_arm.bus.sync_read('Present_Position', gear_space=True)}")
+                #     print(f"Right arm present positions gear space: {robot.right_arm.bus.sync_read('Present_Position', gear_space=True)}")
+                #     print(f"Left arm present positions motor space: {robot.left_arm.bus.sync_read('Present_Position', gear_space=False)}")
+                #     print(f"Right arm present positions motor space: {robot.right_arm.bus.sync_read('Present_Position', gear_space=False)}")
+                #     print()
+                #     last_print_time = time.time()
 
                 last_cmd_time = time.time()
                 watchdog_active = False
