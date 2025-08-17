@@ -862,11 +862,9 @@ class MotorsBus(abc.ABC):
             drive_mode = self.apply_drive_mode and self.calibration[motor].drive_mode
             gear_ratio = self.motors[motor].gear_ratio
 
-            print("normalize before min max check")
             if max_ == min_:
                 raise ValueError(f"Invalid calibration for motor '{motor}': min and max are equal.")
 
-            print("normalize")
             if gear_space:
                 # Convert motor space values to gear space for normalization
                 val = self._motor_space_to_gear_space(val, gear_ratio)
@@ -902,11 +900,9 @@ class MotorsBus(abc.ABC):
             drive_mode = self.apply_drive_mode and self.calibration[motor].drive_mode
             gear_ratio = self.motors[motor].gear_ratio
 
-            print("unnormalize before min max check")
             if max_ == min_:
                 raise ValueError(f"Invalid calibration for motor '{motor}': min and max are equal.")
 
-            print("unnormalize")
             if gear_space:
                 # Convert motor space values to gear space for normalization
                 val = self._motor_space_to_gear_space(val, gear_ratio)
