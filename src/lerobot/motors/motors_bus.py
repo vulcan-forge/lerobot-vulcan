@@ -1089,7 +1089,7 @@ class MotorsBus(abc.ABC):
 
         use_gear_space = gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES
         if use_gear_space:
-            value = self._gear_space_to_motor_space(value, self.motors[motor].gear_ratio)
+            value = self._motor_space_to_gear_space(value, self.motors[motor].gear_ratio)
 
         id_value = self._decode_sign(data_name, {id_: value})
         if normalize and data_name in self.normalized_data:
@@ -1243,7 +1243,7 @@ class MotorsBus(abc.ABC):
 
         use_gear_space = gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES
         if use_gear_space:
-            ids_values = self._apply_gear_space_to_motor_space(ids_values)
+            ids_values = self._apply_motor_space_to_gear_space(ids_values)
 
         ids_values = self._decode_sign(data_name, ids_values)
         if normalize and data_name in self.normalized_data:
