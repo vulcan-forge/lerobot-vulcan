@@ -1032,6 +1032,7 @@ class MotorsBus(abc.ABC):
         *,
         num_retry: int = 0,
         raise_on_error: bool = True,
+        gear_space: bool = False,
         err_msg: str = "",
     ) -> tuple[int, int]:
         if length == 1:
@@ -1060,7 +1061,7 @@ class MotorsBus(abc.ABC):
         return value, comm, error
 
     def write(
-        self, data_name: str, motor: str, value: Value, *, normalize: bool = True, num_retry: int = 3
+        self, data_name: str, motor: str, value: Value, *, normalize: bool = True,  gear_space: bool = False, num_retry: int = 3
     ) -> None:
         """Write a value to a single motor's register.
 
@@ -1128,6 +1129,7 @@ class MotorsBus(abc.ABC):
         motors: str | list[str] | None = None,
         *,
         normalize: bool = True,
+        gear_space: bool = False,
         num_retry: int = 3,
     ) -> dict[str, Value]:
         """Read the same register from several motors at once.
@@ -1223,6 +1225,7 @@ class MotorsBus(abc.ABC):
         values: Value | dict[str, Value],
         *,
         normalize: bool = True,
+        gear_space: bool = False,
         num_retry: int = 3,
     ) -> None:
         """Write the same register on multiple motors.
