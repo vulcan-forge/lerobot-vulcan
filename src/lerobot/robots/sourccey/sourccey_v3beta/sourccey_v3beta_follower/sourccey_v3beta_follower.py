@@ -128,7 +128,7 @@ class SourcceyV3BetaFollower(Robot):
 
         # Read arm position
         start = time.perf_counter()
-        obs_dict = self.bus.sync_read("Present_Position", gear_space=False)
+        obs_dict = self.bus.sync_read("Present_Position", gear_space=True)
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
@@ -161,7 +161,7 @@ class SourcceyV3BetaFollower(Robot):
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
         # Check for NaN values and skip sending actions if any are found
-        present_pos = self.bus.sync_read("Present_Position", gear_space=False)
+        present_pos = self.bus.sync_read("Present_Position", gear_space=True)
         if any(np.isnan(v) for v in goal_pos.values()) or any(np.isnan(v) for v in present_pos.values()):
             logger.warning("NaN values detected in goal positions. Skipping action execution.")
             return {f"{motor}.pos": val for motor, val in present_pos.items()}
@@ -174,7 +174,7 @@ class SourcceyV3BetaFollower(Robot):
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
         # Send goal position to the arm
-        self.bus.sync_write("Goal_Position", goal_pos, gear_space=False)
+        self.bus.sync_write("Goal_Position", goal_pos, gear_space=True)
 
         # Check safety after sending goals
         overcurrent_motors = self._check_current_safety()
@@ -261,7 +261,7 @@ class SourcceyV3BetaFollower(Robot):
 
         # Sync write the modified goal positions
         goal_pos_raw = {k.replace(".pos", ""): v for k, v in modified_goal_pos.items()}
-        self.bus.sync_write("Goal_Position", goal_pos_raw, gear_space=False)
+        self.bus.sync_write("Goal_Position", goal_pos_raw, gear_space=True)
         return modified_goal_pos
 
     def disconnect(self) -> None:
