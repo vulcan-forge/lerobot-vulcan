@@ -1093,12 +1093,13 @@ class MotorsBus(abc.ABC):
         err_msg = f"Failed to read '{data_name}' on {id_=} after {num_retry + 1} tries."
         value, _, _ = self._read(addr, length, id_, num_retry=num_retry, raise_on_error=True, err_msg=err_msg)
 
-        if gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES:
+        use_gear_space = gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES
+        if use_gear_space:
             value = self._gear_space_to_motor_space(value, self.motors[motor].gear_ratio)
 
         id_value = self._decode_sign(data_name, {id_: value})
         if normalize and data_name in self.normalized_data:
-            id_value = self._normalize(id_value)
+            id_value = self._normalize(id_value, use_gear_space)
 
         return id_value[id_]
 
@@ -1246,12 +1247,13 @@ class MotorsBus(abc.ABC):
             addr, length, ids, num_retry=num_retry, raise_on_error=True, err_msg=err_msg
         )
 
-        if gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES:
+        use_gear_space = gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES
+        if use_gear_space:
             ids_values = self._apply_gear_space_to_motor_space(ids_values)
 
         ids_values = self._decode_sign(data_name, ids_values)
         if normalize and data_name in self.normalized_data:
-            ids_values = self._normalize(ids_values)
+            ids_values = self._normalize(ids_values, use_gear_space)
 
         return {self._id_to_name(id_): value for id_, value in ids_values.items()}
 
@@ -1337,11 +1339,12 @@ class MotorsBus(abc.ABC):
         model = next(iter(models))
         addr, length = get_address(self.model_ctrl_table, model, data_name)
 
+        use_gear_space = gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES
         if normalize and data_name in self.normalized_data:
-            ids_values = self._unnormalize(ids_values)
+            ids_values = self._unnormalize(ids_values, use_gear_space)
         ids_values = self._encode_sign(data_name, ids_values)
 
-        if gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES:
+        if use_gear_space:
             ids_values = self._apply_gear_space_to_motor_space(ids_values)
 
         err_msg = f"Failed to sync write '{data_name}' with {ids_values=} after {num_retry + 1} tries."
