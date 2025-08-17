@@ -79,7 +79,6 @@ def main():
 
                 _action_sent = robot.send_action(data)
 
-
                 # Every 10 seconds, print the data and the present positions of the motors
                 if time.time() - last_print_time > 10:
                     print(f"Data: {data}")
