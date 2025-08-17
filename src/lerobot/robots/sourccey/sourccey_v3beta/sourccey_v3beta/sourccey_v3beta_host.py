@@ -60,6 +60,7 @@ def main():
     host = SourcceyV3BetaHost(host_config)
 
     last_cmd_time = time.time()
+    last_print_time = time.time()
     watchdog_active = False
     logging.info("Waiting for commands...")
     print("Waiting for commands...")
