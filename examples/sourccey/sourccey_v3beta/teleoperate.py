@@ -12,7 +12,7 @@ from lerobot.utils.visualization_utils import _init_rerun, log_rerun_data
 FPS = 30
 
 # Create the robot and teleoperator configurations
-robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.227", id="sourccey_v3beta")
+robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.226", id="sourccey_v3beta")
 teleop_arm_config = BiSourcceyV3BetaLeaderConfig(left_arm_port="COM28", right_arm_port="COM23", id="sourccey_v3beta")
 keyboard_config = KeyboardTeleopConfig(id="keyboard")
 

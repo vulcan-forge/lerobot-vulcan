@@ -868,20 +868,26 @@ class MotorsBus(abc.ABC):
             if gear_space:
                 # Convert motor space values to gear space for normalization
                 val = self._motor_space_to_gear_space(val, gear_ratio)
+                print(f"val: {val}")
                 min_ = self._motor_space_to_gear_space(min_, gear_ratio)
+                print(f"min_: {min_}")
                 max_ = self._motor_space_to_gear_space(max_, gear_ratio)
+                print(f"max_: {max_}")
 
             bounded_val = min(max_, max(min_, val))
             if self.motors[motor].norm_mode is MotorNormMode.RANGE_M100_100:
                 norm = (((bounded_val - min_) / (max_ - min_)) * 200) - 100
                 normalized_values[id_] = -norm if drive_mode else norm
+                print(f"normalized_values 1: {normalized_values}")
             elif self.motors[motor].norm_mode is MotorNormMode.RANGE_0_100:
                 norm = ((bounded_val - min_) / (max_ - min_)) * 100
                 normalized_values[id_] = 100 - norm if drive_mode else norm
+                print(f"normalized_values 2: {normalized_values}")
             elif self.motors[motor].norm_mode is MotorNormMode.DEGREES:
                 mid = (min_ + max_) / 2
                 max_res = self.model_resolution_table[self._id_to_model(id_)] - 1
                 normalized_values[id_] = (val - mid) * 360 / max_res
+                print(f"normalized_values 3: {normalized_values}")
             else:
                 raise NotImplementedError
 
