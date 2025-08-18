@@ -13,10 +13,10 @@ EPISODE_TIME_SEC = 30
 TASK_DESCRIPTION = "Grab the tape and put it in the cup"
 
 # Create the robot and teleoperator configurations
-robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.219", id="sourccey_v3beta")
+robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.226", id="sourccey_v3beta")
 robot = SourcceyV3BetaClient(robot_config)
 
-policy = ACTPolicy.from_pretrained("outputs/train/act_sourccey_v3beta-001__tape-a__chrism_010_000_001_002_combined/checkpoints/030000/pretrained_model")
+policy = ACTPolicy.from_pretrained("outputs/train/act__sourccey_v3beta-002__stiction_tape-test-a__set000__chrism/checkpoints/016000/pretrained_model")
 
 # Configure the dataset features
 action_features = hw_to_dataset_features(robot.action_features, "action")
@@ -25,7 +25,7 @@ dataset_features = {**action_features, **obs_features}
 
 # Create the dataset
 dataset = LeRobotDataset.create(
-    repo_id="local/eval_sourccey_v3beta-001__tape-a__chrism_010_000_001_002_combined",
+    repo_id="local/eval_act__sourccey_v3beta-002__stiction_tape-test-a__set000__chrism",
     fps=FPS,
     features=dataset_features,
     robot_type=robot.name,
