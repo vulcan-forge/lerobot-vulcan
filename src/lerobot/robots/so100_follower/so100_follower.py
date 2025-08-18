@@ -42,12 +42,12 @@ class SO100Follower(Robot):
     config_class = SO100FollowerConfig
     name = "so100_follower"
 
-    def __init__(self, reversed: bool, config: SO100FollowerConfig):
+    def __init__(self, config: SO100FollowerConfig):
         super().__init__(config)
         self.config = config
 
         motor_ids = [1, 2, 3, 4, 5, 6]
-        if reversed:
+        if config.reversed:
             motor_ids = [7, 8, 9, 10, 11, 12]
 
         # TODO: Add the new motors for the double arm

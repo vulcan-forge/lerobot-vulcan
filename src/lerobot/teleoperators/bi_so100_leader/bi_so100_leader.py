@@ -53,8 +53,11 @@ class BiSO100Leader(Teleoperator):
             reversed=True,
         )
 
-        self.left_arm = SO100Leader(reversed=left_arm_config.reversed, config=left_arm_config)
-        self.right_arm = SO100Leader(reversed=right_arm_config.reversed, config=right_arm_config)
+        print(left_arm_config.reversed)
+        print(right_arm_config.reversed)
+
+        self.left_arm = SO100Leader(config=left_arm_config)
+        self.right_arm = SO100Leader(config=right_arm_config)
 
     @cached_property
     def action_features(self) -> dict[str, type]:

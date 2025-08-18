@@ -64,8 +64,13 @@ class BiSO100Follower(Robot):
             cameras={},
         )
 
-        self.left_arm = SO100Follower(reversed=config.left_arm_reversed, config=left_arm_config)
-        self.right_arm = SO100Follower(reversed=config.right_arm_reversed, config=right_arm_config)
+        print()
+        print("Follower config: ", left_arm_config.reversed)
+        print("Follower config: ", right_arm_config.reversed)
+        print()
+
+        self.left_arm = SO100Follower(config=left_arm_config)
+        self.right_arm = SO100Follower(config=right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
 
     @property
