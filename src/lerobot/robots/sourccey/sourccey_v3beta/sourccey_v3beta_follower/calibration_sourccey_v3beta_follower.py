@@ -122,22 +122,11 @@ class SourcceyV3BetaFollowerCalibrator:
         """
         calibration = {}
         for motor, m in self.robot.bus.motors.items():
-            drive_mode = 1 if motor == "shoulder_lift" or (self.robot.config.orientation == "right" and motor == "gripper") else 0
+            drive_mode = 1 if (self.robot.config.orientation == "right" and motor == "gripper") else 0
+            # drive_mode = 1 if motor == "shoulder_lift" or (self.robot.config.orientation == "right" and motor == "gripper") else 0
 
-            # Handle both old format (range_mins/range_maxes) and new format (detected_ranges)
-            if range_maxes is not None:
-                # Old format: range_data is range_mins, range_maxes is provided
-                range_min = range_data[motor]
-                range_max = range_maxes[motor]
-            else:
-                # New format: range_data is detected_ranges with {"min": x, "max": y} structure
-                if isinstance(range_data[motor], dict):
-                    range_min = range_data[motor]["min"]
-                    range_max = range_data[motor]["max"]
-                else:
-                    # Fallback: assume range_data[motor] is the value itself
-                    range_min = range_data[motor]
-                    range_max = range_data[motor]
+            range_min = range_data[motor]
+            range_max = range_maxes[motor]
 
             calibration[motor] = MotorCalibration(
                 id=m.id,
