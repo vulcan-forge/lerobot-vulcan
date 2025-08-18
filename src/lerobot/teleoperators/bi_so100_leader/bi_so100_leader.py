@@ -43,16 +43,18 @@ class BiSO100Leader(Teleoperator):
             id=f"{config.id}_left" if config.id else None,
             calibration_dir=config.calibration_dir,
             port=config.left_arm_port,
+            reversed=False,
         )
 
         right_arm_config = SO100LeaderConfig(
             id=f"{config.id}_right" if config.id else None,
             calibration_dir=config.calibration_dir,
             port=config.right_arm_port,
+            reversed=True,
         )
 
-        self.left_arm = SO100Leader(left_arm_config)
-        self.right_arm = SO100Leader(right_arm_config)
+        self.left_arm = SO100Leader(reversed=left_arm_config.reversed, config=left_arm_config)
+        self.right_arm = SO100Leader(reversed=right_arm_config.reversed, config=right_arm_config)
 
     @cached_property
     def action_features(self) -> dict[str, type]:

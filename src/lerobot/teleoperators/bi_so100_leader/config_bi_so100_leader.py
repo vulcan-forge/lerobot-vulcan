@@ -24,3 +24,4 @@ from ..config import TeleoperatorConfig
 class BiSO100LeaderConfig(TeleoperatorConfig):
     left_arm_port: str
     right_arm_port: str
+    reversed: bool = False

@@ -41,15 +41,19 @@ class SO100Leader(Teleoperator):
     def __init__(self, config: SO100LeaderConfig):
         super().__init__(config)
         self.config = config
+        motor_ids = [1, 2, 3, 4, 5, 6]
+        if config.reversed:
+            motor_ids = [7, 8, 9, 10, 11, 12]
+
         self.bus = FeetechMotorsBus(
             port=self.config.port,
             motors={
-                "shoulder_pan": Motor(1, "sts3215", MotorNormMode.RANGE_M100_100),
-                "shoulder_lift": Motor(2, "sts3215", MotorNormMode.RANGE_M100_100),
-                "elbow_flex": Motor(3, "sts3215", MotorNormMode.RANGE_M100_100),
-                "wrist_flex": Motor(4, "sts3215", MotorNormMode.RANGE_M100_100),
-                "wrist_roll": Motor(5, "sts3215", MotorNormMode.RANGE_M100_100),
-                "gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
+                "shoulder_pan": Motor(motor_ids[0], "sts3215", MotorNormMode.RANGE_M100_100),
+                "shoulder_lift": Motor(motor_ids[1], "sts3215", MotorNormMode.RANGE_M100_100),
+                "elbow_flex": Motor(motor_ids[2], "sts3215", MotorNormMode.RANGE_M100_100),
+                "wrist_flex": Motor(motor_ids[3], "sts3215", MotorNormMode.RANGE_M100_100),
+                "wrist_roll": Motor(motor_ids[4], "sts3215", MotorNormMode.RANGE_M100_100),
+                "gripper": Motor(motor_ids[5], "sts3215", MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )
