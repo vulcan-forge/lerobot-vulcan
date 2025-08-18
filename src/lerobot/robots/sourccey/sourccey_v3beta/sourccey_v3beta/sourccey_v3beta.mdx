@@ -247,8 +247,8 @@ python -m lerobot.record
   --robot.id=double_so100_follower \
   --robot.cameras="{ cameraFrontLeft: {type: opencv, index_or_path: '/dev/cameraFrontLeft', width: 640, height: 360, fps: 30}, cameraFrontRight: {type: opencv, index_or_path: '/dev/cameraFrontLeft', width: 640, height: 360, fps: 30 }, cameraWristLeft: {type: opencv, index_or_path: '/dev/cameraWristLeft', width: 640, height: 360, fps: 30}, cameraWristRight: {type: opencv, index_or_path: '/dev/cameraWristRight', width: 640, height: 360, fps: 30} }" \
   --teleop.type=so100_double_leader \
-  --teleop.left_port=/dev/ttyUSB1 \
-  --teleop.right_port=/dev/ttyUSB0 \
+  --teleop.left_port=/dev/ttyACM1 \
+  --teleop.right_port=/dev/ttyACM0 \
   --teleop.id=so100_double_leader \
   --dataset.repo_id=local/ai_test_2 \
   --dataset.num_episodes=10 \
