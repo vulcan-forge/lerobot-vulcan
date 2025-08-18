@@ -244,12 +244,12 @@ lerobot-teleoperate \
   --robot.type=bi_so100_follower \
   --robot.left_arm_port=/dev/robotLeftArm \
   --robot.right_arm_port=/dev/robotRightArm \
-  --robot.id=double_so100_follower \
+  --robot.id=bi_so100_follower \
   --robot.cameras="{ cameraFrontLeft: {type: opencv, index_or_path: '/dev/cameraFrontLeft', width: 640, height: 360, fps: 30}, cameraFrontRight: {type: opencv, index_or_path: '/dev/cameraFrontLeft', width: 640, height: 360, fps: 30 }, cameraWristLeft: {type: opencv, index_or_path: '/dev/cameraWristLeft', width: 640, height: 360, fps: 30}, cameraWristRight: {type: opencv, index_or_path: '/dev/cameraWristRight', width: 640, height: 360, fps: 30} }" \
   --teleop.type=bi_so100_leader \
   --teleop.left_arm_port=/dev/ttyACM3 \
   --teleop.right_arm_port=/dev/ttyACM2 \
-  --teleop.id=bi_so100_follower
+  --teleop.id=bi_so100_leader
 ```
 
 ```
@@ -257,12 +257,12 @@ lerobot-record \
   --robot.type=bi_so100_follower \
   --robot.left_arm_port=/dev/robotLeftArm \
   --robot.right_arm_port=/dev/robotRightArm \
-  --robot.id=double_so100_follower \
+  --robot.id=bi_so100_follower \
   --robot.cameras="{ cameraFrontLeft: {type: opencv, index_or_path: '/dev/cameraFrontLeft', width: 640, height: 360, fps: 30}, cameraFrontRight: {type: opencv, index_or_path: '/dev/cameraFrontLeft', width: 640, height: 360, fps: 30 }, cameraWristLeft: {type: opencv, index_or_path: '/dev/cameraWristLeft', width: 640, height: 360, fps: 30}, cameraWristRight: {type: opencv, index_or_path: '/dev/cameraWristRight', width: 640, height: 360, fps: 30} }" \
   --teleop.type=bi_so100_leader \
   --teleop.left_arm_port=/dev/ttyACM3 \
   --teleop.right_arm_port=/dev/ttyACM2 \
-  --teleop.id=bi_so100_follower \
+  --teleop.id=bi_so100_leader \
   --dataset.repo_id=local/ai_test_2 \
   --dataset.num_episodes=10 \
   --dataset.single_task="Grab the tape and put it in the cup" \
