@@ -245,7 +245,7 @@ lerobot-teleoperate \
   --robot.left_arm_port=/dev/robotLeftArm \
   --robot.right_arm_port=/dev/robotRightArm \
   --robot.id=bi_so100_follower \
-  --robot.cameras="{ cameraFrontLeft: {type: opencv, index_or_path: '/dev/cameraFrontLeft', width: 640, height: 360, fps: 30}, cameraFrontRight: {type: opencv, index_or_path: '/dev/cameraFrontLeft', width: 640, height: 360, fps: 30 }, cameraWristLeft: {type: opencv, index_or_path: '/dev/cameraWristLeft', width: 640, height: 360, fps: 30}, cameraWristRight: {type: opencv, index_or_path: '/dev/cameraWristRight', width: 640, height: 360, fps: 30} }" \
+  --robot.cameras="{ cameraFrontLeft: {type: opencv, index_or_path: '/dev/video2', width: 640, height: 360, fps: 30}, cameraFrontRight: {type: opencv, index_or_path: '/dev/cameraFrontRight', width: 640, height: 360, fps: 30 }, cameraWristLeft: {type: opencv, index_or_path: '/dev/video4', width: 640, height: 360, fps: 30}, cameraWristRight: {type: opencv, index_or_path: '/dev/video6', width: 640, height: 360, fps: 30} }" \
   --teleop.type=bi_so100_leader \
   --teleop.left_arm_port=/dev/ttyACM3 \
   --teleop.right_arm_port=/dev/ttyACM2 \
