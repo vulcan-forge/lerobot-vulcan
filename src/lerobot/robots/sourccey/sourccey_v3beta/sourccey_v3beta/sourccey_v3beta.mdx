@@ -277,6 +277,13 @@ lerobot-record \
   --teleop.id=bi_so100_leader \
   --dataset.repo_id=local/ai_test_2 \
   --dataset.num_episodes=10 \
+  --dataset.episode_time_s=25 \
   --dataset.single_task="Grab the tape and put it in the cup" \
   --dataset.push_to_hub=false
+```
+
+```
+cd ~/Desktop/Projects/lerobot-vulcan-nightly
+cd ~/.cache/huggingface/lerobot/local
+rm -r ~/.cache/huggingface/lerobot/local/ai_test_2
 ```
