@@ -49,6 +49,7 @@ class BiSO100Follower(Robot):
             disable_torque_on_disconnect=config.left_arm_disable_torque_on_disconnect,
             max_relative_target=config.left_arm_max_relative_target,
             use_degrees=config.left_arm_use_degrees,
+            reversed=False,
             cameras={},
         )
 
@@ -59,11 +60,12 @@ class BiSO100Follower(Robot):
             disable_torque_on_disconnect=config.right_arm_disable_torque_on_disconnect,
             max_relative_target=config.right_arm_max_relative_target,
             use_degrees=config.right_arm_use_degrees,
+            reversed=True,
             cameras={},
         )
 
-        self.left_arm = SO100Follower(left_arm_config)
-        self.right_arm = SO100Follower(right_arm_config)
+        self.left_arm = SO100Follower(reversed=config.left_arm_reversed, config=left_arm_config)
+        self.right_arm = SO100Follower(reversed=config.right_arm_reversed, config=right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
 
     @property

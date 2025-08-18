@@ -42,19 +42,25 @@ class SO100Follower(Robot):
     config_class = SO100FollowerConfig
     name = "so100_follower"
 
-    def __init__(self, config: SO100FollowerConfig):
+    def __init__(self, reversed: bool, config: SO100FollowerConfig):
         super().__init__(config)
         self.config = config
+
+        motor_ids = [1, 2, 3, 4, 5, 6]
+        if reversed:
+            motor_ids = [7, 8, 9, 10, 11, 12]
+
+        # TODO: Add the new motors for the double arm
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
         self.bus = FeetechMotorsBus(
             port=self.config.port,
             motors={
-                "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
-                "shoulder_lift": Motor(2, "sts3215", norm_mode_body),
-                "elbow_flex": Motor(3, "sts3215", norm_mode_body),
-                "wrist_flex": Motor(4, "sts3215", norm_mode_body),
-                "wrist_roll": Motor(5, "sts3215", norm_mode_body),
-                "gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
+                "shoulder_pan": Motor(motor_ids[0], "sts3215", norm_mode_body),
+                "shoulder_lift": Motor(motor_ids[1], "sts3215", norm_mode_body),
+                "elbow_flex": Motor(motor_ids[2], "sts3215", norm_mode_body),
+                "wrist_flex": Motor(motor_ids[3], "sts3215", norm_mode_body),
+                "wrist_roll": Motor(motor_ids[4], "sts3215", norm_mode_body),
+                "gripper": Motor(motor_ids[5], "sts3215", MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )
