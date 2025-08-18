@@ -21,15 +21,15 @@ uv run -m lerobot.auto_calibrate \
 # For Teleoperators
 
 ```bash
-uv run -m lerobot.auto_calibrate \
+python -m lerobot.auto_calibrate \
   --teleop.type=bi_sourccey_v3beta_leader \
   --teleop.id=bi_sourccey_v3beta_leader \
-  --teleop.left_arm_port="COM28" \
-  --teleop.right_arm_port="COM23"
+  --teleop.left_arm_port="COM4" \
+  --teleop.right_arm_port="COM41"
 ```
 
 ```bash
-uv run -m lerobot.calibrate \
+python -m lerobot.calibrate \
     --teleop.type=sourccey_v3beta_leader \
     --teleop.port=COM28 \
     --teleop.id=sourccey_v3beta_leader
