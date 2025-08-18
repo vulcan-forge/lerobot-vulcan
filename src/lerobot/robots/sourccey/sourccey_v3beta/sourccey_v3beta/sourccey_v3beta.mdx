@@ -87,6 +87,17 @@ python lerobot/scripts/train.py \
   --steps=20000
 ```
 
+python src/lerobot/scripts/train.py \
+  --dataset.repo_id=local/ai_test_2 \
+  --policy.type=act \
+  --output_dir=outputs/train/act__ai_test_2 \
+  --job_name=act__ai_test_2 \
+  --policy.device=cuda \
+  --save_freq=4000 \
+  --policy.push_to_hub=false \
+  --wandb.enable=false \
+  --steps=20000
+
 
 
 ```bash
