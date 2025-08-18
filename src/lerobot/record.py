@@ -346,7 +346,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     with VideoEncodingManager(dataset):
         recorded_episodes = 0
         while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
-            log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
+            print(f"Recording episode {dataset.num_episodes}")
+            # log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
             record_loop(
                 robot=robot,
                 events=events,
@@ -364,7 +365,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             if not events["stop_recording"] and (
                 (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
             ):
-                log_say("Reset the environment", cfg.play_sounds)
+                print("Reset the environment")
+                # log_say("Reset the environment", cfg.play_sounds)
                 record_loop(
                     robot=robot,
                     events=events,
@@ -376,7 +378,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 )
 
             if events["rerecord_episode"]:
-                log_say("Re-record episode", cfg.play_sounds)
+                print("Re-record episode")
+                # log_say("Re-record episode", cfg.play_sounds)
                 events["rerecord_episode"] = False
                 events["exit_early"] = False
                 dataset.clear_episode_buffer()
@@ -385,7 +388,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             dataset.save_episode()
             recorded_episodes += 1
 
-    log_say("Stop recording", cfg.play_sounds, blocking=True)
+    print("Stop recording")
+    # log_say("Stop recording", cfg.play_sounds, blocking=True)
 
     robot.disconnect()
     if teleop is not None:
@@ -397,7 +401,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     if cfg.dataset.push_to_hub:
         dataset.push_to_hub(tags=cfg.dataset.tags, private=cfg.dataset.private)
 
-    log_say("Exiting", cfg.play_sounds)
+    print("Exiting")
+    # log_say("Exiting", cfg.play_sounds)
     return dataset
 
 
