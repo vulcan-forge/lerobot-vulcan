@@ -218,5 +218,40 @@ python -m lerobot.record \
 ## -- Server SO100
 
 ```
+python -m lerobot.record
+  --robot.type=so100_double_follower \
+  --robot.left_port=/dev/robotLeft \
+  --robot.right_port=/dev/ttyUSB2 \
+  --robot.id=double_so100_follower \
+  --robot.cameras="{ front: {type: opencv, index_or_path: '/dev/video0', width: 640, height: 480, fps: 30}, side: {type: opencv, index_or_path: '/dev/video2', width: 640, height: 480, fps: 30 }" \
+  --teleop.type=so100_double_leader \
+  --teleop.type=so100_double_leader \
+  --teleop.left_port=/dev/ttyUSB1 \
+  --teleop.right_port=/dev/ttyUSB0 \
+  --teleop.id=so100_double_leader \
+  --dataset.repo_id=local/double_so100_towelfold_000 \
+  --dataset.num_episodes=1 \
+  --dataset.single_task="Dual arm manipulation task" \
+  --dataset.push_to_hub=false
+```
 
+---
+
+## Sourccey SO100 Test
+
+```
+python -m lerobot.record
+  --robot.type=so100_double_follower \
+  --robot.left_port=/dev/robotLeftArm \
+  --robot.right_port=/dev/robotRightArm \
+  --robot.id=double_so100_follower \
+  --robot.cameras="{ cameraFrontLeft: {type: opencv, index_or_path: '/dev/cameraFrontLeft', width: 640, height: 360, fps: 30}, cameraFrontRight: {type: opencv, index_or_path: '/dev/cameraFrontLeft', width: 640, height: 360, fps: 30 }, cameraWristLeft: {type: opencv, index_or_path: '/dev/cameraWristLeft', width: 640, height: 360, fps: 30}, cameraWristRight: {type: opencv, index_or_path: '/dev/cameraWristRight', width: 640, height: 360, fps: 30} }" \
+  --teleop.type=so100_double_leader \
+  --teleop.left_port=/dev/ttyUSB1 \
+  --teleop.right_port=/dev/ttyUSB0 \
+  --teleop.id=so100_double_leader \
+  --dataset.repo_id=local/ai_test_2 \
+  --dataset.num_episodes=10 \
+  --dataset.single_task="Dual arm manipulation task" \
+  --dataset.push_to_hub=false
 ```
