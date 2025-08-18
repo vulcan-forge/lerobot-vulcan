@@ -20,15 +20,14 @@ class SourcceyV3BetaFollowerCalibrator:
 
         homing_offsets = self._initialize_calibration(reversed)
 
-        detected_ranges = {}
+        range_mins = {}
+        range_maxes = {}
         default_calibration = self._load_default_calibration(reversed)
         for motor, m in self.robot.bus.motors.items():
-            detected_ranges[motor] = {
-                "min": default_calibration[motor]["range_min"],
-                "max": default_calibration[motor]["range_max"],
-            }
+            range_mins[motor] = default_calibration[motor]["range_min"]
+            range_maxes[motor] = default_calibration[motor]["range_max"]
 
-        self.robot.calibration = self._create_calibration_dict(homing_offsets, detected_ranges)
+        self.robot.calibration = self._create_calibration_dict(homing_offsets, range_mins, range_maxes)
         self.robot.bus.write_calibration(self.robot.calibration)
         self._save_calibration()
         logger.info(f"Default calibration completed and saved to {self.robot.calibration_fpath}")
@@ -104,7 +103,7 @@ class SourcceyV3BetaFollowerCalibrator:
         self.robot.bus.disable_torque()
 
         # Step 4: Create calibration dictionary
-        self.robot.calibration = self._create_calibration_dict(homing_offsets, detected_ranges)
+        self.robot.calibration = self._create_calibration_dict(homing_offsets, detected_ranges["min"], detected_ranges["max"])
 
         # Step 5: Write calibration to motors and save
         self.robot.bus.write_calibration(self.robot.calibration)
@@ -113,21 +112,14 @@ class SourcceyV3BetaFollowerCalibrator:
         return self.robot.calibration
 
     def _create_calibration_dict(self, homing_offsets: Dict[str, int],
-                                range_data: Dict[str, Any], range_maxes: Dict[str, int] = None) -> Dict[str, MotorCalibration]:
-        """Create calibration dictionary from homing offsets and range data.
-
-        Supports both formats:
-        - Old format: range_data=range_mins, range_maxes=range_maxes
-        - New format: range_data=detected_ranges (with {"min": x, "max": y} structure)
-        """
+                                range_mins: Dict[str, Any], range_maxes: Dict[str, int] = None) -> Dict[str, MotorCalibration]:
         calibration = {}
         for motor, m in self.robot.bus.motors.items():
             drive_mode = 1 if (self.robot.config.orientation == "right" and motor == "gripper") else 0
             # drive_mode = 1 if motor == "shoulder_lift" or (self.robot.config.orientation == "right" and motor == "gripper") else 0
 
-            range_min = range_data[motor]
+            range_min = range_mins[motor]
             range_max = range_maxes[motor]
-
             calibration[motor] = MotorCalibration(
                 id=m.id,
                 drive_mode=drive_mode,
@@ -325,6 +317,10 @@ class SourcceyV3BetaFollowerCalibrator:
             "search_negative": True
         }
 
+        detected_ranges = {}
+        detected_ranges["min"] = {}
+        detected_ranges["max"] = {}
+
         for motor_name in self.robot.bus.motors:
             logger.info(f"Detecting limits for motor: {motor_name}")
 
@@ -391,10 +387,8 @@ class SourcceyV3BetaFollowerCalibrator:
                 time.sleep(settle_time * 5)
 
             # Store detected range
-            detected_ranges[motor_name] = {
-                "min": int(min_pos),  # Convert to int
-                "max": int(max_pos)   # Convert to int
-            }
+            detected_ranges["min"][motor_name] = int(min_pos)
+            detected_ranges["max"][motor_name] = int(max_pos)
 
             logger.info(f"  Detected range for {motor_name}: {min_pos} to {max_pos}")
 
