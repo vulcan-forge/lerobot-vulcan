@@ -177,7 +177,7 @@ class SourcceyV3BetaFollowerCalibrator:
                 },
                 "shoulder_lift": {
                     "id": 2,
-                    "drive_mode": 1,
+                    "drive_mode": 0,
                     "homing_offset": 660,
                     "range_min": 0,
                     "range_max": 3800
@@ -223,7 +223,7 @@ class SourcceyV3BetaFollowerCalibrator:
                 },
                 "shoulder_lift": {
                     "id": 8,
-                    "drive_mode": 1,
+                    "drive_mode": 0,
                     "homing_offset": 1645,
                     "range_min": 296,
                     "range_max": 4095
