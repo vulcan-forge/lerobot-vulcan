@@ -20,14 +20,14 @@ class SourcceyV3BetaFollowerCalibrator:
 
         homing_offsets = self._initialize_calibration(reversed)
 
-        range_mins = {}
-        range_maxes = {}
+        min_ranges = {}
+        max_ranges = {}
         default_calibration = self._load_default_calibration(reversed)
         for motor, m in self.robot.bus.motors.items():
-            range_mins[motor] = default_calibration[motor]["range_min"]
-            range_maxes[motor] = default_calibration[motor]["range_max"]
+            min_ranges[motor] = default_calibration[motor]["range_min"]
+            max_ranges[motor] = default_calibration[motor]["range_max"]
 
-        self.robot.calibration = self._create_calibration_dict(homing_offsets, range_mins, range_maxes)
+        self.robot.calibration = self._create_calibration_dict(homing_offsets, min_ranges, max_ranges)
         self.robot.bus.write_calibration(self.robot.calibration)
         self._save_calibration()
         logger.info(f"Default calibration completed and saved to {self.robot.calibration_fpath}")
@@ -115,8 +115,7 @@ class SourcceyV3BetaFollowerCalibrator:
                                 range_mins: Dict[str, Any], range_maxes: Dict[str, int] = None) -> Dict[str, MotorCalibration]:
         calibration = {}
         for motor, m in self.robot.bus.motors.items():
-            drive_mode = 1 if (self.robot.config.orientation == "right" and motor == "gripper") else 0
-            # drive_mode = 1 if motor == "shoulder_lift" or (self.robot.config.orientation == "right" and motor == "gripper") else 0
+            drive_mode = 1 if motor == "shoulder_lift" or (self.robot.config.orientation == "right" and motor == "gripper") else 0
 
             range_min = range_mins[motor]
             range_max = range_maxes[motor]
@@ -177,7 +176,7 @@ class SourcceyV3BetaFollowerCalibrator:
                 },
                 "shoulder_lift": {
                     "id": 2,
-                    "drive_mode": 0,
+                    "drive_mode": 1,
                     "homing_offset": 660,
                     "range_min": 0,
                     "range_max": 3800
@@ -223,7 +222,7 @@ class SourcceyV3BetaFollowerCalibrator:
                 },
                 "shoulder_lift": {
                     "id": 8,
-                    "drive_mode": 0,
+                    "drive_mode": 1,
                     "homing_offset": 1645,
                     "range_min": 296,
                     "range_max": 4095
@@ -317,10 +316,12 @@ class SourcceyV3BetaFollowerCalibrator:
             "search_negative": True
         }
 
-        detected_ranges = {}
-        detected_ranges["min"] = {}
-        detected_ranges["max"] = {}
-
+        min_ranges = {}
+        max_ranges = {}
+        detected_ranges = {
+            "min": min_ranges,
+            "max": max_ranges
+        }
         for motor_name in self.robot.bus.motors:
             logger.info(f"Detecting limits for motor: {motor_name}")
 
