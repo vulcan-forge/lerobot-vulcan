@@ -16,7 +16,7 @@ TASK_DESCRIPTION = "Grab the tape and put it in the cup"
 robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.226", id="sourccey_v3beta")
 robot = SourcceyV3BetaClient(robot_config)
 
-policy = ACTPolicy.from_pretrained("outputs/train/act__sourccey_v3beta-002__stiction_tape-test-a__set000__chrism/checkpoints/016000/pretrained_model")
+policy = ACTPolicy.from_pretrained("outputs/train/act__sourccey_v3beta-002__stiction_tape-test-a__set001__chrism/checkpoints/020000/pretrained_model")
 
 # Configure the dataset features
 action_features = hw_to_dataset_features(robot.action_features, "action")
