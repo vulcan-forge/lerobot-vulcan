@@ -253,6 +253,18 @@ lerobot-teleoperate \
 ```
 
 ```
+nano ~/.cache/huggingface/lerobot/calibration/robots/so100_follower/bi_so100_follower_left.json
+nano ~/.cache/huggingface/lerobot/calibration/robots/so100_follower/bi_so100_follower_right.json
+cat ~/.cache/huggingface/lerobot/calibration/robots/so100_follower/bi_so100_follower_left.json
+cat ~/.cache/huggingface/lerobot/calibration/robots/so100_follower/bi_so100_follower_right.json
+
+nano ~/.cache/huggingface/lerobot/calibration/teleoperators/so100_leader/bi_so100_leader_left.json
+nano ~/.cache/huggingface/lerobot/calibration/teleoperators/so100_leader/bi_so100_leader_right.json
+cat ~/.cache/huggingface/lerobot/calibration/teleoperators/so100_leader/bi_so100_leader_left.json
+cat ~/.cache/huggingface/lerobot/calibration/teleoperators/so100_leader/bi_so100_leader_right.json
+```
+
+```
 lerobot-record \
   --robot.type=bi_so100_follower \
   --robot.left_arm_port=/dev/robotLeftArm \
