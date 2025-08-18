@@ -240,6 +240,19 @@ python -m lerobot.record
 ## Sourccey SO100 Test
 
 ```
+python -m lerobot.teleoperate
+  --robot.type=so100_double_follower \
+  --robot.left_port=/dev/robotLeftArm \
+  --robot.right_port=/dev/robotRightArm \
+  --robot.id=double_so100_follower \
+  --robot.cameras="{ cameraFrontLeft: {type: opencv, index_or_path: '/dev/cameraFrontLeft', width: 640, height: 360, fps: 30}, cameraFrontRight: {type: opencv, index_or_path: '/dev/cameraFrontLeft', width: 640, height: 360, fps: 30 }, cameraWristLeft: {type: opencv, index_or_path: '/dev/cameraWristLeft', width: 640, height: 360, fps: 30}, cameraWristRight: {type: opencv, index_or_path: '/dev/cameraWristRight', width: 640, height: 360, fps: 30} }" \
+  --teleop.type=so100_double_leader \
+  --teleop.left_port=/dev/ttyACM3 \
+  --teleop.right_port=/dev/ttyACM2 \
+  --teleop.id=so100_double_leader
+```
+
+```
 python -m lerobot.record
   --robot.type=so100_double_follower \
   --robot.left_port=/dev/robotLeftArm \
