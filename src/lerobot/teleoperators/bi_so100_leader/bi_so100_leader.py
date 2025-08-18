@@ -53,9 +53,6 @@ class BiSO100Leader(Teleoperator):
             reversed=True,
         )
 
-        print(left_arm_config.reversed)
-        print(right_arm_config.reversed)
-
         self.left_arm = SO100Leader(config=left_arm_config)
         self.right_arm = SO100Leader(config=right_arm_config)
 
