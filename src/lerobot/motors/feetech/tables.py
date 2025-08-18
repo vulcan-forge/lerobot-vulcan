@@ -236,7 +236,7 @@ SCAN_BAUDRATES = [
 
 MODEL_NUMBER_TABLE = {
     "sts3215": 777,
-    "sts3250": 2825,
+    "sts3250": 777,#2825,
     "sm8512bl": 11272,
     "scs0009": 1284,
 }
