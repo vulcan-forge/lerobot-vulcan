@@ -277,12 +277,12 @@ def record_loop(
         # ------------------------------------
 
         # Print observation and action every 3 seconds
-        if time.time() - last_print_time >= 3:
-            print()
-            print(f"Observation: {observation_frame['observation.state']}")
-            print(f"Action: {action}")
-            print(f"Action Type: {type(action)}")
-            print()
+        # if time.time() - last_print_time >= 3:
+        #     print()
+        #     print(f"Observation: {observation_frame['observation.state']}")
+        #     print(f"Action: {action}")
+        #     print(f"Action Type: {type(action)}")
+        #     print()
 
         # Action can be clipped using `max_relative_target`, so save the actually sent action
         sent_action = robot.send_action(action)
