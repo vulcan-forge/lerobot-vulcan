@@ -297,3 +297,29 @@ cd ~/Desktop/Projects/lerobot-vulcan-nightly
 cd ~/.cache/huggingface/lerobot/local
 rm -r ~/.cache/huggingface/lerobot/local/ai_test_2
 ```
+
+python src/lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
+  --policy.type=act \
+  --output_dir=outputs/train/act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
+  --job_name=act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
+  --policy.device=cuda \
+  --save_freq=20000 \
+  --policy.push_to_hub=false \
+  --wandb.enable=false \
+  --steps=40000
+
+
+## Train command 08/19/2025
+```
+python src/lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
+  --policy.type=act \
+  --output_dir=outputs/train/act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
+  --job_name=act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
+  --policy.device=cuda \
+  --save_freq=20000 \
+  --policy.push_to_hub=false \
+  --wandb.enable=false \
+  --steps=40000
+```
