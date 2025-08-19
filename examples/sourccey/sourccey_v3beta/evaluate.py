@@ -9,14 +9,14 @@ from lerobot.record import record_loop
 
 NUM_EPISODES = 1
 FPS = 30
-EPISODE_TIME_SEC = 30
+EPISODE_TIME_SEC = 120
 TASK_DESCRIPTION = "Grab the tape and put it in the cup"
 
 # Create the robot and teleoperator configurations
-robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.226", id="sourccey_v3beta")
+robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.227", id="sourccey_v3beta")
 robot = SourcceyV3BetaClient(robot_config)
 
-policy = ACTPolicy.from_pretrained("outputs/train/act__sourccey_v3beta-002__stiction_tape-test-a__set001__chrism/checkpoints/020000/pretrained_model")
+policy = ACTPolicy.from_pretrained("outputs/train/act__sourccey_v3beta-001__ai_test_3/checkpoints/020000/pretrained_model")
 
 # Configure the dataset features
 action_features = hw_to_dataset_features(robot.action_features, "action")
@@ -25,7 +25,7 @@ dataset_features = {**action_features, **obs_features}
 
 # Create the dataset
 dataset = LeRobotDataset.create(
-    repo_id="local/eval_act__sourccey_v3beta-002__stiction_tape-test-a__set000__chrism",
+    repo_id="local/eval_act__sourccey_v3beta-001__ai_test_3",
     fps=FPS,
     features=dataset_features,
     robot_type=robot.name,

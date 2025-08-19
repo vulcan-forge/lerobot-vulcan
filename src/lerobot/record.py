@@ -233,6 +233,7 @@ def record_loop(
 
     timestamp = 0
     start_episode_t = time.perf_counter()
+    last_print_time = time.time()
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
 
@@ -274,6 +275,14 @@ def record_loop(
             )
             continue
         # ------------------------------------
+
+        # Print observation and action every 3 seconds
+        if time.time() - last_print_time >= 3:
+            print()
+            print(f"Observation: {observation_frame['observation.state']}")
+            print(f"Action: {action}")
+            print(f"Action Type: {type(action)}")
+            print()
 
         # Action can be clipped using `max_relative_target`, so save the actually sent action
         sent_action = robot.send_action(action)
