@@ -151,14 +151,14 @@ torchrun --nproc_per_node=2 lerobot/scripts/train.py \
 ----- Combine Dataset functions
 
 ```bash
-python lerobot/scripts/combine_dataset.py \
-    --repo_ids local/sourccey_v2beta_towel_010_a local/sourccey_v2beta_towel_010_b local/sourccey_v2beta_towel_010_2b local/sourccey_v2beta_towel_010_c local/sourccey_v2beta_towel_010_2c local/sourccey_v2beta_towel_010_3c \
-    --output_repo_id=local/sourccey_v2beta_towel_010_a_2b_3c_combined \
+python src/lerobot/scripts/combine_dataset.py \
+    --repo_ids local/sourccey_v3beta-001__ai_test_4 local/sourccey_v3beta-001__ai_test_4 \
+    --output_repo_id=local/sourccey_v3beta-001__ai_test_4_combined \
     --push_to_hub=0
 ```
 
 ```bash
-python lerobot/scripts/combine_dataset.py \
+python src/lerobot/scripts/combine_dataset.py \
     --repo_ids local/sourccey_v2beta_towel_010_d local/sourccey_v2beta_towel_010_e \
     --output_repo_id=local/sourccey_v2beta_towel_010_d_e_combined \
     --push_to_hub=0

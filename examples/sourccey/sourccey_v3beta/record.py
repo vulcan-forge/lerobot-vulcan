@@ -13,7 +13,7 @@ from lerobot.record import record_loop
 
 NUM_EPISODES = 10
 FPS = 30
-EPISODE_TIME_SEC = 30
+EPISODE_TIME_SEC = 60
 RESET_TIME_SEC = 5
 TASK_DESCRIPTION = "Grab the tape and put it in the cup"
 
@@ -34,7 +34,7 @@ dataset_features = {**action_features, **obs_features}
 # Create the dataset
 from lerobot.constants import HF_LEROBOT_HOME
 
-repo_id = "sourccey_v3beta-001__ai_test_4"
+repo_id = "sourccey_v3beta-001__ai_test_4_2"
 
 dataset = LeRobotDataset.create(
     repo_id=repo_id,
