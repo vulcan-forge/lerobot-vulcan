@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 
 """
-Phone Teleoperation for Sourccey V3 Beta Robot (Right Arm Only)
+Phone Teleoperation for Sourccey V3 Beta Robot (single arm)
 
 This script demonstrates how to integrate phone teleoperation with the Sourccey V3 Beta robot,
-controlling only the right arm. It works like the regular teleoperate.py script but uses
-phone-based control instead of a physical leader arm.
+controlling a single arm. It mirrors the normal v3 teleoperation flow by sending actions to the
+SourcceyV3Beta host over the client link, but uses a phone teleop as the arm command source.
 
 Requirements:
 - Install additional dependencies: pip install pyroki viser yourdfpy
@@ -33,6 +33,9 @@ from lerobot.utils.robot_utils import busy_wait
 from lerobot.utils.visualization_utils import _init_rerun, log_rerun_data
 
 FPS = 30
+
+# Which robot arm to control on the host: "left" or "right"
+CONTROL_ARM = "right"
 
 
 def find_sourccey_model_path() -> tuple[str, str]:
@@ -64,7 +67,7 @@ def main():
         id="sourccey_v3beta"
     )
     
-    # Create phone teleoperator configuration (right arm only)
+    # Create phone teleoperator configuration (produces left_* keys by default)
     phone_config = PhoneTeleoperatorSourcceyConfig(
         id="phone_teleop_sourccey_v3beta",
         urdf_path=urdf_path,
@@ -106,9 +109,10 @@ def main():
     if not robot.is_connected or not phone_teleop.is_connected or not keyboard.is_connected:
         raise ValueError("Robot, phone teleoperator, or keyboard is not connected!")
     
-    print("Phone teleoperation ready for Sourccey V3 Beta (Right Arm Only)!")
+    print("Phone teleoperation ready for Sourccey V3 Beta (Both Arms)!")
     print("- Start the phone app and connect to the gRPC server (port 8765)")
-    print("- Use your phone to control the right robot arm")
+    print("- Use your phone to control both robot arms simultaneously")
+    print("- Both arms will mirror the same movement for now")
     print("- Use keyboard for base movement (WASD keys)")
     print("- Phone app controls:")
     print("  * Move phone to control right arm position")
@@ -123,8 +127,16 @@ def main():
         
         observation = robot.get_observation()
         
-        # Get action from phone teleoperator (right arm only)
-        arm_action = phone_teleop.get_action(observation)
+        # Get action from phone teleoperator (emits left_* keys)
+        arm_action_left = phone_teleop.get_action(observation)
+        
+        # Duplicate commands to both arms to satisfy the bimanual system requirements
+        # The phone teleop produces left_* keys, so we'll use those for the left arm
+        # and remap them to right_* for the right arm
+        arm_action_right = {k.replace("left_", "right_"): v for k, v in arm_action_left.items()}
+        
+        # Combine both arm actions
+        arm_action = {**arm_action_left, **arm_action_right}
         
         # Get keyboard input for base movement
         keyboard_keys = keyboard.get_action()

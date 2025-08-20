@@ -45,7 +45,7 @@ def main():
     # Get the path to the Sourccey V2 Beta model directory
     current_file = Path(__file__)
     # Use the Sourccey V2 Beta model located in the model directory
-    sourccey_model_path = current_file.parent.parent.parent / "src" / "lerobot" / "robots" / "sourccey" / "sourccey_v2beta" / "model"
+    sourccey_model_path = current_file.parent.parent.parent / "src" / "lerobot" / "robots" / "sourccey" / "sourccey_v3beta" / "model"
     
     if sourccey_model_path.exists():
         urdf_path = str(sourccey_model_path / "Arm.urdf")
@@ -54,18 +54,18 @@ def main():
         print(f"Using URDF: {urdf_path}")
         print(f"Using meshes: {mesh_path}")
     else:
-        print(f"ERROR: Could not find Sourccey V2 Beta model directory at {sourccey_model_path}")
-        print("Make sure the Sourccey V2 Beta model files are available in src/lerobot/robots/sourccey/sourccey_v2beta/model/")
+        print(f"ERROR: Could not find Sourccey V3 Beta model directory at {sourccey_model_path}")
+        print("Make sure the Sourccey V3 Beta model files are available in src/lerobot/robots/sourccey/sourccey_v3beta/model/")
         return
     
     # Find existing calibration or use default ID
-    existing_id = find_existing_calibration_id("sourccey_v2beta_follower")
+    existing_id = find_existing_calibration_id("sourccey_v3beta_follower")
     
     if existing_id:
         robot_id = existing_id
         print(f"Found existing calibration for ID: {robot_id}")
     else:
-        robot_id = "sourccey_v2beta_follower_main"
+        robot_id = "sourccey_v3beta_follower_main"
         print(f"No existing calibration found. Using default ID: {robot_id}")
         print("Note: Robot will need to be calibrated on first connection.")
     
