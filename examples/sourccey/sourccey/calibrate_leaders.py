@@ -21,19 +21,19 @@ It runs the device's built-in manual calibration flow:
 Example commands:
 
 # Calibrate LEFT only
-python examples/sourccey/sourccey_v3beta/calibrate_leaders.py \
+python examples/sourccey/sourccey/calibrate_leaders.py \
   --arms left \
   --left-port COM28 \
   --left-id sourccey_v1_left
 
 # Calibrate RIGHT only
-python examples/sourccey/sourccey_v3beta/calibrate_leaders.py \
+python examples/sourccey/sourccey/calibrate_leaders.py \
   --arms right \
   --right-port COM23 \
   --right-id sourccey_v1_right
 
 # Calibrate BOTH
-python examples/sourccey/sourccey_v1/calibrate_leaders.py \
+python examples/sourccey/sourccey/calibrate_leaders.py \
   --arms both \
   --left-port COM28 --left-id sourccey_v1_left \
   --right-port COM23 --right-id sourccey_v1_right
