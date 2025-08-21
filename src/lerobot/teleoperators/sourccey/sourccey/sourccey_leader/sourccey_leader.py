@@ -24,7 +24,7 @@ from lerobot.motors.feetech import (
     OperatingMode,
 )
 
-from ...teleoperator import Teleoperator
+from ....teleoperator import Teleoperator
 from .config_sourccey_leader import  SourcceyLeaderConfig
 from .calibration_sourccey_leader import SourcceyLeaderCalibrator
 
