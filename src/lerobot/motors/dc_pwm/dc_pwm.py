@@ -114,8 +114,10 @@ class PWMProtocolHandler(ProtocolHandler):
         """Initialize gpiozero for DRV8871DDAR motor drivers."""
         try:
             # Initialize motor pins
+            print("pwm_pins", self.pwm_pins)
             for i, pin in enumerate(self.pwm_pins):
                 motor_id = i + 1
+                print("motor_id", motor_id)
 
                 # Initialize motor state
                 self.motor_states[motor_id] = {
@@ -130,8 +132,11 @@ class PWMProtocolHandler(ProtocolHandler):
                     # IN1 pin - PWM for speed control (hardware PWM recommended)
                     # Use a more compatible frequency
                     pwm_led = self.gpiozero.PWMLED(pin, frequency=1000)
+                    print("pwm_led", pwm_led)
                     pwm_led.off()  # Start with 0% duty cycle
+                    print("pwm_led.off()", pwm_led)
                     self.pwm_channels[motor_id] = pwm_led
+                    print("self.pwm_channels[motor_id]", self.pwm_channels[motor_id])
                     logger.debug(f"Motor {motor_id} IN1 (PWM) setup on pin {pin}")
                 except Exception as e:
                     logger.warning(f"Could not setup IN1 (PWM) pin {pin}: {e}")
