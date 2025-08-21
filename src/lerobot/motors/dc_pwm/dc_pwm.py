@@ -114,6 +114,14 @@ class PWMProtocolHandler(ProtocolHandler):
         """Initialize gpiozero for DRV8871DDAR motor drivers."""
         try:
             # Initialize motor pins
+            print()
+            print()
+            print()
+            print()
+            print()
+            print()
+            print()
+            print()
             print("pwm_pins", self.pwm_pins)
             for i, pin in enumerate(self.pwm_pins):
                 motor_id = i + 1
@@ -128,6 +136,15 @@ class PWMProtocolHandler(ProtocolHandler):
                     "brake_active": False
                 }
 
+                print()
+                print()
+                print()
+                print()
+                print()
+                print()
+                print()
+                print()
+
                 try:
                     # IN1 pin - PWM for speed control (hardware PWM recommended)
                     # Use a more compatible frequency
@@ -137,7 +154,23 @@ class PWMProtocolHandler(ProtocolHandler):
                     print("pwm_led.off()", pwm_led)
                     self.pwm_channels[motor_id] = pwm_led
                     print("self.pwm_channels[motor_id]", self.pwm_channels[motor_id])
+                    print()
+                    print()
+                    print()
+                    print()
+                    print()
+                    print()
+                    print()
+                    print()
                     logger.debug(f"Motor {motor_id} IN1 (PWM) setup on pin {pin}")
+                    print()
+                    print()
+                    print()
+                    print()
+                    print()
+                    print()
+                    print()
+                    print()
                 except Exception as e:
                     logger.warning(f"Could not setup IN1 (PWM) pin {pin}: {e}")
                     # Try with default frequency if custom frequency fails
