@@ -88,8 +88,8 @@ def load_dataset_from_directory(directory_path: str) -> LeRobotDataset:
         dataset_root = Path(directory_path).parent.parent
 
         # Extract the dataset name from the path
-        # The path structure is: .../sourccey_v3beta-002__stiction_tape-test-a__set001__chrism/data/chunk-000
-        # We want: sourccey_v3beta-002__stiction_tape-test-a__set001__chrism
+        # The path structure is: .../sourccey-002__stiction_tape-test-a__set001__chrism/data/chunk-000
+        # We want: sourccey-002__stiction_tape-test-a__set001__chrism
         dataset_name = dataset_root.name
 
         # Load the dataset
@@ -160,7 +160,7 @@ def predict_multiple_actions(policy, dataset, num_actions: int = 100, start_fram
                 device,
                 use_amp=False,
                 task="Grab the tape and put it in the cup",
-                robot_type="sourccey_v3beta"
+                robot_type="sourccey"
             )
 
             actions.append({
@@ -291,7 +291,7 @@ def print_actions_summary(actions):
 
 def main():
     # Paths - you'll need to update these to your actual paths
-    dataset_directory = r"C:\Users\Nicholas\.cache\huggingface\lerobot\local\sourccey_v3beta-002__stiction_tape-test-a__set001__chrism\data\chunk-000"
+    dataset_directory = r"C:\Users\Nicholas\.cache\huggingface\lerobot\local\sourccey-002__stiction_tape-test-a__set001__chrism\data\chunk-000"
     num_actions = 100  # Number of actions to predict
     start_frame = 0    # Starting frame index
 
@@ -301,7 +301,7 @@ def main():
 
         # Load the ACT policy
         logger.info("Loading ACT policy...")
-        policy_path = "outputs/train/act__sourccey_v3beta-002__stiction_tape-test-a__set001__chrism/checkpoints/020000/pretrained_model"
+        policy_path = "outputs/train/act__sourccey-002__stiction_tape-test-a__set001__chrism/checkpoints/020000/pretrained_model"
         policy = load_act_policy(policy_path, device="cuda")
 
         # Predict multiple actions

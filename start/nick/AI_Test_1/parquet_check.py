@@ -62,7 +62,7 @@ def read_specific_episode(directory_path, episode_number):
 
 def main():
     # Your directory path
-    directory = r"C:\Users\Nicholas\.cache\huggingface\lerobot\local\sourccey_v3beta-002__stiction_tape-test-a__set001__chrism\data\chunk-000"
+    directory = r"C:\Users\Nicholas\.cache\huggingface\lerobot\local\sourccey-002__stiction_tape-test-a__set001__chrism\data\chunk-000"
 
     print("=== Parquet File Reader ===")
     print(f"Directory: {directory}")

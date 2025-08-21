@@ -69,13 +69,13 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> Teleoperator:
         from .bi_so100_leader import BiSO100Leader
 
         return BiSO100Leader(config)
-    elif config.type == "sourccey_v3beta_leader":
-        from .sourccey_v3beta.sourccey_v3beta_leader import SourcceyV3BetaLeader
+    elif config.type == "sourccey_leader":
+        from .sourccey.sourccey.sourccey_leader.sourccey_leader import SourcceyLeader
 
-        return SourcceyV3BetaLeader(config)
-    elif config.type == "bi_sourccey_v3beta_leader":
-        from .sourccey_v3beta.bi_sourccey_v3beta_leader import BiSourcceyV3BetaLeader
+        return SourcceyLeader(config)
+    elif config.type == "bi_sourccey_leader":
+        from .sourccey.sourccey.sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
 
-        return BiSourcceyV3BetaLeader(config)
+        return BiSourcceyLeader(config)
     else:
         raise ValueError(config.type)

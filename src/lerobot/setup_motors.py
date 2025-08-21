@@ -37,7 +37,7 @@ from lerobot.robots import (  # noqa: F401
     so100_follower,
     so101_follower,
 )
-from lerobot.robots.sourccey_v3beta import sourccey_v3beta
+from lerobot.robots.sourccey import sourccey
 from lerobot.teleoperators import (  # noqa: F401
     TeleoperatorConfig,
     koch_leader,
@@ -55,7 +55,7 @@ COMPATIBLE_DEVICES = [
     "so101_follower",
     "so101_leader",
     "lekiwi",
-    "sourccey_v2beta",
+    "sourccey",
 ]
 
 

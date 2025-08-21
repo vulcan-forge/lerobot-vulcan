@@ -88,8 +88,8 @@ def load_dataset_from_directory(directory_path: str) -> LeRobotDataset:
         dataset_root = Path(directory_path).parent.parent
 
         # Extract the dataset name from the path
-        # The path structure is: .../sourccey_v3beta-002__stiction_tape-test-a__set001__chrism/data/chunk-000
-        # We want: sourccey_v3beta-002__stiction_tape-test-a__set001__chrism
+        # The path structure is: .../sourccey-002__stiction_tape-test-a__set001__chrism/data/chunk-000
+        # We want: sourccey-002__stiction_tape-test-a__set001__chrism
         dataset_name = dataset_root.name
 
         # Load the dataset
@@ -146,7 +146,7 @@ def main():
         device = get_safe_torch_device(policy.config.device)
 
         # Predict action using the policy
-        action = predict_action(numpy_observation, policy, device, use_amp=False, task="Grab the tape and put it in the cup", robot_type="sourccey_v3beta")
+        action = predict_action(numpy_observation, policy, device, use_amp=False, task="Grab the tape and put it in the cup", robot_type="sourccey")
         logger.info(f"Predicted action: {action}")
     except Exception as e:
         logger.error(f"Failed to load dataset or observation: {e}")

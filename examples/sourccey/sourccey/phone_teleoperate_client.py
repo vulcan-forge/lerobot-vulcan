@@ -15,10 +15,10 @@ Requirements:
 
 Usage:
 1. Start the Sourccey V3 Beta host on the Raspberry Pi:
-   python -m lerobot.robots.sourccey.sourccey_v3beta.sourccey_v3beta.sourccey_v3beta_host
+   python -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 
 2. Run this script on your client computer:
-   python examples/sourccey/sourccey_v3beta/phone_teleoperate_client.py
+   python examples/sourccey/sourccey/phone_teleoperate_client.py
 
 3. Connect your phone app to the gRPC server (port 8765) to start teleoperating
 """
@@ -39,8 +39,8 @@ def find_sourccey_model_path() -> tuple[str, str]:
     """Find the Sourccey model URDF and mesh paths."""
     # Get the path to the Sourccey V2 Beta model directory (used for V3 Beta compatibility)
     current_file = Path(__file__)
-    # Navigate to src/lerobot/robots/sourccey/sourccey_v1/model
-    sourccey_model_path = current_file.parent.parent.parent.parent / "src" / "lerobot" / "robots" / "sourccey" / "sourccey_v1" / "model"
+    # Navigate to src/lerobot/robots/sourccey/model
+    sourccey_model_path = current_file.parent.parent.parent.parent / "src" / "lerobot" / "robots" / "sourccey" / "model"
 
     if sourccey_model_path.exists():
         urdf_path = str(sourccey_model_path / "Arm.urdf")
@@ -49,8 +49,8 @@ def find_sourccey_model_path() -> tuple[str, str]:
         print(f"Using meshes: {mesh_path}")
         return urdf_path, mesh_path
     else:
-        print(f"ERROR: Could not find Sourccey V1 model directory at {sourccey_model_path}")
-        print("Make sure the Sourccey V1 model files are available in src/lerobot/robots/sourccey/sourccey_v1/model/")
+        print(f"ERROR: Could not find Sourccey model directory at {sourccey_model_path}")
+        print("Make sure the Sourccey model files are available in src/lerobot/robots/sourccey/model/")
         raise FileNotFoundError(f"Sourccey model not found at {sourccey_model_path}")
 
 
