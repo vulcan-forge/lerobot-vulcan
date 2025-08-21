@@ -179,3 +179,42 @@ outputs/
 cython_debug/
 CLAUDE.md
 .claude/settings.local.json
+
+# CAD / 3D files
+*.stl
+*.step
+*.stp
+*.igs
+*.iges
+*.obj
+*.fbx
+*.dae
+
+# Images / Media
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tif
+*.tiff
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.mp3
+*.wav
+
+# Archives
+*.zip
+*.tar
+*.gz
+*.7z
+*.rar
+
+# Documents
+*.pdf
+*.docx
+*.pptx
+*.xlsx
+
