@@ -222,6 +222,8 @@ class PWMProtocolHandler(ProtocolHandler):
         self.motor_states[motor_id]["brake_active"] = False
 
         # Correct DRV8871DDAR Logic (from datasheet):
+        print("pwm_channels", self.pwm_channels)
+        print("direction_channels", self.direction_channels)
         if velocity > 0:  # Forward
             # IN1 = 1, IN2 = 0 (Forward)
             self.pwm_channels[motor_id].on()
