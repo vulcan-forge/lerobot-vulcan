@@ -1,7 +1,7 @@
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
 from lerobot.policies.act.modeling_act import ACTPolicy
-from lerobot.robots.sourccey.sourccey_v3beta.sourccey_v3beta import SourcceyV3BetaClientConfig, SourcceyV3BetaClient
+from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import _init_rerun
@@ -13,10 +13,10 @@ EPISODE_TIME_SEC = 120
 TASK_DESCRIPTION = "Grab the tape and put it in the cup"
 
 # Create the robot and teleoperator configurations
-robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.227", id="sourccey_v3beta")
-robot = SourcceyV3BetaClient(robot_config)
+robot_config = SourcceyClientConfig(remote_ip="192.168.1.227", id="sourccey")
+robot = SourcceyClient(robot_config)
 
-policy = ACTPolicy.from_pretrained("outputs/train/act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined/checkpoints/040000/pretrained_model")
+policy = ACTPolicy.from_pretrained("outputs/train/act__sourccey-001__ai_test_6_shoulder-fast_chrism_combined/checkpoints/040000/pretrained_model")
 
 # Configure the dataset features
 action_features = hw_to_dataset_features(robot.action_features, "action")
@@ -25,7 +25,7 @@ dataset_features = {**action_features, **obs_features}
 
 # Create the dataset
 dataset = LeRobotDataset.create(
-    repo_id="local/eval_act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined",
+    repo_id="local/eval_act__sourccey-001__ai_test_6_shoulder-fast_chrism_combined",
     fps=FPS,
     features=dataset_features,
     robot_type=robot.name,

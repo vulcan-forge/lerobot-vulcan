@@ -1,11 +1,11 @@
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
-from lerobot.robots.sourccey.sourccey_v3beta.sourccey_v3beta import SourcceyV3Beta, SourcceyV3BetaClientConfig, SourcceyV3BetaClient
+from lerobot.robots.sourccey.sourccey.sourccey import Sourccey, SourcceyClientConfig, SourcceyClient
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
-from lerobot.teleoperators.sourccey_v3beta.bi_sourccey_v3beta_leader.bi_sourccey_v3beta_leader import BiSourcceyV3BetaLeader
-from lerobot.teleoperators.sourccey_v3beta.bi_sourccey_v3beta_leader.config_bi_sourccey_v3beta_leader import BiSourcceyV3BetaLeaderConfig
-from lerobot.teleoperators.sourccey_v3beta.sourccey_v3beta_leader.config_sourccey_v3beta_leader import SourcceyV3BetaLeaderConfig
-from lerobot.teleoperators.sourccey_v3beta.sourccey_v3beta_leader.sourccey_v3beta_leader import SourcceyV3BetaLeader
+from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
+from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourccey_leader import BiSourcceyLeaderConfig
+from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.config_sourccey_leader import SourcceyLeaderConfig
+from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.sourccey_leader import SourcceyLeader
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import _init_rerun
@@ -18,12 +18,12 @@ RESET_TIME_SEC = 5
 TASK_DESCRIPTION = "Grab the tape and put it in the cup"
 
 # Create the robot and teleoperator configurations
-robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.227", id="sourccey_v3beta")
-teleop_arm_config = BiSourcceyV3BetaLeaderConfig(left_arm_port="COM3", right_arm_port="COM41", id="sourccey_v3beta")
+robot_config = SourcceyClientConfig(remote_ip="192.168.1.227", id="sourccey")
+teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="COM3", right_arm_port="COM41", id="sourccey")
 keyboard_config = KeyboardTeleopConfig()
 
-robot = SourcceyV3BetaClient(robot_config)
-leader_arm = BiSourcceyV3BetaLeader(teleop_arm_config)
+robot = SourcceyClient(robot_config)
+leader_arm = BiSourcceyLeader(teleop_arm_config)
 keyboard = KeyboardTeleop(keyboard_config)
 
 # Configure the dataset features
@@ -34,7 +34,7 @@ dataset_features = {**action_features, **obs_features}
 # Create the dataset
 from lerobot.constants import HF_LEROBOT_HOME
 
-repo_id = "sourccey_v3beta-001__ai_test_5"
+repo_id = "sourccey-001__ai_test_5"
 
 dataset = LeRobotDataset.create(
     repo_id=repo_id,
@@ -46,12 +46,11 @@ dataset = LeRobotDataset.create(
     image_writer_threads=4,
 )
 
-# To connect you already should have this script running on Sourccey V2 Beta: `python -m lerobot.common.robots.sourccey_v2beta.sourccey_v2beta_host --robot.id=sourccey_v2beta`
 robot.connect()
 leader_arm.connect()
 keyboard.connect()
 
-_init_rerun(session_name="sourccey_v3beta_record")
+_init_rerun(session_name="sourccey_record")
 
 listener, events = init_keyboard_listener()
 

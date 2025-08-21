@@ -1,16 +1,16 @@
 import time
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.robots.sourccey.sourccey_v3beta.sourccey_v3beta import SourcceyV3Beta, SourcceyV3BetaClientConfig, SourcceyV3BetaClient
+from lerobot.robots.sourccey.sourccey.sourccey import Sourccey, SourcceyClientConfig, SourcceyClient
 from lerobot.utils.robot_utils import busy_wait
 from lerobot.utils.utils import log_say
 
 EPISODE_IDX = 0
 
-robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.227", id="sourccey_v3beta")
-robot = SourcceyV3BetaClient(robot_config)
+robot_config = SourcceyClientConfig(remote_ip="192.168.1.227", id="sourccey")
+robot = SourcceyClient(robot_config)
 
-dataset = LeRobotDataset("local/sourccey_v3beta-001__ai_test_3", episodes=[EPISODE_IDX])
+dataset = LeRobotDataset("local/sourccey-001__ai_test_3", episodes=[EPISODE_IDX])
 actions = dataset.hf_dataset.select_columns("action")
 
 robot.connect()

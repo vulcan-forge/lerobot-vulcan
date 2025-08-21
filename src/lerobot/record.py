@@ -85,8 +85,6 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     so100_follower,
     so101_follower,
-    SourcceyV3BetaFollower,
-    SourcceyV3Beta,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -97,10 +95,10 @@ from lerobot.teleoperators import (  # noqa: F401
     make_teleoperator_from_config,
     so100_leader,
     so101_leader,
-    BiSourcceyV3BetaLeader,
 )
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
-from lerobot.teleoperators.sourccey_v3beta import bi_sourccey_v3beta_leader, sourccey_v3beta_leader
+from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
+from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.sourccey_leader import SourcceyLeader
 from lerobot.utils.control_utils import (
     init_keyboard_listener,
     is_headless,
@@ -214,7 +212,7 @@ def record_loop(
             (
                 t
                 for t in teleop
-                if isinstance(t, (so100_leader.SO100Leader, so101_leader.SO101Leader, sourccey_v3beta_leader.SourcceyV3BetaLeader, bi_sourccey_v3beta_leader.BiSourcceyV3BetaLeader, koch_leader.KochLeader))
+                if isinstance(t, (so100_leader.SO100Leader, so101_leader.SO101Leader, SourcceyLeader, BiSourcceyLeader, koch_leader.KochLeader))
             ),
             None,
         )
@@ -233,7 +231,6 @@ def record_loop(
 
     timestamp = 0
     start_episode_t = time.perf_counter()
-    last_print_time = time.time()
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
 
@@ -266,7 +263,6 @@ def record_loop(
             base_action = robot._from_keyboard_to_base_action(keyboard_action) if keyboard_action else {}
 
             action = {**arm_action, **base_action} if base_action else arm_action
-
         else:
             logging.info(
                 "No policy or teleoperator provided, skipping action generation. "
@@ -274,16 +270,6 @@ def record_loop(
                 "The robot won't be at its rest position at the start of the next episode."
             )
             continue
-        # ------------------------------------
-
-        # Print observation and action every 3 seconds
-        if time.time() - last_print_time >= 3:
-            print()
-            print(f"Observation: {observation_frame['observation.state']}")
-            print(f"Action: {action}")
-            print(f"Action Type: {type(action)}")
-            print()
-            last_print_time = time.time()
 
         # Action can be clipped using `max_relative_target`, so save the actually sent action
         sent_action = robot.send_action(action)

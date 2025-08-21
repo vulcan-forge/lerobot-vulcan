@@ -2,16 +2,16 @@
 
 import argparse
 
-from lerobot.teleoperators.sourccey_v3beta.sourccey_v3beta_leader.config_sourccey_v3beta_leader import (
-    SourcceyV3BetaLeaderConfig,
+from lerobot.teleoperators.sourccey.sourccey_leader.config_sourccey_leader import (
+    SourcceyLeaderConfig,
 )
-from lerobot.teleoperators.sourccey_v3beta.sourccey_v3beta_leader.sourccey_v3beta_leader import (
-    SourcceyV3BetaLeader,
+from lerobot.teleoperators.sourccey.sourccey_leader.sourccey_leader import (
+    SourcceyLeader,
 )
 
 
 """
-Calibrate Sourccey V3 Beta leader arms (manual calibration).
+Calibrate Sourccey leader arms (manual calibration).
 
 This script calibrates the leader arm(s) you select: left, right, or both.
 It runs the device's built-in manual calibration flow:
@@ -24,19 +24,19 @@ Example commands:
 python examples/sourccey/sourccey_v3beta/calibrate_leaders.py \
   --arms left \
   --left-port COM28 \
-  --left-id sourccey_v3beta_left
+  --left-id sourccey_v1_left
 
 # Calibrate RIGHT only
 python examples/sourccey/sourccey_v3beta/calibrate_leaders.py \
   --arms right \
   --right-port COM23 \
-  --right-id sourccey_v3beta_right
+  --right-id sourccey_v1_right
 
 # Calibrate BOTH
-python examples/sourccey/sourccey_v3beta/calibrate_leaders.py \
+python examples/sourccey/sourccey_v1/calibrate_leaders.py \
   --arms both \
-  --left-port COM28 --left-id sourccey_v3beta_left \
-  --right-port COM23 --right-id sourccey_v3beta_right
+  --left-port COM28 --left-id sourccey_v1_left \
+  --right-port COM23 --right-id sourccey_v1_right
 
 Notes:
 - Leader arms are NOT geared down like followers, so calibration is more direct
@@ -47,12 +47,12 @@ Notes:
 
 def _calibrate_leader_arm(side: str, port: str, device_id: str) -> None:
     orientation = "right" if side == "right" else "left"
-    cfg = SourcceyV3BetaLeaderConfig(
+    cfg = SourcceyLeaderConfig(
         port=port,
         id=device_id,
         orientation=orientation,
     )
-    arm = SourcceyV3BetaLeader(cfg)
+    arm = SourcceyLeader(cfg)
     arm.connect(calibrate=False)
     print(f"\nStarting MANUAL calibration for {side.upper()} leader arm ({device_id}) on port {port}...")
     print("Follow on-screen prompts: center the joints, press ENTER; then move through full range, press ENTER.")
@@ -62,12 +62,12 @@ def _calibrate_leader_arm(side: str, port: str, device_id: str) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Manual calibration for Sourccey V3 Beta leader arms")
+    parser = argparse.ArgumentParser(description="Manual calibration for Sourccey leader arms")
     parser.add_argument("--arms", choices=["left", "right", "both"], default="both")
     parser.add_argument("--left-port", type=str, default=None, help="Serial port for left leader arm (e.g., COM28 or /dev/ttyUSB0)")
     parser.add_argument("--right-port", type=str, default=None, help="Serial port for right leader arm (e.g., COM23 or /dev/ttyUSB1)")
-    parser.add_argument("--left-id", type=str, default="sourccey_v3beta_left", help="Calibration ID for left leader arm")
-    parser.add_argument("--right-id", type=str, default="sourccey_v3beta_right", help="Calibration ID for right leader arm")
+    parser.add_argument("--left-id", type=str, default="sourccey_left", help="Calibration ID for left leader arm")
+    parser.add_argument("--right-id", type=str, default="sourccey_right", help="Calibration ID for right leader arm")
     args = parser.parse_args()
 
     if args.arms in ("left", "both") and not args.left_port:

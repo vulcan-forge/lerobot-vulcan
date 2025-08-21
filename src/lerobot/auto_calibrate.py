@@ -25,7 +25,7 @@ Example:
 
 ```shell
 python -m lerobot.auto_calibrate \
-    --robot.type=sourccey_v3beta_follower \
+    --robot.type=sourccey_follower \
     --robot.port=/dev/tty.usbmodem58760431551
 ```
 """
@@ -47,8 +47,6 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     so100_follower,
     so101_follower,
-    SourcceyV3BetaFollower,
-    SourcceyV3Beta,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -58,8 +56,9 @@ from lerobot.teleoperators import (  # noqa: F401
     make_teleoperator_from_config,
     so100_leader,
     so101_leader,
-    BiSourcceyV3BetaLeader,
 )
+from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
+from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.sourccey_leader import SourcceyLeader
 from lerobot.utils.utils import init_logging
 
 
