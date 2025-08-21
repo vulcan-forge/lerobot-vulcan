@@ -304,34 +304,15 @@ cd ~/.cache/huggingface/lerobot/local
 rm -r ~/.cache/huggingface/lerobot/local/ai_test_2
 ```
 
-<<<<<<< HEAD
-
-
-
-
-sourccey_v3beta-001__ai_test_4_combined
-
-
-
-python src/lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_4_combined \
-  --policy.type=act \
-  --output_dir=outputs/train/act__sourccey_v3beta-001__ai_test_4_combined \
-  --job_name=act__sourccey_v3beta-001__ai_test_4_combined \
-=======
 python src/lerobot/scripts/train.py \
   --dataset.repo_id=local/sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
   --policy.type=act \
   --output_dir=outputs/train/act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
   --job_name=act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
->>>>>>> 947a609639c6768a3e5cb819fd964d8a8f7f7dc4
   --policy.device=cuda \
   --save_freq=20000 \
   --policy.push_to_hub=false \
   --wandb.enable=false \
-<<<<<<< HEAD
-  --steps=20000
-=======
   --steps=40000
 
 
@@ -348,4 +329,3 @@ python src/lerobot/scripts/train.py \
   --wandb.enable=false \
   --steps=40000
 ```
->>>>>>> 947a609639c6768a3e5cb819fd964d8a8f7f7dc4
