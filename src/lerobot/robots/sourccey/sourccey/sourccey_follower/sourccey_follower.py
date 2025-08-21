@@ -10,17 +10,17 @@ from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.motors.feetech.feetech import FeetechMotorsBus, OperatingMode
 from lerobot.motors.motors_bus import Motor, MotorNormMode
 from lerobot.robots.robot import Robot
-from lerobot.robots.sourccey.sourccey_v3beta.sourccey_v3beta_follower.calibration_sourccey_v3beta_follower import SourcceyV3BetaFollowerCalibrator
-from lerobot.robots.sourccey.sourccey_v3beta.sourccey_v3beta_follower.config_sourccey_v3beta_follower import SourcceyV3BetaFollowerConfig
+from lerobot.robots.sourccey.sourccey.sourccey_follower.calibration_sourccey_follower import SourcceyFollowerCalibrator
+from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.utils import ensure_safe_goal_position
 import os
 from pathlib import Path
 
-class SourcceyV3BetaFollower(Robot):
-    config_class = SourcceyV3BetaFollowerConfig
-    name = "sourccey_v3beta_follower"
+class SourcceyFollower(Robot):
+    config_class = SourcceyFollowerConfig
+    name = "sourccey_follower"
 
-    def __init__(self, config: SourcceyV3BetaFollowerConfig):
+    def __init__(self, config: SourcceyFollowerConfig):
         super().__init__(config)
         self.config = config
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
@@ -44,7 +44,7 @@ class SourcceyV3BetaFollower(Robot):
         self.cameras = make_cameras_from_configs(config.cameras)
 
         # Initialize calibrator
-        self.calibrator = SourcceyV3BetaFollowerCalibrator(
+        self.calibrator = SourcceyFollowerCalibrator(
             robot=self
         )
 
@@ -170,7 +170,6 @@ class SourcceyV3BetaFollower(Robot):
         # /!\ Slower fps expected due to reading from the follower.
         if self.config.max_relative_target is not None:
             goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
-            goal_present_pos = self._apply_minimum_action(goal_present_pos)
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
         # Send goal position to the arm
@@ -182,36 +181,6 @@ class SourcceyV3BetaFollower(Robot):
             logger.warning(f"Safety triggered: {overcurrent_motors} current > {self.config.max_current_safety_threshold}mA")
             return self._handle_overcurrent_motors(overcurrent_motors, goal_pos, present_pos)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
-
-    def _apply_minimum_action(self, goal_present_pos: dict[str, tuple[float, float]]) -> dict[str, tuple[float, float]]:
-        """Apply a minimum action to the robot's geared down motors.
-
-        This function ensures that geared-down motors receive a minimum movement threshold
-        to overcome friction and backlash. If the desired movement is below the threshold,
-        it's amplified to the minimum threshold while preserving direction.
-        """
-        # Define geared down motors and their minimum action thresholds
-        geared_down_motors = ["shoulder_lift"]
-
-        adjusted_goal_present_pos = {}
-
-        for key, (goal_pos, present_pos) in goal_present_pos.items():
-            motor_name = key.replace(".pos", "")
-            if motor_name in geared_down_motors:
-                desired_movement = goal_pos - present_pos
-                movement_magnitude = abs(desired_movement)
-
-                # If movement is below threshold, apply minimum action
-                if movement_magnitude > 0 and movement_magnitude < self.config.min_action_threshold:
-                    direction = 1 if desired_movement > 0 else -1
-                    adjusted_movement = direction * self.config.min_action_threshold
-                    adjusted_goal_pos = present_pos + adjusted_movement
-                    adjusted_goal_present_pos[key] = (adjusted_goal_pos, present_pos)
-                else:
-                    adjusted_goal_present_pos[key] = (goal_pos, present_pos)
-            else:
-                adjusted_goal_present_pos[key] = (goal_pos, present_pos)
-        return adjusted_goal_present_pos
 
     def _check_current_safety(self) -> list[str]:
         """

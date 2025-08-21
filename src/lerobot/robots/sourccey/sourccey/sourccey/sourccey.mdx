@@ -6,15 +6,15 @@ Sourccey Commands
 
 ```bash
 uv run -m lerobot.auto_calibrate \
-    --robot.type=sourccey_v3beta \
-    --robot.id=sourccey_v3beta
+    --robot.type=sourccey \
+    --robot.id=sourccey
 ```
 
 # For hard reset:
 ```bash
 uv run -m lerobot.auto_calibrate \
-    --robot.type=sourccey_v3beta\
-    --robot.id=sourccey_v3beta \
+    --robot.type=sourccey\
+    --robot.id=sourccey \
     --full_reset=True
 ```
 
@@ -22,30 +22,30 @@ uv run -m lerobot.auto_calibrate \
 
 ```bash
 python -m lerobot.auto_calibrate \
-  --teleop.type=bi_sourccey_v3beta_leader \
-  --teleop.id=bi_sourccey_v3beta_leader \
+  --teleop.type=bi_sourccey_leader \
+  --teleop.id=bi_sourccey_leader \
   --teleop.left_arm_port="COM4" \
   --teleop.right_arm_port="COM41"
 ```
 
 ```bash
 python -m lerobot.calibrate \
-    --teleop.type=sourccey_v3beta_leader \
+    --teleop.type=sourccey_leader \
     --teleop.port=COM28 \
-    --teleop.id=sourccey_v3beta_leader
+    --teleop.id=sourccey_leader
 ```
 
 To teleoperate, SSH into your Raspberry Pi, navigate to the lerobot repo and run this command:
 
 ```
-uv run -m lerobot.robots.sourccey.sourccey_v3beta.sourccey_v3beta.sourccey_v3beta_host
+uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 ```
 
 ```
-nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_v3beta_follower/sourccey_v3beta_left.json
-nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_v3beta_follower/sourccey_v3beta_right.json
-cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_v3beta_follower/sourccey_v3beta_left.json
-cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_v3beta_follower/sourccey_v3beta_right.json
+nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_left.json
+nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_right.json
+cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_left.json
+cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_right.json
 ```
 
 ###
@@ -59,60 +59,58 @@ source .venv/bin/activate
 ```
 
 ```
-python examples/sourccey/sourccey_v3beta/teleoperate.py
+python examples/sourccey/sourccey/teleoperate.py
 ```
 
 ```
-python examples/sourccey/sourccey_v3beta/record.py
+python examples/sourccey/sourccey/record.py
 ```
 
 ```
-python examples/sourccey/sourccey_v3beta/replay.py
+python examples/sourccey/sourccey/replay.py
 ```
 
 ```
-python examples/sourccey/sourccey_v3beta/evaluate.py
+python examples/sourccey/sourccey/evaluate.py
 ```
 
 --- ACT Training
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python src/lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_6 \
+python lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey_v2beta-001__tape-a__set000 \
   --policy.type=act \
-  --output_dir=outputs/train/act__sourccey_v3beta-001__ai_test_6 \
-  --job_name=act__sourccey_v3beta-001__ai_test_6 \
+  --output_dir=outputs/train/act__sourccey_v2beta-001__tape-a__set000 \
+  --job_name=act__sourccey_v2beta-001__tape-a__set000 \
   --policy.device=cuda \
-  --policy.push_to_hub=false \
   --wandb.enable=false \
-  --steps=100000
+  --steps=20000
 ```
 
 python src/lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_4 \
+  --dataset.repo_id=local/ai_test_2 \
   --policy.type=act \
-  --output_dir=outputs/train/act__sourccey_v3beta-001__ai_test_4 \
-  --job_name=act__sourccey_v3beta-001__ai_test_4 \
+  --output_dir=outputs/train/act__ai_test_2 \
+  --job_name=act__ai_test_2 \
   --policy.device=cuda \
-  --save_freq=20000 \
+  --save_freq=4000 \
   --policy.push_to_hub=false \
   --wandb.enable=false \
-  --steps=100000
+  --steps=20000
 
 
 
 ```bash
-torchrun --nproc_per_node=2 src/lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_9  \
+torchrun --nproc_per_node=2 lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey_v2beta_001_tape_a  \
   --policy.type=act \
-  --output_dir=outputs/train/act_sourccey_v3beta-001__ai_test_9 \
-  --job_name=act_sourccey_v3beta-001__ai_test_9  \
+  --output_dir=outputs/train/act_sourccey_v2beta_001_tape_a \
+  --job_name=act_sourccey_v2beta_001_tape_a  \
   --policy.device=cuda \
   --wandb.enable=false \
-  --policy.push_to_hub=false \
   --steps=100000 \
-  --save_freq=20000 \
-  --batch_size=32 \
+  --save_freq=10000 \
+  --batch_size=64 \
   --distributed_training=true \
   --num_gpus=2
 ```
@@ -154,12 +152,8 @@ torchrun --nproc_per_node=2 lerobot/scripts/train.py \
 
 ```bash
 python src/lerobot/scripts/combine_dataset.py \
-<<<<<<< HEAD
-    --repo_ids local/sourccey_v3beta-001__ai_test_4 local/sourccey_v3beta-001__ai_test_4_2 \
-=======
-    --repo_ids local/sourccey_v3beta-001__ai_test_4 local/sourccey_v3beta-001__ai_test_4 \
->>>>>>> 947a609639c6768a3e5cb819fd964d8a8f7f7dc4
-    --output_repo_id=local/sourccey_v3beta-001__ai_test_4_combined \
+    --repo_ids local/sourccey-001__ai_test_4 local/sourccey-001__ai_test_4 \
+    --output_repo_id=local/sourccey-001__ai_test_4_combined \
     --push_to_hub=0
 ```
 
@@ -304,48 +298,28 @@ cd ~/.cache/huggingface/lerobot/local
 rm -r ~/.cache/huggingface/lerobot/local/ai_test_2
 ```
 
-<<<<<<< HEAD
-
-
-
-
-sourccey_v3beta-001__ai_test_4_combined
-
-
-
 python src/lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_4_combined \
-  --policy.type=act \
-  --output_dir=outputs/train/act__sourccey_v3beta-001__ai_test_4_combined \
-  --job_name=act__sourccey_v3beta-001__ai_test_4_combined \
-=======
-python src/lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
-  --policy.type=act \
-  --output_dir=outputs/train/act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
-  --job_name=act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
->>>>>>> 947a609639c6768a3e5cb819fd964d8a8f7f7dc4
-  --policy.device=cuda \
-  --save_freq=20000 \
-  --policy.push_to_hub=false \
-  --wandb.enable=false \
-<<<<<<< HEAD
-  --steps=20000
-=======
-  --steps=40000
-
+ --dataset.repo_id=local/sourccey-001**ai_test_6_shoulder-fast_chrism_combined \
+ --policy.type=act \
+ --output_dir=outputs/train/act**sourccey-001**ai_test_6_shoulder-fast_chrism_combined \
+ --job_name=act**sourccey-001\_\_ai_test_6_shoulder-fast_chrism_combined \
+ --policy.device=cuda \
+ --save_freq=20000 \
+ --policy.push_to_hub=false \
+ --wandb.enable=false \
+ --steps=40000
 
 ## Train command 08/19/2025
+
 ```
 python src/lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
+  --dataset.repo_id=local/sourccey-001__ai_test_6_shoulder-fast_chrism_combined \
   --policy.type=act \
-  --output_dir=outputs/train/act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
-  --job_name=act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
+  --output_dir=outputs/train/act__sourccey-001__ai_test_6_shoulder-fast_chrism_combined \
+  --job_name=act__sourccey-001__ai_test_6_shoulder-fast_chrism_combined \
   --policy.device=cuda \
   --save_freq=20000 \
   --policy.push_to_hub=false \
   --wandb.enable=false \
   --steps=40000
 ```
->>>>>>> 947a609639c6768a3e5cb819fd964d8a8f7f7dc4

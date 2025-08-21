@@ -781,3 +781,56 @@ lerobot-record
   --dataset.single_task="Dual arm manipulation task" \
   --dataset.push_to_hub=false
 ```
+
+
+## Updated Commands 08/19/2025
+
+python lerobot/scripts/combine_dataset.py \
+    --repo_ids local/sourccey_v2beta_towel_010_a local/sourccey_v2beta_towel_010_b local/sourccey_v2beta_towel_010_2b local/sourccey_v2beta_towel_010_c local/sourccey_v2beta_towel_010_2c local/sourccey_v2beta_towel_010_3c \
+    --output_repo_id=local/sourccey_v2beta_towel_010_a_2b_3c_combined \
+    --push_to_hub=0
+	
+	
+python src/lerobot/scripts/combine_dataset.py \
+    --repo_ids local/act__sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism local/sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_2 \
+    --output_repo_id=local/sourccey_v3beta-001__ai_test_6_shoulder-fast_chrism_combined \
+    --push_to_hub=0
+	
+	
+	
+python -m lerobot.teleoperate \
+    --robot.type=bi_so100_follower \
+    --robot.left_arm_port=COM8 \
+	--robot.right_arm_port=COM9 \
+    --robot.id=bi_so100_follower \
+    --teleop.type=bi_so100_leader \
+    --teleop.left_arm_port=COM3 \
+	--teleop.right_arm_port=com29 \
+	--robot.cameras="{ left: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}, right: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+    --teleop.id=bi_so100_leader \
+	--display_data=true
+	
+	
+python -m lerobot.record \
+    --robot.type=bi_so100_follower \
+    --robot.left_arm_port=COM8 \
+	--robot.right_arm_port=COM9 \
+    --robot.id=bi_so100_follower \
+	--robot.cameras="{ left: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}, right: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+    --teleop.type=bi_so100_leader \
+    --teleop.left_arm_port=COM3 \
+	--teleop.right_arm_port=com29 \
+    --teleop.id=bi_so100_leader \
+    --dataset.repo_id=local/bi_so100_test_01 \
+    --dataset.num_episodes=10 \
+    --dataset.single_task="Grab the tape and drop it in the cup" \
+    --dataset.push_to_hub=false
+	
+python -m lerobot-replay \
+  --robot.type=bi_so100_follower \
+  --robot.left_arm_port=COM8 \
+  --robot.right_arm_port=COM9 \
+  --robot.id=bi_so100_follower \
+  --dataset.repo_id=local/bi_so100_test_01 \
+  --dataset.episode=0
+
