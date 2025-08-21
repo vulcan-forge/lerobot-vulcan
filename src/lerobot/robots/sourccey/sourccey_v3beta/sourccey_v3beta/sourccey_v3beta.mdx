@@ -77,42 +77,44 @@ python examples/sourccey/sourccey_v3beta/evaluate.py
 --- ACT Training
 
 ```bash
-python lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey_v2beta-001__tape-a__set000 \
+CUDA_VISIBLE_DEVICES=0 python src/lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_6 \
   --policy.type=act \
-  --output_dir=outputs/train/act__sourccey_v2beta-001__tape-a__set000 \
-  --job_name=act__sourccey_v2beta-001__tape-a__set000 \
+  --output_dir=outputs/train/act__sourccey_v3beta-001__ai_test_6 \
+  --job_name=act__sourccey_v3beta-001__ai_test_6 \
   --policy.device=cuda \
+  --policy.push_to_hub=false \
   --wandb.enable=false \
-  --steps=20000
+  --steps=100000
 ```
 
 python src/lerobot/scripts/train.py \
-  --dataset.repo_id=local/ai_test_2 \
+  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_4 \
   --policy.type=act \
-  --output_dir=outputs/train/act__ai_test_2 \
-  --job_name=act__ai_test_2 \
+  --output_dir=outputs/train/act__sourccey_v3beta-001__ai_test_4 \
+  --job_name=act__sourccey_v3beta-001__ai_test_4 \
   --policy.device=cuda \
-  --save_freq=4000 \
+  --save_freq=20000 \
   --policy.push_to_hub=false \
   --wandb.enable=false \
-  --steps=20000
+  --steps=100000
 
 
 
 
 
 ```bash
-torchrun --nproc_per_node=2 lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey_v2beta_001_tape_a  \
+torchrun --nproc_per_node=2 src/lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_9  \
   --policy.type=act \
-  --output_dir=outputs/train/act_sourccey_v2beta_001_tape_a \
-  --job_name=act_sourccey_v2beta_001_tape_a  \
+  --output_dir=outputs/train/act_sourccey_v3beta-001__ai_test_9 \
+  --job_name=act_sourccey_v3beta-001__ai_test_9  \
   --policy.device=cuda \
   --wandb.enable=false \
+  --policy.push_to_hub=false \
   --steps=100000 \
-  --save_freq=10000 \
-  --batch_size=64 \
+  --save_freq=20000 \
+  --batch_size=32 \
   --distributed_training=true \
   --num_gpus=2
 ```
@@ -153,9 +155,9 @@ torchrun --nproc_per_node=2 lerobot/scripts/train.py \
 ----- Combine Dataset functions
 
 ```bash
-python lerobot/scripts/combine_dataset.py \
-    --repo_ids local/sourccey_v2beta_towel_010_a local/sourccey_v2beta_towel_010_b local/sourccey_v2beta_towel_010_2b local/sourccey_v2beta_towel_010_c local/sourccey_v2beta_towel_010_2c local/sourccey_v2beta_towel_010_3c \
-    --output_repo_id=local/sourccey_v2beta_towel_010_a_2b_3c_combined \
+python src/lerobot/scripts/combine_dataset.py \
+    --repo_ids local/sourccey_v3beta-001__ai_test_4 local/sourccey_v3beta-001__ai_test_4_2 \
+    --output_repo_id=local/sourccey_v3beta-001__ai_test_4_combined \
     --push_to_hub=0
 ```
 
@@ -299,3 +301,22 @@ cd ~/Desktop/Projects/lerobot-vulcan-nightly
 cd ~/.cache/huggingface/lerobot/local
 rm -r ~/.cache/huggingface/lerobot/local/ai_test_2
 ```
+
+
+
+
+
+sourccey_v3beta-001__ai_test_4_combined
+
+
+
+python src/lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_4_combined \
+  --policy.type=act \
+  --output_dir=outputs/train/act__sourccey_v3beta-001__ai_test_4_combined \
+  --job_name=act__sourccey_v3beta-001__ai_test_4_combined \
+  --policy.device=cuda \
+  --save_freq=20000 \
+  --policy.push_to_hub=false \
+  --wandb.enable=false \
+  --steps=20000
