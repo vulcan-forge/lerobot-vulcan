@@ -18,8 +18,8 @@ def test_motor_turn():
 
         # Motor config for testing
         motor_config = {
-            "pwm_pins": [17, 22, 26, 6],
-            "direction_pins": [27, 23, 16, 5],
+            "pwm_pins": [17, 22, 26, 6, 24],
+            "direction_pins": [27, 23, 16, 5, 25],
             "pwm_frequency": 1000,
         }
 
@@ -48,9 +48,15 @@ def test_motor_turn():
             norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
         )
 
+        linear_actuator = DCMotor(
+            id=5,
+            model="linear_actuator",
+            norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
+        )
+
         # Create controller with motors as a dictionary
         controller = PWMDCMotorsController(
-            motors={"front_left": front_left, "front_right": front_right, "rear_left": rear_left, "rear_right": rear_right},
+            motors={"front_left": front_left, "front_right": front_right, "rear_left": rear_left, "rear_right": rear_right, "linear_actuator": linear_actuator},
             config=motor_config,
         )
 
@@ -63,7 +69,7 @@ def test_motor_turn():
         try:
             # Turn motor 1 and 2 forward at full speed for 5 seconds
             print("2. Turning forward for 5 seconds...")
-            controller.set_velocity("rear_left", 1.0)
+            controller.set_velocity("linear_actuator", 1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
             time.sleep(5)
 
@@ -73,6 +79,7 @@ def test_motor_turn():
             controller.set_velocity("front_right", 0.0)
             controller.set_velocity("rear_left", 0.0)
             controller.set_velocity("rear_right", 0.0)
+            controller.set_velocity("linear_actuator", 0.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
             time.sleep(1)
 
@@ -83,6 +90,7 @@ def test_motor_turn():
             controller.set_velocity("front_right", 0.0)
             controller.set_velocity("rear_left", 0.0)
             controller.set_velocity("rear_right", 0.0)
+            controller.set_velocity("linear_actuator", 0.0)
             time.sleep(1)
 
         # Disconnect
