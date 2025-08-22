@@ -37,15 +37,15 @@ class PWMProtocolHandler(ProtocolHandler):
     - 25kHz PWM frequency optimal
 
     Configuration:
-    - pwm_pins: IN1 pins (PWM speed control)
-    - direction_pins: IN2 pins (direction control)
+    - in1_pins: IN1 pins (PWM speed control)
+    - in2_pins: IN2 pins (direction control)
     - pwm_frequency: 25000Hz (optimal for DRV8871DDAR)
     """
 
     def __init__(self, config: Dict, motors: Dict[str, DCMotor]):
         self.config = config
-        self.pwm_pins = config.get("pwm_pins", [])
-        self.direction_pins = config.get("direction_pins", [])
+        self.in1_pins = config.get("in1_pins", [])
+        self.in2_pins = config.get("in2_pins", [])
         self.enable_pins = config.get("enable_pins", [])
         self.brake_pins = config.get("brake_pins", [])
         self.pwm_frequency = config.get("pwm_frequency", PI5_OPTIMAL_FREQUENCY)
@@ -55,9 +55,9 @@ class PWMProtocolHandler(ProtocolHandler):
 
         # Motor configuration and state tracking
         self.motors: Dict[str, DCMotor] = motors
-        self.motor_states: Dict[int, Dict] = {}  # Track motor state by ID
-        self.pwm_channels = {}
-        self.direction_channels = {}
+        self.motor_states: Dict[int, Dict] = {}
+        self.in1_channels = {}
+        self.in2_channels = {}
         self.enable_channels = {}
         self.brake_channels = {}
 
@@ -73,29 +73,29 @@ class PWMProtocolHandler(ProtocolHandler):
         for pwm_pins in PI5_HARDWARE_PWM_PINS.values():
             all_hardware_pwm.extend(pwm_pins)
 
-        # Validate PWM pins (IN1 - should be hardware PWM for best performance)
-        invalid_pwm_pins = [pin for pin in self.pwm_pins if pin not in all_hardware_pwm]
-        if invalid_pwm_pins:
+        # Validate IN1 pins (should be hardware PWM for best performance)
+        invalid_in1_pins = [pin for pin in self.in1_pins if pin not in all_hardware_pwm]
+        if invalid_in1_pins:
             logger.warning(
-                f"PWM pins {invalid_pwm_pins} are not hardware PWM pins on Pi 5. "
+                f"IN1 pins {invalid_in1_pins} are not hardware PWM pins on Pi 5. "
                 f"Hardware PWM pins: {all_hardware_pwm}"
             )
 
-        # Validate direction pins (IN2 - can be any GPIO)
-        invalid_dir_pins = [pin for pin in self.direction_pins if pin not in PI5_ALL_GPIO_PINS]
-        if invalid_dir_pins:
+        # Validate IN2 pins (can be any GPIO)
+        invalid_in2_pins = [pin for pin in self.in2_pins if pin not in PI5_ALL_GPIO_PINS]
+        if invalid_in2_pins:
             logger.warning(
-                f"Direction pins {invalid_dir_pins} are not valid GPIO pins on Pi 5. "
+                f"IN2 pins {invalid_in2_pins} are not valid GPIO pins on Pi 5. "
                 f"Valid GPIO pins: {PI5_ALL_GPIO_PINS}"
             )
 
         # Check for pin conflicts
-        all_used_pins = set(self.pwm_pins + self.direction_pins + self.enable_pins + self.brake_pins)
-        if len(all_used_pins) != len(self.pwm_pins + self.direction_pins + self.enable_pins + self.brake_pins):
+        all_used_pins = set(self.in1_pins + self.in2_pins + self.enable_pins + self.brake_pins)
+        if len(all_used_pins) != len(self.in1_pins + self.in2_pins + self.enable_pins + self.brake_pins):
             logger.warning("Duplicate pins detected in configuration")
 
         # Validate motor count
-        motor_count = len(self.pwm_pins)
+        motor_count = len(self.in1_pins)
         logger.info(f"Configuring {motor_count} DRV8871DDAR motors with gpiozero")
 
     def _import_gpiozero(self):
@@ -110,112 +110,62 @@ class PWMProtocolHandler(ProtocolHandler):
                 "gpiozero not available. Install with: uv pip install gpiozero>=2.0"
             )
 
-    def connect(self) -> None:
-        """Initialize gpiozero for DRV8871DDAR motor drivers."""
+    def _setup_pwmled(self, pin: int, label: str) -> gpiozero.PWMLED: # type: ignore
+        """Safely set up a PWMLED on the given pin, with fallback to default frequency."""
         try:
-            # Initialize motor pins
-            print()
-            print()
-            print()
-            print()
-            print()
-            print()
-            print()
-            print()
-            print("pwm_pins", self.pwm_pins)
-            for i, pin in enumerate(self.pwm_pins):
-                motor_id = i + 1
-                print("motor_id", motor_id)
+            return self.gpiozero.PWMLED(pin, frequency=self.pwm_frequency)
+        except Exception as e:
+            logger.warning(f"{label}: Failed with frequency {self.pwm_frequency}, retrying with default. ({e})")
+            try:
+                return self.gpiozero.PWMLED(pin)
+            except Exception as e2:
+                logger.error(f"{label}: Failed to setup PWMLED on pin {pin}: {e2}")
+                raise
 
-                # Initialize motor state
+    def _safe_close(self, channel: gpiozero.PWMLED, label: str) -> None: # type: ignore
+        """Safely close a PWMLED channel."""
+        try:
+            channel.close()
+        except Exception as e:
+            logger.warning(f"Error closing {label}: {e}")
+
+    def connect(self) -> None:
+        """Initialize gpiozero for DRV8871DDAR motor drivers with symmetric PWM on IN1 and IN2."""
+        try:
+            for motor_id, (in1_pin, in2_pin) in enumerate(zip(self.in1_pins, self.in2_pins), start=1):
                 self.motor_states[motor_id] = {
                     "position": 0.0,
                     "velocity": 0.0,
                     "pwm": 0.0,
                     "enabled": False,
-                    "brake_active": False
+                    "brake_active": False,
+                    "direction": 1
                 }
 
-                print()
-                print()
-                print()
-                print()
-                print()
-                print()
-                print()
-                print()
+                in1 = self._setup_pwmled(in1_pin, f"Motor {motor_id} IN1")
+                in1.off()
+                self.in1_channels[motor_id] = in1
+                logger.debug(f"Motor {motor_id} IN1 setup on pin {in1_pin}")
 
-                try:
-                    # IN1 pin - PWM for speed control (hardware PWM recommended)
-                    # Use a more compatible frequency
-                    pwm_led = self.gpiozero.PWMLED(pin, frequency=1000)
-                    print("pwm_led", pwm_led)
-                    pwm_led.off()  # Start with 0% duty cycle
-                    print("pwm_led.off()", pwm_led)
-                    self.pwm_channels[motor_id] = pwm_led
-                    print("self.pwm_channels[motor_id]", self.pwm_channels[motor_id])
-                    print()
-                    print()
-                    print()
-                    print()
-                    print()
-                    print()
-                    print()
-                    print()
-                    logger.debug(f"Motor {motor_id} IN1 (PWM) setup on pin {pin}")
-                    print()
-                    print()
-                    print()
-                    print()
-                    print()
-                    print()
-                    print()
-                    print()
-                except Exception as e:
-                    logger.warning(f"Could not setup IN1 (PWM) pin {pin}: {e}")
-                    # Try with default frequency if custom frequency fails
-                    try:
-                        pwm_led = self.gpiozero.PWMLED(pin)  # Use default frequency
-                        pwm_led.off()
-                        self.pwm_channels[motor_id] = pwm_led
-                        logger.debug(f"Motor {motor_id} IN1 (PWM) setup on pin {pin} with default frequency")
-                    except Exception as e2:
-                        logger.error(f"Failed to setup PWM pin {pin} even with default frequency: {e2}")
+                in2 = self._setup_pwmled(in2_pin, f"Motor {motor_id} IN2")
+                in2.off()
+                self.in2_channels[motor_id] = in2
+                logger.debug(f"Motor {motor_id} IN2 setup on pin {in2_pin}")
 
-                # IN2 pin - Direction control (regular GPIO)
-                if i < len(self.direction_pins):
-                    try:
-                        dir_pin = self.direction_pins[i]
-                        direction_led = self.gpiozero.LED(dir_pin)
-                        direction_led.off()  # Start with direction off
-                        self.direction_channels[motor_id] = direction_led
-                        logger.debug(f"Motor {motor_id} IN2 (direction) setup on pin {dir_pin}")
-                    except Exception as e:
-                        logger.warning(f"Could not setup IN2 (direction) pin {dir_pin}: {e}")
-
-            total_pins = len(self.pwm_pins) + len(self.direction_pins)
-            logger.info(f"DRV8871DDAR motor driver setup with {len(self.pwm_pins)} motors using {total_pins} GPIO pins")
-            logger.info(f"PWM frequency: 1kHz (compatible with gpiozero)")
-
+            total_pins = len(self.in1_pins) + len(self.in2_pins)
+            logger.info(f"DRV8871DDAR setup complete: {len(self.in1_pins)} motors, {total_pins} GPIOs used")
+            logger.info(f"PWM frequency: {self.pwm_frequency} Hz")
         except Exception as e:
-            logger.error(f"gpiozero setup failed: {e}")
-            raise RuntimeError(f"gpiozero hardware not available")
+            logger.error(f"Motor driver setup failed: {e}")
+            raise RuntimeError("gpiozero hardware not available")
 
     def disconnect(self) -> None:
-        """Clean up gpiozero channels."""
-        # Close all PWM channels (IN1)
-        for pwm_channel in self.pwm_channels.values():
-            try:
-                pwm_channel.close()
-            except Exception as e:
-                logger.warning(f"Error closing PWM channel: {e}")
+        """Clean up gpiozero PWMLED channels for IN1 and IN2."""
+        for motor_id, channel in self.in1_channels.items():
+            self._safe_close(channel, f"IN1 (motor {motor_id})")
 
-        # Close all direction channels (IN2)
-        for direction_channel in self.direction_channels.values():
-            try:
-                direction_channel.close()
-            except Exception as e:
-                logger.warning(f"Error closing direction channel: {e}")
+        for motor_id, channel in self.in2_channels.items():
+            self._safe_close(channel, f"IN2 (motor {motor_id})")
 
         logger.info("DRV8871DDAR motor driver disconnected")
 
@@ -249,31 +199,30 @@ class PWMProtocolHandler(ProtocolHandler):
     def set_velocity(self, motor_id: int, velocity: float) -> None:
         """
         Set motor velocity (normalized -1 to 1) for DRV8871DDAR.
-        Negative values = reverse, Positive values = forward.
+        Uses symmetric PWM: IN1 or IN2 is PWM depending on direction.
         """
-        # Clamp velocity to [-1, 1]
         velocity = max(-1.0, min(1.0, velocity))
-
         self.motor_states[motor_id]["velocity"] = velocity
         self.motor_states[motor_id]["pwm"] = abs(velocity)
-        # Reset brake state when setting velocity
         self.motor_states[motor_id]["brake_active"] = False
 
-        # Correct DRV8871DDAR Logic (from datasheet):
-        print("pwm_channels", self.pwm_channels)
-        print("direction_channels", self.direction_channels)
-        if velocity > 0:  # Forward
-            # IN1 = 1, IN2 = 0 (Forward)
-            self.pwm_channels[motor_id].on()
-            self.direction_channels[motor_id].off()
-        elif velocity < 0:  # Backward
-            # IN1 = 0, IN2 = 1 (Reverse)
-            self.pwm_channels[motor_id].off()
-            self.direction_channels[motor_id].on()
-        else:  # Stop
-            # IN1 = 0, IN2 = 0 (Coast/Stop)
-            self.pwm_channels[motor_id].off()
-            self.direction_channels[motor_id].off()
+        in1 = self.in1_channels.get(motor_id)
+        in2 = self.in2_channels.get(motor_id)
+
+        if velocity > 0:
+            if in1: in1.value = abs(velocity)
+            if in2: in2.off()
+            self.motor_states[motor_id]["direction"] = 1
+
+        elif velocity < 0:
+            if in1: in1.off()
+            if in2: in2.value = abs(velocity)
+            self.motor_states[motor_id]["direction"] = -1
+
+        else:
+            if in1: in1.off()
+            if in2: in2.off()
+            self.motor_states[motor_id]["direction"] = 0
 
     # PWM Functions
     def get_pwm(self, motor_id: int) -> float:
@@ -282,23 +231,34 @@ class PWMProtocolHandler(ProtocolHandler):
 
     def set_pwm(self, motor_id: int, duty_cycle: float) -> None:
         """
-        Set PWM duty cycle (0 to 1) for DRV8871DDAR IN1 pin.
+        Set PWM duty cycle (0..1) respecting current direction.
+        Uses symmetric PWM: IN1 for forward, IN2 for reverse.
         """
-        # Clamp duty cycle to [0, 1]
         duty_cycle = max(0.0, min(1.0, duty_cycle))
-
         self.motor_states[motor_id]["pwm"] = duty_cycle
 
-        # Use gpiozero PWM for IN1 speed control
-        if motor_id in self.pwm_channels:
-            try:
-                pwm_channel = self.pwm_channels[motor_id]
-                pwm_channel.value = duty_cycle
-                logger.debug(f"Motor {motor_id} IN1 PWM set to {duty_cycle:.3f}")
-            except Exception as e:
-                logger.warning(f"Error setting PWM for motor {motor_id}: {e}")
-        else:
-            logger.warning(f"Motor {motor_id} not found in PWM channels")
+        direction = self.motor_states[motor_id].get("direction", 1)
+        in1 = self.in1_channels.get(motor_id)
+        in2 = self.in2_channels.get(motor_id)
+
+        if not in1 or not in2:
+            logger.warning(f"Motor {motor_id} missing IN1/IN2 channel(s)")
+            return
+
+        try:
+            if duty_cycle == 0.0:
+                in1.off(); in2.off()
+            elif direction > 0:   # forward
+                in1.value = duty_cycle
+                in2.off()
+            elif direction < 0:   # reverse
+                in1.off()
+                in2.value = duty_cycle
+            else:
+                in1.off(); in2.off()
+            logger.debug(f"Motor {motor_id} PWM={duty_cycle:.3f} dir={'FWD' if direction>0 else 'REV' if direction<0 else 'STOP'}")
+        except Exception as e:
+            logger.warning(f"Error setting PWM for motor {motor_id}: {e}")
 
     # Enable/Disable Functions
     def enable_motor(self, motor_id: int) -> None:
@@ -315,26 +275,34 @@ class PWMProtocolHandler(ProtocolHandler):
     # Helper methods for DRV8871DDAR-specific functionality
     def _get_direction(self, motor_id: int) -> bool:
         """Get motor direction."""
-        if motor_id not in self.direction_channels:
+        if motor_id not in self.in2_channels:
             return False
-        return self.direction_channels[motor_id].value == 1
+        return self.in2_channels[motor_id].value == 1
 
     def _set_direction(self, motor_id: int, forward: bool) -> None:
         """
-        Set motor direction for DRV8871DDAR IN2 pin.
-        Forward: IN1=PWM, IN2=LOW
-        Backward: IN1=LOW, IN2=PWM
+        Set motor direction for DRV8871DDAR.
+        This method updates the direction state and applies appropriate PWM.
         """
-        if motor_id not in self.direction_channels:
+        if motor_id not in self.in2_channels:
             return
 
         # Apply direction inversion if configured
         if self.invert_direction:
             forward = not forward
 
+        # Update direction state
+        self.motor_states[motor_id]["direction"] = 1 if forward else -1
+
         try:
             # Set IN2 for direction control
-            self.direction_channels[motor_id].on() if forward else self.direction_channels[motor_id].off()
+            self.in2_channels[motor_id].on() if not forward else self.in2_channels[motor_id].off()
+
+            # Re-apply current PWM with new direction
+            current_pwm = self.motor_states[motor_id].get("pwm", 0.0)
+            if current_pwm > 0:
+                self.set_pwm(motor_id, current_pwm)
+
             logger.debug(f"Motor {motor_id} direction set to {'forward' if forward else 'backward'}")
         except Exception as e:
             logger.warning(f"Error setting direction for motor {motor_id}: {e}")
@@ -343,33 +311,42 @@ class PWMProtocolHandler(ProtocolHandler):
     def activate_brake(self, motor_id: int) -> None:
         """
         Activate motor brake for DRV8871DDAR.
-        Brake: IN1=1, IN2=1 (both inputs high)
+        Brake mode: IN1 = HIGH, IN2 = HIGH
         """
-        if motor_id in self.pwm_channels and motor_id in self.direction_channels:
-            try:
-                # Set both IN1 and IN2 high for brake
-                self.pwm_channels[motor_id].on()
-                self.direction_channels[motor_id].on()
-                self.motor_states[motor_id]["brake_active"] = True
-                logger.debug(f"Motor {motor_id} brake activated")
-            except Exception as e:
-                logger.warning(f"Error activating brake for motor {motor_id}: {e}")
+        in1 = self.in1_channels.get(motor_id)
+        in2 = self.in2_channels.get(motor_id)
+
+        if not in1 or not in2:
+            logger.warning(f"Cannot activate brake: IN1 or IN2 not found for motor {motor_id}")
+            return
+
+        try:
+            in1.on()
+            in2.on()
+            self.motor_states[motor_id]["brake_active"] = True
+            logger.debug(f"Motor {motor_id} brake activated (IN1=1, IN2=1)")
+        except Exception as e:
+            logger.warning(f"Error activating brake for motor {motor_id}: {e}")
 
     def release_brake(self, motor_id: int) -> None:
         """
         Release motor brake for DRV8871DDAR.
-        Stop: IN1=0, IN2=0 (coast mode)
+        Coast mode: IN1 = LOW, IN2 = LOW
         """
-        if motor_id in self.pwm_channels and motor_id in self.direction_channels:
-            try:
-                # Set both IN1 and IN2 low for stop
-                self.pwm_channels[motor_id].off()
-                self.direction_channels[motor_id].off()
-                self.motor_states[motor_id]["brake_active"] = False
-                logger.debug(f"Motor {motor_id} brake released")
-            except Exception as e:
-                logger.warning(f"Error releasing brake for motor {motor_id}: {e}")
+        in1 = self.in1_channels.get(motor_id)
+        in2 = self.in2_channels.get(motor_id)
 
+        if not in1 or not in2:
+            logger.warning(f"Cannot release brake: IN1 or IN2 not found for motor {motor_id}")
+            return
+
+        try:
+            in1.off()
+            in2.off()
+            self.motor_states[motor_id]["brake_active"] = False
+            logger.debug(f"Motor {motor_id} brake released (IN1=0, IN2=0)")
+        except Exception as e:
+            logger.warning(f"Error releasing brake for motor {motor_id}: {e}")
 
 class PWMDCMotorsController(BaseDCMotorsController):
     """PWM-based DC motor controller optimized for DRV8871DDAR H-bridge drivers."""
