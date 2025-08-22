@@ -18,41 +18,41 @@ def test_motor_turn():
 
         # Motor config for testing
         motor_config = {
-            "pwm_pins": [24, 22, 17],           # motor1 PWM, motor2 PWM
-            "direction_pins": [23, 27, 18],      # motor1 direction, motor2 direction
+            "pwm_pins": [17, 22, 24, 5],
+            "direction_pins": [27, 23, 25, 6],
             "pwm_frequency": 1000,
-            "invert_direction": False,
         }
 
         # Create motors
-        motor1 = DCMotor(
+        front_left = DCMotor(
             id=1,
             model="mecanum_wheel",
             norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
         )
 
-        motor2 = DCMotor(
+        front_right = DCMotor(
             id=2,
             model="mecanum_wheel",
             norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
         )
 
-        motor3 = DCMotor(
+        rear_left = DCMotor(
             id=3,
+            model="mecanum_wheel",
+            norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
+        )
+
+        rear_right = DCMotor(
+            id=4,
             model="mecanum_wheel",
             norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
         )
 
         # Create controller with motors as a dictionary
         controller = PWMDCMotorsController(
-            motors={"motor1": motor1, "motor2": motor2, "motor3": motor3},  # Add both motors
+            motors={"front_left": front_left, "front_right": front_right, "rear_left": rear_left, "rear_right": rear_right},
             config=motor_config,
         )
-
-        print("=== DC Motor Test ===")
-        print("Motor: Single DC Motor")
-        print(f"Pins: IN1=GPIO {motor_config['pwm_pins'][0]} (PWM), IN2=GPIO {motor_config['direction_pins'][0]} (Direction)")
-        print()
 
         # Connect
         print("1. Connecting motor...")
@@ -62,27 +62,27 @@ def test_motor_turn():
 
         try:
             # Turn motor 1 and 2 forward at full speed for 5 seconds
-            print("2. Turning motor forward for 5 seconds...")
-            controller.set_velocity("motor1", 1.0)
-            controller.set_velocity("motor2", 1.0)
-            controller.set_velocity("motor3", 1.0)
+            print("2. Turning forward for 5 seconds...")
+            controller.set_velocity("front_left", 1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
             time.sleep(5)
 
             # Stop motors
             print("3. Stopping motor...")
-            controller.set_velocity("motor1", 0.0)
-            controller.set_velocity("motor2", 0.0)
-            controller.set_velocity("motor3", 0.0)
+            controller.set_velocity("front_left", 0.0)
+            controller.set_velocity("front_right", 0.0)
+            controller.set_velocity("rear_left", 0.0)
+            controller.set_velocity("rear_right", 0.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
             time.sleep(1)
 
         except KeyboardInterrupt:
             print()
             print("Stopping motors...")
-            controller.set_velocity("motor1", 0.0)
-            controller.set_velocity("motor2", 0.0)
-            controller.set_velocity("motor3", 0.0)
+            controller.set_velocity("front_left", 0.0)
+            controller.set_velocity("front_right", 0.0)
+            controller.set_velocity("rear_left", 0.0)
+            controller.set_velocity("rear_right", 0.0)
             time.sleep(1)
 
         # Disconnect
