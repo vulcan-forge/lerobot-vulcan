@@ -113,12 +113,12 @@ class Sourccey(Robot):
 
     @property
     def is_connected(self) -> bool:
-        return (
-            self.left_arm.is_connected and
-            self.right_arm.is_connected and
-            # self.dc_motors_controller.is_connected and
-            all(cam.is_connected for cam in self.cameras.values())
-        )
+        left_ok = self.left_arm.is_connected if (self.limit_arm is None or self.limit_arm == "left") else True
+        right_ok = self.right_arm.is_connected if (self.limit_arm is None or self.limit_arm == "right") else True
+        # Cameras: only require target cameras for selected arm(s)
+        target_cam_keys = self._target_camera_keys()
+        cams_ok = all(self.cameras[k].is_connected for k in target_cam_keys)
+        return left_ok and right_ok and cams_ok
 
     def connect(self, calibrate: bool = True) -> None:
         # Connect only requested arm if limit set; else both
@@ -132,8 +132,9 @@ class Sourccey(Robot):
 
         self.dc_motors_controller.connect()
 
-        for cam in self.cameras.values():
-            cam.connect()
+        # Connect only target cameras
+        for cam_key in self._target_camera_keys():
+            self.cameras[cam_key].connect()
 
     def disconnect(self):
         if self.limit_arm == "left":
@@ -147,8 +148,11 @@ class Sourccey(Robot):
         self.stop_base()
         self.dc_motors_controller.disconnect()
 
-        for cam in self.cameras.values():
-            cam.disconnect()
+        # Disconnect only those we connected
+        for cam_key in self._target_camera_keys():
+            cam = self.cameras[cam_key]
+            if cam.is_connected:
+                cam.disconnect()
 
     @property
     def is_calibrated(self) -> bool:
@@ -219,7 +223,8 @@ class Sourccey(Robot):
                 right_obs = self.right_arm.get_observation()
                 obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
 
-            for cam_key, cam in self.cameras.items():
+            for cam_key in self._target_camera_keys():
+                cam = self.cameras[cam_key]
                 obs_dict[cam_key] = cam.async_read()
 
             return obs_dict
@@ -261,6 +266,19 @@ class Sourccey(Robot):
         # self.dc_motors_controller.set_velocity("base_rear_left_wheel", 0)
         # self.dc_motors_controller.set_velocity("base_rear_right_wheel", 0)
         pass
+
+    def _target_camera_keys(self) -> list[str]:
+        """Return camera keys to connect/check based on limit_arm.
+        We keep front cameras always. We exclude the wrist camera on the non-selected arm.
+        """
+        keys = list(self.cameras.keys())
+        if self.limit_arm == "left":
+            # Exclude right wrist camera if present
+            return [k for k in keys if k != "wrist_right"]
+        if self.limit_arm == "right":
+            # Exclude left wrist camera if present
+            return [k for k in keys if k != "wrist_left"]
+        return keys
 
     @staticmethod
     def _raw_to_degps(raw_speed: int) -> float:
