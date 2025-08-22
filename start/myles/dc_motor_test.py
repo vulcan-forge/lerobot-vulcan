@@ -1,1 +1,84 @@
-print("Hello World")
+#!/usr/bin/env python3
+"""
+Test single DC motor - turn for 5 seconds.
+"""
+
+import time
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def test_motor_turn():
+    """Turn DC motor for 5 seconds."""
+    try:
+        from lerobot.motors.dc_pwm.dc_pwm import PWMDCMotorsController
+        from lerobot.motors.dc_motors_controller import DCMotor, MotorNormMode
+
+        # Motor config for testing
+        motor_config = {
+            "pwm_pins": [23],           # IN1 - PWM control
+            "direction_pins": [24],      # IN2 - Direction control
+            "pwm_frequency": 1000,
+            "invert_direction": False,
+        }
+
+        # Create motor
+        motor = DCMotor(
+            id=1,
+            model="mecanum_wheel",
+            norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
+        )
+
+        # Create controller with motors as a dictionary
+        controller = PWMDCMotorsController(
+            motors={"motor1": motor},  # Pass as dictionary
+            config=motor_config,
+        )
+
+        print("=== DC Motor Test ===")
+        print("Motor: Single DC Motor")
+        print(f"Pins: IN1=GPIO {motor_config['pwm_pins'][0]} (PWM), IN2=GPIO {motor_config['direction_pins'][0]} (Direction)")
+        print()
+
+        # Connect
+        print("1. Connecting motor...")
+        controller.connect()
+        print("✓ Motor connected")
+        print()
+
+        try:
+            # Turn motor forward for 5 seconds
+            print("2. Turning motor forward for 5 seconds...")
+            controller.set_velocity("motor1", 1.0)
+            print("   Motor states: ", controller.protocol_handler.motor_states)
+            time.sleep(5)
+
+            # Stop motor
+            print("3. Stopping motor...")
+            controller.set_velocity("motor1", 0.0)
+            print("   Motor states: ", controller.protocol_handler.motor_states)
+            time.sleep(1)
+
+        except KeyboardInterrupt:
+            print()
+            print("Stopping motor...")
+            controller.set_velocity("motor1", 0.0)
+            time.sleep(1)
+
+        # Disconnect
+        print("4. Disconnecting motor...")
+        controller.disconnect()
+        print("✓ Motor disconnected")
+        print()
+
+        print("=== Test Complete ===")
+        print("✓ Motor turned for 5 seconds successfully!")
+
+    except Exception as e:
+        print(f"✗ Test failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    test_motor_turn()
