@@ -3,7 +3,7 @@ from gpiozero import DigitalInputDevice, DigitalOutputDevice
 
 # GPIO pin setup for bit-banged SPI
 CLK  = DigitalOutputDevice(2)  # GPIO 11 (Pin 23) - SCLK
-MISO = DigitalInputDevice(3)    # GPIO 9 (Pin 21) - MISO
+MISO = DigitalInputDevice(15)    # GPIO 9 (Pin 21) - MISO
 MOSI = DigitalOutputDevice(4)  # GPIO 10 (Pin 19) - MOSI
 CS   = DigitalOutputDevice(14)   # GPIO 8 (Pin 24) - CS (CE0)
 
