@@ -18,8 +18,8 @@ def test_motor_turn():
 
         # Motor config for testing
         motor_config = {
-            "pwm_pins": [17, 22, 26, 6, 24],
-            "direction_pins": [27, 23, 16, 5, 25],
+            "pwm_pins": [17, 23, 26, 6, 24],
+            "direction_pins": [27, 22, 16, 5, 25],
             "pwm_frequency": 1000,
         }
 
@@ -69,7 +69,7 @@ def test_motor_turn():
         try:
             # Robot forward for 3 seconds
             print("2. Forward for 3 seconds...")
-            controller.set_velocity("front_left", -1.0)
+            controller.set_velocity("front_right", 1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
             time.sleep(3)
 
