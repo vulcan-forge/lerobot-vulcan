@@ -49,11 +49,17 @@ def test_motor_turn():
         print()
 
         try:
-            # Turn motor forward for 5 seconds
+            # Turn motor forward at full speed for 5 seconds
             print("2. Turning motor forward for 5 seconds...")
-            controller.set_velocity("motor1", 0.25)
+            controller.set_velocity("motor1", 1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
-            time.sleep(5)
+            time.sleep(1)
+
+            # Turn motor forward at 50% speed for 5 seconds
+            print("2. Turning motor forward for 5 seconds...")
+            controller.set_velocity("motor1", 0.5)
+            print("   Motor states: ", controller.protocol_handler.motor_states)
+            time.sleep(1)
 
             # Stop motor
             print("3. Stopping motor...")
