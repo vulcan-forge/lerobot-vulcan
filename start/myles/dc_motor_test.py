@@ -18,8 +18,8 @@ def test_motor_turn():
 
         # Motor config for testing
         motor_config = {
-            "pwm_pins": [24, 22],           # motor1 PWM, motor2 PWM
-            "direction_pins": [23, 27],      # motor1 direction, motor2 direction
+            "pwm_pins": [24, 22, 17],           # motor1 PWM, motor2 PWM
+            "direction_pins": [23, 27, 18],      # motor1 direction, motor2 direction
             "pwm_frequency": 1000,
             "invert_direction": False,
         }
@@ -37,9 +37,15 @@ def test_motor_turn():
             norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
         )
 
+        motor3 = DCMotor(
+            id=3,
+            model="mecanum_wheel",
+            norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
+        )
+
         # Create controller with motors as a dictionary
         controller = PWMDCMotorsController(
-            motors={"motor1": motor1, "motor2": motor2},  # Add both motors
+            motors={"motor1": motor1, "motor2": motor2, "motor3": motor3},  # Add both motors
             config=motor_config,
         )
 
@@ -59,6 +65,7 @@ def test_motor_turn():
             print("2. Turning motor forward for 5 seconds...")
             controller.set_velocity("motor1", 1.0)
             controller.set_velocity("motor2", 1.0)
+            controller.set_velocity("motor3", 1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
             time.sleep(5)
 
@@ -66,6 +73,7 @@ def test_motor_turn():
             print("3. Stopping motor...")
             controller.set_velocity("motor1", 0.0)
             controller.set_velocity("motor2", 0.0)
+            controller.set_velocity("motor3", 0.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
             time.sleep(1)
 
@@ -74,6 +82,7 @@ def test_motor_turn():
             print("Stopping motors...")
             controller.set_velocity("motor1", 0.0)
             controller.set_velocity("motor2", 0.0)
+            controller.set_velocity("motor3", 0.0)
             time.sleep(1)
 
         # Disconnect
