@@ -74,7 +74,7 @@ def test_motor_turn():
             controller.set_velocity("rear_left", -1.0)
             controller.set_velocity("rear_right", 1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
-            time.sleep(30)
+            time.sleep(3)
 
             # Stop motors
             print("3. Stopping motor...")
