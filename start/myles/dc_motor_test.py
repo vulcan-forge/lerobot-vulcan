@@ -67,42 +67,23 @@ def test_motor_turn():
         print()
 
         try:
-            # Robot forward for 10 seconds
-            print("2. Forward for 10 seconds...")
+            # Robot forward for 5 seconds
+            print("2. Forward for 5 seconds...")
             controller.set_velocity("front_left", 1.0)
             controller.set_velocity("linear_actuator", 1.0)
             controller.set_velocity("rear_left", 1.0)
             controller.set_velocity("rear_right", 1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
-            time.sleep(10)
+            time.sleep(5)
 
-            # Robot backward for 10 seconds
-            print("3. Backward for 10 seconds...")
+            # Robot backward for 5 seconds
+            print("3. Backward for 5 seconds...")
             controller.set_velocity("front_left", -1.0)
             controller.set_velocity("linear_actuator", -1.0)
             controller.set_velocity("rear_left", -1.0)
             controller.set_velocity("rear_right", -1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
-            time.sleep(10)
-
-            #Robot turn left for 10 seconds
-            print("4. Turn left for 10 seconds...")
-            controller.set_velocity("front_left", -1.0)
-            controller.set_velocity("linear_actuator", 1.0)
-            controller.set_velocity("rear_left", -1.0)
-            controller.set_velocity("rear_right", 1.0)
-            print("   Motor states: ", controller.protocol_handler.motor_states)
-            time.sleep(10)
-
-            #Robot turn right for 10 seconds
-
-            print("5. Turn right for 10 seconds...")
-            controller.set_velocity("front_left", 1.0)
-            controller.set_velocity("linear_actuator", -1.0)
-            controller.set_velocity("rear_left", 1.0)
-            controller.set_velocity("rear_right", -1.0)
-            print("   Motor states: ", controller.protocol_handler.motor_states)
-            time.sleep(10)
+            time.sleep(5)
 
             # Stop motors
             print("3. Stopping motor...")
