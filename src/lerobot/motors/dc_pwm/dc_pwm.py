@@ -260,19 +260,17 @@ class PWMProtocolHandler(ProtocolHandler):
         self.motor_states[motor_id]["brake_active"] = False
 
         # Correct DRV8871DDAR Logic (from datasheet):
-        print("pwm_channels", self.pwm_channels)
-        print("direction_channels", self.direction_channels)
         if velocity > 0:  # Forward
-            # IN1 = 1, IN2 = 0 (Forward)
-            self.pwm_channels[motor_id].on()
+            # IN1 = PWM, IN2 = 0 (Forward)
+            self.set_pwm(motor_id, abs(velocity))  # Set PWM duty cycle
             self.direction_channels[motor_id].off()
         elif velocity < 0:  # Backward
-            # IN1 = 0, IN2 = 1 (Reverse)
-            self.pwm_channels[motor_id].off()
+            # IN1 = 0, IN2 = PWM (Reverse)
+            self.set_pwm(motor_id, 0.0)  # Set PWM to 0
             self.direction_channels[motor_id].on()
         else:  # Stop
             # IN1 = 0, IN2 = 0 (Coast/Stop)
-            self.pwm_channels[motor_id].off()
+            self.set_pwm(motor_id, 0.0)
             self.direction_channels[motor_id].off()
 
     # PWM Functions
