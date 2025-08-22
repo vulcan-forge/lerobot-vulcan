@@ -57,6 +57,8 @@ class Sourccey(Robot):
     def __init__(self, config: SourcceyConfig):
         super().__init__(config)
         self.config = config
+        # Optional limiter set by CLI: None | "left" | "right"
+        self.limit_arm: str | None = None
 
         left_arm_config = SourcceyFollowerConfig(
             id=f"{config.id}_left" if config.id else None,
@@ -119,8 +121,14 @@ class Sourccey(Robot):
         )
 
     def connect(self, calibrate: bool = True) -> None:
-        self.left_arm.connect(calibrate)
-        self.right_arm.connect(calibrate)
+        # Connect only requested arm if limit set; else both
+        if self.limit_arm == "left":
+            self.left_arm.connect(calibrate)
+        elif self.limit_arm == "right":
+            self.right_arm.connect(calibrate)
+        else:
+            self.left_arm.connect(calibrate)
+            self.right_arm.connect(calibrate)
 
         self.dc_motors_controller.connect()
 
@@ -128,8 +136,13 @@ class Sourccey(Robot):
             cam.connect()
 
     def disconnect(self):
-        self.left_arm.disconnect()
-        self.right_arm.disconnect()
+        if self.limit_arm == "left":
+            self.left_arm.disconnect()
+        elif self.limit_arm == "right":
+            self.right_arm.disconnect()
+        else:
+            self.left_arm.disconnect()
+            self.right_arm.disconnect()
 
         self.stop_base()
         self.dc_motors_controller.disconnect()
@@ -139,9 +152,19 @@ class Sourccey(Robot):
 
     @property
     def is_calibrated(self) -> bool:
+        if self.limit_arm == "left":
+            return self.left_arm.is_calibrated
+        if self.limit_arm == "right":
+            return self.right_arm.is_calibrated
         return self.left_arm.is_calibrated and self.right_arm.is_calibrated
 
     def calibrate(self) -> None:
+        if self.limit_arm == "left":
+            self.left_arm.calibrate()
+            return
+        if self.limit_arm == "right":
+            self.right_arm.calibrate()
+            return
         self.left_arm.calibrate()
         self.right_arm.calibrate()
 
@@ -189,12 +212,12 @@ class Sourccey(Robot):
     def get_observation(self) -> dict[str, Any]:
         try:
             obs_dict = {}
-
-            left_obs = self.left_arm.get_observation()
-            obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
-
-            right_obs = self.right_arm.get_observation()
-            obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
+            if self.limit_arm is None or self.limit_arm == "left":
+                left_obs = self.left_arm.get_observation()
+                obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
+            if self.limit_arm is None or self.limit_arm == "right":
+                right_obs = self.right_arm.get_observation()
+                obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
 
             for cam_key, cam in self.cameras.items():
                 obs_dict[cam_key] = cam.async_read()
@@ -206,18 +229,18 @@ class Sourccey(Robot):
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         try:
-            left_action = {
-                key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")
-            }
-            right_action = {
-                key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")
-            }
+            left_action = {key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")}
+            right_action = {key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")}
 
-            send_action_left = self.left_arm.send_action(left_action)
-            send_action_right = self.right_arm.send_action(right_action)
+            prefixed_send_action_left = {}
+            prefixed_send_action_right = {}
 
-            prefixed_send_action_left = {f"left_{key}": value for key, value in send_action_left.items()}
-            prefixed_send_action_right = {f"right_{key}": value for key, value in send_action_right.items()}
+            if self.limit_arm is None or self.limit_arm == "left":
+                sent_left = self.left_arm.send_action(left_action)
+                prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
+            if self.limit_arm is None or self.limit_arm == "right":
+                sent_right = self.right_arm.send_action(right_action)
+                prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
 
             # Base velocity
             # base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}

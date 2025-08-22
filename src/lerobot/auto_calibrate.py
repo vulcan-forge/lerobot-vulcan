@@ -93,6 +93,13 @@ def auto_calibrate(cfg: AutoCalibrateConfig):
         raise ValueError(f"Unsupported device type: {type(cfg.device)}")
 
     try:
+        # If robot supports limiting to a single arm, set it before connect
+        try:
+            if getattr(device, "limit_arm", None) is not None or hasattr(device, "limit_arm"):
+                device.limit_arm = cfg.arm
+        except Exception:
+            pass
+
         # Connect without calibration (we'll do auto-calibration)
         device.connect(calibrate=False)
 
