@@ -18,22 +18,28 @@ def test_motor_turn():
 
         # Motor config for testing
         motor_config = {
-            "pwm_pins": [24],           # IN1 - PWM control
-            "direction_pins": [23],      # IN2 - Direction control
+            "pwm_pins": [23, 27],           # IN1 - PWM control for both motors
+            "direction_pins": [24, 22],      # IN2 - Direction control for both motors
             "pwm_frequency": 1000,
             "invert_direction": False,
         }
 
-        # Create motor
-        motor = DCMotor(
+        # Create motors
+        motor1 = DCMotor(
             id=1,
+            model="mecanum_wheel",
+            norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
+        )
+
+        motor2 = DCMotor(
+            id=2,
             model="mecanum_wheel",
             norm_mode=MotorNormMode.PWM_DUTY_CYCLE,
         )
 
         # Create controller with motors as a dictionary
         controller = PWMDCMotorsController(
-            motors={"motor1": motor},  # Pass as dictionary
+            motors={"motor1": motor1, "motor2": motor2},  # Add both motors
             config=motor_config,
         )
 
@@ -49,38 +55,40 @@ def test_motor_turn():
         print()
 
         try:
-            # Turn motor forward at full speed for 5 seconds
+            # Turn motor 1 forward at full speed for 5 seconds
             print("2. Turning motor forward for 5 seconds...")
             controller.set_velocity("motor1", 1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
             time.sleep(1)
 
-            # Turn motor forward at 50% speed for 5 seconds
-            print("2. Turning motor forward for 5 seconds...")
-            controller.set_velocity("motor1", 0.5)
+            # Turn motor 2 forward at full speed for 5 seconds
+            print("3. Turning motor 2 forward for 5 seconds...")
+            controller.set_velocity("motor2", 1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
             time.sleep(1)
 
-            # Stop motor
+            # Stop motors
             print("3. Stopping motor...")
             controller.set_velocity("motor1", 0.0)
+            controller.set_velocity("motor2", 0.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
             time.sleep(1)
 
         except KeyboardInterrupt:
             print()
-            print("Stopping motor...")
+            print("Stopping motors...")
             controller.set_velocity("motor1", 0.0)
+            controller.set_velocity("motor2", 0.0)
             time.sleep(1)
 
         # Disconnect
-        print("4. Disconnecting motor...")
+        print("4. Disconnecting motors...")
         controller.disconnect()
-        print("✓ Motor disconnected")
+        print("✓ Motors disconnected")
         print()
 
         print("=== Test Complete ===")
-        print("✓ Motor turned for 5 seconds successfully!")
+        print("✓ Motors turned for 5 seconds successfully!")
 
     except Exception as e:
         print(f"✗ Test failed: {e}")
