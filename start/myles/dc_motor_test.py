@@ -68,7 +68,7 @@ def test_motor_turn():
 
         try:
             # Robot forward for 3 seconds
-            print("2. Turning forward for 3 seconds...")
+            print("2. Forward for 3 seconds...")
             controller.set_velocity("front_left", 1.0)
             controller.set_velocity("front_right", 1.0)
             controller.set_velocity("rear_left", 1.0)
@@ -84,18 +84,6 @@ def test_motor_turn():
             controller.set_velocity("rear_right", 0.0)
             controller.set_velocity("linear_actuator", 0.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
-            time.sleep(1)
-
-            #Linear actuator
-            print("4. Linear actuator down for 3 seconds...")
-            controller.set_velocity("linear_actuator", -1.0)
-            print("   Motor states: ", controller.protocol_handler.motor_states)
-            time.sleep(3)
-            controller.set_velocity("linear_actuator", 0.0)
-            time.sleep(1)
-            controller.set_velocity("linear_actuator", 1.0)
-            time.sleep(10)
-            controller.set_velocity("linear_actuator", 0.0)
             time.sleep(1)
 
         except KeyboardInterrupt:
