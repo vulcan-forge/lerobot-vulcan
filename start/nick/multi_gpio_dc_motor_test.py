@@ -26,8 +26,8 @@ def test_motor(pwm_pin, direction_pin, motor_name="Motor"):
 
         # Motor config for testing
         motor_config = {
-            "pwm_pins": [pwm_pin],           # IN1 - PWM control
-            "direction_pins": [direction_pin], # IN2 - Direction control
+            "in1_pins": [pwm_pin],           # IN1 - PWM control
+            "in2_pins": [direction_pin], # IN2 - Direction control
             "pwm_frequency": 1000,
             "invert_direction": False,
         }

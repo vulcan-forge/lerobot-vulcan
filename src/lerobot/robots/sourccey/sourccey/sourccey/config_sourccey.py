@@ -50,10 +50,9 @@ def sourccey_dc_motors() -> dict[str, DCMotor]:
 
 def sourccey_dc_motors_config() -> dict:
     return {
-        "pwm_pins": [12, 13, 14, 15, 18],
-        "direction_pins": [2, 3, 4, 5, 6],
-        "enable_pins": [7, 8, 9, 10, 11],
-        "pwm_frequency": 25000,
+        "in1_pins": [12, 13, 14, 15, 18],
+        "in2_pins": [2, 3, 4, 5, 6],
+        "pwm_frequency": 1000,
         "invert_direction": False,
         "invert_enable": False,
         "invert_brake": False,

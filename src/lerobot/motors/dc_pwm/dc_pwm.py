@@ -110,7 +110,7 @@ class PWMProtocolHandler(ProtocolHandler):
                 "gpiozero not available. Install with: uv pip install gpiozero>=2.0"
             )
 
-    def _setup_pwmled(self, pin: int, label: str) -> gpiozero.PWMLED: # type: ignore
+    def _setup_pwmled(self, pin: int, label: str) -> 'gpiozero.PWMLED': # type: ignore
         """Safely set up a PWMLED on the given pin, with fallback to default frequency."""
         try:
             return self.gpiozero.PWMLED(pin, frequency=self.pwm_frequency)
@@ -122,7 +122,7 @@ class PWMProtocolHandler(ProtocolHandler):
                 logger.error(f"{label}: Failed to setup PWMLED on pin {pin}: {e2}")
                 raise
 
-    def _safe_close(self, channel: gpiozero.PWMLED, label: str) -> None: # type: ignore
+    def _safe_close(self, channel: 'gpiozero.PWMLED', label: str) -> None: # type: ignore
         """Safely close a PWMLED channel."""
         try:
             channel.close()
