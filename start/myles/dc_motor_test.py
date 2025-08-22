@@ -21,7 +21,7 @@ def test_motor_turn():
             "pwm_pins": [23],           # IN1 - PWM control
             "direction_pins": [24],      # IN2 - Direction control
             "pwm_frequency": 1000,
-            "invert_direction": False,
+            "invert_direction": True,
         }
 
         # Create motor
@@ -51,7 +51,7 @@ def test_motor_turn():
         try:
             # Turn motor forward for 5 seconds
             print("2. Turning motor forward for 5 seconds...")
-            controller.set_velocity("motor1", -1.0)
+            controller.set_velocity("motor1", 1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
             time.sleep(5)
 
