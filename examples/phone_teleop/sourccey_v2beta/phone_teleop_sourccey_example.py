@@ -45,7 +45,7 @@ def main():
     # Get the path to the Sourccey V2 Beta model directory
     current_file = Path(__file__)
     # Use the Sourccey V2 Beta model located in the model directory
-    sourccey_model_path = current_file.parent.parent.parent / "src" / "lerobot" / "robots" / "sourccey" / "sourccey_v3beta" / "model"
+    sourccey_model_path = current_file.parent.parent.parent.parent / "src" / "lerobot" / "robots" / "sourccey" / "sourccey_v3beta" / "model"
     
     if sourccey_model_path.exists():
         urdf_path = str(sourccey_model_path / "Arm.urdf")
@@ -72,7 +72,7 @@ def main():
     # Configuration for the Sourccey V2 Beta follower robot
     robot_config = SourcceyV2BetaFollowerConfig(
         id=robot_id,
-        port="COM11",  # Adjust based on your setup - could be /dev/ttyUSB1, COM3, etc.
+        port="COM25",  # Adjust based on your setup - could be /dev/ttyUSB1, COM3, etc.
         use_degrees=True,
         max_relative_target=30.0,  # Safety limit in degrees
     )
@@ -124,8 +124,11 @@ def main():
                 # Get current observation first
                 observation = robot.get_observation()
                 
-                # Get action from phone (pass observation for current robot state)
-                action = phone_teleop.get_action(observation)
+                # Get action from phone (emits left_* keys)
+                left_action = phone_teleop.get_action(observation)
+
+                # Map left_* keys to robot joint keys (strip 'left_' prefix)
+                action = {k.replace("left_", ""): v for k, v in left_action.items()}
                 
                 # Send action to robot
                 actual_action = robot.send_action(action)

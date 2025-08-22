@@ -49,12 +49,12 @@ class SourcceyV2BetaFollower(Robot):
         self.bus = FeetechMotorsBus(
             port=self.config.port,
             motors={
-                "shoulder_pan": Motor(7, "sts3215", norm_mode_body),
-                "shoulder_lift": Motor(8, "sts3215", norm_mode_body),
-                "elbow_flex": Motor(9, "sts3215", norm_mode_body),
-                "wrist_flex": Motor(10, "sts3215", norm_mode_body),
-                "wrist_roll": Motor(11, "sts3215", norm_mode_body),
-                "gripper": Motor(12, "sts3215", MotorNormMode.RANGE_0_100),
+                "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
+                "shoulder_lift": Motor(2, "sts3250", norm_mode_body),
+                "elbow_flex": Motor(3, "sts3215", norm_mode_body),
+                "wrist_flex": Motor(4, "sts3215", norm_mode_body),
+                "wrist_roll": Motor(5, "sts3215", norm_mode_body),
+                "gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )
