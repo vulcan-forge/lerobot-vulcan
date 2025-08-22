@@ -18,10 +18,10 @@ def test_motor_turn():
 
         # Motor config for testing
         motor_config = {
-            "pwm_pins": [23],           # IN1 - PWM control
-            "direction_pins": [24],      # IN2 - Direction control
+            "pwm_pins": [24],           # IN1 - PWM control
+            "direction_pins": [23],      # IN2 - Direction control
             "pwm_frequency": 1000,
-            "invert_direction": True,
+            "invert_direction": False,
         }
 
         # Create motor
