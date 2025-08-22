@@ -18,8 +18,8 @@ def test_motor_turn():
 
         # Motor config for testing
         motor_config = {
-            "pwm_pins": [23, 27],           # motor1 PWM, motor2 PWM
-            "direction_pins": [24, 22],      # motor1 direction, motor2 direction
+            "pwm_pins": [23, 22],           # motor1 PWM, motor2 PWM
+            "direction_pins": [24, 27],      # motor1 direction, motor2 direction
             "pwm_frequency": 1000,
             "invert_direction": False,
         }
@@ -59,13 +59,13 @@ def test_motor_turn():
             print("2. Turning motor forward for 5 seconds...")
             controller.set_velocity("motor1", 1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
-            time.sleep(1)
+            time.sleep(5)
 
             # Turn motor 2 forward at full speed for 5 seconds
             print("3. Turning motor 2 forward for 5 seconds...")
             controller.set_velocity("motor2", 1.0)
             print("   Motor states: ", controller.protocol_handler.motor_states)
-            time.sleep(1)
+            time.sleep(5)
 
             # Stop motors
             print("3. Stopping motor...")
