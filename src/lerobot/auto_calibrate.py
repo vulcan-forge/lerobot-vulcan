@@ -69,6 +69,7 @@ class AutoCalibrateConfig:
     teleop: TeleoperatorConfig | None = None
     robot: RobotConfig | None = None
     full_reset: bool = False
+    arm: str | None = None  # "left", "right", or None for both
 
     def __post_init__(self):
         if bool(self.teleop) == bool(self.robot):
@@ -98,7 +99,15 @@ def auto_calibrate(cfg: AutoCalibrateConfig):
         # Check if device supports auto-calibration
         if hasattr(device, 'auto_calibrate'):
             logging.info("Device supports auto-calibration. Starting automatic calibration...")
-            device.auto_calibrate(full_reset=cfg.full_reset)
+            try:
+                import inspect
+                params = inspect.signature(device.auto_calibrate).parameters
+                if 'arm' in params:
+                    device.auto_calibrate(full_reset=cfg.full_reset, arm=cfg.arm)
+                else:
+                    device.auto_calibrate(full_reset=cfg.full_reset)
+            except TypeError:
+                device.auto_calibrate(cfg.full_reset)
             logging.info("Automatic calibration completed successfully!")
         else:
             logging.warning("Device does not support auto-calibration. Returning")
