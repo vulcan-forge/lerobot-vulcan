@@ -428,6 +428,11 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     
                     # Continuously return rest position until phone reconnects
                     rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
+                    # Apply Sourccey-specific sign flips (same as for IK solutions)
+                    if len(rest_pose_deg) > 1:
+                        rest_pose_deg[1] = -rest_pose_deg[1]
+                    if len(rest_pose_deg) > 4:
+                        rest_pose_deg[4] = -rest_pose_deg[4]
                     return self._format_action_dict(rest_pose_deg)
                 
                 # Get the last known data (may be stale) for continued operation
@@ -444,6 +449,11 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             if not self.start_teleop:
                 # Phone teleoperator always works in degrees (robot is auto-configured)
                 rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
+                # Apply Sourccey-specific sign flips (same as for IK solutions)
+                if len(rest_pose_deg) > 1:
+                    rest_pose_deg[1] = -rest_pose_deg[1]
+                if len(rest_pose_deg) > 4:
+                    rest_pose_deg[4] = -rest_pose_deg[4]
                 self._phone_connected = False
                 # Reset timer when teleop stops
                 self.teleop_start_time = None

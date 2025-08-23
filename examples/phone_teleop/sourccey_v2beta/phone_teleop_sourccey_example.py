@@ -129,6 +129,10 @@ def main():
 
                 # Map left_* keys to robot joint keys (strip 'left_' prefix)
                 action = {k.replace("left_", ""): v for k, v in left_action.items()}
+
+                # Explicit shoulder_lift direction correction for this setup
+                if "shoulder_lift.pos" in action:
+                    action["shoulder_lift.pos"] = -action["shoulder_lift.pos"]
                 
                 # Send action to robot
                 actual_action = robot.send_action(action)

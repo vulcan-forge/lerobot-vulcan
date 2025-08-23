@@ -50,7 +50,8 @@ class SourcceyV2BetaFollower(Robot):
             port=self.config.port,
             motors={
                 "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
-                "shoulder_lift": Motor(2, "sts3250", norm_mode_body),
+                # Geared-down shoulder_lift: requires 1.5x motor ticks per joint degree
+                "shoulder_lift": Motor(2, "sts3250", norm_mode_body, gear_ratio=1.5),
                 "elbow_flex": Motor(3, "sts3215", norm_mode_body),
                 "wrist_flex": Motor(4, "sts3215", norm_mode_body),
                 "wrist_roll": Motor(5, "sts3215", norm_mode_body),
@@ -199,7 +200,8 @@ class SourcceyV2BetaFollower(Robot):
 
         # Read arm position
         start = time.perf_counter()
-        obs_dict = self.bus.sync_read("Present_Position")
+        # Read positions in gear space (joint space degrees)
+        obs_dict = self.bus.sync_read("Present_Position", gear_space=True)
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
@@ -234,12 +236,30 @@ class SourcceyV2BetaFollower(Robot):
         # Cap goal position when too far away from present position.
         # /!\ Slower fps expected due to reading from the follower.
         if self.config.max_relative_target is not None:
-            present_pos = self.bus.sync_read("Present_Position")
+            # Compare in joint space so safety cap is based on true joint angles
+            present_pos = self.bus.sync_read("Present_Position", gear_space=True)
+
+            # Only wrap continuous rotation joint 'wrist_roll'; preserve sign for others
+            for motor_name, g_pos in list(goal_pos.items()):
+                try:
+                    if motor_name == "wrist_roll" and self.bus.motors[motor_name].norm_mode is MotorNormMode.DEGREES:
+                        p_val = present_pos[motor_name]
+                        diff = g_pos - p_val
+                        while diff > 180.0:
+                            diff -= 360.0
+                        while diff < -180.0:
+                            diff += 360.0
+                        goal_pos[motor_name] = p_val + diff
+                except Exception:
+                    # If lookup fails, skip wrapping for this joint
+                    pass
+
             goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
         # Send goal position to the arm
-        self.bus.sync_write("Goal_Position", goal_pos)
+        # Write in gear space (joint space degrees)
+        self.bus.sync_write("Goal_Position", goal_pos, gear_space=True)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
     def disconnect(self):
