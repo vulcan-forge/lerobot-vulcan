@@ -56,4 +56,4 @@ while True:
     raw = adc.raw_value        # 0–1023
     voltage = raw / 1023 * vref
     print(f"Raw={raw}  Voltage={voltage:.3f} V")
-    time.sleep(0.2)
+    time.sleep(1)
