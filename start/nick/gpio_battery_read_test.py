@@ -71,6 +71,7 @@ vref = 3.3
 
 alpha = 0.05  # Lower alpha = more smoothing, slower response
 
+filtered = vref
 while True:
     raw = adc.raw_value
     voltage = raw / 1023 * vref
