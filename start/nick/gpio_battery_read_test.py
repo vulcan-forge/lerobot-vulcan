@@ -53,8 +53,18 @@ import time
 adc = MCP3008(channel=0)
 vref = 3.3
 
+# while True:
+#     raw = adc.raw_value        # 0–1023
+#     voltage = raw / 1023 * vref
+#     print(f"Raw={raw}  Voltage={voltage:.3f} V")
+#     time.sleep(0.2)
+
+alpha = 0.1  # Lower = more smoothing, but slower
+smoothed = 0
+
 while True:
-    raw = adc.raw_value        # 0–1023
+    raw = adc.raw_value
     voltage = raw / 1023 * vref
-    print(f"Raw={raw}  Voltage={voltage:.3f} V")
+    smoothed = alpha * voltage + (1 - alpha) * smoothed
+    print(f"Raw={raw}  Voltage={voltage:.3f} V  Filtered={smoothed:.3f} V")
     time.sleep(0.2)
