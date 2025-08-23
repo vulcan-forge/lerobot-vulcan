@@ -45,3 +45,5 @@ def read_adc(channel: int) -> int:
 
     CS.on()
     return result
+
+read_adc(0)
