@@ -50,8 +50,8 @@ from gpiozero import MCP3008
 import time
 
 # adc = MCP3008(channel=0, clock_pin=11, mosi_pin=10, miso_pin=9, select_pin=8)
-adc = MCP3008(channel=0)
-vref = 3.3
+# adc = MCP3008(channel=0)
+# vref = 3.3
 
 # while True:
 #     raw = adc.raw_value        # 0–1023
@@ -69,12 +69,18 @@ vref = 3.3
 #     print(f"Raw={raw}  Voltage={voltage:.3f} V  Filtered={smoothed:.3f} V")
 #     time.sleep(0.2)
 
-alpha = 0.05  # Lower alpha = more smoothing, slower response
+adc = MCP3008(channel=0)
+vref = 3.3
+alpha = 0.01  # Very stable, slow changes
+filtered = vref  # Start at max Vref
 
-filtered = vref
-while True:
-    raw = adc.raw_value
-    voltage = raw / 1023 * vref
-    filtered = alpha * voltage + (1 - alpha) * filtered
-    print(f"Raw={raw}  Voltage={voltage:.3f} V  Filtered={filtered:.3f} V")
-    time.sleep(0.1)  # Slightly slower sample rate (100ms)
+print("Reading MCP3008... Press Ctrl+C to stop.\n")
+try:
+    while True:
+        raw = adc.raw_value            # 0–1023
+        voltage = raw / 1023 * vref    # Convert to volts
+        filtered = alpha * voltage + (1 - alpha) * filtered
+        print(f"Raw={raw:<4} Voltage={voltage:.3f} V  Filtered={filtered:.3f} V")
+        time.sleep(0.1)
+except KeyboardInterrupt:
+    print("Done.")
