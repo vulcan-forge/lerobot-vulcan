@@ -115,7 +115,7 @@ import time
 
 adc = MCP3008(channel=0)
 vref = 3.3
-sample_interval = 0.1  # seconds between ADC reads
+sample_interval = 0.2  # seconds between ADC reads
 average_window = 50    # number of samples to average (e.g. 50 * 0.1s = 5s)
 
 while True:
@@ -124,9 +124,12 @@ while True:
         raw = adc.raw_value
         voltage = raw / 1023 * vref
         total += voltage
+        print(f"Raw={raw:<4}  Voltage={voltage:.3f} V")
         time.sleep(sample_interval)
 
     avg_voltage = total / average_window
+    print()
     print(f"Averaged Voltage = {avg_voltage:.3f} V")
+    print()
 
     time.sleep(5)  # wait remainder of the 10s cycle
