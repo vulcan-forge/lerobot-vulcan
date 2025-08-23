@@ -29,7 +29,7 @@ MEDIAN_N    = 5    # 1 = no median; higher kills occasional hiccups
 CLK  = DigitalOutputDevice(11)         # SCLK (phys 23), idle low
 MISO = DigitalInputDevice(9)           # DOUT (phys 21)
 MOSI = DigitalOutputDevice(10)         # DIN  (phys 19)
-CS   = DigitalOutputDevice(22)     # CS   (phys 15 if 22; phys 24 if 8), idle high
+CS   = DigitalOutputDevice(8)     # CS   (phys 15 if 22; phys 24 if 8), idle high
 
 def _rise_sample() -> int:
     """SPI mode-0: raise CLK, wait a hair, sample while high, then drop."""
@@ -81,7 +81,7 @@ def _batt_from_node(v_node: float) -> float:
 def main():
     try:
         print("MCP3008 windowed reader. Ctrl+C to stop.")
-        print(f"CS=BCM{22}  Vref={VREF} V  Divider={int(R_TOP)}/{int(R_BOT)} Ω")
+        print(f"CS=BCM{8}  Vref={VREF} V  Divider={int(R_TOP)}/{int(R_BOT)} Ω")
         while True:
             raw = int(round(read_filtered(CHANNEL)))
             vch = _code_to_v(raw)
