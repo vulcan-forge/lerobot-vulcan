@@ -1,56 +1,64 @@
-# mcp3008_bitbang_gpiozero.py
+# Robust bit-banged MCP3008 read (gpiozero, SPI mode 0)
 import time
 from gpiozero import DigitalInputDevice, DigitalOutputDevice
 
-# BCM numbering (gpiozero default)
 CLK  = DigitalOutputDevice(11)   # SCLK (idle low)
-MISO = DigitalInputDevice(9)     # DOUT  (no pull-up)
+MISO = DigitalInputDevice(9)     # DOUT
 MOSI = DigitalOutputDevice(10)   # DIN
-CS   = DigitalOutputDevice(8)    # CS/SHDN (idle high)
+CS   = DigitalOutputDevice(8)    # CS (idle high)
 
-def _clk_rise_read():
-    CLK.on()                     # rising edge: ADC outputs next bit
-    bit = int(MISO.value)        # sample MISO *while clock is high*
-    CLK.off()                    # falling edge: ADC latches DIN
+T_CS   = 2e-6    # CS setup/hold
+T_BIT  = 1e-6    # data settle after rising edge
+T_IDLE = 1e-6    # inter-bit idle
+
+def _rise_sample():
+    CLK.on()
+    time.sleep(T_BIT)            # let DOUT settle
+    bit = 1 if MISO.value else 0
+    CLK.off()
+    time.sleep(T_IDLE)
     return bit
 
 def read_adc(ch: int) -> int:
     if not 0 <= ch <= 7:
-        raise ValueError("Channel must be 0–7")
+        raise ValueError("Channel 0–7")
 
-    # bus idle
-    CS.on(); CLK.off(); MOSI.off()
-    time.sleep(2e-6)
+    # idle bus
+    CLK.off(); MOSI.off(); CS.on()
+    time.sleep(T_CS)
 
     # select chip
     CS.off()
-    time.sleep(2e-6)             # tCSS
+    time.sleep(T_CS)
 
-    # Send control word: Start(1), SGL(1), D2,D1,D0  => 5 bits total
-    cmd = (0b11 << 6) | ((ch & 0x07) << 3)
+    # Control: Start(1), SGL(1), D2,D1,D0   (5 bits total)
+    cmd = (0b11 << 6) | ((ch & 7) << 3)
     for _ in range(5):
-        MOSI.value = (cmd & 0x80) != 0     # present bit while CLK low
-        _ = _clk_rise_read()               # clock it in
+        MOSI.value = (cmd & 0x80) != 0     # present while CLK low
+        _ = _rise_sample()                 # clock into ADC on rising edge
         cmd <<= 1
 
     MOSI.off()
 
-    # One null bit (discard)
-    _ = _clk_rise_read()
+    # --- Alignment guard: clock 2 extra times, discard both ---
+    _ = _rise_sample()     # nominal "null" bit
+    _ = _rise_sample()     # guard bit (so the next is guaranteed MSB)
 
-    # Read 10 data bits MSB..LSB, sample on rising edge
-    result = 0
+    # Now read exact 10 data bits (MSB..LSB)
+    val = 0
     for _ in range(10):
-        result = (result << 1) | _clk_rise_read()
+        val = (val << 1) | _rise_sample()
 
     # deselect
     CS.on()
-    return result
+    time.sleep(T_CS)
+
+    return val
 
 if __name__ == "__main__":
-    print("Reading MCP3008 CH0… (Ctrl+C to stop)")
+    VREF = 3.3
     while True:
         raw = read_adc(0)
-        v = raw * 3.3 / 1023.0   # Vref = 3.3 V
+        v = raw * VREF / 1023.0
         print(f"Raw: {raw:4d}   {v:0.3f} V")
         time.sleep(0.25)
