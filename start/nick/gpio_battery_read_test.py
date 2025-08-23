@@ -59,12 +59,21 @@ vref = 3.3
 #     print(f"Raw={raw}  Voltage={voltage:.3f} V")
 #     time.sleep(0.2)
 
-alpha = 0.1  # Lower = more smoothing, but slower
-smoothed = 0
+# alpha = 0.1  # Lower = more smoothing, but slower
+# smoothed = 0
+
+# while True:
+#     raw = adc.raw_value
+#     voltage = raw / 1023 * vref
+#     smoothed = alpha * voltage + (1 - alpha) * smoothed
+#     print(f"Raw={raw}  Voltage={voltage:.3f} V  Filtered={smoothed:.3f} V")
+#     time.sleep(0.2)
+
+alpha = 0.05  # Lower alpha = more smoothing, slower response
 
 while True:
     raw = adc.raw_value
     voltage = raw / 1023 * vref
-    smoothed = alpha * voltage + (1 - alpha) * smoothed
-    print(f"Raw={raw}  Voltage={voltage:.3f} V  Filtered={smoothed:.3f} V")
-    time.sleep(0.2)
+    filtered = alpha * voltage + (1 - alpha) * filtered
+    print(f"Raw={raw}  Voltage={voltage:.3f} V  Filtered={filtered:.3f} V")
+    time.sleep(0.1)  # Slightly slower sample rate (100ms)
