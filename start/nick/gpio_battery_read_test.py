@@ -49,11 +49,12 @@
 from gpiozero import MCP3008
 import time
 
-adc = MCP3008(channel=0, clock_pin=11, mosi_pin=10, miso_pin=9, select_pin=8)
+# adc = MCP3008(channel=0, clock_pin=11, mosi_pin=10, miso_pin=9, select_pin=8)
+adc = MCP3008(channel=0)
 vref = 3.3
 
 while True:
     raw = adc.raw_value        # 0–1023
     voltage = raw / 1023 * vref
     print(f"Raw={raw}  Voltage={voltage:.3f} V")
-    time.sleep(1)
+    time.sleep(0.2)
