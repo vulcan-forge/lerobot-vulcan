@@ -1,97 +1,47 @@
-#!/usr/bin/env python3
-# MCP3008 robust bit-bang (gpiozero) — windowed capture + guard delays
-
 import time
-from statistics import median
-from gpiozero import DigitalInputDevice, DigitalOutputDevice
+import numpy as np
+from gpiozero import MCP3008
 
-# ------------ USER CONFIG ------------
-CHANNEL   = 0            # MCP3008 channel 0..7
-VREF      = 3.3
-R_TOP     = 30000.0      # divider top (to battery)
-R_BOT     = 7500.0       # divider bottom (to GND)
-PRINT_DT  = 0.25         # print cadence (s)
+# Create ADC channel object (using manual GPIO pin SPI)
+pot = MCP3008(channel=0, clock_pin=11, mosi_pin=10, miso_pin=9, select_pin=8)
 
-# If you can: use CS on BCM22 (physical pin 15). If not, set CS_PIN = 8.
-#CS_PIN = 22  # 22 (phys 15) recommended; 8 (phys 24) if you can't rewire
+# Parameters
+tsample = 0.02  # Sampling interval in seconds
+tstop = 10      # Total runtime in seconds
+vref = 3.3      # Reference voltage for MCP3008
 
-# Timing guards (us-scale)
-T_CS   = 5e-6   # CS setup/hold
-T_BIT  = 3e-6   # settle after rising edge before sampling MISO
-T_IDLE = 2e-6   # idle between bits
-CS_IDLE_GAP = 50e-6  # small idle gap between whole transactions
+# Low-pass filter setup
+fc = 2                    # Cutoff frequency in Hz
+wc = 2 * np.pi * fc       # Angular frequency
+tau = 1 / wc              # Time constant
+c0 = tsample / (tsample + tau)
+c1 = tau / (tsample + tau)
 
-# Robustness knobs
-WINDOW_BITS = 24   # read this many bits after control; keep last 10
-MEDIAN_N    = 5    # 1 = no median; higher kills occasional hiccups
+# Initialize filter
+valueprev = pot.value
+time.sleep(tsample)
+tprev = 0
+tcurr = 0
+tstart = time.perf_counter()
 
-# ------------ PINS (BCM numbering) ------------
-CLK  = DigitalOutputDevice(11)         # SCLK (phys 23), idle low
-MISO = DigitalInputDevice(9)           # DOUT (phys 21)
-MOSI = DigitalOutputDevice(10)         # DIN  (phys 19)
-CS   = DigitalOutputDevice(8)     # CS   (phys 15 if 22; phys 24 if 8), idle high
+# Start loop
+print(f"Reading MCP3008 CH0 for {tstop} seconds...\n")
+while tcurr <= tstop:
+    tcurr = time.perf_counter() - tstart
 
-def _rise_sample() -> int:
-    """SPI mode-0: raise CLK, wait a hair, sample while high, then drop."""
-    CLK.on()
-    time.sleep(T_BIT)
-    bit = 1 if MISO.value else 0
-    CLK.off()
-    time.sleep(T_IDLE)
-    return bit
+    if (np.floor(tcurr / tsample) - np.floor(tprev / tsample)) == 1:
+        valuecurr = pot.value  # Normalized (0–1)
+        valuefilt = c0 * valuecurr + c1 * valueprev
 
-def _send_control(ch: int):
-    """Assert CS, send Start+SGL+D2..D0 (5 bits MSB-first)."""
-    if not 0 <= ch <= 7:
-        raise ValueError("Channel must be 0–7")
-    # bus idle -> select
-    CLK.off(); MOSI.off(); CS.on(); time.sleep(T_CS)
-    CS.off(); time.sleep(T_CS)
+        voltage_raw = valuecurr * vref
+        voltage_filt = valuefilt * vref
 
-    # Control word: Start(1), SGL(1), D2, D1, D0
-    cmd = (0b11 << 6) | ((ch & 7) << 3)
-    for _ in range(5):
-        MOSI.value = (cmd & 0x80) != 0        # present bit while CLK low
-        _ = _rise_sample()                    # latch into ADC on rising edge
-        cmd <<= 1
-    MOSI.off()
+        print(f"t={tcurr:.2f}s | Raw={voltage_raw:.3f} V | Filtered={voltage_filt:.3f} V")
 
-def _read_windowed(ch: int) -> int:
-    """Read a generous bit window; keep only the last 10 data bits."""
-    _send_control(ch)
-    bits = [_rise_sample() for _ in range(WINDOW_BITS)]
-    CS.on(); time.sleep(T_CS); time.sleep(CS_IDLE_GAP)
+        valueprev = valuefilt
 
-    val = 0
-    for b in bits[-10:]:                      # drop null + any misalignment
-        val = (val << 1) | b
-    return val
+    tprev = tcurr
 
-def read_filtered(ch: int) -> int:
-    if MEDIAN_N <= 1:
-        return _read_windowed(ch)
-    return median(_read_windowed(ch) for _ in range(MEDIAN_N))
-
-def _code_to_v(raw: int) -> float:
-    return raw * VREF / 1023.0
-
-def _batt_from_node(v_node: float) -> float:
-    return v_node * (R_TOP + R_BOT) / R_BOT
-
-def main():
-    try:
-        print("MCP3008 windowed reader. Ctrl+C to stop.")
-        print(f"CS=BCM{8}  Vref={VREF} V  Divider={int(R_TOP)}/{int(R_BOT)} Ω")
-        while True:
-            raw = int(round(read_filtered(CHANNEL)))
-            vch = _code_to_v(raw)
-            vb  = _batt_from_node(vch)
-            print(f"Raw: {raw:4d}  CH0: {vch:0.3f} V  Battery≈ {vb:0.2f} V")
-            time.sleep(PRINT_DT)
-    except KeyboardInterrupt:
-        print("\nStopped.")
-    finally:
-        CLK.close(); MISO.close(); MOSI.close(); CS.close()
-
-if __name__ == "__main__":
-    main()
+# Cleanup
+pot.close()
+print("Done.")
