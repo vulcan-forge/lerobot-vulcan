@@ -120,6 +120,9 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         # Reset position holding - store the position when reset starts
         self.reset_hold_position = None
         
+        # Store last valid arm position for reset functionality
+        self.last_valid_arm_position = None
+        
         # Pose tracking
         self.current_t_R = np.array(self.config.initial_position)
         self.current_q_R = np.array(self.config.initial_wxyz)
@@ -374,17 +377,49 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         current_left_arm_pos_deg = None
         if observation is not None:
             try:
-                # Extract left arm joint positions from observation
-                left_motor_keys = ["left_shoulder_pan.pos", "left_shoulder_lift.pos", "left_elbow_flex.pos", 
-                                  "left_wrist_flex.pos", "left_wrist_roll.pos", "left_gripper.pos"]
-                current_left_arm_pos_deg = [observation.get(key, 0.0) for key in left_motor_keys]
+                # Define joint name patterns to look for (without any prefix requirements)
+                joint_base_names = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+                
+                # Try to find keys that contain these joint names with .pos suffix
+                found_keys = []
+                for joint_name in joint_base_names:
+                    matching_key = None
+                    # Look for any key that contains the joint name and ends with .pos
+                    for obs_key in observation.keys():
+                        if joint_name in obs_key and obs_key.endswith(".pos"):
+                            matching_key = obs_key
+                            break
+                    
+                    if matching_key:
+                        found_keys.append(matching_key)
+                    else:
+                        # If we can't find a key for this joint, we can't proceed
+                        found_keys = []
+                        break
+                
+                # If we found all required joint keys, extract the values
+                if len(found_keys) == len(joint_base_names):
+                    current_left_arm_pos_deg = [observation[key] for key in found_keys]
+                    logger.debug(f"Found joint keys: {found_keys}")
+                else:
+                    logger.debug(f"Could not find all required joint keys. Available keys: {list(observation.keys())}")
+                    current_left_arm_pos_deg = None
+                        
             except Exception as e:
                 logger.warning(f"Could not extract left arm joint positions from observation: {e}")
         
-        # If no observation or extraction failed, use rest pose
+        # If we successfully extracted position, store it as last valid position
+        if current_left_arm_pos_deg is not None and not all(pos == 0.0 for pos in current_left_arm_pos_deg):
+            self.last_valid_arm_position = current_left_arm_pos_deg.copy()
+        
+        # If no valid observation, use last valid position or rest pose as fallback
         if current_left_arm_pos_deg is None:
-            current_left_arm_pos_deg = list(np.rad2deg(self.config.rest_pose))
-            logger.debug("Using rest pose as current left arm position")
+            if self.last_valid_arm_position is not None:
+                current_left_arm_pos_deg = self.last_valid_arm_position.copy()
+                logger.debug("Using last valid arm position")
+            else:
+                current_left_arm_pos_deg = list(np.rad2deg(self.config.rest_pose))
+                logger.debug("Using rest pose as current left arm position")
 
         # Show initial motor positions immediately on first call (before phone connection)
         if not self.initial_positions_shown:
@@ -475,15 +510,23 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             
             # Check for reset transition (prev=False, current=True) - reset just started
             if self.prev_is_resetting == False and current_is_resetting == True:
-                self.reset_hold_position = current_left_arm_pos_deg.copy()
+                # Use the last valid arm position if available, otherwise current position
+                if self.last_valid_arm_position is not None:
+                    self.reset_hold_position = self.last_valid_arm_position.copy()
+                    logger.info("Reset started - holding arm at last valid position")
+                else:
+                    self.reset_hold_position = current_left_arm_pos_deg.copy()
+                    logger.info("Reset started - holding arm at current position")
             
             if current_is_resetting:
                 self.prev_is_resetting = current_is_resetting
                 # Return the captured hold position instead of current drifting position
                 if self.reset_hold_position is not None:
+                    logger.debug(f"Reset active - returning hold position: {self.reset_hold_position}")
                     return self._format_action_dict(self.reset_hold_position)
                 else:
                     # Fallback if no hold position captured yet
+                    logger.warning("Reset active but no hold position captured - using current position")
                     return self._format_action_dict(current_left_arm_pos_deg)
 
             # Check for reset transition (prev=True, current=False) - reset just ended
@@ -491,6 +534,9 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 if data is not None:
                     pos, quat = data["position"], data["rotation"]
                     self._reset_mapping(pos, quat)
+                    logger.info("Reset ended - phone mapping reset to current arm position")
+                else:
+                    logger.warning("Reset ended but no phone data available for remapping")
                 self.reset_hold_position = None  # Clear the hold position
 
             self.prev_is_resetting = current_is_resetting
@@ -641,6 +687,10 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             
             # Reset phone disconnection tracking
             self.last_phone_data_time = None
+            
+            # Reset position tracking
+            self.last_valid_arm_position = None
+            self.reset_hold_position = None
             
             logger.info(f"{self} disconnected")
             
