@@ -52,4 +52,8 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     
     # Gripper settings - same as SO100
     gripper_min_pos: float = 0.0    # Gripper closed position (0% slider)
-    gripper_max_pos: float = 50.0   # Gripper open position (100% slider) 
+    gripper_max_pos: float = 50.0   # Gripper open position (100% slider)
+
+    # Optional per-joint degree offsets (applied after IK + sign flips)
+    # Keys: 'shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll'
+    joint_offsets_deg: Optional[dict[str, float]] = None

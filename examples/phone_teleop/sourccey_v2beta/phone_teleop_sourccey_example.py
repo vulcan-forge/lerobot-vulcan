@@ -89,7 +89,24 @@ def main():
         rotation_sensitivity=1.0,
         initial_position=(0.0, -0.17, 0.237),
         initial_wxyz=(0, 0, 1, 0),  # wxyz quaternion
-        # rest_pose=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),  # radians - conservative middle position
+        # Set rest_pose (radians) to match latest measured left-arm actions
+        # Teleop does NOT flip rest pose; values here are the desired joint angles (deg):
+        # [-49.506903, 100.0, -97.716150, 5.381376, 0.854701, 99.603960]
+        rest_pose=(
+            -0.864068,   # shoulder_pan  (-49.506903 deg)
+            2.095329,    # shoulder_lift (100.0 deg)
+            -2.205474,   # elbow_flex    (-97.716150 deg)
+            0.093922,    # wrist_flex    (5.381376 deg)
+            0.014914,    # wrist_roll    (0.854701 deg)
+            1.738416,    # gripper       (99.603960 -> used as 0-100)
+        ),
+        joint_offsets_deg={
+            "shoulder_pan": 0.0,
+            "shoulder_lift": 0.0,
+            "elbow_flex": 0.0,
+            "wrist_flex": 0.0,
+            "wrist_roll": 0.0,
+        },
         enable_visualization=True,
         viser_port=8080,
         # Sourccey V2 Beta gripper configuration - matches SourcceyV2BetaFollowerConfig.max_gripper_pos = 50
@@ -130,10 +147,7 @@ def main():
                 # Map left_* keys to robot joint keys (strip 'left_' prefix)
                 action = {k.replace("left_", ""): v for k, v in left_action.items()}
 
-                # Explicit shoulder_lift direction correction for this setup
-                if "shoulder_lift.pos" in action:
-                    action["shoulder_lift.pos"] = -action["shoulder_lift.pos"]
-                
+
                 # Send action to robot
                 actual_action = robot.send_action(action)
                                 
