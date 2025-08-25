@@ -57,6 +57,8 @@ class Sourccey(Robot):
     def __init__(self, config: SourcceyConfig):
         super().__init__(config)
         self.config = config
+        # Optional limiter set by CLI: None | "left" | "right"
+        self.limit_arm: str | None = None
 
         left_arm_config = SourcceyFollowerConfig(
             id=f"{config.id}_left" if config.id else None,
@@ -111,61 +113,97 @@ class Sourccey(Robot):
 
     @property
     def is_connected(self) -> bool:
-        return (
-            self.left_arm.is_connected and
-            self.right_arm.is_connected and
-            # self.dc_motors_controller.is_connected and
-            all(cam.is_connected for cam in self.cameras.values())
-        )
+        left_ok = self.left_arm.is_connected if (self.limit_arm is None or self.limit_arm == "left") else True
+        right_ok = self.right_arm.is_connected if (self.limit_arm is None or self.limit_arm == "right") else True
+        # Cameras: only require target cameras for selected arm(s)
+        target_cam_keys = self._target_camera_keys()
+        cams_ok = all(self.cameras[k].is_connected for k in target_cam_keys)
+        return left_ok and right_ok and cams_ok
 
     def connect(self, calibrate: bool = True) -> None:
-        self.left_arm.connect(calibrate)
-        self.right_arm.connect(calibrate)
+        # Connect only requested arm if limit set; else both
+        if self.limit_arm == "left":
+            self.left_arm.connect(calibrate)
+        elif self.limit_arm == "right":
+            self.right_arm.connect(calibrate)
+        else:
+            self.left_arm.connect(calibrate)
+            self.right_arm.connect(calibrate)
 
         self.dc_motors_controller.connect()
 
-        for cam in self.cameras.values():
-            cam.connect()
+        # Connect only target cameras
+        for cam_key in self._target_camera_keys():
+            self.cameras[cam_key].connect()
 
     def disconnect(self):
-        self.left_arm.disconnect()
-        self.right_arm.disconnect()
+        if self.limit_arm == "left":
+            self.left_arm.disconnect()
+        elif self.limit_arm == "right":
+            self.right_arm.disconnect()
+        else:
+            self.left_arm.disconnect()
+            self.right_arm.disconnect()
 
         self.stop_base()
         self.dc_motors_controller.disconnect()
 
-        for cam in self.cameras.values():
-            cam.disconnect()
+        # Disconnect only those we connected
+        for cam_key in self._target_camera_keys():
+            cam = self.cameras[cam_key]
+            if cam.is_connected:
+                cam.disconnect()
 
     @property
     def is_calibrated(self) -> bool:
+        if self.limit_arm == "left":
+            return self.left_arm.is_calibrated
+        if self.limit_arm == "right":
+            return self.right_arm.is_calibrated
         return self.left_arm.is_calibrated and self.right_arm.is_calibrated
 
     def calibrate(self) -> None:
+        if self.limit_arm == "left":
+            self.left_arm.calibrate()
+            return
+        if self.limit_arm == "right":
+            self.right_arm.calibrate()
+            return
         self.left_arm.calibrate()
         self.right_arm.calibrate()
 
-    def auto_calibrate(self, full_reset: bool = False) -> None:
+    def auto_calibrate(self, full_reset: bool = False, arm: str | None = None) -> None:
         """
-        Auto-calibrate both arms simultaneously using threading.
+        Auto-calibrate arms. If arm is None, calibrate both in parallel.
+        arm can be "left" or "right" to calibrate only that side.
         """
-        # Create threads for each arm
-        left_thread = threading.Thread(
-            target=self.left_arm.auto_calibrate,
-            kwargs={"reversed": False, "full_reset": full_reset}
-        )
-        right_thread = threading.Thread(
-            target=self.right_arm.auto_calibrate,
-            kwargs={"reversed": True, "full_reset": full_reset}
-        )
+        if arm is None:
+            # Create threads for each arm
+            left_thread = threading.Thread(
+                target=self.left_arm.auto_calibrate,
+                kwargs={"reversed": False, "full_reset": full_reset}
+            )
+            right_thread = threading.Thread(
+                target=self.right_arm.auto_calibrate,
+                kwargs={"reversed": True, "full_reset": full_reset}
+            )
 
-        # Start both threads
-        left_thread.start()
-        right_thread.start()
+            # Start both threads
+            left_thread.start()
+            right_thread.start()
 
-        # Wait for both threads to complete
-        left_thread.join()
-        right_thread.join()
+            # Wait for both threads to complete
+            left_thread.join()
+            right_thread.join()
+            return
+
+        if arm not in ("left", "right"):
+            raise ValueError("arm must be one of: None, 'left', 'right'")
+
+        if arm == "left":
+            self.left_arm.auto_calibrate(reversed=False, full_reset=full_reset)
+        else:
+            self.right_arm.auto_calibrate(reversed=True, full_reset=full_reset)
 
     def configure(self) -> None:
         self.left_arm.configure()
@@ -178,14 +216,15 @@ class Sourccey(Robot):
     def get_observation(self) -> dict[str, Any]:
         try:
             obs_dict = {}
+            if self.limit_arm is None or self.limit_arm == "left":
+                left_obs = self.left_arm.get_observation()
+                obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
+            if self.limit_arm is None or self.limit_arm == "right":
+                right_obs = self.right_arm.get_observation()
+                obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
 
-            left_obs = self.left_arm.get_observation()
-            obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
-
-            right_obs = self.right_arm.get_observation()
-            obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
-
-            for cam_key, cam in self.cameras.items():
+            for cam_key in self._target_camera_keys():
+                cam = self.cameras[cam_key]
                 obs_dict[cam_key] = cam.async_read()
 
             return obs_dict
@@ -195,18 +234,18 @@ class Sourccey(Robot):
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         try:
-            left_action = {
-                key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")
-            }
-            right_action = {
-                key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")
-            }
+            left_action = {key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")}
+            right_action = {key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")}
 
-            send_action_left = self.left_arm.send_action(left_action)
-            send_action_right = self.right_arm.send_action(right_action)
+            prefixed_send_action_left = {}
+            prefixed_send_action_right = {}
 
-            prefixed_send_action_left = {f"left_{key}": value for key, value in send_action_left.items()}
-            prefixed_send_action_right = {f"right_{key}": value for key, value in send_action_right.items()}
+            if self.limit_arm is None or self.limit_arm == "left":
+                sent_left = self.left_arm.send_action(left_action)
+                prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
+            if self.limit_arm is None or self.limit_arm == "right":
+                sent_right = self.right_arm.send_action(right_action)
+                prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
 
             # Base velocity
             # base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
@@ -227,6 +266,19 @@ class Sourccey(Robot):
         # self.dc_motors_controller.set_velocity("base_rear_left_wheel", 0)
         # self.dc_motors_controller.set_velocity("base_rear_right_wheel", 0)
         pass
+
+    def _target_camera_keys(self) -> list[str]:
+        """Return camera keys to connect/check based on limit_arm.
+        We keep front cameras always. We exclude the wrist camera on the non-selected arm.
+        """
+        keys = list(self.cameras.keys())
+        if self.limit_arm == "left":
+            # Exclude right wrist camera if present
+            return [k for k in keys if k != "wrist_right"]
+        if self.limit_arm == "right":
+            # Exclude left wrist camera if present
+            return [k for k in keys if k != "wrist_left"]
+        return keys
 
     @staticmethod
     def _raw_to_degps(raw_speed: int) -> float:

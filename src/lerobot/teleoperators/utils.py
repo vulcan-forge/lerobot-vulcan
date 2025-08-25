@@ -74,7 +74,7 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> Teleoperator:
 
         return SourcceyLeader(config)
     elif config.type == "bi_sourccey_leader":
-        from .sourccey.sourccey.sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
+        from .sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
 
         return BiSourcceyLeader(config)
     else:
