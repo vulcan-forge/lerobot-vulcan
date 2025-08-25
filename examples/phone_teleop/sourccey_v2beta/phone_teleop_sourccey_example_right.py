@@ -93,12 +93,12 @@ def main():
         # Teleop does NOT flip rest pose; values here are the desired joint angles (deg):
         # [-49.506903, 100.0, -97.716150, 5.381376, 0.854701, 99.603960]
         rest_pose=(
-            -0.864068,   # shoulder_pan  (-49.506903 deg)
-            2.095329,    # shoulder_lift (100.0 deg)
-            -2.205474,   # elbow_flex    (-97.716150 deg)
-            0.093922,    # wrist_flex    (5.381376 deg)
-            0.014914,    # wrist_roll    (0.854701 deg)
-            1.738416,    # gripper       (99.603960 -> used as 0-100)
+            0.640044,    # right_shoulder_pan  (36.671576 deg)
+            -1.689644,   # right_shoulder_lift (-96.809571 deg)
+            1.732986,    # right_elbow_flex    (99.292517 deg)
+            -0.235352,   # right_wrist_flex    (-13.484163 deg)
+            0.020884,    # right_wrist_roll    (1.196581 deg)
+            0.004511,    # right_gripper       (0.258398 deg)
         ),
         joint_offsets_deg={
             "shoulder_pan": 0.0,
@@ -113,8 +113,8 @@ def main():
         gripper_min_pos=0.0,    # Gripper closed (0% on phone slider)
         gripper_max_pos=50.0,   # Gripper open (100% on phone slider) - matches Sourccey V2 Beta max
         # Disable built-in mirroring; we'll do explicit right-arm mirroring below
-        mirror_enabled=False,
-        mirror_neutral_deg=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        # mirror_enabled=False,
+        # mirror_neutral_deg=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
     )
     
     # Initialize robot and teleoperator
