@@ -88,7 +88,7 @@ def main():
         sensitivity_precision=0.2,
         rotation_sensitivity=1.0,
         initial_position=(0.0, -0.17, 0.237),
-        initial_wxyz=(0, 0, 1, 0),  # wxyz quaternion
+        initial_wxyz = (0.0, 0.5, 0.866025404, 0.0),  # ~30° right yaw
         # Set rest_pose (radians) to match latest measured left-arm actions
         # Teleop does NOT flip rest pose; values here are the desired joint angles (deg):
         # [-49.506903, 100.0, -97.716150, 5.381376, 0.854701, 99.603960]
