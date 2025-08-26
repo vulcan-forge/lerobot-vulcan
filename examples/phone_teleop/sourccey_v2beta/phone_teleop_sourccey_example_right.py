@@ -87,8 +87,8 @@ def main():
         sensitivity_normal=0.5,
         sensitivity_precision=0.2,
         rotation_sensitivity=1.0,
-        initial_position=(0.0, -0.17, 0.237),
-        initial_wxyz = (0.0, 0.5, 0.866025404, 0.0),  # ~30° right yaw
+        initial_position=(0.09376381640512954, -0.17794639170766768, 0.2820500723608793),
+        initial_wxyz=(-0.07722070939319312, -0.5572409190132325, 0.8238016407260573, -0.0697880860545428),
         # Set rest_pose (radians) to match latest measured left-arm actions
         # Teleop does NOT flip rest pose; values here are the desired joint angles (deg):
         # [-49.506903, 100.0, -97.716150, 5.381376, 0.854701, 99.603960]
@@ -112,9 +112,7 @@ def main():
         # Sourccey V2 Beta gripper configuration - matches SourcceyV2BetaFollowerConfig.max_gripper_pos = 50
         gripper_min_pos=0.0,    # Gripper closed (0% on phone slider)
         gripper_max_pos=50.0,   # Gripper open (100% on phone slider) - matches Sourccey V2 Beta max
-        # Disable built-in mirroring; we'll do explicit right-arm mirroring below
-        # mirror_enabled=False,
-        # mirror_neutral_deg=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        # Built-in mirroring not used in this runtime; handled below conditionally
     )
     
     # Initialize robot and teleoperator
@@ -137,6 +135,7 @@ def main():
         print("- Press Ctrl+C to exit")
         
         # Main control loop
+        last_print_time = time.perf_counter()
         while True:
             start_time = time.perf_counter()
             
@@ -147,23 +146,63 @@ def main():
                 # Get action from phone (emits left_* keys)
                 left_action = phone_teleop.get_action(observation)
 
-                # Mirror around neutral and apply axis sign for a right-side mirrored arm
-                # v' = r[i] * (2*neutral[i] - v)
-                neutral = (0.0, 0.0, 0.0, 0.0, 0.0)
-                r = (-1.0, +1.0, +1.0, +1.0, -1.0)  # [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll]
+                # Print current target pose from phone teleop once per second
+                now = time.perf_counter()
+                if now - last_print_time >= 1.0:
+                    try:
+                        pos = tuple(phone_teleop.current_t_R)
+                        wxyz = tuple(phone_teleop.current_q_R)
+                        print({"position": pos, "wxyz": wxyz})
+                    except Exception:
+                        pass
+                    last_print_time = now
 
-                def mir(v, n, s):
-                    return s * (2.0 * n - float(v))
+                # Conditional mirroring: if teleop is at rest (left equals teleop rest), pass through;
+                # otherwise, mirror left_* to right-handed mapping.
+                # Teleop rest flip note: teleop returns rest with shoulder_lift sign flip only.
 
-                action = {
-                    "shoulder_pan.pos":  mir(left_action.get("left_shoulder_pan.pos", 0.0),  neutral[0], r[0]),
-                    "shoulder_lift.pos": mir(left_action.get("left_shoulder_lift.pos", 0.0), neutral[1], r[1]),
-                    "elbow_flex.pos":    mir(left_action.get("left_elbow_flex.pos", 0.0),    neutral[2], r[2]),
-                    "wrist_flex.pos":    mir(left_action.get("left_wrist_flex.pos", 0.0),    neutral[3], r[3]),
-                    "wrist_roll.pos":    mir(left_action.get("left_wrist_roll.pos", 0.0),    neutral[4], r[4]),
-                    # Gripper typically not mirrored
-                    "gripper.pos":       float(left_action.get("left_gripper.pos", 0.0)),
-                }
+                # Extract left_* vector in declared order
+                left_vec = (
+                    float(left_action.get("left_shoulder_pan.pos", 0.0)),
+                    float(left_action.get("left_shoulder_lift.pos", 0.0)),
+                    float(left_action.get("left_elbow_flex.pos", 0.0)),
+                    float(left_action.get("left_wrist_flex.pos", 0.0)),
+                    float(left_action.get("left_wrist_roll.pos", 0.0)),
+                )
+
+                # Compute teleop rest in degrees (teleop may flip shoulder_lift sign only)
+                import math
+                rest_deg = [
+                    math.degrees(0.640044),   # pan
+                    -math.degrees(-1.689644), # shoulder_lift flip in teleop rest path
+                    math.degrees(1.732986),   # elbow
+                    math.degrees(-0.235352),  # wrist_flex
+                    math.degrees(0.020884),   # wrist_roll
+                ]
+
+                def is_close(a, b, eps=1e-3):
+                    return abs(a - b) < eps
+
+                at_rest = all(is_close(lv, rv) for lv, rv in zip(left_vec, rest_deg))
+
+                if at_rest:
+                    # Pass through without mirroring; strip prefix
+                    action = {k.replace("left_", ""): v for k, v in left_action.items()}
+                else:
+                    # Mirror around neutral (all zeros) with per-axis signs for right arm
+                    neutral = (0.0, 0.0, 0.0, 0.0, 0.0)
+                    r = (-1.0, +1.0, +1.0, +1.0, -1.0)
+                    def mir(v, n, s):
+                        return s * (2.0 * n - float(v))
+                    action = {
+                        "shoulder_pan.pos":  mir(left_action.get("left_shoulder_pan.pos", 0.0),  neutral[0], r[0]),
+                        "shoulder_lift.pos": mir(left_action.get("left_shoulder_lift.pos", 0.0), neutral[1], r[1]),
+                        "elbow_flex.pos":    mir(left_action.get("left_elbow_flex.pos", 0.0),    neutral[2], r[2]),
+                        "wrist_flex.pos":    mir(left_action.get("left_wrist_flex.pos", 0.0),    neutral[3], r[3]),
+                        "wrist_roll.pos":    mir(left_action.get("left_wrist_roll.pos", 0.0),    neutral[4], r[4]),
+                        # Gripper passthrough
+                        "gripper.pos":       float(left_action.get("left_gripper.pos", 0.0)),
+                    }
 
 
                 # Send action to robot
