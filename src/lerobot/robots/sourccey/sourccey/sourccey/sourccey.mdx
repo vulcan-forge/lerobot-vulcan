@@ -78,10 +78,10 @@ python examples/sourccey/sourccey/evaluate.py
 
 ```bash
 python lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey_v2beta-001__tape-a__set000 \
+  --dataset.repo_id=so100_follower-001/dataset \
   --policy.type=act \
-  --output_dir=outputs/train/act__sourccey_v2beta-001__tape-a__set000 \
-  --job_name=act__sourccey_v2beta-001__tape-a__set000 \
+  --output_dir=outputs/train/act__so100_follower-001__dataset-a__set000 \
+  --job_name=act__so100_follower-001__dataset-a__set000 \
   --policy.device=cuda \
   --wandb.enable=false \
   --steps=20000
@@ -93,7 +93,7 @@ python src/lerobot/scripts/train.py \
   --output_dir=outputs/train/act__ai_test_2 \
   --job_name=act__ai_test_2 \
   --policy.device=cuda \
-  --save_freq=4000 \
+  --save_freq=10000 \
   --policy.push_to_hub=false \
   --wandb.enable=false \
   --steps=20000
@@ -322,4 +322,30 @@ python src/lerobot/scripts/train.py \
   --policy.push_to_hub=false \
   --wandb.enable=false \
   --steps=40000
+```
+
+```
+./venv/Scripts/python src/lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey-001__ai_test_6_shoulder-fast_chrism_combined \
+  --policy.type=act \
+  --output_dir=outputs/train/act__sourccey-001__ai_test_6_shoulder-fast_chrism_combined \
+  --job_name=act__sourccey-001__ai_test_6_shoulder-fast_chrism_combined \
+  --policy.device=cuda \
+  --save_freq=20000 \
+  --policy.push_to_hub=false \
+  --wandb.enable=false \
+  --steps=40000
+```
+
+```
+.venv/Scripts/python src/lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_9 \
+  --policy.type=act \
+  --output_dir=outputs/train/act__dtest__sourccey_v3beta-001__ai_test_9 \
+  --job_name=act__sourccey-001__dtest__sourccey_v3beta-001__ai_test_9 \
+  --policy.device=cuda \
+  --save_freq=20000 \
+  --policy.push_to_hub=false \
+  --wandb.enable=false \
+  --steps=20000
 ```
