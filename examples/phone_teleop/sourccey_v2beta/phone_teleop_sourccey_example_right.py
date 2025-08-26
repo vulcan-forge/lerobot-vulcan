@@ -158,8 +158,11 @@ def main():
                     last_print_time = now
 
                 # Conditional mirroring: if teleop is at rest (left equals teleop rest), pass through;
+                # if teleop is in reset mode, pass through without mirroring;
                 # otherwise, mirror left_* to right-handed mapping.
-                # Teleop rest flip note: teleop returns rest with shoulder_lift sign flip only.
+
+                # Check if teleop is in reset mode (avoid double mirroring)
+                is_resetting = getattr(phone_teleop, 'prev_is_resetting', False)
 
                 # Extract left_* vector in declared order
                 left_vec = (
@@ -185,8 +188,9 @@ def main():
 
                 at_rest = all(is_close(lv, rv) for lv, rv in zip(left_vec, rest_deg))
 
-                if at_rest:
+                if at_rest or is_resetting:
                     # Pass through without mirroring; strip prefix
+                    # (reset positions are already in robot space, don't mirror again)
                     action = {k.replace("left_", ""): v for k, v in left_action.items()}
                 else:
                     # Mirror around neutral (all zeros) with per-axis signs for right arm
