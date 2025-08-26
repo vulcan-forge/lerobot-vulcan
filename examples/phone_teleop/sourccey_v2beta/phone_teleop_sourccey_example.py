@@ -45,7 +45,7 @@ def main():
     # Get the path to the Sourccey V2 Beta model directory
     current_file = Path(__file__)
     # Use the Sourccey V2 Beta model located in the model directory
-    sourccey_model_path = current_file.parent.parent.parent / "src" / "lerobot" / "robots" / "sourccey" / "sourccey_v2beta" / "model"
+    sourccey_model_path = current_file.parent.parent.parent.parent / "src" / "lerobot" / "robots" / "sourccey" / "sourccey_v3beta" / "model"
     
     if sourccey_model_path.exists():
         urdf_path = str(sourccey_model_path / "Arm.urdf")
@@ -54,25 +54,25 @@ def main():
         print(f"Using URDF: {urdf_path}")
         print(f"Using meshes: {mesh_path}")
     else:
-        print(f"ERROR: Could not find Sourccey V2 Beta model directory at {sourccey_model_path}")
-        print("Make sure the Sourccey V2 Beta model files are available in src/lerobot/robots/sourccey/sourccey_v2beta/model/")
+        print(f"ERROR: Could not find Sourccey V3 Beta model directory at {sourccey_model_path}")
+        print("Make sure the Sourccey V3 Beta model files are available in src/lerobot/robots/sourccey/sourccey_v3beta/model/")
         return
     
     # Find existing calibration or use default ID
-    existing_id = find_existing_calibration_id("sourccey_v2beta_follower")
+    existing_id = find_existing_calibration_id("sourccey_v3beta_follower")
     
     if existing_id:
         robot_id = existing_id
         print(f"Found existing calibration for ID: {robot_id}")
     else:
-        robot_id = "sourccey_v2beta_follower_main"
+        robot_id = "sourccey_v3beta_follower_main"
         print(f"No existing calibration found. Using default ID: {robot_id}")
         print("Note: Robot will need to be calibrated on first connection.")
     
     # Configuration for the Sourccey V2 Beta follower robot
     robot_config = SourcceyV2BetaFollowerConfig(
         id=robot_id,
-        port="COM11",  # Adjust based on your setup - could be /dev/ttyUSB1, COM3, etc.
+        port="COM25",  # Adjust based on your setup - could be /dev/ttyUSB1, COM3, etc.
         use_degrees=True,
         max_relative_target=30.0,  # Safety limit in degrees
     )
@@ -88,8 +88,25 @@ def main():
         sensitivity_precision=0.2,
         rotation_sensitivity=1.0,
         initial_position=(0.0, -0.17, 0.237),
-        initial_wxyz=(0, 0, 1, 0),  # wxyz quaternion
-        # rest_pose=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),  # radians - conservative middle position
+        initial_wxyz = (0.0, 0.5, 0.866025404, 0.0),  # ~30° right yaw
+        # Set rest_pose (radians) to match latest measured left-arm actions
+        # Teleop does NOT flip rest pose; values here are the desired joint angles (deg):
+        # [-49.506903, 100.0, -97.716150, 5.381376, 0.854701, 99.603960]
+        rest_pose=(
+            -0.864068,   # shoulder_pan  (-49.506903 deg)
+            2.095329,    # shoulder_lift (100.0 deg)
+            -2.205474,   # elbow_flex    (-97.716150 deg)
+            0.093922,    # wrist_flex    (5.381376 deg)
+            0.014914,    # wrist_roll    (0.854701 deg)
+            1.738416,    # gripper       (99.603960 -> used as 0-100)
+        ),
+        joint_offsets_deg={
+            "shoulder_pan": 0.0,
+            "shoulder_lift": 0.0,
+            "elbow_flex": 0.0,
+            "wrist_flex": 0.0,
+            "wrist_roll": 0.0,
+        },
         enable_visualization=True,
         viser_port=8080,
         # Sourccey V2 Beta gripper configuration - matches SourcceyV2BetaFollowerConfig.max_gripper_pos = 50
@@ -124,9 +141,13 @@ def main():
                 # Get current observation first
                 observation = robot.get_observation()
                 
-                # Get action from phone (pass observation for current robot state)
-                action = phone_teleop.get_action(observation)
-                
+                # Get action from phone (emits left_* keys)
+                left_action = phone_teleop.get_action(observation)
+
+                # Map left_* keys to robot joint keys (strip 'left_' prefix)
+                action = {k.replace("left_", ""): v for k, v in left_action.items()}
+
+
                 # Send action to robot
                 actual_action = robot.send_action(action)
                                 

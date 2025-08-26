@@ -12,8 +12,13 @@ from lerobot.utils.visualization_utils import _init_rerun, log_rerun_data
 FPS = 30
 
 # Create the robot and teleoperator configurations
+<<<<<<< HEAD:examples/sourccey/sourccey/teleoperate.py
 robot_config = SourcceyClientConfig(remote_ip="192.168.1.227", id="sourccey")
 teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="COM28", right_arm_port="COM23", id="sourccey")
+=======
+robot_config = SourcceyV3BetaClientConfig(remote_ip="192.168.1.227", id="sourccey_v3beta")
+teleop_arm_config = BiSourcceyV3BetaLeaderConfig(left_arm_port="COM28", right_arm_port="COM23", id="sourccey_v3beta")
+>>>>>>> phone-teleop-6-baseleft-working:examples/sourccey/sourccey_v3beta/teleoperate.py
 keyboard_config = KeyboardTeleopConfig(id="keyboard")
 
 robot = SourcceyClient(robot_config)
