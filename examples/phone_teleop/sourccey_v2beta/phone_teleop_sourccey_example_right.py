@@ -94,8 +94,8 @@ def main():
         # [-49.506903, 100.0, -97.716150, 5.381376, 0.854701, 99.603960]
         rest_pose=(
             0.640044,    # right_shoulder_pan  (36.671576 deg)
-            -1.689644,   # right_shoulder_lift (-96.809571 deg)
-            1.732986,    # right_elbow_flex    (99.292517 deg)
+            -2.474699,   # right_shoulder_lift (-141.809571 deg, moved clockwise 45°)
+            2.518931,    # right_elbow_flex    (144.292517 deg, moved counterclockwise 45°)
             -0.235352,   # right_wrist_flex    (-13.484163 deg)
             0.020884,    # right_wrist_roll    (1.196581 deg)
             0.004511,    # right_gripper       (0.258398 deg)
@@ -177,8 +177,8 @@ def main():
                 import math
                 rest_deg = [
                     math.degrees(0.640044),   # pan
-                    -math.degrees(-1.689644), # shoulder_lift flip in teleop rest path
-                    math.degrees(1.732986),   # elbow
+                    -math.degrees(-2.474699), # shoulder_lift flip in teleop rest path
+                    math.degrees(2.518931),   # elbow
                     math.degrees(-0.235352),  # wrist_flex
                     math.degrees(0.020884),   # wrist_roll
                 ]
