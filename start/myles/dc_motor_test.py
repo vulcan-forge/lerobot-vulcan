@@ -18,8 +18,8 @@ def test_motor_turn():
 
         # Motor config for testing
         motor_config = {
-            "in1_pins": [17,23,24,26,14],
-            "in2_pins": [27,22,25,16,15],
+            "in1_pins": [17,23,24,26,15],
+            "in2_pins": [27,22,25,16,14],
             "pwm_frequency": 1000,
         }
 
@@ -69,11 +69,11 @@ def test_motor_turn():
         try:
             #Wheel Test
             print("2. Wheel Test...")
-            controller.set_velocity("rear_right", 1.0)
+            controller.set_velocity("rear_right", -1.0)
             time.sleep(2)
             controller.set_velocity("rear_right", 0.0)
             time.sleep(1)
-            controller.set_velocity("rear_right", -1.0)
+            controller.set_velocity("rear_right", 1.0)
             time.sleep(2)
 
             # Stop motors
