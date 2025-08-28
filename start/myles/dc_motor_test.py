@@ -18,8 +18,8 @@ def test_motor_turn():
 
         # Motor config for testing
         motor_config = {
-            "in1_pins": [17, 22, 26, 6, 24],
-            "in2_pins": [27, 23, 16, 5, 25],
+            "in1_pins": [22,17,15,4,2],
+            "in2_pins": [23,27,18,14,3],
             "pwm_frequency": 1000,
         }
 
@@ -67,23 +67,9 @@ def test_motor_turn():
         print()
 
         try:
-            # Robot forward for 5 seconds
-            print("2. Forward for 5 seconds...")
+            #Wheel Test
+            print("2. Wheel Test...")
             controller.set_velocity("front_left", 1.0)
-            controller.set_velocity("linear_actuator", 1.0)
-            controller.set_velocity("rear_left", 1.0)
-            controller.set_velocity("rear_right", 1.0)
-            print("   Motor states: ", controller.protocol_handler.motor_states)
-            time.sleep(15)
-
-            # Robot backward for 5 seconds
-            print("3. Backward for 5 seconds...")
-            controller.set_velocity("front_left", -1.0)
-            controller.set_velocity("linear_actuator", -1.0)
-            controller.set_velocity("rear_left", -1.0)
-            controller.set_velocity("rear_right", -1.0)
-            print("   Motor states: ", controller.protocol_handler.motor_states)
-            time.sleep(15)
 
             # Stop motors
             print("3. Stopping motor...")
