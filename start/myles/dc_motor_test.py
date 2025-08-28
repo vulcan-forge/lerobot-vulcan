@@ -70,11 +70,11 @@ def test_motor_turn():
             #Wheel Test
             print("2. Wheel Test...")
             controller.set_velocity("linear_actuator", 1.0)
-            time.sleep(2)
+            time.sleep(5)
             controller.set_velocity("linear_actuator", 0.0)
             time.sleep(1)
             controller.set_velocity("linear_actuator", -1.0)
-            time.sleep(2)
+            time.sleep(5)
 
             # Stop motors
             print("3. Stopping motor...")
