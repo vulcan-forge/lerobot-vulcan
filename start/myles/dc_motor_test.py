@@ -18,8 +18,8 @@ def test_motor_turn():
 
         # Motor config for testing
         motor_config = {
-            "in1_pins": [17,23,24,26,12],
-            "in2_pins": [27,22,25,16,1],
+            "in1_pins": [17,23,24,26,7],
+            "in2_pins": [27,22,25,16,8],
             "pwm_frequency": 1000,
         }
 
