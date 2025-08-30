@@ -33,7 +33,7 @@ def find_available_cameras():
     
     # Test a wider range of camera indices
     # Most systems have 0-3, but some might have more
-    for i in range(20):
+    for i in range(12):
         try:
             cap = cv2.VideoCapture(i)
             if cap.isOpened():
