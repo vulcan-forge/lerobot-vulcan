@@ -1,5 +1,5 @@
 """
-Helper to list all available USB ports in a sorted, numbered format.
+Helper to list all available USB ports and cameras in a sorted, numbered format.
 Returns data in a format suitable for Rust consumption.
 
 Example:
@@ -11,6 +11,7 @@ lerobot-auto-config
 
 import platform
 import json
+import cv2
 from pathlib import Path
 
 
@@ -26,15 +27,42 @@ def find_available_ports():
     return ports
 
 
-def get_ports_list():
-    """Return all available ports as a sorted list."""
-    ports = find_available_ports()
-    return sorted(ports)
+def find_available_cameras():
+    """Find all available camera indices."""
+    available_cameras = []
+    
+    # Test a wider range of camera indices
+    # Most systems have 0-3, but some might have more
+    for i in range(20):
+        try:
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if ret:
+                    available_cameras.append(i)
+                cap.release()
+        except Exception:
+            # Skip any problematic camera indices
+            continue
+    
+    return available_cameras
+
+
+def get_config_data():
+    """Return all available ports and cameras as a sorted list."""
+    ports = sorted(find_available_ports())
+    cameras = sorted(find_available_cameras())
+    
+    return {
+        "ports": ports,
+        "cameras": cameras
+    }
+
 
 def main():
     # For Rust consumption, output as JSON
-    ports = get_ports_list()
-    print(json.dumps(ports))
+    config_data = get_config_data()
+    print(json.dumps(config_data))
 
 
 if __name__ == "__main__":
