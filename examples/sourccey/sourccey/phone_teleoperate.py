@@ -138,7 +138,6 @@ def main():
     
     # Track last right arm position for proper reset functionality
     last_right_arm_position = None
-    prev_is_resetting = False
     
     try:
         # Connect to remote robot host (sourccey_host should already be running)
@@ -197,8 +196,6 @@ def main():
                     # Combine left and right actions
                     action = {**action_left, **action_right}
                     
-
-                    
                     # Send action to robot
                     try:
                         robot.send_action(action)
@@ -210,22 +207,12 @@ def main():
                     # Get action from phone (emits left_* keys)
                     arm_action = phone_teleop.get_action(obs_for_teleop)
 
-
-
                     # Conditional mirroring: if teleop is at rest (left equals teleop rest), pass through;
                     # if teleop is in reset mode, pass through without mirroring;
                     # otherwise, mirror left_* to right-handed mapping.
 
                     # Get current reset state from phone teleop
                     current_is_resetting = getattr(phone_teleop, 'prev_is_resetting', False)
-
-                    # Check for reset transition (reset just started)
-                    if prev_is_resetting == False and current_is_resetting == True:
-                        # Capture current right arm position when reset starts
-                        pass
-                    
-                    # Update previous reset state
-                    prev_is_resetting = current_is_resetting
 
                     # Extract left_* vector in declared order
                     arm_vec = (
@@ -293,8 +280,6 @@ def main():
                     # Combine left and right actions
                     action = {**left_actions, **right_actions}
 
-
-                    
                     robot.send_action(action)
                 
                 else:
