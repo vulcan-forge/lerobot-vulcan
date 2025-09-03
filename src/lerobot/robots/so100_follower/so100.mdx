@@ -688,3 +688,16 @@ python src/lerobot/replay.py \
     --dataset.repo_id=local/dataset \
     --dataset.episode=0
 ```
+
+```bash
+python src/lerobot/scripts/train.py \
+ --dataset.repo_id=so100_follower-001/dataset \
+ --policy.type=act \
+ --output_dir=outputs/train/act_model_1 \
+ --job_name=act_model_1 \
+ --policy.device=cuda \
+ --batch_size=8 \
+ --steps=200 \
+ --wandb.enable=false \
+ --policy.push_to_hub=false
+```
