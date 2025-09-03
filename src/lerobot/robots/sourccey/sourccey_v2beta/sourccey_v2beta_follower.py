@@ -50,8 +50,7 @@ class SourcceyV2BetaFollower(Robot):
             port=self.config.port,
             motors={
                 "shoulder_pan": Motor(7, "sts3215", norm_mode_body),
-                # Geared-down shoulder_lift: requires 1.5x motor ticks per joint degree
-                "shoulder_lift": Motor(8, "sts3250", norm_mode_body, gear_ratio=1.5),
+                "shoulder_lift": Motor(8, "sts3250", norm_mode_body),
                 "elbow_flex": Motor(9, "sts3215", norm_mode_body),
                 "wrist_flex": Motor(10, "sts3215", norm_mode_body),
                 "wrist_roll": Motor(11, "sts3215", norm_mode_body),
@@ -172,7 +171,7 @@ class SourcceyV2BetaFollower(Robot):
         """Set up a single motor by name."""
         if motor_name not in self.bus.motors:
             raise ValueError(f"Motor '{motor_name}' not found. Available motors: {list(self.bus.motors.keys())}")
-        
+
         input(f"Connect the controller board to the '{motor_name}' motor only and press enter.")
         self.bus.setup_motor(motor_name)
         print(f"'{motor_name}' motor id set to {self.bus.motors[motor_name].id}")
@@ -181,16 +180,16 @@ class SourcceyV2BetaFollower(Robot):
         """Set up a single motor by ID (7-12 for Sourccey V2 Beta)."""
         motor_names = {
             7: "shoulder_pan",
-            8: "shoulder_lift", 
+            8: "shoulder_lift",
             9: "elbow_flex",
             10: "wrist_flex",
             11: "wrist_roll",
             12: "gripper"
         }
-        
+
         if motor_id not in motor_names:
             raise ValueError(f"Motor ID {motor_id} not valid. Valid IDs: {list(motor_names.keys())}")
-        
+
         motor_name = motor_names[motor_id]
         self.setup_single_motor(motor_name)
 
@@ -270,4 +269,4 @@ class SourcceyV2BetaFollower(Robot):
         for cam in self.cameras.values():
             cam.disconnect()
 
-        logger.info(f"{self} disconnected.") 
+        logger.info(f"{self} disconnected.")

@@ -103,7 +103,6 @@ class Motor:
     id: int
     model: str
     norm_mode: MotorNormMode
-    gear_ratio: float = 1.0
 
 
 class JointOutOfRangeError(Exception):
@@ -860,14 +859,9 @@ class MotorsBus(abc.ABC):
             min_ = self.calibration[motor].range_min
             max_ = self.calibration[motor].range_max
             drive_mode = self.apply_drive_mode and self.calibration[motor].drive_mode
-            gear_ratio = self.motors[motor].gear_ratio
 
             if max_ == min_:
                 raise ValueError(f"Invalid calibration for motor '{motor}': min and max are equal.")
-
-            if gear_space:
-                min_ = self._motor_space_to_gear_space(min_, gear_ratio)
-                max_ = self._motor_space_to_gear_space(max_, gear_ratio)
 
             bounded_val = min(max_, max(min_, val))
             if self.motors[motor].norm_mode is MotorNormMode.RANGE_M100_100:
@@ -895,14 +889,9 @@ class MotorsBus(abc.ABC):
             min_ = self.calibration[motor].range_min
             max_ = self.calibration[motor].range_max
             drive_mode = self.apply_drive_mode and self.calibration[motor].drive_mode
-            gear_ratio = self.motors[motor].gear_ratio
 
             if max_ == min_:
                 raise ValueError(f"Invalid calibration for motor '{motor}': min and max are equal.")
-
-            if gear_space:
-                min_ = self._motor_space_to_gear_space(min_, gear_ratio)
-                max_ = self._motor_space_to_gear_space(max_, gear_ratio)
 
             if self.motors[motor].norm_mode is MotorNormMode.RANGE_M100_100:
                 val = -val if drive_mode else val
@@ -920,52 +909,6 @@ class MotorsBus(abc.ABC):
                 raise NotImplementedError
 
         return unnormalized_values
-
-    def _motor_space_to_gear_space(self, motor_pos: int, gear_ratio: float) -> int:
-        """Convert motor position to gear space position."""
-        return int(motor_pos / gear_ratio)
-
-    def _gear_space_to_motor_space(self, gear_pos: int, gear_ratio: float) -> int:
-        """Convert gear space position to motor position."""
-        return int(gear_pos * gear_ratio)
-
-    def _apply_gear_space_to_motor_space(self, ids_values: dict[int, int]) -> dict[int, int]:
-        """Apply gear ratio conversion to convert from gear space to motor space.
-
-        Args:
-            ids_values: Dictionary mapping motor IDs to values in gear space
-
-        Returns:
-            Dictionary mapping motor IDs to values in motor space
-        """
-        motor_space_values = {}
-        for id_, value in ids_values.items():
-            motor_name = self._id_to_name(id_)
-            gear_ratio = self.motors[motor_name].gear_ratio
-
-            # Convert from gear space to motor space
-            motor_space_values[id_] = self._gear_space_to_motor_space(value, gear_ratio)
-
-        return motor_space_values
-
-    def _apply_motor_space_to_gear_space(self, ids_values: dict[int, int]) -> dict[int, int]:
-        """Apply gear ratio conversion to convert from motor space to gear space.
-
-        Args:
-            ids_values: Dictionary mapping motor IDs to values in motor space
-
-        Returns:
-            Dictionary mapping motor IDs to values in gear space
-        """
-        gear_space_values = {}
-        for id_, value in ids_values.items():
-            motor_name = self._id_to_name(id_)
-            gear_ratio = self.motors[motor_name].gear_ratio
-
-            # Convert from motor space to gear space
-            gear_space_values[id_] = self._motor_space_to_gear_space(value, gear_ratio)
-
-        return gear_space_values
 
     @abc.abstractmethod
     def _encode_sign(self, data_name: str, ids_values: dict[int, int]) -> dict[int, int]:
@@ -1083,10 +1026,6 @@ class MotorsBus(abc.ABC):
         err_msg = f"Failed to read '{data_name}' on {id_=} after {num_retry + 1} tries."
         value, _, _ = self._read(addr, length, id_, num_retry=num_retry, raise_on_error=True, err_msg=err_msg)
 
-        use_gear_space = gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES
-        if use_gear_space:
-            value = self._motor_space_to_gear_space(value, self.motors[motor].gear_ratio)
-
         id_value = self._decode_sign(data_name, {id_: value})
         if normalize and data_name in self.normalized_data:
             id_value = self._normalize(id_value, use_gear_space)
@@ -1160,9 +1099,6 @@ class MotorsBus(abc.ABC):
         if normalize and data_name in self.normalized_data:
             value = self._unnormalize({id_: value}, use_gear_space)[id_]
         value = self._encode_sign(data_name, {id_: value})[id_]
-
-        if use_gear_space:
-            value = self._gear_space_to_motor_space(value, self.motors[motor].gear_ratio)
 
         err_msg = f"Failed to write '{data_name}' on {id_=} with '{value}' after {num_retry + 1} tries."
         self._write(addr, length, id_, value, num_retry=num_retry, raise_on_error=True, err_msg=err_msg)

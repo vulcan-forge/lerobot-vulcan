@@ -33,7 +33,7 @@ class SourcceyFollower(Robot):
             port=self.config.port,
             motors={
                 "shoulder_pan": Motor(motor_ids[0], "sts3215", norm_mode_body),
-                "shoulder_lift": Motor(motor_ids[1], "sts3235" if motor_ids[1] == 2 else "sts3250", norm_mode_body, gear_ratio=1.5),
+                "shoulder_lift": Motor(motor_ids[1], "sts3250", norm_mode_body),
                 "elbow_flex": Motor(motor_ids[2], "sts3215", norm_mode_body),
                 "wrist_flex": Motor(motor_ids[3], "sts3215", norm_mode_body),
                 "wrist_roll": Motor(motor_ids[4], "sts3215", norm_mode_body),
