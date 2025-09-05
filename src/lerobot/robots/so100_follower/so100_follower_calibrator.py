@@ -72,8 +72,7 @@ class SO100FollowerCalibrator:
                                 range_mins: Dict[str, Any], range_maxes: Dict[str, int] = None) -> Dict[str, MotorCalibration]:
         calibration = {}
         for motor, m in self.robot.bus.motors.items():
-            drive_mode = 1 if motor == "gripper" else 0
-
+            drive_mode = 0
             range_min = range_mins[motor]
             range_max = range_maxes[motor]
             calibration[motor] = MotorCalibration(
@@ -93,8 +92,8 @@ class SO100FollowerCalibrator:
             "shoulder_lift": 3300 if reversed else 795,
             "elbow_flex": 1000 if reversed else 3095,
             "wrist_flex": 1200 if reversed else 2895,
-            "wrist_roll": 2047 if reversed else 2048,
-            "gripper": 1135 if reversed else 2960
+            "wrist_roll": 1995 if reversed else 2100,
+            "gripper": 1130 if reversed else 2965
         })
         return homing_offsets
 
