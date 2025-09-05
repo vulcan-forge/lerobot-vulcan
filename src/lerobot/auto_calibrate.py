@@ -93,29 +93,12 @@ def auto_calibrate(cfg: AutoCalibrateConfig):
         raise ValueError(f"Unsupported device type: {type(cfg.device)}")
 
     try:
-        # If robot supports limiting to a single arm, set it before connect
-        try:
-            if getattr(device, "limit_arm", None) is not None or hasattr(device, "limit_arm"):
-                device.limit_arm = cfg.arm
-        except Exception:
-            pass
-
         # Connect without calibration (we'll do auto-calibration)
         device.connect(calibrate=False)
 
         # Check if device supports auto-calibration
         if hasattr(device, 'auto_calibrate'):
-            logging.info("Device supports auto-calibration. Starting automatic calibration...")
-            try:
-                import inspect
-                params = inspect.signature(device.auto_calibrate).parameters
-                if 'arm' in params:
-                    device.auto_calibrate(full_reset=cfg.full_reset, arm=cfg.arm)
-                else:
-                    device.auto_calibrate(full_reset=cfg.full_reset)
-            except TypeError:
-                device.auto_calibrate(cfg.full_reset)
-            logging.info("Automatic calibration completed successfully!")
+            device.auto_calibrate(full_reset=cfg.full_reset)
         else:
             logging.warning("Device does not support auto-calibration. Returning")
 
@@ -123,11 +106,7 @@ def auto_calibrate(cfg: AutoCalibrateConfig):
         logging.error(f"Calibration failed: {e}")
         raise
     finally:
-        # Always disconnect
-        try:
-            device.disconnect()
-        except Exception as e:
-            logging.warning(f"Error during disconnect: {e}")
+        device.disconnect()
 
 
 if __name__ == "__main__":

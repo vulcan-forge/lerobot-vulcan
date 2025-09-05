@@ -30,6 +30,7 @@ from lerobot.motors.feetech import (
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
 from .config_so100_follower import SO100FollowerConfig
+from .so100_follower_calibrator import SO100FollowerCalibrator
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,11 @@ class SO100Follower(Robot):
             calibration=self.calibration,
         )
         self.cameras = make_cameras_from_configs(config.cameras)
+
+        # Initialize calibrator
+        self.calibrator = SO100FollowerCalibrator(
+            robot=self
+        )
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -155,6 +161,9 @@ class SO100Follower(Robot):
         self.bus.write_calibration(self.calibration)
         self._save_calibration()
         print("Calibration saved to", self.calibration_fpath)
+
+    def auto_calibrate(self, full_reset: bool = False) -> None:
+        self.calibration = self.calibrator.default_calibrate(reversed=self.config.reversed)
 
     def configure(self) -> None:
         with self.bus.torque_disabled():
