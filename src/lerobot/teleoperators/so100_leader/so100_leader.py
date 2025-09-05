@@ -131,6 +131,9 @@ class SO100Leader(Teleoperator):
         self._save_calibration()
         print(f"Calibration saved to {self.calibration_fpath}")
 
+    def auto_calibrate(self, full_reset: bool = False) -> None:
+        self.calibration = self.calibrator.auto_calibrate(reversed=self.config.reversed)
+
     def configure(self) -> None:
         self.bus.disable_torque()
         self.bus.configure_motors()
