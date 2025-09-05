@@ -40,8 +40,8 @@ class SO100LeaderCalibrator:
             "shoulder_pan": 2047 if reversed else 2048,
             "shoulder_lift": 3325 if reversed else 770,
             "elbow_flex": 1000 if reversed else 3095,
-            "wrist_flex": 1360 if reversed else 2735,
-            "wrist_roll": 1950 if reversed else 2150,
+            "wrist_flex": 1335 if reversed else 2760,
+            "wrist_roll": 2020 if reversed else 2085,
             "gripper": 1927 if reversed else 2168
         })
         return homing_offsets

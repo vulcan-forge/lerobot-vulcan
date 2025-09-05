@@ -90,11 +90,11 @@ class SO100FollowerCalibrator:
         # Set all motors to half turn homings except shoulder_lift
         homing_offsets = self.robot.bus.set_position_homings({
             "shoulder_pan": 2047 if reversed else 2048,
-            "shoulder_lift": 3200 if reversed else 895,
-            "elbow_flex": 2971 if reversed else 1124,
-            "wrist_flex": 3300 if reversed else 795,
-            "wrist_roll": 2727 if reversed else 1368,
-            "gripper": 3300 if reversed else 795
+            "shoulder_lift": 3300 if reversed else 795,
+            "elbow_flex": 1000 if reversed else 3095,
+            "wrist_flex": 1200 if reversed else 2895,
+            "wrist_roll": 2047 if reversed else 2048,
+            "gripper": 1135 if reversed else 2960
         })
         return homing_offsets
 
