@@ -88,7 +88,14 @@ class SO100FollowerCalibrator:
     def _initialize_calibration(self, reversed: bool = False) -> Dict[str, int]:
         """Initialize the calibration of the robot."""
         # Set all motors to half turn homings except shoulder_lift
-        homing_offsets = self.robot.bus.set_half_turn_homings()
+        homing_offsets = self.robot.bus.set_position_homings({
+            "shoulder_pan": 2047 if reversed else 2048,
+            "shoulder_lift": 3200 if reversed else 895,
+            "elbow_flex": 2971 if reversed else 1124,
+            "wrist_flex": 3300 if reversed else 795,
+            "wrist_roll": 2727 if reversed else 1368,
+            "gripper": 3300 if reversed else 795
+        })
         return homing_offsets
 
     def _load_default_calibration(self, reversed: bool = False) -> Dict[str, Any]:

@@ -26,6 +26,7 @@ from lerobot.motors.feetech import (
 
 from ..teleoperator import Teleoperator
 from .config_so100_leader import SO100LeaderConfig
+from .so100_leader_calibrator import SO100LeaderCalibrator
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,9 @@ class SO100Leader(Teleoperator):
             },
             calibration=self.calibration,
         )
+
+        # Initialize calibrator
+        self.calibrator = SO100LeaderCalibrator(self)
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -132,7 +136,7 @@ class SO100Leader(Teleoperator):
         print(f"Calibration saved to {self.calibration_fpath}")
 
     def auto_calibrate(self, full_reset: bool = False) -> None:
-        self.calibration = self.calibrator.auto_calibrate(reversed=self.config.reversed)
+        self.calibration = self.calibrator.default_calibrate(reversed=self.config.reversed)
 
     def configure(self) -> None:
         self.bus.disable_torque()

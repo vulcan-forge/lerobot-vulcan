@@ -351,3 +351,82 @@ python src/lerobot/scripts/train.py \
   --wandb.enable=false \
   --steps=20000
 ```
+
+-- SO100
+
+```bash
+python -m lerobot.auto_calibrate \
+    --robot.type=so100_follower \
+    --robot.id=so100_follower-001 \
+    --robot.port=COM37
+```
+
+```bash
+python -m lerobot.auto_calibrate \
+    --teleop.type=so100_leader \
+    --teleop.id=so100_follower-001 \
+    --teleop.port=COM38
+```
+
+```bash
+python src/lerobot/teleoperate.py \
+    --robot.type=so100_follower \
+    --robot.port=COM37 \
+    --robot.id=so100_follower-001 \
+    --robot.cameras="{ main: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+    --teleop.type=so100_leader \
+    --teleop.port=COM38 \
+    --teleop.id=so100_follower-001 \
+    --display_data=True
+```
+
+```bash
+python src/lerobot/teleoperate.py \
+    --robot.type=so100_follower \
+    --robot.port=COM37 \
+    --robot.id=so100_follower-001 \
+    --robot.cameras="{ }" \
+    --teleop.type=so100_leader \
+    --teleop.port=COM38 \
+    --teleop.id=so100_follower-001 \
+    --display_data=True
+```
+
+```bash
+uv run src/lerobot/record.py \
+    --robot.type=so100_follower \
+    --robot.port=COM38 \
+    --robot.id=so100_follower-001 \
+    --robot.cameras="{'main': OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=30)}" \
+    --teleop.type=so100_leader \
+    --teleop.port=COM37 \
+    --teleop.id=so100_leader-001 \
+    --dataset.repo_id=local/dataset_test \
+    --dataset.num_episodes=1 \
+    --dataset.episode_time_s=10 \
+    --dataset.single_task="Grab towel and fold it" \
+    --dataset.push_to_hub=false
+```
+
+```bash
+python src/lerobot/replay.py \
+    --robot.type=so100_follower \
+    --robot.port=COM4 \
+    --robot.id=so100_follower-001 \
+    --robot.cameras="{ main: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}}" \
+    --dataset.repo_id=local/dataset \
+    --dataset.episode=0
+```
+
+```bash
+python src/lerobot/scripts/train.py \
+ --dataset.repo_id=so100_follower-001/dataset \
+ --policy.type=act \
+ --output_dir=outputs/train/act_model_1 \
+ --job_name=act_model_1 \
+ --policy.device=cuda \
+ --batch_size=8 \
+ --steps=1000 \
+ --wandb.enable=false \
+ --policy.push_to_hub=false
+```

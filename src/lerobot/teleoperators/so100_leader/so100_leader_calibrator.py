@@ -34,9 +34,16 @@ class SO100LeaderCalibrator:
         return self.teleop.calibration
 
     def _initialize_calibration(self, reversed: bool = False) -> Dict[str, int]:
-        """Initialize the calibration of the robot."""
+        """Initialize the calibration of the teleop."""
 
-        homing_offsets = self.teleop.bus.set_position_homings()
+        homing_offsets = self.teleop.bus.set_position_homings({
+            "shoulder_pan": 2047 if reversed else 2048,
+            "shoulder_lift": 3325 if reversed else 770,
+            "elbow_flex": 1000 if reversed else 3095,
+            "wrist_flex": 1360 if reversed else 2735,
+            "wrist_roll": 1950 if reversed else 2150,
+            "gripper": 1927 if reversed else 2168
+        })
         return homing_offsets
 
     def _create_calibration_dict(self, homing_offsets: Dict[str, int],
