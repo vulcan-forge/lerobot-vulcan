@@ -91,7 +91,7 @@ def test_motor_turn():
 
             #     time.sleep(0.02)
 
-            time.sleep(10)
+            time.sleep(30)
 
             print("3. Stopping motor...")
             controller.set_velocity("front_left", 0.0)
@@ -129,7 +129,7 @@ def test_motor_turn():
             # controller.update_velocity("rear_right", 0.05)   # same for motor 2, etc.
             controller.update_velocity("linear_actuator", 1.0)
 
-            time.sleep(10)
+            time.sleep(30)
 
             # Stop motors
             print("3. Stopping motor...")
