@@ -354,37 +354,21 @@ class PWMProtocolHandler(ProtocolHandler):
 
     def _velocity_to_pwm(self, velocity: float) -> float:
         """
-        Convert velocity to PWM duty cycle with linearization.
-        Based on actual motor data:
-        - velocity 1.0 -> 2.2 RPM (PWM 1.0)
-        - velocity 0.25 -> 1.13 RPM (PWM 0.25)
-        - Ratio: 1.13/2.2 = 0.51 (not 0.25!)
+        Convert normalized velocity (-1 to 1) into PWM duty cycle (0.0 to 1.0).
+        Tuned so that velocity=0.5 gives about 0.25 duty (half speed in real world).
         """
-        abs_vel = abs(velocity)
+        v = abs(velocity)
 
-        if abs_vel == 0:
-            return 0.0
+        # Deadzone: minimum duty needed before the motor starts turning
+        deadzone = 0.1
 
-        # Your data shows: 0.25 velocity = 51% of 1.0 velocity speed
-        # This means we need to map velocity to PWM such that:
-        # - 0.5 velocity should give ~50% of max speed
-        # - 0.25 velocity should give ~25% of max speed
+        # Exponent < 1 compresses the curve so mid-values are smaller
+        exponent = 0.5   # square-root curve
 
-        # Method 1: Square root compensation (most common)
-        # This makes the relationship more linear
-        linearized_vel = abs_vel ** 0.5  # Square root
+        # Scale output so max=1.0
+        pwm = deadzone + (1 - deadzone) * (v ** exponent)
 
-        # Method 2: Custom curve based on your specific data
-        # If square root isn't enough, try a steeper curve:
-        # linearized_vel = abs_vel ** 0.3  # Adjust this exponent
-
-        # Apply minimum threshold (motors won't start below this)
-        min_threshold = 0.15  # Adjust based on your motor's minimum start threshold
-
-        # Map to PWM range
-        pwm_duty = min_threshold + (linearized_vel * (1.0 - min_threshold))
-
-        return min(1.0, pwm_duty)
+        return min(1.0, pwm)
 
 class PWMDCMotorsController(BaseDCMotorsController):
     """PWM-based DC motor controller optimized for DRV8871DDAR H-bridge drivers."""
