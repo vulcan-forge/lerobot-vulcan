@@ -76,12 +76,12 @@ def test_motor_turn():
             # controller.set_velocity("rear_right", 0.5)
             controller.set_velocity("linear_actuator", 0.5)
 
-            for i in range(100):
-                controller.update_velocity("front_left", 0.01)   # nudges motor 1 toward target
-                controller.update_velocity("front_right", 0.01)   # same for motor 2, etc.
-                controller.update_velocity("rear_left", 0.01)   # same for motor 2, etc.
-                # controller.update_velocity("rear_right", 0.01)   # same for motor 2, etc.
-                controller.update_velocity("linear_actuator", 0.01)   # same for motor 2, etc.
+            for i in range(50):
+                controller.update_velocity("front_left", 0.02)   # nudges motor 1 toward target
+                controller.update_velocity("front_right", 0.02)   # same for motor 2, etc.
+                controller.update_velocity("rear_left", 0.02)   # same for motor 2, etc.
+                # controller.update_velocity("rear_right", 0.02)   # same for motor 2, etc.
+                controller.update_velocity("linear_actuator", 0.02)   # same for motor 2, etc.
 
                 time.sleep(0.02)
 
@@ -94,12 +94,12 @@ def test_motor_turn():
             # controller.set_velocity("rear_right", 0.5)
             controller.set_velocity("linear_actuator", 0.5)
 
-            for i in range(100):
-                controller.update_velocity("front_left", 0.01)   # nudges motor 1 toward target
-                controller.update_velocity("front_right", 0.01)   # same for motor 2, etc.
-                controller.update_velocity("rear_left", 0.01)   # same for motor 2, etc.
-                # controller.update_velocity("rear_right", 0.01)   # same for motor 2, etc.
-                controller.update_velocity("linear_actuator", 0.01)   # same for motor 2, etc.
+            for i in range(50):
+                controller.update_velocity("front_left", 0.02)   # nudges motor 1 toward target
+                controller.update_velocity("front_right", 0.02)   # same for motor 2, etc.
+                controller.update_velocity("rear_left", 0.02)   # same for motor 2, etc.
+                # controller.update_velocity("rear_right", 0.02)   # same for motor 2, etc.
+                controller.update_velocity("linear_actuator", 0.02)   # same for motor 2, etc.
 
                 time.sleep(0.02)
 
@@ -112,12 +112,12 @@ def test_motor_turn():
             controller.set_velocity("rear_left", 0.0)
             # controller.set_velocity("rear_right", 0.0)
             controller.set_velocity("linear_actuator", 0.0)
-            for i in range(20):
-                controller.update_velocity("front_left", 0.01)   # nudges motor 1 toward target
-                controller.update_velocity("front_right", 0.01)   # same for motor 2, etc.
-                controller.update_velocity("rear_left", 0.01)   # same for motor 2, etc.
-                # controller.update_velocity("rear_right", 0.01)   # same for motor 2, etc.
-                controller.update_velocity("linear_actuator", 0.01)   # same for motor 2, etc.
+            for i in range(50):
+                controller.update_velocity("front_left", 0.02)   # nudges motor 1 toward target
+                controller.update_velocity("front_right", 0.02)   # same for motor 2, etc.
+                controller.update_velocity("rear_left", 0.02)   # same for motor 2, etc.
+                # controller.update_velocity("rear_right", 0.02)   # same for motor 2, etc.
+                controller.update_velocity("linear_actuator", 0.02)   # same for motor 2, etc.
 
             print("   Motor states: ", controller.protocol_handler.motor_states)
             time.sleep(1)
