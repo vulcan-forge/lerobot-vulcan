@@ -203,20 +203,23 @@ class PWMProtocolHandler(ProtocolHandler):
         """
         velocity = max(-1.0, min(1.0, velocity))
         self.motor_states[motor_id]["velocity"] = velocity
-        self.motor_states[motor_id]["pwm"] = abs(velocity)
+
+        # Convert velocity to PWM with linearization
+        pwm_duty = self._velocity_to_pwm(velocity)
+        self.motor_states[motor_id]["pwm"] = pwm_duty
         self.motor_states[motor_id]["brake_active"] = False
 
         in1 = self.in1_channels.get(motor_id)
         in2 = self.in2_channels.get(motor_id)
 
         if velocity > 0:
-            if in1: in1.value = abs(velocity)
+            if in1: in1.value = pwm_duty
             if in2: in2.off()
             self.motor_states[motor_id]["direction"] = 1
 
         elif velocity < 0:
             if in1: in1.off()
-            if in2: in2.value = abs(velocity)
+            if in2: in2.value = pwm_duty
             self.motor_states[motor_id]["direction"] = -1
 
         else:
@@ -347,6 +350,40 @@ class PWMProtocolHandler(ProtocolHandler):
             logger.debug(f"Motor {motor_id} brake released (IN1=0, IN2=0)")
         except Exception as e:
             logger.warning(f"Error releasing brake for motor {motor_id}: {e}")
+
+    def _velocity_to_pwm(self, velocity: float) -> float:
+        """
+        Convert velocity to PWM duty cycle with linearization.
+        Based on actual motor data:
+        - velocity 1.0 -> 2.2 RPM (PWM 1.0)
+        - velocity 0.25 -> 1.13 RPM (PWM 0.25)
+        - Ratio: 1.13/2.2 = 0.51 (not 0.25!)
+        """
+        abs_vel = abs(velocity)
+
+        if abs_vel == 0:
+            return 0.0
+
+        # Your data shows: 0.25 velocity = 51% of 1.0 velocity speed
+        # This means we need to map velocity to PWM such that:
+        # - 0.5 velocity should give ~50% of max speed
+        # - 0.25 velocity should give ~25% of max speed
+
+        # Method 1: Square root compensation (most common)
+        # This makes the relationship more linear
+        linearized_vel = abs_vel ** 0.5  # Square root
+
+        # Method 2: Custom curve based on your specific data
+        # If square root isn't enough, try a steeper curve:
+        # linearized_vel = abs_vel ** 0.3  # Adjust this exponent
+
+        # Apply minimum threshold (motors won't start below this)
+        min_threshold = 0.15  # Adjust based on your motor's minimum start threshold
+
+        # Map to PWM range
+        pwm_duty = min_threshold + (linearized_vel * (1.0 - min_threshold))
+
+        return min(1.0, pwm_duty)
 
 class PWMDCMotorsController(BaseDCMotorsController):
     """PWM-based DC motor controller optimized for DRV8871DDAR H-bridge drivers."""
