@@ -206,6 +206,7 @@ class PWMProtocolHandler(ProtocolHandler):
 
         # Convert velocity to PWM with linearization
         pwm_duty = self._velocity_to_pwm(velocity)
+        print(f"Motor {motor_id}, Input velocity: {velocity}, Output PWM duty cycle: {pwm_duty}")
         self.motor_states[motor_id]["pwm"] = pwm_duty
         self.motor_states[motor_id]["brake_active"] = False
 
