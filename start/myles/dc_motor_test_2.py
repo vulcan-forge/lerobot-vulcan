@@ -88,11 +88,11 @@ def test_motor_turn():
             time.sleep(10)
 
 
-            controller.set_velocity("front_left", -0.5)
-            controller.set_velocity("front_right", 0.5)
-            controller.set_velocity("rear_left", -0.5)
+            controller.set_velocity("front_left", 0.5)
+            controller.set_velocity("front_right", -0.5)
+            controller.set_velocity("rear_left", 0.5)
             # controller.set_velocity("rear_right", 0.5)
-            controller.set_velocity("linear_actuator", 0.5)
+            controller.set_velocity("linear_actuator", -0.5)
 
             for i in range(20):
                 controller.update_velocity("front_left", 0.05)   # nudges motor 1 toward target
