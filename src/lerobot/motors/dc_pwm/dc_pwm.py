@@ -196,37 +196,56 @@ class PWMProtocolHandler(ProtocolHandler):
         """Get current motor velocity."""
         return self.motor_states.get(motor_id, {}).get("velocity", 0.0)
 
-    def set_velocity(self, motor_id: int, velocity: float) -> None:
+    def set_velocity(self, motor_id: int, target_velocity: float) -> None:
         """
-        Set motor velocity (normalized -1 to 1) for DRV8871DDAR.
-        Uses symmetric PWM: IN1 or IN2 is PWM depending on direction.
+        Set the target velocity for the motor (-1.0 to 1.0).
+        Actual velocity will be slewed toward this value in update_velocity().
         """
-        velocity = max(-1.0, min(1.0, velocity))
-        self.motor_states[motor_id]["velocity"] = velocity
+        target_velocity = max(-1.0, min(1.0, target_velocity))  # clamp
+        self.motor_states[motor_id]["target_velocity"] = target_velocity
 
-        # Convert velocity to PWM with linearization
-        pwm_duty = self._velocity_to_pwm(velocity)
-        print(f"Motor {motor_id}, Input velocity: {velocity}, Output PWM duty cycle: {pwm_duty}")
-        self.motor_states[motor_id]["pwm"] = pwm_duty
-        self.motor_states[motor_id]["brake_active"] = False
+    def update_velocity(self, motor_id: int, max_step: float = 0.05) -> None:
+        """
+        Gradually update the motor velocity toward its target using a slew-rate limiter.
+        Call this periodically (e.g., every 10–20 ms).
+        """
+        state = self.motor_states[motor_id]
+        current = state.get("velocity", 0.0)
+        target = state.get("target_velocity", 0.0)
+
+        # Apply slew-rate limit
+        if target > current:
+            new_velocity = min(current + max_step, target)
+        elif target < current:
+            new_velocity = max(current - max_step, target)
+        else:
+            new_velocity = target
+
+        # Save new velocity
+        state["velocity"] = new_velocity
+
+        # Convert to PWM duty cycle
+        pwm_duty = self._velocity_to_pwm(new_velocity)
+        state["pwm"] = pwm_duty
+        state["brake_active"] = False
 
         in1 = self.in1_channels.get(motor_id)
         in2 = self.in2_channels.get(motor_id)
 
-        if velocity > 0:
+        if new_velocity > 0:
             if in1: in1.value = pwm_duty
             if in2: in2.off()
-            self.motor_states[motor_id]["direction"] = 1
+            state["direction"] = 1
 
-        elif velocity < 0:
+        elif new_velocity < 0:
             if in1: in1.off()
             if in2: in2.value = pwm_duty
-            self.motor_states[motor_id]["direction"] = -1
+            state["direction"] = -1
 
         else:
             if in1: in1.off()
             if in2: in2.off()
-            self.motor_states[motor_id]["direction"] = 0
+            state["direction"] = 0
 
     # PWM Functions
     def get_pwm(self, motor_id: int) -> float:

@@ -204,6 +204,14 @@ class BaseDCMotorsController(abc.ABC):
         self.protocol_handler.set_velocity(motor_id, velocity)
         logger.debug(f"Set motor {motor} velocity to {velocity}")
 
+    def update_velocity(self, motor: NameOrID) -> None:
+        """Update motor velocity."""
+        if not self._is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        motor_id = self._get_motor_id(motor)
+        self.protocol_handler.update_velocity(motor_id)
+
     # PWM Functions
     def get_pwm(self, motor: NameOrID) -> float:
         """Get current PWM duty cycle."""
