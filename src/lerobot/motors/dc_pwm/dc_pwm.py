@@ -359,16 +359,20 @@ class PWMProtocolHandler(ProtocolHandler):
         """
         v = abs(velocity)
 
-        # Deadzone: minimum duty needed before the motor starts turning
+        # Special case: stop = true 0 duty
+        if v == 0:
+            return 0.0
+
+        # Deadzone threshold (motor won’t spin below this duty)
         deadzone = 0.1
 
-        # Exponent < 1 compresses the curve so mid-values are smaller
-        exponent = 0.5   # square-root curve
+        # Exponent > 1 pushes mid values lower
+        exponent = 2.0   # quadratic curve, makes 0.5 input ≈ 0.25 duty
 
-        # Scale output so max=1.0
+        # Map velocity into [deadzone, 1.0]
         pwm = deadzone + (1 - deadzone) * (v ** exponent)
 
-        return min(1.0, pwm)
+        return pwm
 
 class PWMDCMotorsController(BaseDCMotorsController):
     """PWM-based DC motor controller optimized for DRV8871DDAR H-bridge drivers."""
