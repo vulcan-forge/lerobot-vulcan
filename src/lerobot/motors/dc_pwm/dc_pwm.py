@@ -21,7 +21,7 @@ PI5_ALL_GPIO_PINS = [
 ]
 
 # Pi 5 Optimal Settings for DRV8871DDAR
-PI5_OPTIMAL_FREQUENCY = 15000  # 15kHz - more compatible with gpiozero
+PI5_OPTIMAL_FREQUENCY = 20000  # 15kHz - more compatible with gpiozero
 PI5_MAX_FREQUENCY = 15000      # 15kHz - Pi 5 can handle higher frequencies
 PI5_RESOLUTION = 12            # 12-bit resolution
 
