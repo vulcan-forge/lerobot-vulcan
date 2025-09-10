@@ -357,6 +357,10 @@ class PWMProtocolHandler(ProtocolHandler):
         Convert normalized velocity (-1 to 1) into PWM duty cycle (0.0 to 1.0).
         Tuned so that velocity=0.5 gives about 0.25 duty (half speed in real world).
         """
+
+        # This code works for the 120RPM 10kg.cm torque motor.
+
+
         v = abs(velocity)
 
         # Special case: stop = true 0 duty
