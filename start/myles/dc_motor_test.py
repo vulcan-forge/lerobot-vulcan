@@ -69,10 +69,10 @@ def test_motor_turn():
         try:
             #Wheel Test
             print("2. Wheel Test...")
-            controller.set_velocity("front_left", 0.1)
-            controller.set_velocity("front_right", 0.1)
-            controller.set_velocity("rear_left", 0.1)
-            controller.set_velocity("rear_right", 0.1)
+            controller.set_velocity("front_left", 0.12)
+            controller.set_velocity("front_right", 0.12)
+            controller.set_velocity("rear_left", 0.12)
+            controller.set_velocity("rear_right", 0.12)
             time.sleep(15)
 
             # Stop motors
