@@ -26,7 +26,7 @@ from lerobot.motors.feetech import (
 
 from ....teleoperator import Teleoperator
 from .config_sourccey_leader import  SourcceyLeaderConfig
-from .calibration_sourccey_leader import SourcceyLeaderCalibrator
+from .sourccey_leader_calibrator import SourcceyLeaderCalibrator
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ class SourcceyLeader(Teleoperator):
 
     def auto_calibrate(self, reversed: bool = False, full_reset: bool = False) -> None:
         """Perform automatic calibration."""
-        self.calibration = self.calibrator.auto_calibrate(reversed=reversed, full_reset=full_reset)
+        self.calibration = self.calibrator.default_calibrate(reversed=reversed)
 
     def configure(self) -> None:
         self.bus.disable_torque()

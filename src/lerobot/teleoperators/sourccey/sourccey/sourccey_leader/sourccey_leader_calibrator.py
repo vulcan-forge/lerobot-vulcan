@@ -15,50 +15,36 @@ class SourcceyLeaderCalibrator:
     def __init__(self, teleop):
         self.teleop = teleop
 
-    def auto_calibrate(self, reversed: bool = False, full_reset: bool = False, com_port_1: str = None, com_port_2: str = None) -> Dict[str, MotorCalibration]:
-        """
-        This function will calibrate the teleoperator arm.
-        It will first set the homing offsets based on the starting position of the arm.
-        Then it will record the range of motion of the arm.
-        Then it will create a calibration dictionary and save it to the file.
+    def default_calibrate(self, reversed: bool = False) -> Dict[str, MotorCalibration]:
+        """Perform default calibration."""
 
-        Args:
-            reversed: If True, the arm will be calibrated in the reversed direction.
-        """
-        print(f"Starting automatic calibration of robot {self.teleop.id}")
-
-        # Step 1: Adjust calibration so current positions become desired logical positions
-        print("Adjusting calibration to align current positions with desired logical positions...")
         homing_offsets = self._initialize_calibration(reversed)
 
-        detected_ranges = {}
-
+        min_ranges = {}
+        max_ranges = {}
         default_calibration = self._load_default_calibration(reversed)
         for motor, m in self.teleop.bus.motors.items():
-            detected_ranges[motor] = {
-                "min": default_calibration[motor]["range_min"],
-                "max": default_calibration[motor]["range_max"],
-            }
+            min_ranges[motor] = default_calibration[motor]["range_min"]
+            max_ranges[motor] = default_calibration[motor]["range_max"]
 
-        # Step 4: Create calibration dictionary
-        self.teleop.calibration = self._create_calibration_dict(homing_offsets, detected_ranges)
-
-        # Step 5: Write calibration to motors and save
+        self.teleop.calibration = self._create_calibration_dict(homing_offsets, min_ranges, max_ranges)
         self.teleop.bus.write_calibration(self.teleop.calibration)
         self._save_calibration()
-        print(f"Automatic calibration completed and saved to {self.teleop.calibration_fpath}")
+        logger.info(f"Default calibration completed and saved to {self.teleop.calibration_fpath}")
         return self.teleop.calibration
 
     def _initialize_calibration(self, reversed: bool = False) -> Dict[str, int]:
         """Initialize the calibration of the robot."""
 
         shoulder_pan_homing_offset = self.teleop.bus.set_position_homings(
-            {"shoulder_pan": 2474 if reversed else 1554},
-            {"shoulder_lift": 483 if reversed else 3667},
-            {"elbow_flex": 3884 if reversed else 151},
-            {"wrist_flex": 6086 if reversed else 2144},
-            {"wrist_roll": 2078 if reversed else 2069},
-            {"gripper": 5571 if reversed else 2725}
+            {
+                "shoulder_pan": 2474 if reversed else 1554,
+                "shoulder_lift": 483 if reversed else 3667,
+                "elbow_flex": 3884 if reversed else 151,
+                "wrist_flex": 6086 if reversed else 2144,
+                "wrist_roll": 2078 if reversed else 2069,
+                "gripper": 5571 if reversed else 2725
+            }
         )
 
         # Set the homing offsets for the motors
@@ -73,8 +59,12 @@ class SourcceyLeaderCalibrator:
 
         return homing_offsets
 
-    def _create_calibration_dict(self, homing_offsets: Dict[str, int],
-                                range_mins: Dict[str, Any], range_maxes: Dict[str, int] = None) -> Dict[str, MotorCalibration]:
+    def _create_calibration_dict(
+        self,
+        homing_offsets: Dict[str, int],
+        range_mins: Dict[str, int],
+        range_maxes: Dict[str, int]
+    ) -> Dict[str, MotorCalibration]:
 
         calibration = {}
         for motor, m in self.teleop.bus.motors.items():
