@@ -849,7 +849,7 @@ class MotorsBus(abc.ABC):
 
         return mins, maxes
 
-    def _normalize(self, ids_values: dict[int, int], gear_space: bool = False) -> dict[int, float]:
+    def _normalize(self, ids_values: dict[int, int]) -> dict[int, float]:
         if not self.calibration:
             raise RuntimeError(f"{self} has no calibration registered.")
 
@@ -879,7 +879,7 @@ class MotorsBus(abc.ABC):
 
         return normalized_values
 
-    def _unnormalize(self, ids_values: dict[int, float], gear_space: bool = False) -> dict[int, int]:
+    def _unnormalize(self, ids_values: dict[int, float]) -> dict[int, int]:
         if not self.calibration:
             raise RuntimeError(f"{self} has no calibration registered.")
 
@@ -997,7 +997,6 @@ class MotorsBus(abc.ABC):
         motor: str,
         *,
         normalize: bool = True,
-        gear_space: bool = False,
         num_retry: int = 3,
     ) -> Value:
         """Read a register from a motor.
@@ -1007,8 +1006,6 @@ class MotorsBus(abc.ABC):
             motor (str): Motor name.
             normalize (bool, optional): When `True` (default) scale the value to a user-friendly range as
                 defined by the calibration.
-            gear_space (bool, optional): If `True` (default) apply gear ratio conversion. If `False`, treat values
-                as already in motor space.
             num_retry (int, optional): Retry attempts.  Defaults to `3`.
 
         Returns:
@@ -1028,7 +1025,7 @@ class MotorsBus(abc.ABC):
 
         id_value = self._decode_sign(data_name, {id_: value})
         if normalize and data_name in self.normalized_data:
-            id_value = self._normalize(id_value, use_gear_space)
+            id_value = self._normalize(id_value)
 
         return id_value[id_]
 
@@ -1040,7 +1037,6 @@ class MotorsBus(abc.ABC):
         *,
         num_retry: int = 0,
         raise_on_error: bool = True,
-        gear_space: bool = False,
         err_msg: str = "",
     ) -> tuple[int, int]:
         if length == 1:
@@ -1069,7 +1065,7 @@ class MotorsBus(abc.ABC):
         return value, comm, error
 
     def write(
-        self, data_name: str, motor: str, value: Value, *, normalize: bool = True,  gear_space: bool = False, num_retry: int = 3
+        self, data_name: str, motor: str, value: Value, *, normalize: bool = True, num_retry: int = 3
     ) -> None:
         """Write a value to a single motor's register.
 
@@ -1095,9 +1091,8 @@ class MotorsBus(abc.ABC):
         model = self.motors[motor].model
         addr, length = get_address(self.model_ctrl_table, model, data_name)
 
-        use_gear_space = gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES
         if normalize and data_name in self.normalized_data:
-            value = self._unnormalize({id_: value}, use_gear_space)[id_]
+            value = self._unnormalize({id_: value})[id_]
         value = self._encode_sign(data_name, {id_: value})[id_]
 
         err_msg = f"Failed to write '{data_name}' on {id_=} with '{value}' after {num_retry + 1} tries."
@@ -1137,7 +1132,6 @@ class MotorsBus(abc.ABC):
         motors: str | list[str] | None = None,
         *,
         normalize: bool = True,
-        gear_space: bool = False,
         num_retry: int = 3,
     ) -> dict[str, Value]:
         """Read the same register from several motors at once.
@@ -1175,7 +1169,7 @@ class MotorsBus(abc.ABC):
 
         ids_values = self._decode_sign(data_name, ids_values)
         if normalize and data_name in self.normalized_data:
-            ids_values = self._normalize(ids_values, use_gear_space)
+            ids_values = self._normalize(ids_values,)
 
         return {self._id_to_name(id_): value for id_, value in ids_values.items()}
 
@@ -1232,7 +1226,6 @@ class MotorsBus(abc.ABC):
         values: Value | dict[str, Value],
         *,
         normalize: bool = True,
-        gear_space: bool = False,
         num_retry: int = 3,
     ) -> None:
         """Write the same register on multiple motors.
@@ -1261,13 +1254,9 @@ class MotorsBus(abc.ABC):
         model = next(iter(models))
         addr, length = get_address(self.model_ctrl_table, model, data_name)
 
-        use_gear_space = gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES
         if normalize and data_name in self.normalized_data:
-            ids_values = self._unnormalize(ids_values, use_gear_space)
+            ids_values = self._unnormalize(ids_values,)
         ids_values = self._encode_sign(data_name, ids_values)
-
-        if use_gear_space:
-            ids_values = self._apply_gear_space_to_motor_space(ids_values)
 
         err_msg = f"Failed to sync write '{data_name}' with {ids_values=} after {num_retry + 1} tries."
         self._sync_write(addr, length, ids_values, num_retry=num_retry, raise_on_error=True, err_msg=err_msg)
