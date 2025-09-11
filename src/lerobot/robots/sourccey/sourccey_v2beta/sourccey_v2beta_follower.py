@@ -200,7 +200,7 @@ class SourcceyV2BetaFollower(Robot):
         # Read arm position
         start = time.perf_counter()
         # Read positions in gear space (joint space degrees)
-        obs_dict = self.bus.sync_read("Present_Position", gear_space=True)
+        obs_dict = self.bus.sync_read("Present_Position")
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
@@ -236,7 +236,7 @@ class SourcceyV2BetaFollower(Robot):
         # /!\ Slower fps expected due to reading from the follower.
         if self.config.max_relative_target is not None:
             # Compare in joint space so safety cap is based on true joint angles
-            present_pos = self.bus.sync_read("Present_Position", gear_space=True)
+            present_pos = self.bus.sync_read("Present_Position")
 
             # Only wrap continuous rotation joint 'wrist_roll'; preserve sign for others
             for motor_name, g_pos in list(goal_pos.items()):
@@ -258,7 +258,7 @@ class SourcceyV2BetaFollower(Robot):
 
         # Send goal position to the arm
         # Write in gear space (joint space degrees)
-        self.bus.sync_write("Goal_Position", goal_pos, gear_space=True)
+        self.bus.sync_write("Goal_Position", goal_pos)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
     def disconnect(self):
