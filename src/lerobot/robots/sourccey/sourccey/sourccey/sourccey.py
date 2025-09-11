@@ -83,6 +83,9 @@ class Sourccey(Robot):
         self.left_arm = SourcceyFollower(left_arm_config)
         self.right_arm = SourcceyFollower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
+
+        print('config dc motors', self.config.dc_motors)
+        print('config dc motors config', self.config.dc_motors_config)
         self.dc_motors_controller = PWMDCMotorsController(
             motors=self.config.dc_motors,
             config=self.config.dc_motors_config,
@@ -90,11 +93,13 @@ class Sourccey(Robot):
 
     @property
     def _state_ft(self) -> dict[str, type]:
-        return {f"{motor}.pos": float for motor in self.left_arm.bus.motors} | {
+        return {
+            f"{motor}.pos": float for motor in self.left_arm.bus.motors} | {
             f"{motor}.pos": float for motor in self.right_arm.bus.motors} | {
-            # "x.vel": float,
-            # "y.vel": float,
-            # "theta.vel": float,
+                "x.vel": float,
+                "y.vel": float,
+                "theta.vel": float,
+            }
         }
 
     @property
@@ -246,6 +251,8 @@ class Sourccey(Robot):
             if self.limit_arm is None or self.limit_arm == "right":
                 sent_right = self.right_arm.send_action(right_action)
                 prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
+
+            # Set Velocity and update velocity (0.1 second step up on update)
 
             # Base velocity
             # base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
