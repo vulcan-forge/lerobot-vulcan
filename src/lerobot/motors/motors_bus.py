@@ -1173,10 +1173,6 @@ class MotorsBus(abc.ABC):
             addr, length, ids, num_retry=num_retry, raise_on_error=True, err_msg=err_msg
         )
 
-        use_gear_space = gear_space and data_name in MOTOR_MOVEMENT_DATA_NAMES
-        if use_gear_space:
-            ids_values = self._apply_motor_space_to_gear_space(ids_values)
-
         ids_values = self._decode_sign(data_name, ids_values)
         if normalize and data_name in self.normalized_data:
             ids_values = self._normalize(ids_values, use_gear_space)
