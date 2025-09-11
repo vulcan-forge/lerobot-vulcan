@@ -84,8 +84,8 @@ class Sourccey(Robot):
         self.right_arm = SourcceyFollower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
 
-        print('config dc motors', self.config.dc_motors)
-        print('config dc motors config', self.config.dc_motors_config)
+        print("DC Motors Config: ", self.config.dc_motors_config)
+        print("DC Motors: ", self.config.dc_motors)
         self.dc_motors_controller = PWMDCMotorsController(
             motors=self.config.dc_motors,
             config=self.config.dc_motors_config,
@@ -100,7 +100,6 @@ class Sourccey(Robot):
                 "y.vel": float,
                 "theta.vel": float,
             }
-        }
 
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
