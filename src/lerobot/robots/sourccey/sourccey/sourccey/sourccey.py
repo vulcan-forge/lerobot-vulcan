@@ -250,7 +250,10 @@ class Sourccey(Robot):
                 prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
 
             # Base velocity
-            action = self._body_to_wheel_raw(action)
+            x_vel = action.get("x.vel", 0)
+            y_vel = action.get("y.vel", 0)
+            theta_vel = action.get("theta.vel", 0)
+            action = self._body_to_wheel_raw(x_vel, y_vel, theta_vel)
             for key, value in action.items():
                 self.dc_motors_controller.set_velocity(key, value)
             # self.dc_motors_controller.set_velocity(action)
