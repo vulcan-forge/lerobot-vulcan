@@ -256,12 +256,6 @@ class Sourccey(Robot):
             action = self._body_to_wheel_raw(x_vel, y_vel, theta_vel)
             for key, value in action.items():
                 self.dc_motors_controller.set_velocity(key, value)
-            # self.dc_motors_controller.set_velocity(action)
-            # base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
-            # base_wheel_goal_vel = self._body_to_wheel_raw(
-            #     base_goal_vel["x.vel"], base_goal_vel["y.vel"], base_goal_vel["theta.vel"]
-            # )
-            # self.bus.sync_write("Goal_Velocity", base_wheel_goal_vel)
 
             return {**prefixed_send_action_left, **prefixed_send_action_right, **action}
         except Exception as e:
