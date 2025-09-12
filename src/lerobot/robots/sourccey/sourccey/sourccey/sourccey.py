@@ -84,8 +84,6 @@ class Sourccey(Robot):
         self.right_arm = SourcceyFollower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
 
-        print("DC Motors Config: ", self.config.dc_motors_config)
-        print("DC Motors: ", self.config.dc_motors)
         self.dc_motors_controller = PWMDCMotorsController(
             motors=self.config.dc_motors,
             config=self.config.dc_motors_config,
@@ -252,6 +250,7 @@ class Sourccey(Robot):
                 prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
 
             # Set Velocity and update velocity (0.1 second step up on update)
+            print(f"Action sent: {action}")
 
             # Base velocity
             # base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
@@ -271,6 +270,10 @@ class Sourccey(Robot):
         # self.dc_motors_controller.set_velocity("base_front_right_wheel", 0)
         # self.dc_motors_controller.set_velocity("base_rear_left_wheel", 0)
         # self.dc_motors_controller.set_velocity("base_rear_right_wheel", 0)
+        pass
+
+    def update(self):
+        # self.dc_motors_controller.update_velocity()
         pass
 
     def _target_camera_keys(self) -> list[str]:
