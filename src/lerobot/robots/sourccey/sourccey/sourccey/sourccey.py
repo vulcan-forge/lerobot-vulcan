@@ -255,6 +255,12 @@ class Sourccey(Robot):
             theta_vel = action.get("theta.vel", 0)
             action = self._body_to_wheel_raw(x_vel, y_vel, theta_vel)
             for key, value in action.items():
+                if (value > 0):
+                    value = 1.0
+                elif (value < 0):
+                    value = -1.0
+                else:
+                    value = 0.0
                 self.dc_motors_controller.set_velocity(key, value)
 
             return {**prefixed_send_action_left, **prefixed_send_action_right, **action}
