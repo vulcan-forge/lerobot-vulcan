@@ -260,7 +260,7 @@ class Sourccey(Robot):
             # )
             # self.bus.sync_write("Goal_Velocity", base_wheel_goal_vel)
 
-            return {**prefixed_send_action_left, **prefixed_send_action_right}
+            return {**prefixed_send_action_left, **prefixed_send_action_right, **action}
         except Exception as e:
             print(f"Error sending action: {e}")
             return {}
