@@ -271,8 +271,7 @@ class Sourccey(Robot):
         pass
 
     def update(self):
-        # self.dc_motors_controller.update_velocity()
-        pass
+        self.dc_motors_controller.update_velocity()
 
     def _target_camera_keys(self) -> list[str]:
         """Return camera keys to connect/check based on limit_arm.
