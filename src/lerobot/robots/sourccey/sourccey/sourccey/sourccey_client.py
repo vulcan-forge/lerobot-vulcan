@@ -65,7 +65,7 @@ class SourcceyClient(Robot):
             {"xy": 0.2, "theta": 60},  # medium
             {"xy": 0.3, "theta": 90},  # fast
         ]
-        self.speed_index = 0  # Start at slow
+        self.speed_index = 0  # Start at fast
 
         self._is_connected = False
         self.logs = {}

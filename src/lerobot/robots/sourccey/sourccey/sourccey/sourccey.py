@@ -249,10 +249,11 @@ class Sourccey(Robot):
                 sent_right = self.right_arm.send_action(right_action)
                 prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
 
-            # Set Velocity and update velocity (0.1 second step up on update)
-            print(f"Action sent: {action}")
-
             # Base velocity
+            action = self._body_to_wheel_raw(action)
+            for key, value in action.items():
+                self.dc_motors_controller.set_velocity(key, value)
+            # self.dc_motors_controller.set_velocity(action)
             # base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
             # base_wheel_goal_vel = self._body_to_wheel_raw(
             #     base_goal_vel["x.vel"], base_goal_vel["y.vel"], base_goal_vel["theta.vel"]
@@ -386,18 +387,18 @@ class Sourccey(Robot):
         wheel_raw = [self._degps_to_raw(deg) for deg in wheel_degps]
 
         return {
-            "base_front_left_wheel": wheel_raw[0],
-            "base_front_right_wheel": wheel_raw[1],
-            "base_rear_left_wheel": wheel_raw[2],
-            "base_rear_right_wheel": wheel_raw[3],
+            "front_left": wheel_raw[0],
+            "front_right": wheel_raw[1],
+            "rear_left": wheel_raw[2],
+            "rear_right": wheel_raw[3],
         }
 
     def _wheel_raw_to_body(
         self,
-        front_left_wheel_speed,
-        front_right_wheel_speed,
-        rear_left_wheel_speed,
-        rear_right_wheel_speed,
+        front_left,
+        front_right,
+        rear_left,
+        rear_right,
         wheel_radius: float = 0.05,
         wheelbase: float = 0.25,  # Distance between front and rear wheels
         track_width: float = 0.25,  # Distance between left and right wheels
@@ -418,10 +419,10 @@ class Sourccey(Robot):
 
         # Convert each raw command back to an angular speed in deg/s.
         wheel_degps = np.array([
-            self._raw_to_degps(front_left_wheel_speed),
-            self._raw_to_degps(front_right_wheel_speed),
-            self._raw_to_degps(rear_left_wheel_speed),
-            self._raw_to_degps(rear_right_wheel_speed),
+            self._raw_to_degps(front_left),
+            self._raw_to_degps(front_right),
+            self._raw_to_degps(rear_left),
+            self._raw_to_degps(rear_right),
         ])
 
         # Convert from deg/s to rad/s.
