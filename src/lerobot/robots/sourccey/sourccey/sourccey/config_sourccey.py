@@ -45,17 +45,14 @@ def sourccey_dc_motors() -> dict[str, DCMotor]:
         "front_right": DCMotor(id=2, model="mecanum_wheel", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
         "rear_left": DCMotor(id=3, model="mecanum_wheel", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
         "rear_right": DCMotor(id=4, model="mecanum_wheel", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
-        "actuator": DCMotor(id=5, model="linear_actuator", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
+        "linear_actuator": DCMotor(id=5, model="linear_actuator", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
     }
 
 def sourccey_dc_motors_config() -> dict:
     return {
-        "in1_pins": [12, 13, 14, 15, 18],
-        "in2_pins": [2, 3, 4, 5, 6],
+        "in1_pins": [17,23,24,26,5], # Physical pins: [11, 16, 18, 37, 29]
+        "in2_pins": [27,22,25,16,6], # Physical pins: [13, 15, 22, 36, 31]
         "pwm_frequency": 1000,
-        "invert_direction": False,
-        "invert_enable": False,
-        "invert_brake": False,
     }
 
 @RobotConfig.register_subclass("sourccey")
