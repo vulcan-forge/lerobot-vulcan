@@ -70,20 +70,25 @@ def test_motor_turn():
             #Wheel Test
             print("2. Wheel Test...")
 
-            controller.set_velocity("front_left", -1.0)
-            controller.set_velocity("front_right", 1.0)
-            controller.set_velocity("rear_left", -1.0)
-            controller.set_velocity("rear_right", 1.0)
+            controller.set_velocity("front_left", 1.0)
+            controller.set_velocity("front_right", -1.0)
+            controller.set_velocity("rear_left", 1.0)
+            controller.set_velocity("rear_right", -1.0)
             # controller.set_velocity("linear_actuator", 1.0)
 
-            for i in range(5):
-                controller.update_velocity("front_left", 0.2)   # nudges motor 1 toward target
-                controller.update_velocity("front_right", 0.2)   # same for motor 2, etc.
-                controller.update_velocity("rear_left", 0.2)   # same for motor 2, etc.
-                controller.update_velocity("rear_right", 0.2)   # same for motor 2, etc.
-                # controller.update_velocity("linear_actuator", 0.2)   # same for motor 2, etc.
+            controller.update_velocity("front_left", 1.0)   # nudges motor 1 toward target
+            controller.update_velocity("front_right", 1.0)   # same for motor 2, etc.
+            controller.update_velocity("rear_left", 1.0)   # same for motor 2, etc.
+            controller.update_velocity("rear_right", 1.0)   # same for motor 2, etc.
 
-                time.sleep(0.02)
+            # for i in range(5):
+            #     controller.update_velocity("front_left", 0.2)   # nudges motor 1 toward target
+            #     controller.update_velocity("front_right", 0.2)   # same for motor 2, etc.
+            #     controller.update_velocity("rear_left", 0.2)   # same for motor 2, etc.
+            #     controller.update_velocity("rear_right", 0.2)   # same for motor 2, etc.
+            #     # controller.update_velocity("linear_actuator", 0.2)   # same for motor 2, etc.
+
+            #     time.sleep(0.02)
 
             time.sleep(30)
 
@@ -102,20 +107,25 @@ def test_motor_turn():
 
             time.sleep(2)
 
-            controller.set_velocity("front_left", 1.0)
-            controller.set_velocity("front_right", -1.0)
-            controller.set_velocity("rear_left", 1.0)
-            controller.set_velocity("rear_right", -1.0)
+            controller.set_velocity("front_left", -1.0)
+            controller.set_velocity("front_right", 1.0)
+            controller.set_velocity("rear_left", -1.0)
+            controller.set_velocity("rear_right", 1.0)
             # controller.set_velocity("linear_actuator", -1.0)
 
-            for i in range(5):
-                controller.update_velocity("front_left", 0.2)   # nudges motor 1 toward target
-                controller.update_velocity("front_right", 0.2)   # same for motor 2, etc.
-                controller.update_velocity("rear_left", 0.2)   # same for motor 2, etc.
-                controller.update_velocity("rear_right", 0.2)   # same for motor 2, etc.
-                # controller.update_velocity("linear_actuator", 0.2)   # same for motor 2, etc.
+            controller.update_velocity("front_left", 1.0)   # nudges motor 1 toward target
+            controller.update_velocity("front_right", 1.0)   # same for motor 2, etc.
+            controller.update_velocity("rear_left", 1.0)   # same for motor 2, etc.
+            controller.update_velocity("rear_right", 1.0)   # same for motor 2, etc.
 
-                time.sleep(0.02)
+            # for i in range(5):
+            #     controller.update_velocity("front_left", 0.2)   # nudges motor 1 toward target
+            #     controller.update_velocity("front_right", 0.2)   # same for motor 2, etc.
+            #     controller.update_velocity("rear_left", 0.2)   # same for motor 2, etc.
+            #     controller.update_velocity("rear_right", 0.2)   # same for motor 2, etc.
+            #     # controller.update_velocity("linear_actuator", 0.2)   # same for motor 2, etc.
+
+            #     time.sleep(0.02)
 
             time.sleep(30)
 
