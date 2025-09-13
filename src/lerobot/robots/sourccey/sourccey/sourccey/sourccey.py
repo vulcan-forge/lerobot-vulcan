@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import logging
+import random
 import time
 from functools import cached_property
 from itertools import chain
@@ -249,6 +250,11 @@ class Sourccey(Robot):
                 sent_right = self.right_arm.send_action(right_action)
                 prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
 
+
+            # Randomly print out the action here so that it doesnt spam me
+            if random.random() < 0.01:
+                print(f"Action sent: {action}")
+
             # Base velocity
             x_vel = action.get("x.vel", 0)
             y_vel = action.get("y.vel", 0)
@@ -359,6 +365,7 @@ class Sourccey(Robot):
             using _degps_to_normalized(). If any command exceeds max_normalized, all commands
             are scaled down proportionally.
           - Mechanum wheels allow for omnidirectional movement including strafing.
+          - Right wheels are inverted to match physical motor direction.
         """
         # Convert rotational velocity from deg/s to rad/s.
         theta_rad = theta * (np.pi / 180.0)
@@ -370,12 +377,13 @@ class Sourccey(Robot):
         effective_radius = np.sqrt((wheelbase/2)**2 + (track_width/2)**2)
 
         # Build the kinematic matrix for mechanum wheels
+        # Right wheels are inverted to match physical motor direction
         # Each row represents: [forward/backward, left/right, rotation]
         m = np.array([
             [1,  1, -effective_radius],  # Front-left wheel
-            [1, -1,  effective_radius],  # Front-right wheel
+            [-1, 1,  effective_radius],  # Front-right wheel (inverted)
             [1, -1, -effective_radius],  # Rear-left wheel
-            [1,  1,  effective_radius],  # Rear-right wheel
+            [-1, -1,  effective_radius], # Rear-right wheel (inverted)
         ])
 
         # Compute each wheel's linear speed (m/s) and then its angular speed (rad/s).
@@ -442,11 +450,12 @@ class Sourccey(Robot):
         effective_radius = np.sqrt((wheelbase/2)**2 + (track_width/2)**2)
 
         # Build the kinematic matrix for mechanum wheels (same as forward kinematics)
+        # Right wheels are inverted to match physical motor direction
         m = np.array([
             [1,  1, -effective_radius],  # Front-left wheel
-            [1, -1,  effective_radius],  # Front-right wheel
+            [-1, 1,  effective_radius],  # Front-right wheel (inverted)
             [1, -1, -effective_radius],  # Rear-left wheel
-            [1,  1,  effective_radius],  # Rear-right wheel
+            [-1, -1,  effective_radius], # Rear-right wheel (inverted)
         ])
 
         # Solve the inverse kinematics: body_velocity = M⁺ · wheel_linear_speeds.

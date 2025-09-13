@@ -213,10 +213,9 @@ class BaseDCMotorsController(abc.ABC):
             normalize: Whether to normalize the velocity
         """
         for motor, velocity in motors.items():
-            print(f"Setting motor {motor} velocity to {velocity}")
             self.set_velocity(motor, velocity, normalize)
 
-    def update_velocity(self, motor: NameOrID | None = None, max_step: float = 0.2) -> None:
+    def update_velocity(self, motor: NameOrID | None = None, max_step: float = 1.0) -> None:
         """Update motor velocity."""
         if not self._is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
