@@ -16,7 +16,7 @@
     "elbow_flex": {
         "id": 3,
         "drive_mode": 0,
-        "homing_offset": -1515,
+        "homing_offset": -1795,
         "range_min": 200,
         "range_max": 3800
     },
