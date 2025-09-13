@@ -253,15 +253,8 @@ class Sourccey(Robot):
             x_vel = action.get("x.vel", 0)
             y_vel = action.get("y.vel", 0)
             theta_vel = action.get("theta.vel", 0)
-            action = self._body_to_wheel_raw(x_vel, y_vel, theta_vel)
-            for key, value in action.items():
-                if (value > 0):
-                    value = 1.0
-                elif (value < 0):
-                    value = -1.0
-                else:
-                    value = 0.0
-                self.dc_motors_controller.set_velocity(key, value)
+            action = self._body_to_wheel_normalized(x_vel, y_vel, theta_vel)
+            self.dc_motors_controller.set_velocity(action)
 
             return {**prefixed_send_action_left, **prefixed_send_action_right, **action}
         except Exception as e:
@@ -293,25 +286,47 @@ class Sourccey(Robot):
         return keys
 
     @staticmethod
-    def _raw_to_degps(raw_speed: int) -> float:
-        steps_per_deg = 4096.0 / 360.0
-        magnitude = raw_speed
-        degps = magnitude / steps_per_deg
+    def _normalized_to_degps(normalized_speed: float) -> float:
+        """
+        Convert normalized DC motor speed (-1 to 1) to degrees per second.
+
+        Parameters:
+          normalized_speed: DC motor speed from -1.0 to 1.0
+
+        Returns:
+          Angular velocity in degrees per second
+        """
+        # Define maximum angular velocity for DC motors (adjust based on your motor specs)
+        max_degps = 360.0  # Adjust this value based on your DC motor's maximum speed
+
+        # Clamp normalized speed to valid range
+        normalized_speed = np.clip(normalized_speed, -1.0, 1.0)
+
+        # Convert to degrees per second
+        degps = normalized_speed * max_degps
         return degps
 
     @staticmethod
-    def _degps_to_raw(degps: float) -> int:
-        steps_per_deg = 4096.0 / 360.0
-        speed_in_steps = degps * steps_per_deg
-        speed_int = int(round(speed_in_steps))
-        # Cap the value to fit within signed 16-bit range (-32768 to 32767)
-        if speed_int > 0x7FFF:
-            speed_int = 0x7FFF  # 32767 -> maximum positive value
-        elif speed_int < -0x8000:
-            speed_int = -0x8000  # -32768 -> minimum negative value
-        return speed_int
+    def _degps_to_normalized(degps: float) -> float:
+        """
+        Convert degrees per second to normalized DC motor speed (-1 to 1).
 
-    def _body_to_wheel_raw(
+        Parameters:
+          degps: Angular velocity in degrees per second
+
+        Returns:
+          Normalized DC motor speed from -1.0 to 1.0
+        """
+        # Define maximum angular velocity for DC motors (adjust based on your motor specs)
+        max_degps = 360.0  # Adjust this value based on your DC motor's maximum speed
+
+        # Convert to normalized speed and clamp to valid range
+        normalized_speed = degps / max_degps
+        normalized_speed = np.clip(normalized_speed, -1.0, 1.0)
+
+        return normalized_speed
+
+    def _body_to_wheel_normalized(
         self,
         x: float,
         y: float,
@@ -319,10 +334,10 @@ class Sourccey(Robot):
         wheel_radius: float = 0.05,
         wheelbase: float = 0.25,  # Distance between front and rear wheels
         track_width: float = 0.25,  # Distance between left and right wheels
-        max_raw: int = 3000,
+        max_normalized: float = 1.0,
     ) -> dict:
         """
-        Convert desired body-frame velocities into wheel raw commands for 4-wheel mechanum drive.
+        Convert desired body-frame velocities into normalized wheel commands for 4-wheel mechanum drive.
 
         Parameters:
           x_cmd      : Linear velocity in x (m/s).
@@ -331,17 +346,17 @@ class Sourccey(Robot):
           wheel_radius: Radius of each wheel (meters).
           wheelbase  : Distance between front and rear wheels (meters).
           track_width: Distance between left and right wheels (meters).
-          max_raw    : Maximum allowed raw command (ticks) per wheel.
+          max_normalized: Maximum allowed normalized command per wheel (typically 1.0).
 
         Returns:
-          A dictionary with wheel raw commands:
-             {"base_front_left_wheel": value, "base_front_right_wheel": value,
-              "base_rear_left_wheel": value, "base_rear_right_wheel": value}.
+          A dictionary with normalized wheel commands:
+             {"front_left": value, "front_right": value,
+              "rear_left": value, "rear_right": value}.
 
         Notes:
           - Internally, the method converts theta_cmd to rad/s for the kinematics.
-          - The raw command is computed from the wheels angular speed in deg/s
-            using _degps_to_raw(). If any command exceeds max_raw, all commands
+          - The normalized command is computed from the wheels angular speed in deg/s
+            using _degps_to_normalized(). If any command exceeds max_normalized, all commands
             are scaled down proportionally.
           - Mechanum wheels allow for omnidirectional movement including strafing.
         """
@@ -350,13 +365,6 @@ class Sourccey(Robot):
 
         # Create the body velocity vector [x, y, theta_rad].
         velocity_vector = np.array([x, y, theta_rad])
-
-        # Mechanum wheel kinematic matrix
-        # For mechanum wheels, the kinematic relationship is:
-        # [v_fl]   [1  1  -(wheelbase + track_width)/2] [v_x]
-        # [v_fr] = [1 -1   (wheelbase + track_width)/2] [v_y]
-        # [v_rl]   [1 -1  -(wheelbase + track_width)/2] [v_theta]
-        # [v_rr]   [1  1   (wheelbase + track_width)/2]
 
         # Calculate the effective radius for rotation
         effective_radius = np.sqrt((wheelbase/2)**2 + (track_width/2)**2)
@@ -377,25 +385,23 @@ class Sourccey(Robot):
         # Convert wheel angular speeds from rad/s to deg/s.
         wheel_degps = wheel_angular_speeds * (180.0 / np.pi)
 
-        # Scaling to respect maximum raw command
-        steps_per_deg = 4096.0 / 360.0
-        raw_floats = [abs(degps) * steps_per_deg for degps in wheel_degps]
-        max_raw_computed = max(raw_floats)
-        if max_raw_computed > max_raw:
-            scale = max_raw / max_raw_computed
-            wheel_degps = wheel_degps * scale
+        # Convert to normalized speeds
+        wheel_normalized = np.array([self._degps_to_normalized(deg) for deg in wheel_degps])
 
-        # Convert each wheel's angular speed (deg/s) to a raw integer.
-        wheel_raw = [self._degps_to_raw(deg) for deg in wheel_degps]
+        # Scaling to respect maximum normalized command
+        max_normalized_computed = np.max(np.abs(wheel_normalized))
+        if max_normalized_computed > max_normalized:
+            scale = max_normalized / max_normalized_computed
+            wheel_normalized = wheel_normalized * scale
 
         return {
-            "front_left": wheel_raw[0],
-            "front_right": wheel_raw[1],
-            "rear_left": wheel_raw[2],
-            "rear_right": wheel_raw[3],
+            "front_left": float(wheel_normalized[0]),
+            "front_right": float(wheel_normalized[1]),
+            "rear_left": float(wheel_normalized[2]),
+            "rear_right": float(wheel_normalized[3]),
         }
 
-    def _wheel_raw_to_body(
+    def _wheel_normalized_to_body(
         self,
         front_left,
         front_right,
@@ -406,11 +412,11 @@ class Sourccey(Robot):
         track_width: float = 0.25,  # Distance between left and right wheels
     ) -> dict[str, Any]:
         """
-        Convert wheel raw command feedback back into body-frame velocities for 4-wheel mechanum drive.
+        Convert normalized wheel command feedback back into body-frame velocities for 4-wheel mechanum drive.
 
         Parameters:
-          wheel_raw   : Vector with raw wheel commands ("base_front_left_wheel", "base_front_right_wheel",
-                       "base_rear_left_wheel", "base_rear_right_wheel").
+          wheel_normalized: Vector with normalized wheel commands (front_left, front_right,
+                           rear_left, rear_right) from -1.0 to 1.0.
           wheel_radius: Radius of each wheel (meters).
           wheelbase   : Distance between front and rear wheels (meters).
           track_width : Distance between left and right wheels (meters).
@@ -419,12 +425,12 @@ class Sourccey(Robot):
           A dict (x.vel, y.vel, theta.vel) all in m/s and deg/s
         """
 
-        # Convert each raw command back to an angular speed in deg/s.
+        # Convert each normalized command back to an angular speed in deg/s.
         wheel_degps = np.array([
-            self._raw_to_degps(front_left),
-            self._raw_to_degps(front_right),
-            self._raw_to_degps(rear_left),
-            self._raw_to_degps(rear_right),
+            self._normalized_to_degps(front_left),
+            self._normalized_to_degps(front_right),
+            self._normalized_to_degps(rear_left),
+            self._normalized_to_degps(rear_right),
         ])
 
         # Convert from deg/s to rad/s.

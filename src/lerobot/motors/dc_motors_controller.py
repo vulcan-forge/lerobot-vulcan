@@ -204,21 +204,33 @@ class BaseDCMotorsController(abc.ABC):
         self.protocol_handler.set_velocity(motor_id, velocity)
         logger.debug(f"Set motor {motor} velocity to {velocity}")
 
-    def update_velocity(self, motor: NameOrID, max_step: float = 0.05) -> None:
-        """Update motor velocity."""
-        if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        motor_id = self._get_motor_id(motor)
-        self.protocol_handler.update_velocity(motor_id, max_step)
+    def set_velocity(self, motors: dict[NameOrID, float], normalize: bool = True) -> None:
+        """
+        Set motor velocities.
 
-    def update_velocity(self, max_step: float = 0.05) -> None:
+        Args:
+            motors: Dictionary of motor names or IDs and target velocities
+            normalize: Whether to normalize the velocity
+        """
+        for motor, velocity in motors.items():
+            self.set_velocity(motor, velocity, normalize)
+
+    def update_velocity(self, max_step: float = 0.2) -> None:
         """Update all motor velocity."""
         if not self._is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         for motor_id in self._id_to_name_dict.keys():
             self.protocol_handler.update_velocity(motor_id, max_step)
+
+    def update_velocity(self, motor: NameOrID, max_step: float = 0.2) -> None:
+        """Update motor velocity."""
+        if not self._is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        motor_id = self._get_motor_id(motor)
+        self.protocol_handler.update_velocity(motor_id, max_step)
 
     # PWM Functions
     def get_pwm(self, motor: NameOrID) -> float:
