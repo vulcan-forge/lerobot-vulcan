@@ -61,11 +61,11 @@ class SourcceyClient(Robot):
 
         # Define three speed levels and a current index
         self.speed_levels = [
-            {"xy": 0.1, "theta": 30},  # slow
-            {"xy": 0.2, "theta": 60},  # medium
-            {"xy": 0.3, "theta": 90},  # fast
+            {"xy": 0.33, "theta": 30},  # slow
+            {"xy": 0.67, "theta": 60},  # medium
+            {"xy": 1.0, "theta": 90},  # fast
         ]
-        self.speed_index = 0  # Start at fast
+        self.speed_index = 2  # Start at fast
 
         self._is_connected = False
         self.logs = {}
