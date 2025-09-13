@@ -254,7 +254,7 @@ class Sourccey(Robot):
             y_vel = action.get("y.vel", 0)
             theta_vel = action.get("theta.vel", 0)
             action = self._body_to_wheel_normalized(x_vel, y_vel, theta_vel)
-            self.dc_motors_controller.set_velocity(action)
+            self.dc_motors_controller.set_velocities(action)
 
             return {**prefixed_send_action_left, **prefixed_send_action_right, **action}
         except Exception as e:
