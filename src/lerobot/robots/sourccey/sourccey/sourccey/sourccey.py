@@ -250,11 +250,6 @@ class Sourccey(Robot):
                 sent_right = self.right_arm.send_action(right_action)
                 prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
 
-
-            # Randomly print out the action here so that it doesnt spam me
-            if random.random() < 0.0001:
-                print(f"Action sent: {action}")
-
             # Base velocity
             x_vel = action.get("x.vel", 0)
             y_vel = action.get("y.vel", 0)
@@ -269,11 +264,7 @@ class Sourccey(Robot):
 
     # Base Functions
     def stop_base(self):
-        # self.dc_motors_controller.set_velocity("base_front_left_wheel", 0)
-        # self.dc_motors_controller.set_velocity("base_front_right_wheel", 0)
-        # self.dc_motors_controller.set_velocity("base_rear_left_wheel", 0)
-        # self.dc_motors_controller.set_velocity("base_rear_right_wheel", 0)
-        pass
+        self.dc_motors_controller.set_velocities({"front_left": 0, "front_right": 0, "rear_left": 0, "rear_right": 0})
 
     def update(self):
         self.dc_motors_controller.update_velocity()
