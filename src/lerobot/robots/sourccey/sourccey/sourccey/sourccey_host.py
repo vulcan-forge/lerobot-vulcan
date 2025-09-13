@@ -79,7 +79,6 @@ def main():
 
                 _action_sent = robot.send_action(data)
                 robot.update()
-                print(f"Action sent: {_action_sent}")
 
                 last_cmd_time = time.time()
                 watchdog_active = False
