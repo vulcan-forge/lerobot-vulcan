@@ -92,6 +92,9 @@ class Sourccey(Robot):
 
 
     def __del__(self):
+        print()
+        print("Destroying Sourccey")
+        print()
         self.disconnect()
 
     @property
@@ -144,11 +147,14 @@ class Sourccey(Robot):
             self.cameras[cam_key].connect()
 
     def disconnect(self):
-        if self.limit_arm == "left":
+        print()
+        print("Disconnecting Sourccey")
+        print()
+        if self.left_arm.is_connected and self.limit_arm == "left":
             self.left_arm.disconnect()
-        elif self.limit_arm == "right":
+        elif self.right_arm.is_connected and self.limit_arm == "right":
             self.right_arm.disconnect()
-        else:
+        elif self.left_arm.is_connected and self.right_arm.is_connected:
             self.left_arm.disconnect()
             self.right_arm.disconnect()
 

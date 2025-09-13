@@ -49,7 +49,11 @@ class SourcceyFollower(Robot):
         )
 
     def __del__(self):
-        self.disconnect()
+        print()
+        print("Destroying Sourccey Follower")
+        print()
+        if (self.is_connected):
+            self.disconnect()
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -118,6 +122,15 @@ class SourcceyFollower(Robot):
             # Set I_Coefficient and D_Coefficient to default value 0 and 32
             self.bus.write("I_Coefficient", motor, 0)
             self.bus.write("D_Coefficient", motor, 32)
+
+            if motor == "gripper":
+                self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
+                self.bus.write("Protection_Current", motor, 250)  # 50% of max current to avoid burnout
+                self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
+            else:
+                self.bus.write("Max_Torque_Limit", motor, 800)  # 80% of max torque
+                self.bus.write("Protection_Current", motor, 400)  # 80% of max current
+                self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
 
     def setup_motors(self) -> None:
         for motor in reversed(self.bus.motors):
