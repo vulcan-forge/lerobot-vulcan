@@ -90,6 +90,10 @@ class Sourccey(Robot):
             config=self.config.dc_motors_config,
         )
 
+
+    def __del__(self):
+        self.disconnect()
+
     @property
     def _state_ft(self) -> dict[str, type]:
         return {

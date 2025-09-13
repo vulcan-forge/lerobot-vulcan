@@ -48,6 +48,9 @@ class SourcceyFollower(Robot):
             robot=self
         )
 
+    def __del__(self):
+        self.disconnect()
+
     @property
     def _motors_ft(self) -> dict[str, type]:
         return {f"{motor}.pos": float for motor in self.bus.motors}
