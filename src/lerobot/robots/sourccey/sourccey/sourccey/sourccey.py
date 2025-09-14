@@ -355,10 +355,12 @@ class Sourccey(Robot):
         m_pinv = np.linalg.pinv(m)
         velocity_vector = m_pinv.dot(wheel_array)
         x, y, theta = velocity_vector
+
+        # Round to prevent floating-point precision issues
         return {
-            "x.vel": x,
-            "y.vel": y,
-            "theta.vel": theta,
+            "x.vel": round(x, 8),
+            "y.vel": round(y, 8),
+            "theta.vel": round(theta, 8),
         }
 
 
