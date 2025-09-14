@@ -384,8 +384,8 @@ class Sourccey(Robot):
         # Build the correct kinematic matrix for mechanum wheels
         m = np.array([
             [ 1,  1, -rotation_coeff],  # Front-left wheel
-            [-1,  1, -rotation_coeff],  # Front-right wheel
-            [ 1, -1, -rotation_coeff],  # Rear-left wheel
+            [-1,  1,  rotation_coeff],  # Front-right wheel
+            [ 1, -1,  rotation_coeff],  # Rear-left wheel
             [-1, -1, -rotation_coeff], # Rear-right wheel
         ])
 
@@ -455,8 +455,8 @@ class Sourccey(Robot):
         # Build the kinematic matrix for mechanum wheels (same as forward kinematics)
         m = np.array([
             [ 1,  1, -rotation_coeff],  # Front-left wheel
-            [-1,  1, -rotation_coeff],  # Front-right wheel
-            [ 1, -1, -rotation_coeff],  # Rear-left wheel
+            [-1,  1,  rotation_coeff],  # Front-right wheel
+            [ 1, -1,  rotation_coeff],  # Rear-left wheel
             [-1, -1, -rotation_coeff], # Rear-right wheel
         ])
 
