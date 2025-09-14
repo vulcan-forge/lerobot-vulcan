@@ -268,7 +268,7 @@ class Sourccey(Robot):
             self.dc_motors_controller.set_velocities(action)
 
             sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **action}
-            if random.random() < 0.001:
+            if random.random() < 0.02:
                 print()
                 print()
                 print()
