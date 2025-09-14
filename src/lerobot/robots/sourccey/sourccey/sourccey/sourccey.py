@@ -383,10 +383,10 @@ class Sourccey(Robot):
 
         # Build the correct kinematic matrix for mechanum wheels
         m = np.array([
-            [ 1,  1, -rotation_coeff],  # Front-left wheel
-            [-1,  1,  rotation_coeff],  # Front-right wheel
-            [ 1, -1,  rotation_coeff],  # Rear-left wheel
-            [-1, -1, -rotation_coeff], # Rear-right wheel
+            [ 1,  1, rotation_coeff],  # Front-left wheel
+            [-1,  1, rotation_coeff],  # Front-right wheel
+            [ 1, -1, rotation_coeff],  # Rear-left wheel
+            [-1, -1, rotation_coeff], # Rear-right wheel
         ])
 
         # Compute each wheel's linear speed (m/s) and then its angular speed (rad/s).
@@ -454,10 +454,10 @@ class Sourccey(Robot):
 
         # Build the kinematic matrix for mechanum wheels (same as forward kinematics)
         m = np.array([
-            [ 1,  1, -rotation_coeff],  # Front-left wheel
-            [-1,  1,  rotation_coeff],  # Front-right wheel
-            [ 1, -1,  rotation_coeff],  # Rear-left wheel
-            [-1, -1, -rotation_coeff], # Rear-right wheel
+            [ 1,  1, rotation_coeff],  # Front-left wheel
+            [-1,  1, rotation_coeff],  # Front-right wheel
+            [ 1, -1, rotation_coeff],  # Rear-left wheel
+            [-1, -1, rotation_coeff], # Rear-right wheel
         ])
 
         # Solve the inverse kinematics: body_velocity = M⁺ · wheel_linear_speeds.
