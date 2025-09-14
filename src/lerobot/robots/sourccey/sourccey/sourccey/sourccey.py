@@ -261,7 +261,11 @@ class Sourccey(Robot):
                 prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
 
             # Base velocity
-            wheel_action = self._body_to_wheel_normalized(base_goal_vel["x.vel"], base_goal_vel["y.vel"], base_goal_vel["theta.vel"])
+            wheel_action = self._body_to_wheel_normalized(
+                base_goal_vel.get("x.vel", 0.0),
+                base_goal_vel.get("y.vel", 0.0),
+                base_goal_vel.get("theta.vel", 0.0)
+            )
             self.dc_motors_controller.set_velocities(wheel_action)
 
             sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_vel}
