@@ -231,6 +231,12 @@ class Sourccey(Robot):
                 right_obs = self.right_arm.get_observation()
                 obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
 
+            base_wheel_vel = self.dc_motors_controller.get_velocities()
+            base_vel = self._wheel_normalized_to_body(base_wheel_vel)
+
+            print(f"Base velocity: {base_vel}")
+            obs_dict.update(base_vel)
+
             for cam_key in self._target_camera_keys():
                 cam = self.cameras[cam_key]
                 obs_dict[cam_key] = cam.async_read()
@@ -321,18 +327,6 @@ class Sourccey(Robot):
             "rear_right": float(wheel_normalized[3]),
         }
 
-        if (random.random() < 0.02):
-            print()
-            print()
-            print()
-            print(f"Wheel normalized: {wheel_normalized}")
-            print()
-            print()
-            print()
-            print(f"Wheel dict: {wheel_dict}")
-            print()
-            print()
-            print()
         return wheel_dict
 
     def _wheel_normalized_to_body(

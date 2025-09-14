@@ -378,9 +378,7 @@ class PWMProtocolHandler(ProtocolHandler):
         Tuned so that velocity=0.5 gives about 0.25 duty (half speed in real world).
         """
 
-        # This code works for the 120RPM 10kg.cm torque motor.
-
-
+        # This code works for the 30RPM 10kg.cm torque motor.
         v = abs(velocity)
 
         # Special case: stop = true 0 duty

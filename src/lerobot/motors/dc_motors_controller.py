@@ -183,6 +183,13 @@ class BaseDCMotorsController(abc.ABC):
         motor_id = self._get_motor_id(motor)
         return self.protocol_handler.get_velocity(motor_id)
 
+    def get_velocities(self) -> dict[NameOrID, float]:
+        """Get current motor velocities."""
+        if not self._is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        return {motor: self.get_velocity(motor) for motor in self.motors.keys()}
+
     def set_velocity(self, motor: NameOrID, velocity: float, normalize: bool = True) -> None:
         """
         Set motor velocity.
