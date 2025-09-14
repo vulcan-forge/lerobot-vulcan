@@ -61,11 +61,12 @@ class SourcceyClient(Robot):
 
         # Define three speed levels and a current index
         self.speed_levels = [
-            {"xy": 0.33, "theta": 30},  # slow
-            {"xy": 0.67, "theta": 60},  # medium
-            {"xy": 1.0, "theta": 90},  # fast
+            {"x": 0.25, "y": 0.25, "theta": 0.25},  # slow
+            {"x": 0.5,  "y": 0.5,  "theta": 0.5},   # medium
+            {"x": 0.75, "y": 0.75, "theta": 0.75},  # fast
+            {"x": 1.0,  "y": 1.0,  "theta": 1.0},   # max
         ]
-        self.speed_index = 2  # Start at fast
+        self.speed_index = 3  # Start at max
 
         self._is_connected = False
         self.logs = {}
@@ -274,29 +275,31 @@ class SourcceyClient(Robot):
     def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray):
         # Speed control
         if self.teleop_keys["speed_up"] in pressed_keys:
-            self.speed_index = min(self.speed_index + 1, 2)
+            self.speed_index = min(self.speed_index + 1, 3)
         if self.teleop_keys["speed_down"] in pressed_keys:
             self.speed_index = max(self.speed_index - 1, 0)
         speed_setting = self.speed_levels[self.speed_index]
-        xy_speed = speed_setting["xy"]  # e.g. 0.1, 0.25, or 0.4
-        theta_speed = speed_setting["theta"]  # e.g. 30, 60, or 90
+        x_speed = speed_setting["x"]
+        y_speed = speed_setting["y"]
+        theta_speed = speed_setting["theta"]
 
-        x_cmd = 0.0  # m/s forward/backward
-        y_cmd = 0.0  # m/s lateral
-        theta_cmd = 0.0  # deg/s rotation
+        x_cmd = 0.0
+        y_cmd = 0.0
+        theta_cmd = 0.0
 
         if self.teleop_keys["forward"] in pressed_keys:
-            x_cmd += xy_speed
+            x_cmd += x_speed
         if self.teleop_keys["backward"] in pressed_keys:
-            x_cmd -= xy_speed
+            x_cmd -= x_speed
         if self.teleop_keys["left"] in pressed_keys:
-            y_cmd += xy_speed
+            y_cmd += y_speed
         if self.teleop_keys["right"] in pressed_keys:
-            y_cmd -= xy_speed
+            y_cmd -= y_speed
         if self.teleop_keys["rotate_left"] in pressed_keys:
             theta_cmd += theta_speed
         if self.teleop_keys["rotate_right"] in pressed_keys:
             theta_cmd -= theta_speed
+
         return {
             "x.vel": x_cmd,
             "y.vel": y_cmd,
