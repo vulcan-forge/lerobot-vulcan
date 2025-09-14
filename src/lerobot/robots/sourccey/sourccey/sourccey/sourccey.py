@@ -266,16 +266,6 @@ class Sourccey(Robot):
             self.dc_motors_controller.set_velocities(wheel_action)
 
             sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_vel}
-            if random.random() < 0.02:
-                print()
-                print()
-                print()
-                print(f"Action received: {action}")
-                print(f"Action sent: {sent_action}")
-                print()
-                print()
-                print()
-
             return sent_action
         except Exception as e:
             print(f"Error sending action: {e}")
