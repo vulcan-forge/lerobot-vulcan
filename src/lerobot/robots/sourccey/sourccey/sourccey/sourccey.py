@@ -356,11 +356,16 @@ class Sourccey(Robot):
         velocity_vector = m_pinv.dot(wheel_array)
         x, y, theta = velocity_vector
 
-        # Round to prevent floating-point precision issues
+        # Round to prevent floating-point precision issues and handle -0.0
+        def clean_value(val):
+            rounded = round(val, 8)
+            # Convert -0.0 to 0.0 and very small values to 0.0
+            return 0.0 if abs(rounded) < 1e-10 else rounded
+
         return {
-            "x.vel": round(x, 8),
-            "y.vel": round(y, 8),
-            "theta.vel": round(theta, 8),
+            "x.vel": clean_value(x),
+            "y.vel": clean_value(y),
+            "theta.vel": clean_value(theta),
         }
 
 
