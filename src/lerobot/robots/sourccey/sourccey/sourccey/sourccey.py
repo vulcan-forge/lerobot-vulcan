@@ -378,18 +378,15 @@ class Sourccey(Robot):
         # Create the body velocity vector [x, y, theta_rad].
         velocity_vector = np.array([x, y, theta_rad])
 
-        # Calculate the effective radius for rotation
-        effective_radius = np.sqrt((wheelbase/2)**2 + (track_width/2)**2)
+        # Calculate rotation coefficient for cleaner matrix
+        rotation_coeff = (wheelbase + track_width) / 2
 
-        # Build the kinematic matrix for mechanum wheels
-        # For mechanum wheels, turning requires all wheels to rotate in the same direction
-        # Right wheels are inverted to match physical motor direction
-        # Each row represents: [forward/backward, left/right, rotation]
+        # Build the correct kinematic matrix for mechanum wheels
         m = np.array([
-            [1,  1, -effective_radius],  # Front-left wheel
-            [-1, 1, -effective_radius],  # Front-right wheel (inverted for forward/backward, same for rotation)
-            [1, -1, -effective_radius],  # Rear-left wheel
-            [-1, -1, -effective_radius], # Rear-right wheel (inverted for forward/backward, same for rotation)
+            [1,  1,  rotation_coeff],  # Front-left wheel
+            [-1, 1,  rotation_coeff],  # Front-right wheel
+            [1, -1, -rotation_coeff],  # Rear-left wheel
+            [-1, -1, -rotation_coeff], # Rear-right wheel
         ])
 
         # Compute each wheel's linear speed (m/s) and then its angular speed (rad/s).
@@ -452,16 +449,15 @@ class Sourccey(Robot):
         # Compute each wheel's linear speed (m/s) from its angular speed.
         wheel_linear_speeds = wheel_radps * wheel_radius
 
-        # Calculate the effective radius for rotation
-        effective_radius = np.sqrt((wheelbase/2)**2 + (track_width/2)**2)
+        # Calculate rotation coefficient for cleaner matrix
+        rotation_coeff = (wheelbase + track_width) / 2
 
         # Build the kinematic matrix for mechanum wheels (same as forward kinematics)
-        # Right wheels are inverted to match physical motor direction
         m = np.array([
-            [1,  1, -effective_radius],  # Front-left wheel
-            [-1, 1, -effective_radius],  # Front-right wheel (inverted for forward/backward, same for rotation)
-            [1, -1, -effective_radius],  # Rear-left wheel
-            [-1, -1, -effective_radius], # Rear-right wheel (inverted for forward/backward, same for rotation)
+            [1,  1,  rotation_coeff],  # Front-left wheel
+            [-1, 1,  rotation_coeff],  # Front-right wheel
+            [1, -1, -rotation_coeff],  # Rear-left wheel
+            [-1, -1, -rotation_coeff], # Rear-right wheel
         ])
 
         # Solve the inverse kinematics: body_velocity = M⁺ · wheel_linear_speeds.
