@@ -247,6 +247,7 @@ class SourcceyFollower(Robot):
         return modified_goal_pos
 
     def disconnect(self) -> None:
+        print(f"Disconnecting Sourccey {self.config.orientation} Follower")
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
