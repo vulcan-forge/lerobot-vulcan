@@ -378,15 +378,12 @@ class Sourccey(Robot):
         # Create the body velocity vector [x, y, theta_rad].
         velocity_vector = np.array([x, y, theta_rad])
 
-        # Calculate rotation coefficient for cleaner matrix
-        rotation_coeff = (wheelbase + track_width) / 2
-
         # Build the correct kinematic matrix for mechanum wheels
         m = np.array([
-            [ 1,  1, rotation_coeff],  # Front-left wheel
-            [-1,  1, rotation_coeff],  # Front-right wheel
-            [ 1, -1, rotation_coeff],  # Rear-left wheel
-            [-1, -1, rotation_coeff], # Rear-right wheel
+            [ 1,  1, -1], # Front-left wheel
+            [-1,  1, -1], # Front-right wheel
+            [ 1, -1, -1], # Rear-left wheel
+            [-1, -1, -1], # Rear-right wheel
         ])
 
         # Compute each wheel's linear speed (m/s) and then its angular speed (rad/s).
@@ -405,12 +402,26 @@ class Sourccey(Robot):
             scale = max_normalized / max_normalized_computed
             wheel_normalized = wheel_normalized * scale
 
-        return {
+        wheel_dict = {
             "front_left": float(wheel_normalized[0]),
             "front_right": float(wheel_normalized[1]),
             "rear_left": float(wheel_normalized[2]),
             "rear_right": float(wheel_normalized[3]),
         }
+
+        if (random.random() < 0.02):
+            print()
+            print()
+            print()
+            print(f"Wheel normalized: {wheel_normalized}")
+            print()
+            print()
+            print()
+            print(f"Wheel dict: {wheel_dict}")
+            print()
+            print()
+            print()
+        return wheel_dict
 
     def _wheel_normalized_to_body(
         self,
@@ -449,15 +460,12 @@ class Sourccey(Robot):
         # Compute each wheel's linear speed (m/s) from its angular speed.
         wheel_linear_speeds = wheel_radps * wheel_radius
 
-        # Calculate rotation coefficient for cleaner matrix
-        rotation_coeff = (wheelbase + track_width) / 2
-
         # Build the kinematic matrix for mechanum wheels (same as forward kinematics)
         m = np.array([
-            [ 1,  1, rotation_coeff],  # Front-left wheel
-            [-1,  1, rotation_coeff],  # Front-right wheel
-            [ 1, -1, rotation_coeff],  # Rear-left wheel
-            [-1, -1, rotation_coeff], # Rear-right wheel
+            [ 1,  1, -1], # Front-left wheel
+            [-1,  1, -1], # Front-right wheel
+            [ 1, -1, -1], # Rear-left wheel
+            [-1, -1, -1], # Rear-right wheel
         ])
 
         # Solve the inverse kinematics: body_velocity = M⁺ · wheel_linear_speeds.
