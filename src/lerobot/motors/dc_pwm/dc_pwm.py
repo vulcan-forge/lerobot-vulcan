@@ -8,10 +8,10 @@ logger = logging.getLogger(__name__)
 
 # Pi 5 Hardware PWM Configuration
 PI5_HARDWARE_PWM_PINS = {
-    "pwm0": [12, 18],  # PWM0 channels
-    "pwm1": [13, 19],  # PWM1 channels
-    "pwm2": [14, 20],  # PWM2 channels
-    "pwm3": [15, 21],  # PWM3 channels
+    "pwm0": [12],  # PWM0 channels
+    "pwm1": [13],  # PWM1 channels
+    "pwm2": [18],  # PWM2 channels
+    "pwm3": [19],  # PWM3 channels
 }
 
 # Pi 5 All Available GPIO Pins (40-pin header)
@@ -21,7 +21,7 @@ PI5_ALL_GPIO_PINS = [
 ]
 
 # Pi 5 Optimal Settings for DRV8871DDAR
-PI5_OPTIMAL_FREQUENCY = 20000  # 15kHz - more compatible with gpiozero
+PI5_OPTIMAL_FREQUENCY = 15000  # 15kHz - more compatible with gpiozero
 PI5_MAX_FREQUENCY = 15000      # 15kHz - Pi 5 can handle higher frequencies
 PI5_RESOLUTION = 12            # 12-bit resolution
 
@@ -76,10 +76,11 @@ class PWMProtocolHandler(ProtocolHandler):
         # Validate IN1 pins (should be hardware PWM for best performance)
         invalid_in1_pins = [pin for pin in self.in1_pins if pin not in all_hardware_pwm]
         if invalid_in1_pins:
-            logger.warning(
-                f"IN1 pins {invalid_in1_pins} are not hardware PWM pins on Pi 5. "
-                f"Hardware PWM pins: {all_hardware_pwm}"
-            )
+            # logger.warning(
+            #     f"IN1 pins {invalid_in1_pins} are not hardware PWM pins on Pi 5. "
+            #     f"Hardware PWM pins: {all_hardware_pwm}"
+            # )
+            pass
 
         # Validate IN2 pins (can be any GPIO)
         invalid_in2_pins = [pin for pin in self.in2_pins if pin not in PI5_ALL_GPIO_PINS]
