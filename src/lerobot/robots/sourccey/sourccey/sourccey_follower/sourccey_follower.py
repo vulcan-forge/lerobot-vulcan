@@ -49,9 +49,6 @@ class SourcceyFollower(Robot):
         )
 
     def __del__(self):
-        print()
-        print("Destroying Sourccey Follower")
-        print()
         if (self.is_connected):
             self.disconnect()
 
