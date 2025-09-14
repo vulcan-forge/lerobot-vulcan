@@ -260,11 +260,7 @@ def record_loop(
             arm_action = teleop_arm.get_action()
 
             keyboard_action = teleop_keyboard.get_action() if teleop_keyboard is not None else {}
-            base_action = robot._from_keyboard_to_base_action(keyboard_action) if keyboard_action else {
-                "x.vel": 0.0,
-                "y.vel": 0.0,
-                "theta.vel": 0.0,
-            }
+            base_action = robot._from_keyboard_to_base_action(keyboard_action) if keyboard_action else { }
 
             action = {**arm_action, **base_action} if base_action else arm_action
         else:

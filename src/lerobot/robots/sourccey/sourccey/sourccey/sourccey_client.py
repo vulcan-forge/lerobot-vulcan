@@ -87,6 +87,9 @@ class SourcceyClient(Robot):
                 "right_wrist_flex.pos",
                 "right_wrist_roll.pos",
                 "right_gripper.pos",
+                "x.vel",
+                "y.vel",
+                "theta.vel",
             ),
             float,
         )
