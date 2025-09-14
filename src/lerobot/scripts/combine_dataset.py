@@ -32,13 +32,13 @@ def main():
         type=str,
         nargs="+",
         required=True,
-        help="List of Hugging Face repository IDs containing LeRobotDatasets to combine (e.g., `local/sourccey_v1beta_towel_010_a local/sourccey_v1beta_towel_010_b`).",
+        help="List of Hugging Face repository IDs containing LeRobotDatasets to combine (e.g., `local/sourccey_towel_010_a local/sourccey_towel_010_b`).",
     )
     parser.add_argument(
         "--output_repo_id",
         type=str,
         required=True,
-        help="Name of the output Hugging Face repository for the combined dataset (e.g., `local/sourccey_v1beta_towel_010_a_b_combined`).",
+        help="Name of the output Hugging Face repository for the combined dataset (e.g., `local/sourccey_towel_010_a_b_combined`).",
     )
     parser.add_argument(
         "--root",
