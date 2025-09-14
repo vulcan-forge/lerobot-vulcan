@@ -249,6 +249,7 @@ class Sourccey(Robot):
         try:
             left_action = {key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")}
             right_action = {key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")}
+            base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
 
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}
@@ -261,17 +262,15 @@ class Sourccey(Robot):
                 prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
 
             # Base velocity
-            x_vel = action.get("x.vel", 0)
-            y_vel = action.get("y.vel", 0)
-            theta_vel = action.get("theta.vel", 0)
-            action = self._body_to_wheel_normalized(x_vel, y_vel, theta_vel)
-            self.dc_motors_controller.set_velocities(action)
+            wheel_action = self._body_to_wheel_normalized(base_goal_vel["x.vel"], base_goal_vel["y.vel"], base_goal_vel["theta.vel"])
+            self.dc_motors_controller.set_velocities(wheel_action)
 
-            sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **action}
+            sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_vel}
             if random.random() < 0.02:
                 print()
                 print()
                 print()
+                print(f"Action received: {action}")
                 print(f"Action sent: {sent_action}")
                 print()
                 print()
