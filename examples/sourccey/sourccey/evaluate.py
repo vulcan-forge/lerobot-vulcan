@@ -9,14 +9,14 @@ from lerobot.record import record_loop
 
 NUM_EPISODES = 1
 FPS = 30
-EPISODE_TIME_SEC = 120
-TASK_DESCRIPTION = "Grab the tape and put it in the cup"
+EPISODE_TIME_SEC = 60
+TASK_DESCRIPTION = "Drive around the room"
 
 # Create the robot and teleoperator configurations
-robot_config = SourcceyClientConfig(remote_ip="192.168.1.227", id="sourccey")
+robot_config = SourcceyClientConfig(remote_ip="192.168.1.235", id="sourccey")
 robot = SourcceyClient(robot_config)
 
-policy = ACTPolicy.from_pretrained("outputs/train/act__sourccey-001__ai_test_6_shoulder-fast_chrism_combined/checkpoints/040000/pretrained_model")
+policy = ACTPolicy.from_pretrained("outputs/train/act__sourccey-001__drive_test_1/checkpoints/020000/pretrained_model")
 
 # Configure the dataset features
 action_features = hw_to_dataset_features(robot.action_features, "action")
@@ -25,7 +25,7 @@ dataset_features = {**action_features, **obs_features}
 
 # Create the dataset
 dataset = LeRobotDataset.create(
-    repo_id="local/eval_act__sourccey-001__ai_test_6_shoulder-fast_chrism_combined",
+    repo_id="local/eval_act__sourccey-001__drive_test_1",
     fps=FPS,
     features=dataset_features,
     robot_type=robot.name,

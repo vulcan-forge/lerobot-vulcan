@@ -11,20 +11,24 @@ from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import _init_rerun
 from lerobot.record import record_loop
 
-NUM_EPISODES = 10
+NUM_EPISODES = 1
 FPS = 30
 EPISODE_TIME_SEC = 60
 RESET_TIME_SEC = 5
-TASK_DESCRIPTION = "Grab the tape and put it in the cup"
+TASK_DESCRIPTION = "Drive around the room"
 
 # Create the robot and teleoperator configurations
-robot_config = SourcceyClientConfig(remote_ip="192.168.1.227", id="sourccey")
-teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="COM3", right_arm_port="COM41", id="sourccey")
-keyboard_config = KeyboardTeleopConfig()
+robot_config = SourcceyClientConfig(remote_ip="192.168.1.235", id="sourccey")
+teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="COM8", right_arm_port="COM3", id="sourccey")
+keyboard_config = KeyboardTeleopConfig(id="keyboard")
 
 robot = SourcceyClient(robot_config)
 leader_arm = BiSourcceyLeader(teleop_arm_config)
 keyboard = KeyboardTeleop(keyboard_config)
+
+robot.connect()
+leader_arm.connect()
+keyboard.connect()
 
 # Configure the dataset features
 action_features = hw_to_dataset_features(robot.action_features, "action")
@@ -34,7 +38,7 @@ dataset_features = {**action_features, **obs_features}
 # Create the dataset
 from lerobot.constants import HF_LEROBOT_HOME
 
-repo_id = "sourccey-001__ai_test_5"
+repo_id = "sourccey-001__drive_test_1"
 
 dataset = LeRobotDataset.create(
     repo_id=repo_id,
@@ -45,10 +49,6 @@ dataset = LeRobotDataset.create(
     use_videos=True,
     image_writer_threads=4,
 )
-
-robot.connect()
-leader_arm.connect()
-keyboard.connect()
 
 _init_rerun(session_name="sourccey_record")
 
