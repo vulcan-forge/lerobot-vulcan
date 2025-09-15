@@ -104,6 +104,24 @@ class PhoneTeleoperatorSourccey(Teleoperator):
     def __init__(self, config: PhoneTeleoperatorSourcceyConfig, **kwargs):
         super().__init__(config, **kwargs)
         self.config = config
+        self.arm_side = getattr(self.config, "arm_side", "left").lower()
+        
+        # Set default joint offsets based on arm side if not explicitly provided
+        if hasattr(self.config, "joint_offsets_deg"):
+            if self.config.joint_offsets_deg is None:
+                # Initialize with default values if None
+                self.config.joint_offsets_deg = {
+                    "shoulder_pan": 0.0,
+                    "shoulder_lift": 0.0,
+                    "elbow_flex": 0.0,
+                    "wrist_flex": 0.0,
+                    "wrist_roll": 0.0,
+                }
+            
+            # Set shoulder_pan offset based on arm_side if it's still at default
+            if self.config.joint_offsets_deg.get("shoulder_pan", 0.0) == 0.0:
+                offset_value = 30.0 if self.arm_side == "right" else -30.0
+                self.config.joint_offsets_deg["shoulder_pan"] = offset_value
         
         # Initialize robot model for IK
         self.urdf = None
@@ -123,9 +141,13 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         # Store last valid arm position for reset functionality
         self.last_valid_arm_position = None
         
-        # Pose tracking
-        self.current_t_R = np.array(self.config.initial_position)
-        self.current_q_R = np.array(self.config.initial_wxyz)
+        # Pose tracking (per-arm initial)
+        if self.arm_side == "right":
+            self.current_t_R = np.array(getattr(self.config, "initial_position_right", self.config.initial_position))
+            self.current_q_R = np.array(getattr(self.config, "initial_wxyz_right", self.config.initial_wxyz))
+        else:
+            self.current_t_R = np.array(self.config.initial_position)
+            self.current_q_R = np.array(self.config.initial_wxyz)
         self.initial_phone_quat = None
         self.initial_phone_pos = None
         self.last_precision_mode = False
@@ -152,15 +174,17 @@ class PhoneTeleoperatorSourccey(Teleoperator):
     @cached_property
     def action_features(self) -> dict[str, type]:
         """Features for the actions produced by this teleoperator."""
-        # Only left arm controlled by phone
-        motor_names = [
-            "left_shoulder_pan.pos",
-            "left_shoulder_lift.pos", 
-            "left_elbow_flex.pos",
-            "left_wrist_flex.pos",
-            "left_wrist_roll.pos",
-            "left_gripper.pos"
+        # Controlled arm depends on arm_side
+        joints = [
+            "shoulder_pan.pos",
+            "shoulder_lift.pos",
+            "elbow_flex.pos",
+            "wrist_flex.pos",
+            "wrist_roll.pos",
+            "gripper.pos",
         ]
+        prefix = "left_" if self.arm_side == "left" else "right_"
+        motor_names = [f"{prefix}{j}" for j in joints]
         return {name: float for name in motor_names}
 
     @cached_property
@@ -187,7 +211,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         try:
             # Initialize robot model
             urdf_path = self.config.urdf_path
-            mesh_path = self.config.mesh_path
+            mesh_path = getattr(self.config, "mesh_path", None)
             
             # Resolve relative paths to absolute paths
             if urdf_path and mesh_path:
@@ -216,18 +240,23 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     
                     if sourccey_model_path.exists():
                         auto_urdf_path = str(sourccey_model_path / "Arm.urdf")
-                        auto_mesh_path = str(sourccey_model_path / "meshes")
                         urdf_path = urdf_path or auto_urdf_path
-                        mesh_path = mesh_path or auto_mesh_path
-                        logger.info(f"Auto-detected Sourccey paths - URDF: {urdf_path}, Mesh: {mesh_path}")
+                        if mesh_path:
+                            logger.info(f"Auto-detected Sourccey URDF: {urdf_path}")
+                        else:
+                            logger.info(f"Auto-detected Sourccey URDF (no meshes): {urdf_path}")
                     else:
                         raise FileNotFoundError(f"Could not find Sourccey model directory at {sourccey_model_path}")
                 except Exception as e:
                     logger.warning(f"Could not auto-detect Sourccey paths: {e}")
-                    if not urdf_path or not mesh_path:
-                        raise ValueError("URDF path and mesh path must be provided in config or Sourccey model must be available in lerobot/robots/sourccey/sourccey_v2beta/model/")
+                    if not urdf_path:
+                        raise ValueError("URDF path must be provided in config or model must exist in lerobot/robots/sourccey/sourccey_v2beta/model/")
                 
-            self.urdf = yourdfpy.URDF.load(urdf_path, mesh_dir=mesh_path)
+            # Load URDF; meshes optional
+            if mesh_path:
+                self.urdf = yourdfpy.URDF.load(urdf_path, mesh_dir=mesh_path)
+            else:
+                self.urdf = yourdfpy.URDF.load(urdf_path)
             self.robot = pk.Robot.from_urdf(self.urdf)
             
             # Initialize visualization if enabled
@@ -278,8 +307,12 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         # Use the initial target pose, not the current robot joint positions
         # The current joint positions are used elsewhere, but the target pose is what we map to
         init_rot_robot = _rotation_from_quat(self.current_q_R, scalar_first=True)
-        self.current_t_R = np.array(self.config.initial_position)
-        self.current_q_R = np.array(self.config.initial_wxyz)
+        if self.arm_side == "right":
+            self.current_t_R = np.array(getattr(self.config, "initial_position_right", self.config.initial_position))
+            self.current_q_R = np.array(getattr(self.config, "initial_wxyz_right", self.config.initial_wxyz))
+        else:
+            self.current_t_R = np.array(self.config.initial_position)
+            self.current_q_R = np.array(self.config.initial_wxyz)
 
         logger.info("Getting initial phone data for mapping setup...")
         logger.info(f"gRPC server listening on port {self.config.grpc_port}")
@@ -373,7 +406,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected")
 
-        # Extract current robot positions from observation (left arm only)
+        # Extract current robot positions from observation (controlled arm only)
         current_left_arm_pos_deg = None
         if observation is not None:
             try:
@@ -600,7 +633,47 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             # Update teleop state
             self.start_teleop = switch_state
 
-            return self._format_action_dict(solution_final)
+            # Format action for selected arm
+            action_ctrl = self._format_action_dict(solution_final)
+            if self.arm_side == "right":
+                # Mirror left->right if not at rest or resetting handled below
+                action_ctrl = {k.replace("left_", "right_"): v for k, v in action_ctrl.items()}
+
+            # If only emitting controlled arm, return now
+            if not getattr(self.config, "emit_both_arms", True):
+                return action_ctrl
+
+            # Build full bimanual action: controlled arm from phone, other arm to rest
+            if self.arm_side == "left":
+                # Other arm (right) to rest
+                rest_right_deg = list(np.rad2deg(getattr(self.config, "rest_pose_right", self.config.rest_pose)))
+                right_keys = [
+                    "right_shoulder_pan.pos",
+                    "right_shoulder_lift.pos",
+                    "right_elbow_flex.pos",
+                    "right_wrist_flex.pos",
+                    "right_wrist_roll.pos",
+                    "right_gripper.pos",
+                ]
+                action_other = {k: float(v) for k, v in zip(right_keys, rest_right_deg)}
+                # Ensure all values are Python floats for JSON serialization
+                full_action = {**action_ctrl, **action_other}
+                return {k: float(v) for k, v in full_action.items()}
+            else:
+                # Other arm (left) to rest
+                rest_left_deg = list(np.rad2deg(self.config.rest_pose))
+                left_keys = [
+                    "left_shoulder_pan.pos",
+                    "left_shoulder_lift.pos",
+                    "left_elbow_flex.pos",
+                    "left_wrist_flex.pos",
+                    "left_wrist_roll.pos",
+                    "left_gripper.pos",
+                ]
+                action_other = {k: float(v) for k, v in zip(left_keys, rest_left_deg)}
+                # Ensure all values are Python floats for JSON serialization
+                full_action = {**action_other, **action_ctrl}
+                return {k: float(v) for k, v in full_action.items()}
 
         except Exception as e:
             logger.error(f"Error getting action from {self}: {e}")
@@ -639,7 +712,8 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             while len(joint_positions) < len(action_keys):
                 joint_positions.append(0.0)
         
-        return {key: pos for key, pos in zip(action_keys, joint_positions)}
+        # Convert all values to Python floats for JSON serialization
+        return {key: float(pos) for key, pos in zip(action_keys, joint_positions)}
 
 
     def _read_and_display_motor_positions(self, current_joint_pos: list[float]) -> None:
