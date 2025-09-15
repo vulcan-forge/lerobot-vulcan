@@ -1,7 +1,7 @@
 from gpiozero import MCP3008
 import time
 
-adc = MCP3008(channel=0)
+adc = MCP3008(channel=0) #clock_pin=11, mosi_pin=10, miso_pin=9, select_pin=8 # Physical pins: [23, 19, 21, 24]
 vref = 3.3
 sample_interval = 0.2  # seconds between ADC reads
 average_window = 50    # number of samples to average
