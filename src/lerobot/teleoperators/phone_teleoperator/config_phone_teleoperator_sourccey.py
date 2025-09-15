@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from lerobot.teleoperators.config import TeleoperatorConfig
@@ -25,17 +25,38 @@ from lerobot.teleoperators.config import TeleoperatorConfig
 class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     """Configuration for Sourccey phone teleoperation."""
     
+    # Which arm the phone controls: "left" or "right"
+    arm_side: str = "left"
+
     # gRPC server settings
     grpc_port: int = 8765  # Default port to match phone app
     grpc_timeout: float = 100.0
     
     # Robot model paths - same as SO100
     urdf_path: str = "lerobot/robots/sourccey/sourccey_v2beta/model/Arm.urdf"
-    mesh_path: str = "lerobot/robots/sourccey/sourccey_v2beta/model/meshes"
+    mesh_path: str | None = "lerobot/robots/sourccey/sourccey_v2beta/model/meshes"
     
     # IK solver settings - same as SO100
     target_link_name: str = "Feetech-Servo-Motor-v1-5"
-    rest_pose: tuple[float, ...] = (-0.843128, 1.552000, 0.736491, 0.591494, 0.020714, 0.009441)   # Always in radians - initial robot positions for IK solver
+    # Left rest pose (radians)
+    rest_pose: tuple[float, ...] = (
+        -0.864068,   # shoulder_pan  (-49.506903 deg)
+        2.095329,    # shoulder_lift (100.0 deg)
+        -2.205474,   # elbow_flex    (-97.716150 deg)
+        0.093922,    # wrist_flex    (5.381376 deg)
+        0.014914,    # wrist_roll    (0.854701 deg)
+        1.738416,    # gripper       (99.603960 -> used as 0-100)
+    )   # Always in radians - initial robot positions for IK solver
+
+    # Right rest pose (radians)
+    rest_pose_right: tuple[float, ...] = (
+        0.640044,    # right_shoulder_pan  (36.671576 deg)
+        -2.474699,   # right_shoulder_lift (-141.809571 deg)
+        2.518931,    # right_elbow_flex    (144.292517 deg)
+        -0.235352,   # right_wrist_flex    (-13.484163 deg)
+        0.020884,    # right_wrist_roll    (1.196581 deg)
+        0.004511,    # right_gripper       (0.258398 deg)
+    )
 
     # Phone mapping settings
     rotation_sensitivity: float = 1.0
@@ -45,6 +66,26 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     # Initial robot pose (when connecting phone) - same as SO100
     initial_position: tuple[float, ...] = (0.0, -0.17, 0.237)  # meters
     initial_wxyz: tuple[float, ...] = (0, 0, 1, 0)  # quaternion (w,x,y,z)
+    # Right-arm initial
+    initial_position_right: tuple[float, ...] = (
+        0.09376381640512954,
+        -0.17794639170766768,
+        0.2820500723608793,
+    )
+    initial_wxyz_right: tuple[float, ...] = (0, 0, 1, 0)
+
+    # Joint offsets for calibration (degrees)
+    joint_offsets_deg: dict[str, float] = field(default_factory=lambda: {
+        "shoulder_pan": 0.0,  # Will be set based on arm_side: -30.0 for left, 30.0 for right
+        "shoulder_lift": 0.0,
+        "elbow_flex": 0.0,
+        "wrist_flex": 0.0,
+        "wrist_roll": 0.0,
+    })
+
+    # Output controls
+    # If True, the teleop will emit both arms' keys. The non-controlled arm will be set to rest.
+    emit_both_arms: bool = True
     
     # Visualization settings
     enable_visualization: bool = True
