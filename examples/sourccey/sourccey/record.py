@@ -15,11 +15,11 @@ NUM_EPISODES = 10
 FPS = 30
 EPISODE_TIME_SEC = 60
 RESET_TIME_SEC = 5
-TASK_DESCRIPTION = "Drive around the room"
+TASK_DESCRIPTION = "Put red tape in cup"
 
 # Create the robot and teleoperator configurations
 robot_config = SourcceyClientConfig(remote_ip="192.168.1.235", id="sourccey")
-teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="COM8", right_arm_port="COM3", id="sourccey")
+teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="/dev/ttyACM1", right_arm_port="/dev/ttyACM0", id="sourccey")
 keyboard_config = KeyboardTeleopConfig(id="keyboard")
 
 robot = SourcceyClient(robot_config)
@@ -38,7 +38,7 @@ dataset_features = {**action_features, **obs_features}
 # Create the dataset
 from lerobot.constants import HF_LEROBOT_HOME
 
-repo_id = "sourccey-001__drive_test_1"
+repo_id = "sourccey-001__tape-cup10"
 
 dataset = LeRobotDataset.create(
     repo_id=repo_id,

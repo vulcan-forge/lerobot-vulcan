@@ -13,7 +13,7 @@ FPS = 30
 
 # Create the robot and teleoperator configurations
 robot_config = SourcceyClientConfig(remote_ip="192.168.1.235", id="sourccey")
-teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="COM8", right_arm_port="COM3", id="sourccey")
+teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="/dev/ttyACM1", right_arm_port="/dev/ttyACM0", id="sourccey")
 keyboard_config = KeyboardTeleopConfig(id="keyboard")
 
 robot = SourcceyClient(robot_config)
