@@ -189,9 +189,10 @@ def main():
                 
                 # Debug: Show what we're sending vs working teleoperate
                 if base_action["x.vel"] != 0.0 or base_action["y.vel"] != 0.0 or base_action["theta.vel"] != 0.0:
-                    print(f"DEBUG: Arm action sample values: {dict(list(arm_action.items())[:3])}")
-                    print(f"DEBUG: Base action: {base_action}")
-                    print(f"DEBUG: Action value types: {[(k, type(v).__name__) for k, v in list({**arm_action, **base_action}.items())[:5]]}")
+                    print(f"DEBUG PHONE: Arm action keys: {list(arm_action.keys())}")
+                    print(f"DEBUG PHONE: Arm action sample values: {dict(list(arm_action.items())[:3])}")
+                    print(f"DEBUG PHONE: Base action: {base_action}")
+                    print(f"DEBUG PHONE: Action value types: {[(k, type(v).__name__) for k, v in list({**arm_action, **base_action}.items())[:5]]}")
                     
                     # Check for any non-serializable values
                     combined = {**arm_action, **base_action}
@@ -203,7 +204,7 @@ def main():
                         except:
                             problematic_values.append((k, type(v).__name__, str(v)))
                     if problematic_values:
-                        print(f"DEBUG: Non-JSON-serializable values: {problematic_values}")
+                        print(f"DEBUG PHONE: Non-JSON-serializable values: {problematic_values}")
                 
                 # Combine arm and wheel actions
                 action = {**arm_action, **base_action}

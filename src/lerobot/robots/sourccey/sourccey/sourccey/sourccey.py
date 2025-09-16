@@ -246,32 +246,51 @@ class Sourccey(Robot):
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         try:
+            # Debug: Log incoming action details
+            print(f"DEBUG: Received action with {len(action)} keys: {list(action.keys())}")
+            
             left_action = {key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")}
             right_action = {key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")}
             base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
+
+            print(f"DEBUG: Left action keys: {list(left_action.keys())}")
+            print(f"DEBUG: Right action keys: {list(right_action.keys())}")
+            print(f"DEBUG: Base velocity: {base_goal_vel}")
 
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}
 
             if self.limit_arm is None or self.limit_arm == "left":
+                print("DEBUG: Sending left arm action...")
                 sent_left = self.left_arm.send_action(left_action)
                 prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
+                print(f"DEBUG: Left arm action sent successfully")
             if self.limit_arm is None or self.limit_arm == "right":
+                print("DEBUG: Sending right arm action...")
                 sent_right = self.right_arm.send_action(right_action)
                 prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
+                print(f"DEBUG: Right arm action sent successfully")
 
             # Base velocity
+            print(f"DEBUG: Setting wheel velocities: x={base_goal_vel.get('x.vel', 0.0)}, y={base_goal_vel.get('y.vel', 0.0)}, theta={base_goal_vel.get('theta.vel', 0.0)}")
             wheel_action = self._body_to_wheel_normalized(
                 base_goal_vel.get("x.vel", 0.0),
                 base_goal_vel.get("y.vel", 0.0),
                 base_goal_vel.get("theta.vel", 0.0)
             )
+            print(f"DEBUG: Normalized wheel action: {wheel_action}")
             self.dc_motors_controller.set_velocities(wheel_action)
+            print("DEBUG: Wheel velocities set successfully")
 
             sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_vel}
+            print("DEBUG: Action sent successfully!")
             return sent_action
         except Exception as e:
             print(f"Error sending action: {e}")
+            print(f"Exception type: {type(e).__name__}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            print(f"Action that caused error: {action}")
             return {}
 
     # Base Functions
