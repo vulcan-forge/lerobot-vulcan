@@ -18,10 +18,49 @@ Usage:
 
 import time
 import argparse
+import os
 from pathlib import Path
 
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
 from lerobot.teleoperators.phone_teleoperator import PhoneTeleoperatorSourccey, PhoneTeleoperatorSourcceyConfig
+
+try:
+    from pynput import keyboard
+    PYNPUT_AVAILABLE = True
+except ImportError:
+    PYNPUT_AVAILABLE = False
+    print("Warning: pynput not available. Q key exit won't work.")
+
+
+class QKeyHandler:
+    """Handles Q key press for immediate exit."""
+    
+    def __init__(self):
+        self.should_exit = False
+        self.listener = None
+        
+    def start(self):
+        """Start listening for Q key press."""
+        if not PYNPUT_AVAILABLE:
+            return
+            
+        def on_press(key):
+            try:
+                if key.char and key.char.lower() == 'q':
+                    print("\nQ key pressed - exiting immediately...")
+                    self.should_exit = True
+                    os._exit(0)  # Force immediate exit
+            except AttributeError:
+                # Special keys (ctrl, alt, etc.) don't have char attribute
+                pass
+        
+        self.listener = keyboard.Listener(on_press=on_press, suppress=False)
+        self.listener.start()
+    
+    def stop(self):
+        """Stop the key listener."""
+        if self.listener:
+            self.listener.stop()
 
 
 def find_sourccey_model_path():
@@ -42,8 +81,8 @@ def main():
     parser = argparse.ArgumentParser(description='Phone teleoperation for Sourccey robot')
     parser.add_argument('arm_side', nargs='?', default='left', choices=['left', 'right'],
                        help='Which arm to control (default: left)')
-    parser.add_argument('remote_ip', nargs='?', default='192.168.1.227',
-                       help='Remote host IP address (default: 192.168.1.227)')
+    parser.add_argument('remote_ip', nargs='?', default='192.168.1.237',
+                       help='Remote host IP address (default: 192.168.1.237)')
     args = parser.parse_args()
     
     print(f"Controlling {args.arm_side} arm")
@@ -74,6 +113,9 @@ def main():
     # Initialize teleoperator
     phone_teleop = PhoneTeleoperatorSourccey(phone_config)
     
+    # Initialize Q key handler for immediate exit
+    q_handler = QKeyHandler()
+    
     try:
         # Connect to remote robot host
         print(f"Connecting to remote robot host at {args.remote_ip}...")
@@ -86,11 +128,14 @@ def main():
         if not robot.is_connected or not phone_teleop.is_connected:
             raise ValueError("Remote robot host or phone teleoperator is not connected!")
         
+        # Start Q key handler
+        q_handler.start()
+        
         print(f"Phone teleoperation ready for {args.arm_side} arm!")
         print(f"- Connected to remote host at {args.remote_ip}")
         print("- Start the phone app and connect to the gRPC server")
         print("- Use your phone to control the robot")
-        print("- Press Ctrl+C to exit")
+        print("- Press Q to exit")
         
         # Main control loop
         while True:
@@ -124,6 +169,10 @@ def main():
     finally:
         # Cleanup
         print("Disconnecting devices...")
+        try:
+            q_handler.stop()
+        except:
+            pass
         try:
             phone_teleop.disconnect()
         except:
