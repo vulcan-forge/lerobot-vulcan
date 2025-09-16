@@ -213,7 +213,16 @@ def record_loop(
             (
                 t
                 for t in teleop
-                if isinstance(t, (so100_leader.SO100Leader, so101_leader.SO101Leader, SourcceyLeader, BiSourcceyLeader, koch_leader.KochLeader))
+                if isinstance(
+                    t,
+                    (
+                        so100_leader.SO100Leader,
+                        so101_leader.SO101Leader,
+                        koch_leader.KochLeader,
+                        SourcceyLeader,
+                        BiSourcceyLeader
+                    ),
+                )
             ),
             None,
         )
@@ -281,8 +290,8 @@ def record_loop(
 
         if dataset is not None:
             action_frame = build_dataset_frame(dataset.features, sent_action, prefix="action")
-            frame = {**observation_frame, **action_frame}
-            dataset.add_frame(frame, task=single_task)
+            frame = {**observation_frame, **action_frame, "task": single_task}
+            dataset.add_frame(frame)
 
         if display_data:
             log_rerun_data(observation, action)

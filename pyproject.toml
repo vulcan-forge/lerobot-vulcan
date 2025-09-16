@@ -84,7 +84,6 @@ dependencies = [
 
     # Support dependencies
     "deepdiff>=7.0.1,<9.0.0",
-    "flask>=3.0.3,<4.0.0",
     "imageio[ffmpeg]>=2.34.0,<3.0.0",
     "termcolor>=2.4.0,<4.0.0",
 ]
@@ -112,6 +111,7 @@ sourccey = [
     "gpiozero>=2.0.1 ; sys_platform == 'linux'",
     "lgpio>=0.2.2 ; sys_platform == 'linux'"
 ]
+reachy2 = ["reachy2_sdk>=1.0.14"]
 kinematics = ["lerobot[placo-dep]"]
 intelrealsense = [
     "pyrealsense2>=2.55.1.6486 ; sys_platform != 'darwin'",
@@ -157,6 +157,7 @@ all = [
     "lerobot[gamepad]",
     "lerobot[hopejr]",
     "lerobot[lekiwi]",
+    "lerobot[reachy2]",
     "lerobot[kinematics]",
     "lerobot[intelrealsense]",
     "lerobot[pi0]",

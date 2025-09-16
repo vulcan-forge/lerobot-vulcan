@@ -69,7 +69,7 @@ from flask import Flask, redirect, render_template, request, url_for
 
 from lerobot import available_datasets
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import IterableNamespace
+from lerobot.datasets.utils import IterableNamespace, translate_episode_index_to_position
 from lerobot.utils.utils import init_logging
 
 

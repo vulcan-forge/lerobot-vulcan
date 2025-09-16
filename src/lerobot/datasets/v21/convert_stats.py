@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from lerobot.datasets.compute_stats import aggregate_stats, get_feature_stats, sample_indices
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import write_episode_stats
+from lerobot.datasets.utils import translate_episode_index_to_position, write_episode_stats
 
 
 def sample_episode_video_frames(dataset: LeRobotDataset, episode_index: int, ft_key: str) -> np.ndarray:
