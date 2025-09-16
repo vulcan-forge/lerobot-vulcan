@@ -74,19 +74,13 @@ import torch
 import torch.utils.data
 import tqdm
 
-<<<<<<< HEAD:lerobot/scripts/visualize_dataset.py
-from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.common.datasets.utils import translate_episode_index_to_position
-=======
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
->>>>>>> upstream/main:src/lerobot/scripts/visualize_dataset.py
 
 class EpisodeSampler(torch.utils.data.Sampler):
     def __init__(self, dataset: LeRobotDataset, episode_index: int):
-        index_position = translate_episode_index_to_position(dataset.meta.episodes, episode_index)
-        from_idx = dataset.episode_data_index["from"][index_position].item()
-        to_idx = dataset.episode_data_index["to"][index_position].item()
+        from_idx = dataset.meta.episodes["dataset_from_index"][episode_index]
+        to_idx = dataset.meta.episodes["dataset_to_index"][episode_index]
         self.frame_ids = range(from_idx, to_idx)
 
     def __iter__(self) -> Iterator:
@@ -289,7 +283,7 @@ def main():
     tolerance_s = kwargs.pop("tolerance_s")
 
     logging.info("Loading dataset")
-    dataset = LeRobotDataset(repo_id, root=root, tolerance_s=tolerance_s)
+    dataset = LeRobotDataset(repo_id, episodes=[args.episode_index], root=root, tolerance_s=tolerance_s)
 
     visualize_dataset(dataset, **vars(args))
 
