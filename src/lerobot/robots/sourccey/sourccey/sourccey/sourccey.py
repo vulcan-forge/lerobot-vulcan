@@ -256,6 +256,9 @@ class Sourccey(Robot):
             print(f"DEBUG: Left action keys: {list(left_action.keys())}")
             print(f"DEBUG: Right action keys: {list(right_action.keys())}")
             print(f"DEBUG: Base velocity: {base_goal_vel}")
+            if base_goal_vel.get("x.vel", 0.0) != 0.0 or base_goal_vel.get("y.vel", 0.0) != 0.0 or base_goal_vel.get("theta.vel", 0.0) != 0.0:
+                import time
+                print(f"DEBUG HOST: t={time.time():.3f} NON-ZERO base velocity received: {base_goal_vel}")
 
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}
@@ -288,6 +291,12 @@ class Sourccey(Robot):
             print("DEBUG: Wheel velocities set successfully")
 
             sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_vel}
+            
+            # CRITICAL: Update DC motor controller to apply wheel velocities
+            print("DEBUG: Calling update_velocity() to apply wheel commands...")
+            self.dc_motors_controller.update_velocity()
+            print("DEBUG: update_velocity() completed!")
+            
             print("DEBUG: Action sent successfully!")
             return sent_action
         except Exception as e:

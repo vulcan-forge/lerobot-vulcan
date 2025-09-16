@@ -25,6 +25,9 @@ from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyCl
 from lerobot.teleoperators.phone_teleoperator import PhoneTeleoperatorSourccey, PhoneTeleoperatorSourcceyConfig
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
 
+# Toggle to force sending a constant "W" (forward) command for debugging
+FORCE_W = True
+
 
 class ThreadedKeyboardHandler:
     """Handles keyboard input in a separate thread to avoid blocking"""
@@ -187,12 +190,10 @@ def main():
                 # Get base action from threaded keyboard handler
                 base_action = threaded_keyboard.get_base_action()
                 
-                # Debug: Show what we're sending vs working teleoperate
+                # Debug: Show what we're sending vs working teleoperate  
                 if base_action["x.vel"] != 0.0 or base_action["y.vel"] != 0.0 or base_action["theta.vel"] != 0.0:
-                    print(f"DEBUG PHONE: Arm action keys: {list(arm_action.keys())}")
-                    print(f"DEBUG PHONE: Arm action sample values: {dict(list(arm_action.items())[:3])}")
-                    print(f"DEBUG PHONE: Base action: {base_action}")
-                    print(f"DEBUG PHONE: Action value types: {[(k, type(v).__name__) for k, v in list({**arm_action, **base_action}.items())[:5]]}")
+                    print(f"DEBUG PHONE CLIENT: About to send base action: {base_action}")
+                    print(f"DEBUG PHONE CLIENT: Combined action keys: {list({**arm_action, **base_action}.keys())}")
                     
                     # Check for any non-serializable values
                     combined = {**arm_action, **base_action}
@@ -204,8 +205,19 @@ def main():
                         except:
                             problematic_values.append((k, type(v).__name__, str(v)))
                     if problematic_values:
-                        print(f"DEBUG PHONE: Non-JSON-serializable values: {problematic_values}")
+                        print(f"DEBUG PHONE CLIENT: Non-JSON-serializable values: {problematic_values}")
                 
+                # Always show base action for debugging timing
+                if True:  # Always log to see timing
+                    current_time = time.time()
+                    print(f"DEBUG TIMING: t={current_time:.3f} base_action={base_action}")
+                
+                # Optionally override base action with constant "W" command
+                if FORCE_W:
+                    forced = robot._from_keyboard_to_base_action({'w': None})
+                    print(f"DEBUG PHONE CLIENT: FORCING base action to {forced}")
+                    base_action = forced
+
                 # Combine arm and wheel actions
                 action = {**arm_action, **base_action}
                 
