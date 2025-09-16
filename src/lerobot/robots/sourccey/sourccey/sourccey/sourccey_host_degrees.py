@@ -77,6 +77,22 @@ def main():
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
                 data = dict(json.loads(msg))
 
+                # Debug: Log received action data
+                if len(data) > 0:
+                    action_keys = list(data.keys())
+                    logging.info(f"Received action with {len(data)} keys: {action_keys[:5]}{'...' if len(action_keys) > 5 else ''}")
+                    
+                    # Check for any problematic values
+                    problematic_values = []
+                    for key, value in data.items():
+                        if value is None:
+                            problematic_values.append(f"{key}=None")
+                        elif isinstance(value, (int, float)) and (value != value or abs(value) > 1000):  # NaN or extreme values
+                            problematic_values.append(f"{key}={value}")
+                    
+                    if problematic_values:
+                        logging.warning(f"Problematic action values detected: {problematic_values}")
+
                 _action_sent = robot.send_action(data)
 
                 last_cmd_time = time.time()
@@ -85,8 +101,14 @@ def main():
                 if not watchdog_active:
                     # logging.warning("No command available")
                     pass
+            except json.JSONDecodeError as e:
+                logging.error(f"JSON decode error: {e}")
+                logging.error(f"Raw message: {msg[:200]}...")
             except Exception as e:
-                logging.error("Message fetching failed: %s", e)
+                logging.error(f"Message fetching/processing failed: {e}")
+                logging.error(f"Exception type: {type(e).__name__}")
+                import traceback
+                logging.error(f"Traceback: {traceback.format_exc()}")
 
             now = time.time()
             if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
