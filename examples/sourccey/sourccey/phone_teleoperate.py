@@ -19,12 +19,50 @@ Usage:
 import time
 import argparse
 import threading
+import os
 from pathlib import Path
 
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
 from lerobot.teleoperators.phone_teleoperator import PhoneTeleoperatorSourccey, PhoneTeleoperatorSourcceyConfig
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
 
+try:
+    from pynput import keyboard
+    PYNPUT_AVAILABLE = True
+except ImportError:
+    PYNPUT_AVAILABLE = False
+    print("WARNING: pynput not available - Q key exit disabled")
+
+
+
+class QKeyHandler:
+    """Handles Q key for immediate exit using pynput"""
+    
+    def __init__(self):
+        self.should_exit = False
+        self.listener = None
+        
+    def start(self):
+        """Start the Q key listener"""
+        if not PYNPUT_AVAILABLE:
+            return
+            
+        def on_press(key):
+            try:
+                if key.char == 'q' or key.char == 'Q':
+                    print("\nQ key pressed - exiting immediately...")
+                    self.should_exit = True
+                    os._exit(0)  # Force immediate exit
+            except AttributeError:
+                pass
+                
+        self.listener = keyboard.Listener(on_press=on_press, suppress=False)
+        self.listener.start()
+        
+    def stop(self):
+        """Stop the Q key listener"""
+        if self.listener:
+            self.listener.stop()
 
 
 class ThreadedKeyboardHandler:
@@ -137,9 +175,10 @@ def main():
         gripper_max_pos=50.0,
     )
     
-    # Initialize teleoperator and threaded keyboard handler
+    # Initialize teleoperator, threaded keyboard handler, and Q key handler
     phone_teleop = PhoneTeleoperatorSourccey(phone_config)
     threaded_keyboard = ThreadedKeyboardHandler(robot)
+    q_key_handler = QKeyHandler()
     
     try:
         # Connect to remote robot host
@@ -154,6 +193,10 @@ def main():
         print("Starting threaded keyboard handler...")
         threaded_keyboard.start()
         
+        # Start Q key handler for immediate exit
+        print("Starting Q key handler...")
+        q_key_handler.start()
+        
         if not robot.is_connected or not phone_teleop.is_connected:
             raise ValueError("Remote robot host or phone teleoperator is not connected!")
         
@@ -163,7 +206,7 @@ def main():
         print("- Keyboard controls wheels (W/A/S/D/Z/X/R/F)")
         print("- Start the phone app and connect to the gRPC server")
         print("- Use your phone to control the robot")
-        print("- Press ESC to exit")
+        print("- Press Q to exit immediately")
         
         # Main control loop
         while True:
@@ -204,6 +247,10 @@ def main():
     finally:
         # Cleanup
         print("Disconnecting devices...")
+        try:
+            q_key_handler.stop()
+        except:
+            pass
         try:
             phone_teleop.disconnect()
         except:
