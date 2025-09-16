@@ -267,9 +267,14 @@ class Sourccey(Robot):
                 print(f"DEBUG: Left arm action sent successfully")
             if self.limit_arm is None or self.limit_arm == "right":
                 print("DEBUG: Sending right arm action...")
-                sent_right = self.right_arm.send_action(right_action)
-                prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
-                print(f"DEBUG: Right arm action sent successfully")
+                # Skip empty right actions to prevent StopIteration error
+                if right_action:
+                    sent_right = self.right_arm.send_action(right_action)
+                    prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
+                    print(f"DEBUG: Right arm action sent successfully")
+                else:
+                    print("DEBUG: Skipping empty right arm action")
+                    prefixed_send_action_right = {}
 
             # Base velocity
             print(f"DEBUG: Setting wheel velocities: x={base_goal_vel.get('x.vel', 0.0)}, y={base_goal_vel.get('y.vel', 0.0)}, theta={base_goal_vel.get('theta.vel', 0.0)}")
