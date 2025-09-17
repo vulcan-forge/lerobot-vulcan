@@ -309,6 +309,27 @@ class SourcceyClient(Robot):
             "theta.vel": theta_cmd,
         }
 
+    def _from_analog_to_base_action(self, x: float, y: float, theta: float):
+        """Map analog base inputs (in [-1,1]) through the same speed scaling used for keyboard.
+
+        Ensures behavior is consistent with `_from_keyboard_to_base_action` speed levels.
+        """
+        # Clamp to [-1, 1]
+        x_in = max(-1.0, min(1.0, float(x)))
+        y_in = max(-1.0, min(1.0, float(y)))
+        theta_in = max(-1.0, min(1.0, float(theta)))
+
+        speed_setting = self.speed_levels[self.speed_index]
+        x_speed = speed_setting["x"]
+        y_speed = speed_setting["y"]
+        theta_speed = speed_setting["theta"]
+
+        return {
+            "x.vel": float(x_in * x_speed),
+            "y.vel": float(y_in * y_speed),
+            "theta.vel": float(theta_in * theta_speed),
+        }
+
     def configure(self):
         pass
 

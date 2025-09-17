@@ -22,7 +22,15 @@ class PoseTelemetryService(pose_telemetry_pb2_grpc.PoseTelemetryServicer):
 
     def StreamPoses(self, request_iterator, context):
         """Handle streaming poses from client"""
-        print("Device connected to gRPC streaming")
+        peer = context.peer() if hasattr(context, 'peer') else 'unknown'
+        md = context.invocation_metadata() if hasattr(context, 'invocation_metadata') else []
+        print(f"Device connected to gRPC streaming (peer={peer})")
+        if md:
+            try:
+                md_str = ", ".join([f"{k}={v}" for k, v in md])
+                print(f"gRPC metadata: {md_str}")
+            except Exception:
+                pass
         try:
             for pose_data in request_iterator:
                 self.pose_count += 1
@@ -35,6 +43,18 @@ class PoseTelemetryService(pose_telemetry_pb2_grpc.PoseTelemetryServicer):
                 precision_mode = pose_data.precision_mode
                 reset_mapping = pose_data.reset_mapping
                 is_resetting = pose_data.is_resetting
+                # Base velocities from phone (optional)
+                x_vel = getattr(pose_data, "x_vel", 0.0)
+                y_vel = getattr(pose_data, "y_vel", 0.0)
+                theta_vel = getattr(pose_data, "theta_vel", 0.0)
+                base_active = getattr(pose_data, "base_active", False)
+                
+                # If any velocity is non-zero, treat as active and log
+                if abs(x_vel) > 0.0 or abs(y_vel) > 0.0 or abs(theta_vel) > 0.0:
+                    base_active = True
+                # Debug: Log wheel commands when received
+                if base_active and (abs(x_vel) > 0.0 or abs(y_vel) > 0.0 or abs(theta_vel) > 0.0):
+                    print(f"DEBUG PHONE WHEELS: Received wheel command - x_vel={x_vel:.3f}, y_vel={y_vel:.3f}, theta_vel={theta_vel:.3f}")
 
                 # Reorder quaternion from ARCore [qx,qy,qz,qw] to [qw,qx,qy,qz]
                 if len(rotation) == 4:
@@ -57,6 +77,13 @@ class PoseTelemetryService(pose_telemetry_pb2_grpc.PoseTelemetryServicer):
                     "precision": precision_mode,
                     "reset_mapping": reset_mapping,
                     "is_resetting": is_resetting,
+                    # Pass through base control if provided
+                    "base": {
+                        "x.vel": float(x_vel),
+                        "y.vel": float(y_vel),
+                        "theta.vel": float(theta_vel),
+                        "active": bool(base_active),
+                    },
                 }
 
                 # atomically overwrite the shared slot

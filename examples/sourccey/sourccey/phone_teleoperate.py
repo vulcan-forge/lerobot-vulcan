@@ -181,13 +181,17 @@ def main():
     q_key_handler = QKeyHandler()
     
     try:
-        # Connect to remote robot host
-        print(f"Connecting to remote robot host at {args.remote_ip}...")
-        robot.connect()
-        
-        # Connect phone teleoperator
+        # Connect phone teleoperator first (this starts the gRPC server)
         print("Connecting to phone teleoperator...")
         phone_teleop.connect()
+        
+        # Connect to remote robot host
+        print(f"Connecting to remote robot host at {args.remote_ip}...")
+        try:
+            robot.connect()
+        except Exception as e:
+            print(f"WARNING: Could not connect to remote robot: {e}")
+            print("Continuing with phone teleop only (gRPC server will still work)...")
         
         # Start threaded keyboard handler
         print("Starting threaded keyboard handler...")
@@ -197,8 +201,11 @@ def main():
         print("Starting Q key handler...")
         q_key_handler.start()
         
-        if not robot.is_connected or not phone_teleop.is_connected:
-            raise ValueError("Remote robot host or phone teleoperator is not connected!")
+        if not phone_teleop.is_connected:
+            raise ValueError("Phone teleoperator is not connected!")
+        
+        if not robot.is_connected:
+            print("WARNING: Robot not connected - phone teleop will work but no robot control")
         
         print(f"Phone teleoperation ready for {args.arm_side} arm!")
         print(f"- Connected to remote host at {args.remote_ip}")
@@ -225,14 +232,36 @@ def main():
                 
 
                 # Combine arm and wheel actions
-                action = {**arm_action, **base_action}
+                # If phone provided base velocities, map them via client's analog path to match keyboard scaling
+                phone_x = arm_action.get("x.vel", 0.0)
+                phone_y = arm_action.get("y.vel", 0.0)
+                phone_theta = arm_action.get("theta.vel", 0.0)
+
+                if any(abs(v) > 0.0 for v in (phone_x, phone_y, phone_theta)):
+                    analog_base = robot._from_analog_to_base_action(phone_x, phone_y, phone_theta)
+                else:
+                    analog_base = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+
+                # Keyboard overrides phone when non-zero
+                kb_active = any(abs(base_action.get(k, 0.0)) > 0.0 for k in ("x.vel","y.vel","theta.vel"))
+                effective_base = base_action if kb_active else analog_base
+                action = {**arm_action, **effective_base}
                 
-                # Send combined action to robot
-                try:
-                    robot.send_action(action)
-                except Exception as e:
-                    import traceback
-                    traceback.print_exc()
+                # Send combined action to robot (if connected)
+                if robot.is_connected:
+                    # Debug: show base command being sent and source
+                    if any(abs(effective_base.get(k, 0.0)) > 0.0 for k in ("x.vel","y.vel","theta.vel")):
+                        src = "keyboard" if kb_active else "phone"
+                        print(f"CLIENT WHEELS: Sending base ({src}) x={effective_base.get('x.vel',0.0):.3f}, y={effective_base.get('y.vel',0.0):.3f}, theta={effective_base.get('theta.vel',0.0):.3f}")
+                    try:
+                        robot.send_action(action)
+                    except Exception as e:
+                        import traceback
+                        traceback.print_exc()
+                else:
+                    # Just print the action for debugging when robot not connected
+                    if any(abs(v) > 0.0 for v in [action.get("x.vel", 0), action.get("y.vel", 0), action.get("theta.vel", 0)]):
+                        print(f"DEBUG: Would send base action: {action}")
                 
                 # Control frequency
                 time.sleep(max(0, 1/30))  # Target ~30 Hz

@@ -577,7 +577,10 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             # Ensure we have valid data before processing pose
             if data is None:
                 # If no data available, return current positions to maintain stability
-                return self._format_action_dict(current_left_arm_pos_deg)
+                return self._merge_base_with_action(
+                    self._format_action_dict(current_left_arm_pos_deg),
+                    base=data.get("base") if data else None
+                )
 
             pos, quat, gripper_value = data["position"], data["rotation"], data["gripper_value"]
 
@@ -641,7 +644,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
 
             # If only emitting controlled arm, return now
             if not getattr(self.config, "emit_both_arms", True):
-                return action_ctrl
+                return self._merge_base_with_action(action_ctrl, base=data.get("base"))
 
             # Build full bimanual action: controlled arm from phone, other arm to rest
             if self.arm_side == "left":
@@ -658,7 +661,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 action_other = {k: float(v) for k, v in zip(right_keys, rest_right_deg)}
                 # Ensure all values are Python floats for JSON serialization
                 full_action = {**action_ctrl, **action_other}
-                return {k: float(v) for k, v in full_action.items()}
+                return self._merge_base_with_action({k: float(v) for k, v in full_action.items()}, base=data.get("base"))
             else:
                 # Other arm (left) to rest
                 rest_left_deg = list(np.rad2deg(self.config.rest_pose))
@@ -673,12 +676,12 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 action_other = {k: float(v) for k, v in zip(left_keys, rest_left_deg)}
                 # Ensure all values are Python floats for JSON serialization
                 full_action = {**action_other, **action_ctrl}
-                return {k: float(v) for k, v in full_action.items()}
+                return self._merge_base_with_action({k: float(v) for k, v in full_action.items()}, base=data.get("base"))
 
         except Exception as e:
             logger.error(f"Error getting action from {self}: {e}")
             # Return current positions on error (safer than rest pose)
-            return self._format_action_dict(current_left_arm_pos_deg)
+            return self._merge_base_with_action(self._format_action_dict(current_left_arm_pos_deg), base=data.get("base") if 'data' in locals() else None)
 
     def _solve_ik(self, target_position: np.ndarray, target_wxyz: np.ndarray) -> list[float]:
         """Solve inverse kinematics for target pose. Returns solution in radians."""
@@ -714,6 +717,40 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         
         # Convert all values to Python floats for JSON serialization
         return {key: float(pos) for key, pos in zip(action_keys, joint_positions)}
+
+    def _merge_base_with_action(self, action: dict[str, Any], base: Optional[dict] = None) -> dict[str, Any]:
+        """Merge base velocities from phone data into action if enabled.
+
+        Applies scaling factors from config and only includes base keys when active.
+        """
+        try:
+            if not getattr(self.config, "enable_base_from_phone", True):
+                return action
+            if not base:
+                return action
+
+            # Read raw analog values (in [-1, 1]) and apply optional scaling
+            x = float(base.get("x.vel", 0.0)) * float(getattr(self.config, "base_scale_x", 1.0))
+            y = float(base.get("y.vel", 0.0)) * float(getattr(self.config, "base_scale_y", 1.0))
+            theta = float(base.get("theta.vel", 0.0)) * float(getattr(self.config, "base_scale_theta", 1.0))
+
+            # If base_active is False but we have non-zero inputs, treat as active
+            is_active = bool(base.get("active", False)) or (abs(x) > 0.0 or abs(y) > 0.0 or abs(theta) > 0.0)
+            if not is_active:
+                return action
+
+            # Debug: Log when phone wheel commands are applied
+            if abs(x) > 0.0 or abs(y) > 0.0 or abs(theta) > 0.0:
+                print(f"DEBUG TELEOP WHEELS: Applying phone wheel command - x={x:.3f}, y={y:.3f}, theta={theta:.3f}")
+
+            # Emit raw analog values in [-1,1]; client will scale via _from_analog_to_base_action
+            merged = {**action}
+            merged["x.vel"] = x
+            merged["y.vel"] = y
+            merged["theta.vel"] = theta
+            return merged
+        except Exception:
+            return action
 
 
     def _read_and_display_motor_positions(self, current_joint_pos: list[float]) -> None:

@@ -96,3 +96,9 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     gripper_max_pos: float = 50.0   # Gripper open position (100% slider)
 
     # Remove duplicate joint_offsets_deg - already defined above on line 78
+
+    # Base control via phone (optional)
+    enable_base_from_phone: bool = True
+    base_scale_x: float = 1.0
+    base_scale_y: float = 1.0
+    base_scale_theta: float = 1.0
