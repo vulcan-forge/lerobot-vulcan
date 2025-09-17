@@ -513,17 +513,18 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 self._phone_connected = True
 
             if not self.start_teleop:
-                # Phone teleoperator always works in degrees (robot is auto-configured)
+                # Teleop inactive: keep arms at rest, but allow base commands if configured
                 rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
-                # Flip shoulder_lift only for rest pose to match hardware
                 if len(rest_pose_deg) > 1:
                     rest_pose_deg[1] = -rest_pose_deg[1]
                 self._phone_connected = False
-                # Reset timer when teleop stops
                 self.teleop_start_time = None
                 self.motor_positions_read = False
-                # Return rest position when not teleoperating
-                return self._format_action_dict(rest_pose_deg)
+                base = data.get("base") if data is not None else None
+                if getattr(self.config, "base_allow_when_inactive", True):
+                    return self._merge_base_with_action(self._format_action_dict(rest_pose_deg), base=base)
+                else:
+                    return self._format_action_dict(rest_pose_deg)
             
             # Start timer when teleop becomes active
             if self.teleop_start_time is None:
@@ -556,10 +557,16 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 # Return the captured hold position instead of current drifting position
                 if self.reset_hold_position is not None:
                     logger.debug(f"Reset active - returning hold position: {self.reset_hold_position}")
+                    if getattr(self.config, "base_allow_when_resetting", True):
+                        base = data.get("base") if data is not None else None
+                        return self._merge_base_with_action(self._format_action_dict(self.reset_hold_position), base=base)
                     return self._format_action_dict(self.reset_hold_position)
                 else:
                     # Fallback if no hold position captured yet
                     logger.warning("Reset active but no hold position captured - using current position")
+                    if getattr(self.config, "base_allow_when_resetting", True):
+                        base = data.get("base") if data is not None else None
+                        return self._merge_base_with_action(self._format_action_dict(current_left_arm_pos_deg), base=base)
                     return self._format_action_dict(current_left_arm_pos_deg)
 
             # Check for reset transition (prev=True, current=False) - reset just ended

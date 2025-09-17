@@ -102,3 +102,6 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     base_scale_x: float = 1.0
     base_scale_y: float = 1.0
     base_scale_theta: float = 1.0
+    # Allow base to run when teleop is inactive or resetting
+    base_allow_when_inactive: bool = True
+    base_allow_when_resetting: bool = True
