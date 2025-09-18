@@ -253,20 +253,6 @@ class Sourccey(Robot):
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}
 
-            # If one side has no commands, hold its current pose by filling with present positions
-            if (self.limit_arm is None or self.limit_arm == "left") and not left_action:
-                try:
-                    present_left = self.left_arm.bus.sync_read("Present_Position")
-                    left_action = {f"{motor}.pos": val for motor, val in present_left.items()}
-                except Exception:
-                    left_action = {}
-            if (self.limit_arm is None or self.limit_arm == "right") and not right_action:
-                try:
-                    present_right = self.right_arm.bus.sync_read("Present_Position")
-                    right_action = {f"{motor}.pos": val for motor, val in present_right.items()}
-                except Exception:
-                    right_action = {}
-
             if self.limit_arm is None or self.limit_arm == "left":
                 sent_left = self.left_arm.send_action(left_action)
                 prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
@@ -381,6 +367,3 @@ class Sourccey(Robot):
             "y.vel": clean_value(y),
             "theta.vel": clean_value(theta),
         }
-
-
-
