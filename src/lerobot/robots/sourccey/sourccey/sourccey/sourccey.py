@@ -257,8 +257,12 @@ class Sourccey(Robot):
                 sent_left = self.left_arm.send_action(left_action)
                 prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
             if self.limit_arm is None or self.limit_arm == "right":
-                sent_right = self.right_arm.send_action(right_action)
-                prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
+                # Skip empty right actions to prevent StopIteration error
+                if right_action:
+                    sent_right = self.right_arm.send_action(right_action)
+                    prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
+                else:
+                    prefixed_send_action_right = {}
 
             # Base velocity
             wheel_action = self._body_to_wheel_normalized(
@@ -272,6 +276,10 @@ class Sourccey(Robot):
             return sent_action
         except Exception as e:
             print(f"Error sending action: {e}")
+            print(f"Exception type: {type(e).__name__}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            print(f"Action that caused error: {action}")
             return {}
 
     # Base Functions

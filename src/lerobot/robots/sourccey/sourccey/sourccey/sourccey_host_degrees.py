@@ -77,23 +77,25 @@ def main():
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
                 data = dict(json.loads(msg))
 
-                # Debug: Log received action data
-                if len(data) > 0:
-                    action_keys = list(data.keys())
-                    logging.info(f"Received action with {len(data)} keys: {action_keys[:5]}{'...' if len(action_keys) > 5 else ''}")
-                    
-                    # Check for any problematic values
-                    problematic_values = []
-                    for key, value in data.items():
-                        if value is None:
-                            problematic_values.append(f"{key}=None")
-                        elif isinstance(value, (int, float)) and (value != value or abs(value) > 1000):  # NaN or extreme values
-                            problematic_values.append(f"{key}={value}")
-                    
-                    if problematic_values:
-                        logging.warning(f"Problematic action values detected: {problematic_values}")
+                # Debug: Log when wheel/base commands are received
+                try:
+                    x = float(data.get("x.vel", 0.0))
+                    y = float(data.get("y.vel", 0.0))
+                    theta = float(data.get("theta.vel", 0.0))
+                    if abs(x) > 0.0 or abs(y) > 0.0 or abs(theta) > 0.0:
+                        print(f"HOST WHEELS: Applying base command x={x:.3f}, y={y:.3f}, theta={theta:.3f}")
+                except Exception:
+                    pass
 
                 _action_sent = robot.send_action(data)
+                # Debug: print wheel setpoints and actual wheel velocities after applying
+                try:
+                    base_goal = {k: data.get(k, 0.0) for k in ("x.vel","y.vel","theta.vel")}
+                    wheel_set = robot._body_to_wheel_normalized(base_goal.get("x.vel",0.0), base_goal.get("y.vel",0.0), base_goal.get("theta.vel",0.0))
+                    print(f"HOST WHEELS: Wheel setpoints {wheel_set}")
+                except Exception:
+                    pass
+                robot.update()
 
                 last_cmd_time = time.time()
                 watchdog_active = False
@@ -101,14 +103,8 @@ def main():
                 if not watchdog_active:
                     # logging.warning("No command available")
                     pass
-            except json.JSONDecodeError as e:
-                logging.error(f"JSON decode error: {e}")
-                logging.error(f"Raw message: {msg[:200]}...")
             except Exception as e:
-                logging.error(f"Message fetching/processing failed: {e}")
-                logging.error(f"Exception type: {type(e).__name__}")
-                import traceback
-                logging.error(f"Traceback: {traceback.format_exc()}")
+                logging.error("Message fetching failed: %s", e)
 
             now = time.time()
             if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:

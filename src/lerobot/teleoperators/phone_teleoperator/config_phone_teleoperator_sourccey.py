@@ -95,6 +95,13 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     gripper_min_pos: float = 0.0    # Gripper closed position (0% slider)
     gripper_max_pos: float = 50.0   # Gripper open position (100% slider)
 
-    # Optional per-joint degree offsets (applied after IK + sign flips)
-    # Keys: 'shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll'
-    joint_offsets_deg: Optional[dict[str, float]] = None
+    # Remove duplicate joint_offsets_deg - already defined above on line 78
+
+    # Base control via phone (optional)
+    enable_base_from_phone: bool = True
+    base_scale_x: float = 1.0
+    base_scale_y: float = 1.0
+    base_scale_theta: float = 1.0
+    # Allow base to run when teleop is inactive or resetting
+    base_allow_when_inactive: bool = True
+    base_allow_when_resetting: bool = True

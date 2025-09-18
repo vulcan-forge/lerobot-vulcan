@@ -12,8 +12,8 @@ from lerobot.utils.visualization_utils import _init_rerun, log_rerun_data
 FPS = 30
 
 # Create the robot and teleoperator configurations
-robot_config = SourcceyClientConfig(remote_ip="192.168.1.235", id="sourccey")
-teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="/dev/ttyACM1", right_arm_port="/dev/ttyACM0", id="sourccey")
+robot_config = SourcceyClientConfig(remote_ip="192.168.1.240", id="sourccey")
+teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="COM6", right_arm_port="COM5", id="sourccey")
 keyboard_config = KeyboardTeleopConfig(id="keyboard")
 
 robot = SourcceyClient(robot_config)
@@ -38,6 +38,7 @@ while True:
 
     keyboard_keys = keyboard.get_action()
     base_action = robot._from_keyboard_to_base_action(keyboard_keys)
+
 
     log_rerun_data(observation, {**arm_action, **base_action})
 
