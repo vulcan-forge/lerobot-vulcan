@@ -77,24 +77,7 @@ def main():
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
                 data = dict(json.loads(msg))
 
-                # Debug: Log when wheel/base commands are received
-                try:
-                    x = float(data.get("x.vel", 0.0))
-                    y = float(data.get("y.vel", 0.0))
-                    theta = float(data.get("theta.vel", 0.0))
-                    if abs(x) > 0.0 or abs(y) > 0.0 or abs(theta) > 0.0:
-                        print(f"HOST WHEELS: Applying base command x={x:.3f}, y={y:.3f}, theta={theta:.3f}")
-                except Exception:
-                    pass
-
                 _action_sent = robot.send_action(data)
-                # Debug: print wheel setpoints and actual wheel velocities after applying
-                try:
-                    base_goal = {k: data.get(k, 0.0) for k in ("x.vel","y.vel","theta.vel")}
-                    wheel_set = robot._body_to_wheel_normalized(base_goal.get("x.vel",0.0), base_goal.get("y.vel",0.0), base_goal.get("theta.vel",0.0))
-                    print(f"HOST WHEELS: Wheel setpoints {wheel_set}")
-                except Exception:
-                    pass
                 robot.update()
 
                 last_cmd_time = time.time()
