@@ -62,6 +62,8 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     rotation_sensitivity: float = 1.0
     sensitivity_normal: float = 0.5
     sensitivity_precision: float = 0.2
+    # Global mapping gain multiplier for both translation and rotation
+    mapping_gain: float = 2.0
     
     # Initial robot pose (when connecting phone) - same as SO100
     initial_position: tuple[float, ...] = (0.0, -0.17, 0.237)  # meters

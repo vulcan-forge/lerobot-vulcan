@@ -146,6 +146,51 @@ class PhoneTeleoperator(Teleoperator):
         self._prev_q = None
         # Elbow soft stop threshold (radians), computed from URDF limits when available
         self._elbow_soft_stop = None
+        # Elbow backward block baseline (radians) captured at start of teleop
+        self._elbow_back_limit = None
+        # Direction to block as "backwards": 'increase' or 'decrease'
+        self._elbow_block_direction = getattr(self.config, "elbow_block_direction", "increase")
+
+        # Tuning parameters (can be edited in-script)
+        # Joint indices: 0 shoulder_pan, 1 shoulder_lift, 2 elbow_flex, 3 wrist_flex, 4 wrist_roll, 5 gripper
+        self.tune = {
+            "lowpass_alpha": 0.25,  # 0..1; lower = smoother
+            "delta_scale": {  # per-joint delta multipliers (post-IK, relative to previous)
+                0: 0.5,  # shoulder_pan
+                1: 1.0,
+                2: 1.0,
+                3: 1.0,
+                4: 1.0,
+                5: 1.0,
+            },
+            "wrist_roll_overhand_bias": {
+                "enabled": True,
+                "index": 4,
+                "target": 0.0,   # radians
+                "blend": 0.05,   # 0..1 small bias
+            },
+            "elbow_soft_stop": {
+                "enabled": True,
+                "index": 2,
+                "fraction_from_lower": 0.25,  # 0..1; 0.25 ~ 6:00 soft stop
+                "below_small_step_deg": 3.0,
+                "below_margin_deg": 8.0,
+                "above_max_down_deg": 25.0,
+            },
+            "elbow_back_block": {
+                "enabled": True,
+                "index": 2,
+                "direction": getattr(self.config, "elbow_block_direction", "increase"),
+                "tolerance_deg": 2.0,
+            },
+            "fixed_rate": {
+                "enabled": True,
+                "joints": {
+                    # shoulder_pan moves at a fixed max step per update
+                    0: {"step_deg": 2.0, "deadband_deg": 0.2},
+                },
+            },
+        }
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -227,8 +272,9 @@ class PhoneTeleoperator(Teleoperator):
                 
             self.urdf = yourdfpy.URDF.load(urdf_path, mesh_dir=mesh_path)
             self.robot = pk.Robot.from_urdf(self.urdf)
-            # Compute elbow soft stop (≈ 25% from lower limit) from URDF limits if available
-            self._compute_elbow_soft_stop()
+            # Compute elbow soft stop from URDF limits if available
+            frac = float(self.tune["elbow_soft_stop"]["fraction_from_lower"]) if self.tune["elbow_soft_stop"]["enabled"] else 0.25
+            self._compute_elbow_soft_stop(frac)
             
             # Initialize visualization if enabled
             if self.config.enable_visualization:
@@ -371,7 +417,7 @@ class PhoneTeleoperator(Teleoperator):
         scale = (
             self.config.sensitivity_precision if precision_mode 
             else self.config.sensitivity_normal
-        )
+        ) * float(getattr(self.config, "mapping_gain", 1.0))
 
         # Translate
         delta = (phone_pos - self.initial_phone_pos) * scale
@@ -381,7 +427,7 @@ class PhoneTeleoperator(Teleoperator):
         init_rot = _rotation_from_quat(self.initial_phone_quat, scalar_first=True)
         curr_rot = _rotation_from_quat(phone_quat, scalar_first=True)
         relative_rot = init_rot.inv() * curr_rot
-        rotvec = relative_rot.as_rotvec() * self.config.rotation_sensitivity
+        rotvec = relative_rot.as_rotvec() * (self.config.rotation_sensitivity * float(getattr(self.config, "mapping_gain", 1.0)))
         scaled_rot = R.from_rotvec(rotvec)
         quat_scaled = init_rot * scaled_rot
 
@@ -501,25 +547,25 @@ class PhoneTeleoperator(Teleoperator):
                 import numpy as _np
             except Exception:
                 _np = np
-            alpha = 0.25  # low-pass filter factor
+            alpha = float(self.tune["lowpass_alpha"])  # low-pass filter factor
             if self._prev_q is None:
                 self._prev_q = solution_rad
             # Low-pass filter all joints
             solution_rad = alpha * solution_rad + (1.0 - alpha) * self._prev_q
 
             # Discourage elbow going down past soft stop (≈ quarter range from lower)
-            ELBOW_IDX = 2  # shoulder_pan, shoulder_lift, elbow_flex, ...
+            ELBOW_IDX = int(self.tune["elbow_soft_stop"]["index"])  # shoulder_pan, shoulder_lift, elbow_flex, ...
             soft_stop = self._elbow_soft_stop
             if soft_stop is not None:
                 if solution_rad[ELBOW_IDX] < soft_stop:
                     # Below soft stop: allow only small downward steps and clamp near soft stop
-                    small_step = _np.deg2rad(3.0)
-                    margin = _np.deg2rad(8.0)
+                    small_step = _np.deg2rad(float(self.tune["elbow_soft_stop"]["below_small_step_deg"]))
+                    margin = _np.deg2rad(float(self.tune["elbow_soft_stop"]["below_margin_deg"]))
                     allowed = max(solution_rad[ELBOW_IDX], self._prev_q[ELBOW_IDX] - small_step)
                     solution_rad[ELBOW_IDX] = max(allowed, soft_stop - margin)
                 else:
                     # Above soft stop: allow more generous downward motion for responsiveness
-                    max_down_per_call = _np.deg2rad(25.0)
+                    max_down_per_call = _np.deg2rad(float(self.tune["elbow_soft_stop"]["above_max_down_deg"]))
                     solution_rad[ELBOW_IDX] = max(
                         solution_rad[ELBOW_IDX],
                         self._prev_q[ELBOW_IDX] - max_down_per_call,
@@ -533,9 +579,51 @@ class PhoneTeleoperator(Teleoperator):
                 )
 
             # Gentle overhand bias on wrist roll
-            WRIST_ROLL_IDX = 4
-            overhand_roll_target = 0.0  # rad
-            solution_rad[WRIST_ROLL_IDX] = 0.95 * solution_rad[WRIST_ROLL_IDX] + 0.05 * overhand_roll_target
+            if self.tune["wrist_roll_overhand_bias"]["enabled"]:
+                WRIST_ROLL_IDX = int(self.tune["wrist_roll_overhand_bias"]["index"]) 
+                overhand_roll_target = float(self.tune["wrist_roll_overhand_bias"]["target"])  # rad
+                blend = float(self.tune["wrist_roll_overhand_bias"]["blend"])  # 0..1
+                keep = 1.0 - blend
+                solution_rad[WRIST_ROLL_IDX] = keep * solution_rad[WRIST_ROLL_IDX] + blend * overhand_roll_target
+
+            # Per-joint delta scaling (sensitivity)
+            for j_idx, scale in self.tune["delta_scale"].items():
+                j = int(j_idx)
+                s = float(scale)
+                if 0 <= j < len(solution_rad) and s != 1.0:
+                    delta = solution_rad[j] - self._prev_q[j]
+                    solution_rad[j] = self._prev_q[j] + s * delta
+
+            # Per-joint fixed-rate limiter (velocity clamp per update)
+            if self.tune.get("fixed_rate", {}).get("enabled", False):
+                joints_cfg = self.tune["fixed_rate"].get("joints", {})
+                for j_idx, cfg in joints_cfg.items():
+                    j = int(j_idx)
+                    if 0 <= j < len(solution_rad):
+                        step = float(cfg.get("step_deg", 2.0))
+                        deadband = float(cfg.get("deadband_deg", 0.0))
+                        step_rad = _np.deg2rad(step)
+                        deadband_rad = _np.deg2rad(deadband)
+                        target = float(solution_rad[j])
+                        prev = float(self._prev_q[j])
+                        error = target - prev
+                        if abs(error) <= deadband_rad:
+                            solution_rad[j] = prev
+                        else:
+                            direction = 1.0 if error > 0 else -1.0
+                            solution_rad[j] = prev + direction * min(step_rad, abs(error))
+
+            # Strongly prevent elbow from moving "backwards" from initial (12:00) position
+            if self.tune["elbow_back_block"]["enabled"]:
+                ELBOW_IDX = int(self.tune["elbow_back_block"]["index"]) 
+                if self._elbow_back_limit is None:
+                    self._elbow_back_limit = float(solution_rad[ELBOW_IDX])
+                back_margin = _np.deg2rad(float(self.tune["elbow_back_block"]["tolerance_deg"]))
+                direction = str(self.tune["elbow_back_block"]["direction"]).lower()
+                if direction == "decrease":
+                    solution_rad[ELBOW_IDX] = max(solution_rad[ELBOW_IDX], self._elbow_back_limit - back_margin)
+                else:
+                    solution_rad[ELBOW_IDX] = min(solution_rad[ELBOW_IDX], self._elbow_back_limit + back_margin)
 
             self._prev_q = solution_rad
 
