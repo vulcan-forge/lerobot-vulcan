@@ -167,6 +167,9 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         # Flag to show initial motor positions on first get_action call
         self.initial_positions_shown = False
         
+        # Temporal smoothing state (per controlled arm)
+        self._prev_q = None
+        
         # Connection timeout tracking
         self.last_phone_data_time = None
         self.phone_disconnection_timeout = 3.0  # seconds without data before considering disconnected
@@ -596,6 +599,32 @@ class PhoneTeleoperatorSourccey(Teleoperator):
 
             # Solve inverse kinematics (returns radians)
             solution_rad = self._solve_ik(t_robot, q_robot)
+
+            # Temporal smoothing and posture shaping
+            try:
+                import numpy as _np
+            except Exception:
+                _np = np
+            alpha = 0.25  # low-pass filter factor
+            if self._prev_q is None:
+                self._prev_q = solution_rad
+            # Low-pass filter all joints
+            solution_rad = alpha * solution_rad + (1.0 - alpha) * self._prev_q
+
+            # Discourage elbow going down quickly
+            ELBOW_IDX = 2  # shoulder_pan, shoulder_lift, elbow_flex, ...
+            max_down_per_call = _np.deg2rad(10.0)
+            solution_rad[ELBOW_IDX] = max(
+                solution_rad[ELBOW_IDX],
+                self._prev_q[ELBOW_IDX] - max_down_per_call,
+            )
+
+            # Gentle overhand bias on wrist roll
+            WRIST_ROLL_IDX = 4
+            overhand_roll_target = 0.0  # rad
+            solution_rad[WRIST_ROLL_IDX] = 0.9 * solution_rad[WRIST_ROLL_IDX] + 0.1 * overhand_roll_target
+
+            self._prev_q = solution_rad
 
             # Update visualization (expects radians)
             if self.config.enable_visualization and self.urdf_vis:
