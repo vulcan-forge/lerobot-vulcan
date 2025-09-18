@@ -144,6 +144,8 @@ class PhoneTeleoperator(Teleoperator):
         
         # Temporal smoothing state
         self._prev_q = None
+        # Elbow soft stop threshold (radians), computed from URDF limits when available
+        self._elbow_soft_stop = None
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -225,6 +227,8 @@ class PhoneTeleoperator(Teleoperator):
                 
             self.urdf = yourdfpy.URDF.load(urdf_path, mesh_dir=mesh_path)
             self.robot = pk.Robot.from_urdf(self.urdf)
+            # Compute elbow soft stop (≈ 25% from lower limit) from URDF limits if available
+            self._compute_elbow_soft_stop()
             
             # Initialize visualization if enabled
             if self.config.enable_visualization:
@@ -240,6 +244,40 @@ class PhoneTeleoperator(Teleoperator):
         except Exception as e:
             logger.error(f"Failed to connect {self}: {e}")
             raise
+
+    def _compute_elbow_soft_stop(self, fraction: float = 0.25) -> None:
+        """Compute elbow soft-stop threshold from URDF joint limits.
+
+        By default uses 25% from the lower limit to allow roughly twice the range
+        compared to the prior halfway clamp (closer to 6:00 vs 9:00).
+        """
+        try:
+            joint_name = "elbow_flex"
+            lower = None
+            upper = None
+            jm = getattr(self.urdf, "joint_map", None)
+            if jm and joint_name in jm:
+                limit = getattr(jm[joint_name], "limit", None)
+                lower = getattr(limit, "lower", None)
+                upper = getattr(limit, "upper", None)
+            if (lower is None or upper is None) and hasattr(self.urdf, "joints"):
+                for j in getattr(self.urdf, "joints", []):
+                    if getattr(j, "name", None) == joint_name:
+                        limit = getattr(j, "limit", None)
+                        lower = getattr(limit, "lower", None)
+                        upper = getattr(limit, "upper", None)
+                        break
+            if lower is not None and upper is not None:
+                low = float(lower)
+                up = float(upper)
+                # Ensure ordering
+                if up < low:
+                    low, up = up, low
+                self._elbow_soft_stop = float(low + fraction * (up - low))
+            else:
+                self._elbow_soft_stop = None
+        except Exception:
+            self._elbow_soft_stop = None
 
     def calibrate(self) -> None:
         """Phone teleoperator doesn't require calibration."""
@@ -469,18 +507,35 @@ class PhoneTeleoperator(Teleoperator):
             # Low-pass filter all joints
             solution_rad = alpha * solution_rad + (1.0 - alpha) * self._prev_q
 
-            # Discourage elbow going down quickly
+            # Discourage elbow going down past soft stop (≈ quarter range from lower)
             ELBOW_IDX = 2  # shoulder_pan, shoulder_lift, elbow_flex, ...
-            max_down_per_call = _np.deg2rad(10.0)
-            solution_rad[ELBOW_IDX] = max(
-                solution_rad[ELBOW_IDX],
-                self._prev_q[ELBOW_IDX] - max_down_per_call,
-            )
+            soft_stop = self._elbow_soft_stop
+            if soft_stop is not None:
+                if solution_rad[ELBOW_IDX] < soft_stop:
+                    # Below soft stop: allow only small downward steps and clamp near soft stop
+                    small_step = _np.deg2rad(3.0)
+                    margin = _np.deg2rad(8.0)
+                    allowed = max(solution_rad[ELBOW_IDX], self._prev_q[ELBOW_IDX] - small_step)
+                    solution_rad[ELBOW_IDX] = max(allowed, soft_stop - margin)
+                else:
+                    # Above soft stop: allow more generous downward motion for responsiveness
+                    max_down_per_call = _np.deg2rad(25.0)
+                    solution_rad[ELBOW_IDX] = max(
+                        solution_rad[ELBOW_IDX],
+                        self._prev_q[ELBOW_IDX] - max_down_per_call,
+                    )
+            else:
+                # Fallback if no limits known
+                max_down_per_call = _np.deg2rad(25.0)
+                solution_rad[ELBOW_IDX] = max(
+                    solution_rad[ELBOW_IDX],
+                    self._prev_q[ELBOW_IDX] - max_down_per_call,
+                )
 
             # Gentle overhand bias on wrist roll
             WRIST_ROLL_IDX = 4
             overhand_roll_target = 0.0  # rad
-            solution_rad[WRIST_ROLL_IDX] = 0.9 * solution_rad[WRIST_ROLL_IDX] + 0.1 * overhand_roll_target
+            solution_rad[WRIST_ROLL_IDX] = 0.95 * solution_rad[WRIST_ROLL_IDX] + 0.05 * overhand_roll_target
 
             self._prev_q = solution_rad
 
