@@ -683,6 +683,42 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             solution_rad = self._solve_ik(t_robot, q_robot)
 
             # Temporal smoothing and posture shaping
+            if getattr(self, "tune", None) and self.tune.get("bypass_all_mods", False):
+                self._prev_q = solution_rad
+                solution_final = np.rad2deg(solution_rad)
+                self.start_teleop = switch_state
+                action_ctrl = self._format_action_dict(solution_final)
+                if self.arm_side == "right":
+                    action_ctrl = {k.replace("left_", "right_"): v for k, v in action_ctrl.items()}
+                if not getattr(self.config, "emit_both_arms", True):
+                    return self._merge_base_with_action(action_ctrl, base=data.get("base"))
+                if self.arm_side == "left":
+                    rest_right_deg = list(np.rad2deg(getattr(self.config, "rest_pose_right", self.config.rest_pose)))
+                    right_keys = [
+                        "right_shoulder_pan.pos",
+                        "right_shoulder_lift.pos",
+                        "right_elbow_flex.pos",
+                        "right_wrist_flex.pos",
+                        "right_wrist_roll.pos",
+                        "right_gripper.pos",
+                    ]
+                    action_other = {k: float(v) for k, v in zip(right_keys, rest_right_deg)}
+                    full_action = {**action_ctrl, **action_other}
+                    return self._merge_base_with_action({k: float(v) for k, v in full_action.items()}, base=data.get("base"))
+                else:
+                    rest_left_deg = list(np.rad2deg(self.config.rest_pose))
+                    left_keys = [
+                        "left_shoulder_pan.pos",
+                        "left_shoulder_lift.pos",
+                        "left_elbow_flex.pos",
+                        "left_wrist_flex.pos",
+                        "left_wrist_roll.pos",
+                        "left_gripper.pos",
+                    ]
+                    action_other = {k: float(v) for k, v in zip(left_keys, rest_left_deg)}
+                    full_action = {**action_other, **action_ctrl}
+                    return self._merge_base_with_action({k: float(v) for k, v in full_action.items()}, base=data.get("base"))
+
             try:
                 import numpy as _np
             except Exception:

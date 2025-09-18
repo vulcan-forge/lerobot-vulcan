@@ -543,6 +543,13 @@ class PhoneTeleoperator(Teleoperator):
             solution_rad = self._solve_ik(t_robot, q_robot)
             
             # Temporal smoothing and posture shaping
+            if self.tune.get("bypass_all_mods", False):
+                # Bypass: use raw IK output, keep prev for continuity
+                self._prev_q = solution_rad
+                solution_final = np.rad2deg(solution_rad)
+                self.start_teleop = switch_state
+                return self._format_action_dict(solution_final)
+
             try:
                 import numpy as _np
             except Exception:

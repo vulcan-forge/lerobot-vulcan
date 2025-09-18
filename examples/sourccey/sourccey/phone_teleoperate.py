@@ -177,6 +177,10 @@ def main():
     
     # Initialize teleoperator, threaded keyboard handler, and Q key handler
     phone_teleop = PhoneTeleoperatorSourccey(phone_config)
+    
+    # Toggle this to bypass all modifications and use raw IK solver
+    phone_teleop.tune["bypass_all_mods"] = False  # Set to True for raw IK behavior
+    
     threaded_keyboard = ThreadedKeyboardHandler(robot)
     q_key_handler = QKeyHandler()
     
