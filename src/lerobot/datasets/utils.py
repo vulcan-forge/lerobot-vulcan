@@ -1184,7 +1184,6 @@ def validate_episode_buffer(episode_buffer: dict, total_episodes: int, features:
             f"In features not in episode_buffer: {set(features) - buffer_keys}"
         )
 
-<<<<<<< HEAD
 def translate_episode_index_to_position(episode_dicts: dict[dict], episode_index: int) -> int:
     """
     Translates an actual episode index to its position in the sequential episode_data_index tensors.
@@ -1208,7 +1207,6 @@ def translate_episode_index_to_position(episode_dicts: dict[dict], episode_index
     episode_to_position = {ep_idx: i for i, ep_idx in enumerate(episode_dicts)}
     position = episode_to_position[episode_index]
     return position
-=======
 
 def to_parquet_with_hf_images(df: pandas.DataFrame, path: Path) -> None:
     """This function correctly writes to parquet a panda DataFrame that contains images encoded by HF dataset.
@@ -1443,4 +1441,3 @@ def safe_shard(dataset: datasets.IterableDataset, index: int, num_shards: int) -
     shard_idx = min(dataset.num_shards, index + 1) - 1
 
     return dataset.shard(num_shards, index=shard_idx)
->>>>>>> upstream/main
