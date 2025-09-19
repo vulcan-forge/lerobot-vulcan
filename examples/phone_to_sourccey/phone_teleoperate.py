@@ -25,6 +25,7 @@ from pathlib import Path
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
 from lerobot.teleoperators.phone_teleoperator import PhoneTeleoperatorSourccey, PhoneTeleoperatorSourcceyConfig
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
+from lerobot.utils.visualization_utils import _init_rerun, log_rerun_data
 
 try:
     from pynput import keyboard
@@ -131,7 +132,7 @@ class ThreadedKeyboardHandler:
 def find_sourccey_model_path():
     """Find the Sourccey URDF path."""
     current_file = Path(__file__)
-    sourccey_model_path = current_file.parent.parent.parent.parent / "src" / "lerobot" / "robots" / "sourccey" / "sourccey" / "sourccey" / "model"
+    sourccey_model_path = current_file.parent.parent.parent / "src" / "lerobot" / "robots" / "sourccey" / "sourccey" / "sourccey" / "model"
     
     if not sourccey_model_path.exists():
         raise FileNotFoundError(f"Could not find Sourccey model directory at {sourccey_model_path}")
@@ -205,6 +206,10 @@ def main():
         print("Starting Q key handler...")
         q_key_handler.start()
         
+        # Initialize rerun viewer for visualization
+        print("Initializing rerun viewer...")
+        _init_rerun(session_name=f"phone_sourccey_{args.arm_side}_teleop")
+        
         if not phone_teleop.is_connected:
             raise ValueError("Phone teleoperator is not connected!")
         
@@ -218,6 +223,7 @@ def main():
         print("- Start the phone app and connect to the gRPC server")
         print("- Use your phone to control the robot")
         print("- Press Q to exit immediately")
+        print("- Rerun viewer is running for real-time visualization")
         
         # Main control loop
         while True:
@@ -266,6 +272,9 @@ def main():
                     # Just print the action for debugging when robot not connected
                     if any(abs(v) > 0.0 for v in [action.get("x.vel", 0), action.get("y.vel", 0), action.get("theta.vel", 0)]):
                         print(f"DEBUG: Would send base action: {action}")
+                
+                # Visualize with rerun
+                log_rerun_data(observation=observation, action=action)
                 
                 # Control frequency
                 time.sleep(max(0, 1/30))  # Target ~30 Hz

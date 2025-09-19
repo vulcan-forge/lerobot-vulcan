@@ -254,8 +254,12 @@ class Sourccey(Robot):
             prefixed_send_action_right = {}
 
             if self.limit_arm is None or self.limit_arm == "left":
-                sent_left = self.left_arm.send_action(left_action)
-                prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
+                # Skip empty left actions to prevent StopIteration error
+                if left_action:
+                    sent_left = self.left_arm.send_action(left_action)
+                    prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
+                else:
+                    prefixed_send_action_left = {}
             if self.limit_arm is None or self.limit_arm == "right":
                 # Skip empty right actions to prevent StopIteration error
                 if right_action:
