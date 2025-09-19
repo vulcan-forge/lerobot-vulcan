@@ -717,7 +717,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.pull_from_repo(allow_patterns=files, ignore_patterns=ignore_patterns)
 
     def get_episodes_file_paths(self) -> list[Path]:
-        episodes = self.episodes if self.episodes is not None else list(self.meta.episodes)
+        episodes = self.episodes if self.episodes is not None else list(range(self.meta.total_episodes))
         fpaths = [str(self.meta.get_data_file_path(ep_idx)) for ep_idx in episodes]
         if len(self.meta.video_keys) > 0:
             video_files = [
@@ -801,8 +801,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             key: [max(ep_start, min(ep_end - 1, idx + delta)) for delta in delta_idx]
             for key, delta_idx in self.delta_indices.items()
         }
-
-        padding = {
+        padding = {  # Pad values outside of current episode range
             f"{key}_is_pad": torch.BoolTensor(
                 [(idx + delta < ep_start) | (idx + delta >= ep_end) for delta in delta_idx]
             )
