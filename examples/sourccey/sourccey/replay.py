@@ -7,7 +7,7 @@ from lerobot.utils.utils import log_say
 
 EPISODE_IDX = 0
 
-robot_config = SourcceyClientConfig(remote_ip="192.168.1.235", id="sourccey")
+robot_config = SourcceyClientConfig(remote_ip="192.168.1.237", id="sourccey")
 robot = SourcceyClient(robot_config)
 
 dataset = LeRobotDataset("local/sourccey-001__drive_test_1", episodes=[EPISODE_IDX])

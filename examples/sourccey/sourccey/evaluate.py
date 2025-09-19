@@ -13,7 +13,7 @@ EPISODE_TIME_SEC = 60
 TASK_DESCRIPTION = "Put tape in the cup"
 
 # Create the robot and teleoperator configurations
-robot_config = SourcceyClientConfig(remote_ip="192.168.1.235", id="sourccey")
+robot_config = SourcceyClientConfig(remote_ip="192.168.1.237", id="sourccey")
 robot = SourcceyClient(robot_config)
 
 policy = ACTPolicy.from_pretrained("outputs/train/act_sourccey-001__tape-cup1/checkpoints/020000/pretrained_model")
