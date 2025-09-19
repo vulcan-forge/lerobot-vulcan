@@ -199,6 +199,16 @@ def train(cfg: TrainPipelineConfig):
         ds_meta=dataset.meta,
     )
 
+    # Create processors - only provide dataset_stats if not resuming from saved processors
+    processor_kwargs = {}
+    if not (cfg.resume and cfg.policy.pretrained_path):
+        # Only provide dataset_stats when not resuming from saved processor state
+        processor_kwargs["dataset_stats"] = dataset.meta.stats
+
+    preprocessor, postprocessor = make_pre_post_processors(
+        policy_cfg=cfg.policy, pretrained_path=cfg.policy.pretrained_path, **processor_kwargs
+    )
+
     # Create optimizer, scheduler, and grad scaler BEFORE DDP wrapping
     logging.info("Creating optimizer and scheduler")
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
