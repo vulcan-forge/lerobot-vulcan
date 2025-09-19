@@ -218,3 +218,6 @@ CLAUDE.md
 *.pptx
 *.xlsx
 
+*.urdf
+*.xml
+*.part
