@@ -664,7 +664,7 @@ python src/lerobot/teleoperate.py \
 ```
 
 ```bash
-uv run src/lerobot/record.py \
+python src/lerobot/record.py \
     --robot.type=so100_follower \
     --robot.port=COM38 \
     --robot.id=so100_follower-001 \
@@ -700,4 +700,20 @@ python src/lerobot/scripts/train.py \
  --steps=1000 \
  --wandb.enable=false \
  --policy.push_to_hub=false
+```
+
+```bash
+python src/lerobot/record.py \
+    --robot.type=so100_follower \
+    --robot.port=COM38 \
+    --robot.id=so100_follower-001 \
+    --robot.cameras="{'main': OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=30)}" \
+    --teleop.type=so100_leader \
+    --teleop.port=COM37 \
+    --teleop.id=so100_leader-001 \
+    --dataset.repo_id=local/dataset_test \
+    --dataset.num_episodes=1 \
+    --dataset.episode_time_s=10 \
+    --dataset.single_task="Grab towel and fold it" \
+    --dataset.push_to_hub=false
 ```
