@@ -387,25 +387,25 @@ python src/lerobot/teleoperate.py \
 ```
 
 ```bash
-python src/lerobot/teleoperate.py \
-    --robot.type=so100_follower \
-    --robot.port=COM37 \
-    --robot.id=so100_follower-001 \
-    --robot.cameras="{ }" \
-    --teleop.type=so100_leader \
-    --teleop.port=COM38 \
-    --teleop.id=so100_follower-001 \
-    --display_data=True
+python src/lerobot/teleoperate.py
+    --robot.type=so100_follower
+    --robot.port=COM37
+    --robot.id=so100_follower-001
+    --teleop.type=so100_leader
+    --teleop.port=COM7
+    --teleop.id=so100_follower-001
+    --display_data=true
+    --robot.cameras={"main": { "type": opencv, "index_or_path": 0, "width": 640, "height": 480, "fps": 30}}
 ```
 
 ```bash
-uv run src/lerobot/record.py \
+python src/lerobot/record.py \
     --robot.type=so100_follower \
-    --robot.port=COM38 \
+    --robot.port=COM37 \
     --robot.id=so100_follower-001 \
     --robot.cameras="{'main': OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=30)}" \
     --teleop.type=so100_leader \
-    --teleop.port=COM37 \
+    --teleop.port=COM7 \
     --teleop.id=so100_leader-001 \
     --dataset.repo_id=local/dataset_test \
     --dataset.num_episodes=1 \

@@ -31,7 +31,7 @@ lerobot-record \
     # --teleop.type=so100_leader \
     # --teleop.port=/dev/tty.usbmodem58760431551 \
     # --teleop.id=blue \
-    # <- Policy optional if you want to record with a policy  \
+    # <- Policy optional if you want to record with a policy \
     # --policy.path=${HF_USER}/my_policy \
 ```
 
@@ -59,7 +59,6 @@ lerobot-record \
 """
 
 import logging
-import random
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -110,8 +109,6 @@ from lerobot.teleoperators import (  # noqa: F401
     so101_leader,
 )
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
-from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
-from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.sourccey_leader import SourcceyLeader
 from lerobot.utils.control_utils import (
     init_keyboard_listener,
     is_headless,
@@ -260,7 +257,6 @@ def record_loop(
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
 
-    # --- Handle multi-teleop (keyboard + arm) like the new version expects ---
     teleop_arm = teleop_keyboard = None
     if isinstance(teleop, list):
         teleop_keyboard = next((t for t in teleop if isinstance(t, KeyboardTeleop)), None)
@@ -274,32 +270,22 @@ def record_loop(
                         so100_leader.SO100Leader,
                         so101_leader.SO101Leader,
                         koch_leader.KochLeader,
-                        SourcceyLeader,
-                        BiSourcceyLeader
                     ),
                 )
             ),
             None,
         )
 
-        # if not (teleop_arm and teleop_keyboard and len(teleop) == 2 and robot.name == "lekiwi_client"):
-        #     raise ValueError(
-        #         "For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. Currently only supported for LeKiwi robot."
-        #     )
+        if not (teleop_arm and teleop_keyboard and len(teleop) == 2 and robot.name == "lekiwi_client"):
+            raise ValueError(
+                "For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. Currently only supported for LeKiwi robot."
+            )
 
-<<<<<<< HEAD
-    # Reset policy if provided
-    if policy is not None:
-=======
     # Reset policy and processor if they are provided
     if policy is not None and preprocessor is not None and postprocessor is not None:
->>>>>>> upstream/main
         policy.reset()
         preprocessor.reset()
         postprocessor.reset()
-
-    if dataset is not None:
-        print("Start Recording")
 
     timestamp = 0
     start_episode_t = time.perf_counter()
@@ -319,13 +305,8 @@ def record_loop(
         if policy is not None or dataset is not None:
             observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix="observation")
 
-<<<<<<< HEAD
-        # --------- ACTION SELECTION ---------
-        if policy is not None:
-=======
         # Get action from either policy or teleop
         if policy is not None and preprocessor is not None and postprocessor is not None:
->>>>>>> upstream/main
             action_values = predict_action(
                 observation=observation_frame,
                 policy=policy,
@@ -350,33 +331,32 @@ def record_loop(
 
         elif policy is None and isinstance(teleop, list):
             arm_action = teleop_arm.get_action()
-<<<<<<< HEAD
-
-            keyboard_action = teleop_keyboard.get_action() if teleop_keyboard is not None else {}
-            base_action = robot._from_keyboard_to_base_action(keyboard_action) if keyboard_action else {
-                "x.vel": 0.0,
-                "y.vel": 0.0,
-                "theta.vel": 0.0,
-            }
-
-            action = {**arm_action, **base_action} if base_action else arm_action
-=======
             arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
             keyboard_action = teleop_keyboard.get_action()
             base_action = robot._from_keyboard_to_base_action(keyboard_action)
             act = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
             act_processed_teleop = teleop_action_processor((act, obs))
->>>>>>> upstream/main
         else:
             logging.info(
-                "No policy or teleoperator provided, skipping action generation. "
-                "This is likely to happen when resetting the environment without a teleop device. "
+                "No policy or teleoperator provided, skipping action generation."
+                "This is likely to happen when resetting the environment without a teleop device."
                 "The robot won't be at its rest position at the start of the next episode."
             )
             continue
 
-        # Action can be clipped using `max_relative_target`, so save the actually sent action
-        sent_action = robot.send_action(action)
+        # Applies a pipeline to the action, default is IdentityProcessor
+        if policy is not None and act_processed_policy is not None:
+            action_values = act_processed_policy
+            robot_action_to_send = robot_action_processor((act_processed_policy, obs))
+        else:
+            action_values = act_processed_teleop
+            robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
+
+        # Send action to robot
+        # Action can eventually be clipped using `max_relative_target`,
+        # so action actually sent is saved in the dataset. action = postprocessor.process(action)
+        # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
+        _sent_action = robot.send_action(robot_action_to_send)
 
         # Write to dataset
         if dataset is not None:
@@ -472,7 +452,6 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     with VideoEncodingManager(dataset):
         recorded_episodes = 0
         while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
-            print(f"Recording episode {dataset.num_episodes}")
             log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
             record_loop(
                 robot=robot,
@@ -496,7 +475,6 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             if not events["stop_recording"] and (
                 (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
             ):
-                print("Reset the environment")
                 log_say("Reset the environment", cfg.play_sounds)
                 record_loop(
                     robot=robot,
@@ -512,7 +490,6 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 )
 
             if events["rerecord_episode"]:
-                print("Re-record episode")
                 log_say("Re-record episode", cfg.play_sounds)
                 events["rerecord_episode"] = False
                 events["exit_early"] = False
@@ -522,7 +499,6 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             dataset.save_episode()
             recorded_episodes += 1
 
-    print("Stop recording")
     log_say("Stop recording", cfg.play_sounds, blocking=True)
 
     robot.disconnect()
@@ -535,7 +511,6 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     if cfg.dataset.push_to_hub:
         dataset.push_to_hub(tags=cfg.dataset.tags, private=cfg.dataset.private)
 
-    print("Exiting")
     log_say("Exiting", cfg.play_sounds)
     return dataset
 
