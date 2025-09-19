@@ -143,7 +143,6 @@ def train(cfg: TrainPipelineConfig):
     Args:
         cfg: A `TrainPipelineConfig` object containing all training configurations.
     """
-    import pdb; pdb.set_trace()
     cfg.validate()
     logging.info(pformat(cfg.to_dict()))
 
