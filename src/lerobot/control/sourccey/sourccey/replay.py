@@ -18,6 +18,7 @@ robot.connect()
 if not robot.is_connected:
     raise ValueError("Robot is not connected!")
 
+print("Starting replay loop...")
 log_say(f"Replaying episode {EPISODE_IDX}")
 for idx in range(dataset.num_frames):
     t0 = time.perf_counter()

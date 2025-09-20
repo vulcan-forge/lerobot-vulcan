@@ -1,5 +1,6 @@
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
+from lerobot.processor import make_default_processors
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
@@ -17,12 +18,14 @@ TASK_DESCRIPTION = "Put red tape in cup"
 
 # Create the robot and teleoperator configurations
 robot_config = SourcceyClientConfig(remote_ip="192.168.1.237", id="sourccey")
-teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="COM8", right_arm_port="COM3", id="sourccey")
+teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="COM3", right_arm_port="COM8", id="sourccey")
 keyboard_config = KeyboardTeleopConfig(id="keyboard")
 
 robot = SourcceyClient(robot_config)
 leader_arm = BiSourcceyLeader(teleop_arm_config)
 keyboard = KeyboardTeleop(keyboard_config)
+
+teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
 robot.connect()
 leader_arm.connect()
@@ -69,6 +72,9 @@ while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
         control_time_s=EPISODE_TIME_SEC,
         single_task=TASK_DESCRIPTION,
         display_data=True,
+        teleop_action_processor=teleop_action_processor,
+        robot_action_processor=robot_action_processor,
+        robot_observation_processor=robot_observation_processor,
     )
 
     # Logic for reset env
@@ -84,6 +90,9 @@ while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
             control_time_s=RESET_TIME_SEC,
             single_task=TASK_DESCRIPTION,
             display_data=True,
+            teleop_action_processor=teleop_action_processor,
+            robot_action_processor=robot_action_processor,
+            robot_observation_processor=robot_observation_processor,
         )
 
     if events["rerecord_episode"]:
@@ -98,7 +107,7 @@ while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
 
 # Upload to hub and clean up
 # dataset.push_to_hub()
-
+log_say("Stop recording")
 robot.disconnect()
 leader_arm.disconnect()
 keyboard.disconnect()
