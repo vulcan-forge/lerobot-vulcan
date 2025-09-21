@@ -530,14 +530,25 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         if current_left_arm_pos_deg is not None and not all(pos == 0.0 for pos in current_left_arm_pos_deg):
             self.last_valid_arm_position = current_left_arm_pos_deg.copy()
         
-        # If no valid observation, use last valid position or rest pose as fallback
+        # If no valid observation, use last valid position or return early to avoid unwanted movement
         if current_left_arm_pos_deg is None:
             if self.last_valid_arm_position is not None:
                 current_left_arm_pos_deg = self.last_valid_arm_position.copy()
                 logger.debug("Using last valid arm position")
             else:
-                current_left_arm_pos_deg = list(np.rad2deg(self.config.rest_pose))
-                logger.debug("Using rest pose as current left arm position")
+                # No valid observation and no last position - avoid sending arm commands
+                logger.warning("No valid observation data available - skipping arm control to avoid unwanted movement")
+                # Still try to get phone data for base controls if available
+                try:
+                    data = self.pose_service.get_latest_pose(block=False) if self.pose_service else None
+                    if data and getattr(self.config, "enable_base_from_phone", True):
+                        base = data.get("base")
+                        if base:
+                            return self._merge_base_with_action({}, base=base)
+                except Exception:
+                    pass
+                # Return empty action - no arm movement, no base movement
+                return {}
 
         # Show initial motor positions immediately on first call (before phone connection)
         if not self.initial_positions_shown:
