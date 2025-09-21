@@ -11,15 +11,17 @@ from lerobot.record import record_loop
 
 NUM_EPISODES = 1
 FPS = 30
-EPISODE_TIME_SEC = 60
-TASK_DESCRIPTION = "Put tape in the cup"
+EPISODE_TIME_SEC = 30
+TASK_DESCRIPTION = "Put red tape in cup"
+RESET_TIME_SEC = 1
 
-PRETRAINED_MODEL_ID = "outputs/train/act_sourccey-001__tape-cup1/checkpoints/020000/pretrained_model"
+PRETRAINED_MODEL_ID = "outputs/train/act_sourccey-001__tape-cup1/checkpoints/001000/pretrained_model"
 
 # Create the robot and teleoperator configurations
 robot_config = SourcceyClientConfig(remote_ip="192.168.1.237", id="sourccey")
 robot = SourcceyClient(robot_config)
 
+# Create policy
 policy = ACTPolicy.from_pretrained(PRETRAINED_MODEL_ID)
 
 # Configure the dataset features
@@ -29,7 +31,7 @@ dataset_features = {**action_features, **obs_features}
 
 # Create the dataset
 dataset = LeRobotDataset.create(
-    repo_id="local/eval_act__sourccey-001__tape-cup1",
+    repo_id="local/eval__act__sourccey-001__tape-cup1",
     fps=FPS,
     features=dataset_features,
     robot_type=robot.name,
@@ -46,18 +48,18 @@ preprocessor, postprocessor = make_pre_post_processors(
     preprocessor_overrides={"device_processor": {"device": str(policy.config.device)}},
 )
 
-# To connect you already should have this script running on Sourccey V2 Beta: `python -m lerobot.common.robots.sourccey_v2beta.sourccey_v2beta_host --robot.id=sourccey_v2beta`
+# Connect to the robot
 robot.connect()
 
 teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
-_init_rerun(session_name="recording")
-
 listener, events = init_keyboard_listener()
+_init_rerun(session_name="recording")
 
 if not robot.is_connected:
     raise ValueError("Robot is not connected!")
 
+print("Starting evaluate loop...")
 recorded_episodes = 0
 while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
     log_say(f"Running inference, recording eval episode {recorded_episodes} of {NUM_EPISODES}")
@@ -88,9 +90,7 @@ while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
             robot=robot,
             events=events,
             fps=FPS,
-            preprocessor=preprocessor,
-            postprocessor=postprocessor,
-            control_time_s=EPISODE_TIME_SEC,
+            control_time_s=RESET_TIME_SEC,
             single_task=TASK_DESCRIPTION,
             display_data=True,
             teleop_action_processor=teleop_action_processor,
