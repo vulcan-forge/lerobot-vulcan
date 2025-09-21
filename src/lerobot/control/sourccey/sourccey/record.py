@@ -10,10 +10,10 @@ from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import _init_rerun
 from lerobot.record import record_loop
 
-NUM_EPISODES = 10
+NUM_EPISODES = 3
 FPS = 30
-EPISODE_TIME_SEC = 60
-RESET_TIME_SEC = 5
+EPISODE_TIME_SEC = 30
+RESET_TIME_SEC = 1
 TASK_DESCRIPTION = "Put red tape in cup"
 
 # Create the robot and teleoperator configurations
