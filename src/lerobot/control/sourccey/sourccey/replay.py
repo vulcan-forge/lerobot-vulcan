@@ -1,40 +1,74 @@
 import time
+from dataclasses import dataclass
+from pathlib import Path
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
 from lerobot.utils.robot_utils import busy_wait
 from lerobot.utils.utils import log_say
+from lerobot.configs import parser
+import logging
+from pprint import pformat
+from dataclasses import asdict
+from lerobot.utils.utils import init_logging
 
-EPISODE_IDX = 0
+@dataclass
+class DatasetReplayConfig:
+    # Dataset identifier. By convention it should match '{hf_username}/{dataset_name}' (e.g. `lerobot/test`).
+    repo_id: str
+    # Episode to replay.
+    episode: int
+    # Root directory where the dataset will be stored (e.g. 'dataset/path').
+    root: str | Path | None = None
+    # Limit the frames per second. By default, uses the policy fps.
+    fps: int = 30
 
-# Intialize the robot config and the robot
-robot_config = SourcceyClientConfig(remote_ip="192.168.1.237", id="sourccey")
-robot = SourcceyClient(robot_config)
+@dataclass
+class SourcceyReplayConfig:
+    id: str = "sourccey"
+    remote_ip: str = "192.168.1.237"
+    fps: int = 30
+    dataset: DatasetReplayConfig
 
-# Fetch the dataset to replay
-dataset = LeRobotDataset("local/sourccey-001__tape-cup10", episodes=[EPISODE_IDX])
+@parser.wrap()
+def replay(cfg: SourcceyReplayConfig):
+    init_logging()
+    logging.info(pformat(asdict(cfg)))
 
-# Filter dataset to only include frames from the specified episode since episodes are chunked in dataset V3.0
-episode_frames = dataset.hf_dataset.filter(lambda x: x["episode_index"] == EPISODE_IDX)
-actions = episode_frames.select_columns("action")
+    # Intialize the robot config and the robot
+    robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
+    robot = SourcceyClient(robot_config)
 
-# Connect to the robot
-robot.connect()
+    # Fetch the dataset to replay
+    dataset = LeRobotDataset(cfg.dataset.repo_id, episodes=[cfg.dataset.episode])
 
-if not robot.is_connected:
-    raise ValueError("Robot is not connected!")
+    # Filter dataset to only include frames from the specified episode since episodes are chunked in dataset V3.0
+    episode_frames = dataset.hf_dataset.filter(lambda x: x["episode_index"] == cfg.dataset.episode)
+    actions = episode_frames.select_columns("action")
 
-print("Starting replay loop...")
-log_say(f"Replaying episode {EPISODE_IDX}")
-for idx in range(len(episode_frames)):
-    t0 = time.perf_counter()
+    # Connect to the robot
+    robot.connect()
 
-    action = {
-        name: float(actions[idx]["action"][i]) for i, name in enumerate(dataset.features["action"]["names"])
-    }
+    if not robot.is_connected:
+        raise ValueError("Robot is not connected!")
 
-    robot.send_action(action)
+    print("Starting replay loop...")
+    log_say(f"Replaying episode {cfg.dataset.episode}")
+    for idx in range(len(episode_frames)):
+        t0 = time.perf_counter()
 
-    busy_wait(max(1.0 / dataset.fps - (time.perf_counter() - t0), 0.0))
+        action = {
+            name: float(actions[idx]["action"][i]) for i, name in enumerate(dataset.features["action"]["names"])
+        }
 
-robot.disconnect()
+        robot.send_action(action)
+
+        busy_wait(max(1.0 / dataset.fps - (time.perf_counter() - t0), 0.0))
+
+    robot.disconnect()
+
+def main():
+    replay()
+
+if __name__ == "__main__":
+    main()

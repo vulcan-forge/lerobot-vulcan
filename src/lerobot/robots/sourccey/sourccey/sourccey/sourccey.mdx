@@ -451,3 +451,13 @@ python src/lerobot/record.py \
     --dataset.push_to_hub=false \
     --policy.path=outputs/train/act_model_1/checkpoints/001000/pretrained_model
 ```
+
+```
+python src/lerobot/control/sourccey/sourccey/teleoperate.py \
+  --id="sourccey"
+  --remote_ip="192.168.1.237"
+  --left_arm_port="COM3"
+  --right_arm_port="COM8"
+  --keyboard_port="keyboard"
+  --fps=30
+```

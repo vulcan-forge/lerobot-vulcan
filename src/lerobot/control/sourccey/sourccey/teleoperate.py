@@ -1,4 +1,5 @@
 import time
+from dataclasses import dataclass
 
 from lerobot.robots.sourccey.sourccey.sourccey import Sourccey, SourcceyClientConfig, SourcceyClient
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
@@ -6,41 +7,58 @@ from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_lead
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourccey_leader import BiSourcceyLeaderConfig
 from lerobot.utils.robot_utils import busy_wait
 from lerobot.utils.visualization_utils import _init_rerun, log_rerun_data
+from lerobot.configs import parser
 
-FPS = 30
 
-# Create the robot and teleoperator configurations
-robot_config = SourcceyClientConfig(remote_ip="192.168.1.237", id="sourccey")
-teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port="COM3", right_arm_port="COM8", id="sourccey")
-keyboard_config = KeyboardTeleopConfig(id="keyboard")
+@dataclass
+class SourcceyTeleoperateConfig:
+    id: str = "sourccey"
+    remote_ip: str = "192.168.1.237"
+    left_arm_port: str = "COM3"
+    right_arm_port: str = "COM8"
+    keyboard_port: str = "keyboard"
+    fps: int = 30
 
-robot = SourcceyClient(robot_config)
-leader_arm = BiSourcceyLeader(teleop_arm_config)
-keyboard = KeyboardTeleop(keyboard_config)
+@parser.wrap()
+def teleoperate(cfg: SourcceyTeleoperateConfig):
+    # Create the robot and teleoperator configurations
+    robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
+    teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port=cfg.left_arm_port, right_arm_port=cfg.right_arm_port, id=cfg.id)
+    keyboard_config = KeyboardTeleopConfig(id=cfg.keyboard_port)
 
-robot.connect()
-leader_arm.connect()
-keyboard.connect()
+    robot = SourcceyClient(robot_config)
+    leader_arm = BiSourcceyLeader(teleop_arm_config)
+    keyboard = KeyboardTeleop(keyboard_config)
 
-_init_rerun(session_name="sourccey_teleop")
+    robot.connect()
+    leader_arm.connect()
+    keyboard.connect()
 
-if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
-    raise ValueError("Robot, leader arm of keyboard is not connected!")
+    _init_rerun(session_name="sourccey_teleop")
 
-print("Teleoperating Sourccey")
-while True:
-    t0 = time.perf_counter()
+    if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
+        raise ValueError("Robot, leader arm of keyboard is not connected!")
 
-    observation = robot.get_observation()
-    arm_action = leader_arm.get_action()
+    print("Teleoperating Sourccey")
+    while True:
+        t0 = time.perf_counter()
 
-    keyboard_keys = keyboard.get_action()
-    base_action = robot._from_keyboard_to_base_action(keyboard_keys)
+        observation = robot.get_observation()
+        arm_action = leader_arm.get_action()
 
-    log_rerun_data(observation, {**arm_action, **base_action})
+        keyboard_keys = keyboard.get_action()
+        base_action = robot._from_keyboard_to_base_action(keyboard_keys)
 
-    action = {**arm_action, **base_action}
+        log_rerun_data(observation, {**arm_action, **base_action})
 
-    robot.send_action(action)
+        action = {**arm_action, **base_action}
 
-    busy_wait(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
+        robot.send_action(action)
+
+        busy_wait(max(1.0 / cfg.fps - (time.perf_counter() - t0), 0.0))
+
+def main():
+    teleoperate()
+
+if __name__ == "__main__":
+    main()
