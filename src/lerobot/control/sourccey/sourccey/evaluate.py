@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from pathlib import Path
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
 from lerobot.policies.act.modeling_act import ACTPolicy
@@ -15,18 +14,20 @@ from lerobot.configs.policies import PreTrainedConfig
 
 @dataclass
 class DatasetEvaluateConfig:
-    repo_id: str = "local/eval__act__sourccey-001__tape-cup1"
-    root: str | Path | None = None
+    repo_id: str = "sourccey-001/eval__act__sourccey-001__wave_hand-001"
     num_episodes: int = 1
     episode_time_s: int = 30
     reset_time_s: int = 1
-    task_description: str = "Put red tape in cup"
+    task: str = "Wave your hand"
+    fps: int = 30
+    push_to_hub: bool = False
+    private: bool = False
 
 @dataclass
 class SourcceyEvaluateConfig:
     id: str = "sourccey"
     remote_ip: str = "192.168.1.237"
-    fps: int = 30
+    model_name: str = "act__sourccey-001__wave_hand-001"
     dataset: DatasetEvaluateConfig = DatasetEvaluateConfig()
     policy: PreTrainedConfig = PreTrainedConfig()
 
@@ -48,8 +49,7 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     # Create the dataset
     dataset = LeRobotDataset.create(
         repo_id=cfg.dataset.repo_id,
-        root=cfg.dataset.root,
-        fps=cfg.fps,
+        fps=cfg.dataset.fps,
         features=dataset_features,
         robot_type=robot.name,
         use_videos=True,
@@ -85,13 +85,13 @@ def evaluate(cfg: SourcceyEvaluateConfig):
         record_loop(
             robot=robot,
             events=events,
-            fps=cfg.fps,
+            fps=cfg.dataset.fps,
             policy=policy,
             preprocessor=preprocessor,
             postprocessor=postprocessor,
             dataset=dataset,
             control_time_s=cfg.dataset.episode_time_s,
-            single_task=cfg.dataset.task_description,
+            single_task=cfg.dataset.task,
             display_data=True,
             teleop_action_processor=teleop_action_processor,
             robot_action_processor=robot_action_processor,
@@ -106,9 +106,9 @@ def evaluate(cfg: SourcceyEvaluateConfig):
             record_loop(
                 robot=robot,
                 events=events,
-                fps=cfg.fps,
+                fps=cfg.dataset.fps,
                 control_time_s=cfg.dataset.reset_time_s,
-                single_task=cfg.dataset.task_description,
+                single_task=cfg.dataset.task,
                 display_data=True,
                 teleop_action_processor=teleop_action_processor,
                 robot_action_processor=robot_action_processor,

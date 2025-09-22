@@ -1,6 +1,5 @@
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
@@ -11,25 +10,18 @@ import logging
 from pprint import pformat
 from dataclasses import asdict
 from lerobot.utils.utils import init_logging
-from lerobot.constants import HF_LEROBOT_HOME
 
 @dataclass
 class DatasetReplayConfig:
-    # Dataset identifier. By convention it should match '{hf_username}/{dataset_name}' (e.g. `lerobot/test`).
-    repo_id: str
-    # Episode to replay.
-    episode: int
-    # Root directory where the dataset will be stored (e.g. 'dataset/path').
-    root: str  = HF_LEROBOT_HOME
-    # Limit the frames per second. By default, uses the policy fps.
+    dataset: str = "sourccey-001/sourccey-001__wave_hand-001"
+    episode: int = 0
     fps: int = 30
 
 @dataclass
 class SourcceyReplayConfig:
     id: str = "sourccey"
     remote_ip: str = "192.168.1.237"
-    fps: int = 30
-    dataset: DatasetReplayConfig
+    dataset: DatasetReplayConfig = DatasetReplayConfig()
 
 @parser.wrap()
 def replay(cfg: SourcceyReplayConfig):
@@ -41,7 +33,7 @@ def replay(cfg: SourcceyReplayConfig):
     robot = SourcceyClient(robot_config)
 
     # Fetch the dataset to replay
-    dataset = LeRobotDataset(cfg.dataset.repo_id, episodes=[cfg.dataset.episode])
+    dataset = LeRobotDataset(cfg.dataset.dataset, episodes=[cfg.dataset.episode])
 
     # Filter dataset to only include frames from the specified episode since episodes are chunked in dataset V3.0
     episode_frames = dataset.hf_dataset.filter(lambda x: x["episode_index"] == cfg.dataset.episode)

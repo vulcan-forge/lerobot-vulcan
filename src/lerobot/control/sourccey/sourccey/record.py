@@ -14,11 +14,12 @@ from dataclasses import dataclass
 
 @dataclass
 class DatasetRecordConfig:
-    repo_id: str = "local/sourccey-001__tape-cup10"
+    repo_id: str = "sourccey-001/sourccey-001__wave_hand-001"
     num_episodes: int = 1
     episode_time_s: int = 30
     reset_time_s: int = 1
-    task: str = "Put red tape in cup"
+    task: str = "Wave your hand"
+    fps: int = 30
     push_to_hub: bool = False
     private: bool = False
 
@@ -29,7 +30,6 @@ class SourcceyRecordConfig:
     left_arm_port: str = "COM3"
     right_arm_port: str = "COM8"
     keyboard: str = "keyboard"
-    fps: int = 30
     dataset: DatasetRecordConfig = DatasetRecordConfig()
 
 @parser.wrap()
@@ -56,7 +56,7 @@ def record(cfg: SourcceyRecordConfig):
 
     dataset = LeRobotDataset.create(
         repo_id=cfg.dataset.repo_id,
-        fps=cfg.fps,
+        fps=cfg.dataset.fps,
         features=dataset_features,
         robot_type=robot.name,
         use_videos=True,
@@ -78,7 +78,7 @@ def record(cfg: SourcceyRecordConfig):
         record_loop(
             robot=robot,
             events=events,
-            fps=cfg.fps,
+            fps=cfg.dataset.fps,
             dataset=dataset,
             teleop=[leader_arm, keyboard],
             control_time_s=cfg.dataset.episode_time_s,
@@ -97,7 +97,7 @@ def record(cfg: SourcceyRecordConfig):
             record_loop(
                 robot=robot,
                 events=events,
-                fps=cfg.fps,
+                fps=cfg.dataset.fps,
                 teleop=[leader_arm, keyboard],
                 control_time_s=cfg.dataset.reset_time_s,
                 single_task=cfg.dataset.task,
