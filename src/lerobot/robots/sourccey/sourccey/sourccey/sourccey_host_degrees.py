@@ -77,8 +77,27 @@ def main():
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
                 data = dict(json.loads(msg))
 
-                _action_sent = robot.send_action(data)
-                robot.update()
+                # Filter out empty arm actions - only send commands for arms that have actions
+                filtered_data = {}
+                
+                # Check for left arm actions
+                left_actions = {k: v for k, v in data.items() if k.startswith("left_")}
+                if left_actions:
+                    filtered_data.update(left_actions)
+                
+                # Check for right arm actions  
+                right_actions = {k: v for k, v in data.items() if k.startswith("right_")}
+                if right_actions:
+                    filtered_data.update(right_actions)
+                
+                # Always include base/wheel commands
+                base_actions = {k: v for k, v in data.items() if k.endswith(".vel")}
+                filtered_data.update(base_actions)
+                
+                # Only send action if we have something to send
+                if filtered_data:
+                    _action_sent = robot.send_action(filtered_data)
+                    robot.update()
 
                 last_cmd_time = time.time()
                 watchdog_active = False

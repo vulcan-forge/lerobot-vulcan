@@ -143,8 +143,11 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         
         # Pose tracking (per-arm initial)
         if self.arm_side == "right":
-            self.current_t_R = np.array(getattr(self.config, "initial_position_right", self.config.initial_position))
-            self.current_q_R = np.array(getattr(self.config, "initial_wxyz_right", self.config.initial_wxyz))
+            # Store original right arm initial pose for later mirroring when teleop starts
+            self._original_right_position = np.array(getattr(self.config, "initial_position_right", self.config.initial_position))
+            self._original_right_quat = np.array(getattr(self.config, "initial_wxyz_right", self.config.initial_wxyz))
+            self.current_t_R = self._original_right_position.copy()
+            self.current_q_R = self._original_right_quat.copy()
         else:
             self.current_t_R = np.array(self.config.initial_position)
             self.current_q_R = np.array(self.config.initial_wxyz)
@@ -530,14 +533,25 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         if current_left_arm_pos_deg is not None and not all(pos == 0.0 for pos in current_left_arm_pos_deg):
             self.last_valid_arm_position = current_left_arm_pos_deg.copy()
         
-        # If no valid observation, use last valid position or rest pose as fallback
+        # If no valid observation, use last valid position or return early to avoid unwanted movement
         if current_left_arm_pos_deg is None:
             if self.last_valid_arm_position is not None:
                 current_left_arm_pos_deg = self.last_valid_arm_position.copy()
                 logger.debug("Using last valid arm position")
             else:
-                current_left_arm_pos_deg = list(np.rad2deg(self.config.rest_pose))
-                logger.debug("Using rest pose as current left arm position")
+                # No valid observation and no last position - avoid sending arm commands
+                logger.warning("No valid observation data available - skipping arm control to avoid unwanted movement")
+                # Still try to get phone data for base controls if available
+                try:
+                    data = self.pose_service.get_latest_pose(block=False) if self.pose_service else None
+                    if data and getattr(self.config, "enable_base_from_phone", True):
+                        base = data.get("base")
+                        if base:
+                            return self._merge_base_with_action({}, base=base)
+                except Exception:
+                    pass
+                # Return empty action - no arm movement, no base movement
+                return {}
 
         # Show initial motor positions immediately on first call (before phone connection)
         if not self.initial_positions_shown:
@@ -580,10 +594,16 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     self.motor_positions_read = False
                     
                     # Continuously return rest position until phone reconnects
-                    rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
-                    # Flip shoulder_lift only for rest pose to match hardware
-                    if len(rest_pose_deg) > 1:
-                        rest_pose_deg[1] = -rest_pose_deg[1]
+                    if self.arm_side == "right":
+                        # Right arm: use rest_pose_right with shoulder_lift flip for hardware compatibility
+                        rest_pose_deg = list(np.rad2deg(getattr(self.config, "rest_pose_right", self.config.rest_pose)))
+                        if len(rest_pose_deg) > 1:
+                            rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for right arm hardware
+                    else:
+                        # Left arm: use rest_pose with shoulder_lift flip for hardware compatibility
+                        rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
+                        if len(rest_pose_deg) > 1:
+                            rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for left arm hardware
                     return self._format_action_dict(rest_pose_deg)
                 
                 # Get the last known data (may be stale) for continued operation
@@ -599,9 +619,16 @@ class PhoneTeleoperatorSourccey(Teleoperator):
 
             if not self.start_teleop:
                 # Teleop inactive: keep arms at rest, but allow base commands if configured
-                rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
-                if len(rest_pose_deg) > 1:
-                    rest_pose_deg[1] = -rest_pose_deg[1]
+                if self.arm_side == "right":
+                    # Right arm: use rest_pose_right with shoulder_lift flip for hardware compatibility
+                    rest_pose_deg = list(np.rad2deg(getattr(self.config, "rest_pose_right", self.config.rest_pose)))
+                    if len(rest_pose_deg) > 1:
+                        rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for right arm hardware
+                else:
+                    # Left arm: use rest_pose with shoulder_lift flip for hardware compatibility
+                    rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
+                    if len(rest_pose_deg) > 1:
+                        rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for left arm hardware
                 self._phone_connected = False
                 self.teleop_start_time = None
                 self.motor_positions_read = False
@@ -686,38 +713,32 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             if getattr(self, "tune", None) and self.tune.get("bypass_all_mods", False):
                 self._prev_q = solution_rad
                 solution_final = np.rad2deg(solution_rad)
+                # Update teleop state and apply right arm initial position reversal when teleop starts
+                prev_start_teleop = getattr(self, 'start_teleop', False)
                 self.start_teleop = switch_state
+                
+                # Apply right arm initial position mirroring when teleop becomes active
+                if self.arm_side == "right" and not prev_start_teleop and self.start_teleop:
+                    # Mirror the right arm's initial position when teleop starts
+                    # Apply comprehensive right arm reversals to match movement reversals
+                    self.current_t_R = self._original_right_position.copy()
+                    # Mirror position: flip Y (left-right) and potentially Z (up-down)
+                    self.current_t_R[1] = -self.current_t_R[1]  # Flip Y coordinate (left-right)
+                    
+                    # Also apply quaternion mirroring for right arm orientation
+                    self.current_q_R = self._original_right_quat.copy()
+                    # Mirror orientation by flipping Y and Z components of quaternion
+                    self.current_q_R[2] = -self.current_q_R[2]  # Flip Y component
+                    self.current_q_R[3] = -self.current_q_R[3]  # Flip Z component
+                    
+                    logger.info("Applied comprehensive right arm initial position and orientation mirroring for teleop (bypass mode)")
                 action_ctrl = self._format_action_dict(solution_final)
                 if self.arm_side == "right":
                     action_ctrl = {k.replace("left_", "right_"): v for k, v in action_ctrl.items()}
                 if not getattr(self.config, "emit_both_arms", True):
                     return self._merge_base_with_action(action_ctrl, base=data.get("base"))
-                if self.arm_side == "left":
-                    rest_right_deg = list(np.rad2deg(getattr(self.config, "rest_pose_right", self.config.rest_pose)))
-                    right_keys = [
-                        "right_shoulder_pan.pos",
-                        "right_shoulder_lift.pos",
-                        "right_elbow_flex.pos",
-                        "right_wrist_flex.pos",
-                        "right_wrist_roll.pos",
-                        "right_gripper.pos",
-                    ]
-                    action_other = {k: float(v) for k, v in zip(right_keys, rest_right_deg)}
-                    full_action = {**action_ctrl, **action_other}
-                    return self._merge_base_with_action({k: float(v) for k, v in full_action.items()}, base=data.get("base"))
-                else:
-                    rest_left_deg = list(np.rad2deg(self.config.rest_pose))
-                    left_keys = [
-                        "left_shoulder_pan.pos",
-                        "left_shoulder_lift.pos",
-                        "left_elbow_flex.pos",
-                        "left_wrist_flex.pos",
-                        "left_wrist_roll.pos",
-                        "left_gripper.pos",
-                    ]
-                    action_other = {k: float(v) for k, v in zip(left_keys, rest_left_deg)}
-                    full_action = {**action_other, **action_ctrl}
-                    return self._merge_base_with_action({k: float(v) for k, v in full_action.items()}, base=data.get("base"))
+                # Only emit the controlled arm - no commands for the other arm
+                return self._merge_base_with_action(action_ctrl, base=data.get("base"))
 
             try:
                 import numpy as _np
@@ -817,9 +838,23 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             # elbow_flex (index 2): no fixed offset or sign change
             #   (axis is +X and rpy now embeds the old –90° roll)
 
-            # wrist_roll (index 4): sign flip only
-            if len(solution_final) > 4:
-                solution_final[4] = -solution_final[4]
+            # Apply joint-level reversals based on arm side
+            if self.arm_side == "right":
+                # Right arm needs comprehensive joint reversals for proper mirroring
+                if len(solution_final) > 0:  # shoulder_pan
+                    solution_final[0] = -solution_final[0]
+                if len(solution_final) > 1:  # shoulder_lift  
+                    solution_final[1] = -solution_final[1]
+                if len(solution_final) > 2:  # elbow_flex
+                    solution_final[2] = -solution_final[2]
+                if len(solution_final) > 3:  # wrist_flex
+                    solution_final[3] = -solution_final[3]
+                if len(solution_final) > 4:  # wrist_roll
+                    solution_final[4] = -solution_final[4]
+            else:
+                # Left arm: only wrist_roll flip for consistency
+                if len(solution_final) > 4:
+                    solution_final[4] = -solution_final[4]
 
             # Apply optional per-joint offsets (degrees)
             if getattr(self.config, "joint_offsets_deg", None):
@@ -843,8 +878,25 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             gripper_position = self.config.gripper_min_pos + (gripper_value / 100.0) * gripper_range
             solution_final[-1] = gripper_position
             
-            # Update teleop state
+            # Update teleop state and apply right arm initial position reversal when teleop starts
+            prev_start_teleop = getattr(self, 'start_teleop', False)
             self.start_teleop = switch_state
+            
+            # Apply right arm initial position mirroring when teleop becomes active
+            if self.arm_side == "right" and not prev_start_teleop and self.start_teleop:
+                # Mirror the right arm's initial position when teleop starts
+                # Apply comprehensive right arm reversals to match movement reversals
+                self.current_t_R = self._original_right_position.copy()
+                # Mirror position: flip Y (left-right) and potentially Z (up-down)
+                self.current_t_R[1] = -self.current_t_R[1]  # Flip Y coordinate (left-right)
+                
+                # Also apply quaternion mirroring for right arm orientation
+                self.current_q_R = self._original_right_quat.copy()
+                # Mirror orientation by flipping Y and Z components of quaternion
+                self.current_q_R[2] = -self.current_q_R[2]  # Flip Y component
+                self.current_q_R[3] = -self.current_q_R[3]  # Flip Z component
+                
+                logger.info("Applied comprehensive right arm initial position and orientation mirroring for teleop")
 
             # Format action for selected arm
             action_ctrl = self._format_action_dict(solution_final)
@@ -856,37 +908,8 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             if not getattr(self.config, "emit_both_arms", True):
                 return self._merge_base_with_action(action_ctrl, base=data.get("base"))
 
-            # Build full bimanual action: controlled arm from phone, other arm to rest
-            if self.arm_side == "left":
-                # Other arm (right) to rest
-                rest_right_deg = list(np.rad2deg(getattr(self.config, "rest_pose_right", self.config.rest_pose)))
-                right_keys = [
-                    "right_shoulder_pan.pos",
-                    "right_shoulder_lift.pos",
-                    "right_elbow_flex.pos",
-                    "right_wrist_flex.pos",
-                    "right_wrist_roll.pos",
-                    "right_gripper.pos",
-                ]
-                action_other = {k: float(v) for k, v in zip(right_keys, rest_right_deg)}
-                # Ensure all values are Python floats for JSON serialization
-                full_action = {**action_ctrl, **action_other}
-                return self._merge_base_with_action({k: float(v) for k, v in full_action.items()}, base=data.get("base"))
-            else:
-                # Other arm (left) to rest
-                rest_left_deg = list(np.rad2deg(self.config.rest_pose))
-                left_keys = [
-                    "left_shoulder_pan.pos",
-                    "left_shoulder_lift.pos",
-                    "left_elbow_flex.pos",
-                    "left_wrist_flex.pos",
-                    "left_wrist_roll.pos",
-                    "left_gripper.pos",
-                ]
-                action_other = {k: float(v) for k, v in zip(left_keys, rest_left_deg)}
-                # Ensure all values are Python floats for JSON serialization
-                full_action = {**action_other, **action_ctrl}
-                return self._merge_base_with_action({k: float(v) for k, v in full_action.items()}, base=data.get("base"))
+            # Only emit the controlled arm - no commands for the other arm
+            return self._merge_base_with_action(action_ctrl, base=data.get("base"))
 
         except Exception as e:
             logger.error(f"Error getting action from {self}: {e}")

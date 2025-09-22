@@ -27,8 +27,8 @@ class SourcceyEvaluateConfig:
     id: str = "sourccey"
     remote_ip: str = "192.168.1.237"
     fps: int = 30
-    dataset: DatasetEvaluateConfig
-    policy: PreTrainedConfig
+    dataset: DatasetEvaluateConfig = DatasetEvaluateConfig()
+    policy: PreTrainedConfig = PreTrainedConfig()
 
 @parser.wrap()
 def evaluate(cfg: SourcceyEvaluateConfig):

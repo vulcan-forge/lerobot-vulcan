@@ -21,7 +21,7 @@ class SourcceyRecordConfig:
     right_arm_port: str = "COM8"
     keyboard: str = "keyboard"
     fps: int = 30
-    dataset: DatasetRecordConfig
+    dataset: DatasetRecordConfig = DatasetRecordConfig()
 
 class DatasetRecordConfig:
     repo_id: str = "local/sourccey-001__tape-cup10"
