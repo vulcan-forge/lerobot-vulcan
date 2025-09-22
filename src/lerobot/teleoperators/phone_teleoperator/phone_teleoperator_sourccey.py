@@ -143,8 +143,11 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         
         # Pose tracking (per-arm initial)
         if self.arm_side == "right":
-            self.current_t_R = np.array(getattr(self.config, "initial_position_right", self.config.initial_position))
-            self.current_q_R = np.array(getattr(self.config, "initial_wxyz_right", self.config.initial_wxyz))
+            # Store original right arm initial pose for later mirroring when teleop starts
+            self._original_right_position = np.array(getattr(self.config, "initial_position_right", self.config.initial_position))
+            self._original_right_quat = np.array(getattr(self.config, "initial_wxyz_right", self.config.initial_wxyz))
+            self.current_t_R = self._original_right_position.copy()
+            self.current_q_R = self._original_right_quat.copy()
         else:
             self.current_t_R = np.array(self.config.initial_position)
             self.current_q_R = np.array(self.config.initial_wxyz)
@@ -710,7 +713,25 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             if getattr(self, "tune", None) and self.tune.get("bypass_all_mods", False):
                 self._prev_q = solution_rad
                 solution_final = np.rad2deg(solution_rad)
+                # Update teleop state and apply right arm initial position reversal when teleop starts
+                prev_start_teleop = getattr(self, 'start_teleop', False)
                 self.start_teleop = switch_state
+                
+                # Apply right arm initial position mirroring when teleop becomes active
+                if self.arm_side == "right" and not prev_start_teleop and self.start_teleop:
+                    # Mirror the right arm's initial position when teleop starts
+                    # Apply comprehensive right arm reversals to match movement reversals
+                    self.current_t_R = self._original_right_position.copy()
+                    # Mirror position: flip Y (left-right) and potentially Z (up-down)
+                    self.current_t_R[1] = -self.current_t_R[1]  # Flip Y coordinate (left-right)
+                    
+                    # Also apply quaternion mirroring for right arm orientation
+                    self.current_q_R = self._original_right_quat.copy()
+                    # Mirror orientation by flipping Y and Z components of quaternion
+                    self.current_q_R[2] = -self.current_q_R[2]  # Flip Y component
+                    self.current_q_R[3] = -self.current_q_R[3]  # Flip Z component
+                    
+                    logger.info("Applied comprehensive right arm initial position and orientation mirroring for teleop (bypass mode)")
                 action_ctrl = self._format_action_dict(solution_final)
                 if self.arm_side == "right":
                     action_ctrl = {k.replace("left_", "right_"): v for k, v in action_ctrl.items()}
@@ -817,9 +838,23 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             # elbow_flex (index 2): no fixed offset or sign change
             #   (axis is +X and rpy now embeds the old –90° roll)
 
-            # wrist_roll (index 4): sign flip only
-            if len(solution_final) > 4:
-                solution_final[4] = -solution_final[4]
+            # Apply joint-level reversals based on arm side
+            if self.arm_side == "right":
+                # Right arm needs comprehensive joint reversals for proper mirroring
+                if len(solution_final) > 0:  # shoulder_pan
+                    solution_final[0] = -solution_final[0]
+                if len(solution_final) > 1:  # shoulder_lift  
+                    solution_final[1] = -solution_final[1]
+                if len(solution_final) > 2:  # elbow_flex
+                    solution_final[2] = -solution_final[2]
+                if len(solution_final) > 3:  # wrist_flex
+                    solution_final[3] = -solution_final[3]
+                if len(solution_final) > 4:  # wrist_roll
+                    solution_final[4] = -solution_final[4]
+            else:
+                # Left arm: only wrist_roll flip for consistency
+                if len(solution_final) > 4:
+                    solution_final[4] = -solution_final[4]
 
             # Apply optional per-joint offsets (degrees)
             if getattr(self.config, "joint_offsets_deg", None):
@@ -843,8 +878,25 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             gripper_position = self.config.gripper_min_pos + (gripper_value / 100.0) * gripper_range
             solution_final[-1] = gripper_position
             
-            # Update teleop state
+            # Update teleop state and apply right arm initial position reversal when teleop starts
+            prev_start_teleop = getattr(self, 'start_teleop', False)
             self.start_teleop = switch_state
+            
+            # Apply right arm initial position mirroring when teleop becomes active
+            if self.arm_side == "right" and not prev_start_teleop and self.start_teleop:
+                # Mirror the right arm's initial position when teleop starts
+                # Apply comprehensive right arm reversals to match movement reversals
+                self.current_t_R = self._original_right_position.copy()
+                # Mirror position: flip Y (left-right) and potentially Z (up-down)
+                self.current_t_R[1] = -self.current_t_R[1]  # Flip Y coordinate (left-right)
+                
+                # Also apply quaternion mirroring for right arm orientation
+                self.current_q_R = self._original_right_quat.copy()
+                # Mirror orientation by flipping Y and Z components of quaternion
+                self.current_q_R[2] = -self.current_q_R[2]  # Flip Y component
+                self.current_q_R[3] = -self.current_q_R[3]  # Flip Z component
+                
+                logger.info("Applied comprehensive right arm initial position and orientation mirroring for teleop")
 
             # Format action for selected arm
             action_ctrl = self._format_action_dict(solution_final)
