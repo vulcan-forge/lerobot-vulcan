@@ -11,12 +11,10 @@ from lerobot.utils.visualization_utils import _init_rerun
 from lerobot.record import record_loop
 from lerobot.configs import parser
 from dataclasses import dataclass
-from lerobot.constants import HF_LEROBOT_HOME
 
 @dataclass
 class DatasetRecordConfig:
     repo_id: str = "local/sourccey-001__tape-cup10"
-    root: str = HF_LEROBOT_HOME
     num_episodes: int = 1
     episode_time_s: int = 30
     reset_time_s: int = 1
@@ -61,7 +59,6 @@ def record(cfg: SourcceyRecordConfig):
         fps=cfg.fps,
         features=dataset_features,
         robot_type=robot.name,
-        root=cfg.dataset.root,
         use_videos=True,
         image_writer_threads=4,
     )
