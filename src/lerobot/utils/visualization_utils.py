@@ -29,21 +29,25 @@ def _init_rerun(session_name: str = "lerobot_control_loop") -> None:
     rr.init(session_name)
     print("DEBUG: rr.init() completed")
 
-    # Get the current recording and ensure it's connected
+    # Get the current recording
     recording = rr.get_global_data_recording()
     print(f"DEBUG: Global recording: {recording}")
     if recording is None:
         print("ERROR: No global data recording found!")
         return
 
-    # Always spawn a new viewer
-    memory_limit = os.getenv("LEROBOT_RERUN_MEMORY_LIMIT", "10%")
-    print(f"DEBUG: Spawning with memory limit: {memory_limit}")
+    # Use save mode instead of spawn for subprocess environments
+    save_path = f"rerun_{session_name}.rrd"
+    print(f"DEBUG: Saving Rerun data to: {save_path}")
     try:
-        recording.spawn(memory_limit=memory_limit)
-        print("DEBUG: Spawn completed successfully")
+        recording.save(save_path)
+        print("DEBUG: Save mode enabled successfully")
+        print(f"To view the data, run: rerun {save_path}")
     except Exception as e:
-        print(f"DEBUG: Spawn failed: {e}")
+        print(f"DEBUG: Save failed: {e}")
+        # Fallback to spawn
+        memory_limit = os.getenv("LEROBOT_RERUN_MEMORY_LIMIT", "10%")
+        recording.spawn(memory_limit=memory_limit)
 
 
 def _is_scalar(x):
