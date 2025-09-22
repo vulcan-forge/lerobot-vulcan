@@ -28,8 +28,8 @@ class SourcceyEvaluateConfig:
     id: str = "sourccey"
     remote_ip: str = "192.168.1.237"
     model_name: str = "act__sourccey-001__wave_hand-001"
+    model_path: str = "sourccey-001/act__sourccey-001__wave_hand-001"
     dataset: DatasetEvaluateConfig = DatasetEvaluateConfig()
-    policy: PreTrainedConfig = PreTrainedConfig()
 
 @parser.wrap()
 def evaluate(cfg: SourcceyEvaluateConfig):
@@ -39,7 +39,7 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     robot = SourcceyClient(robot_config)
 
     # Create policy
-    policy = ACTPolicy.from_pretrained(cfg.policy.pretrained_path)
+    policy = ACTPolicy.from_pretrained(cfg.model_path)
 
     # Configure the dataset features
     action_features = hw_to_dataset_features(robot.action_features, "action")
@@ -59,7 +59,7 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     # Build Policy Processors
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=policy,
-        pretrained_path=cfg.policy.pretrained_path,
+        pretrained_path=cfg.model_path,
         dataset_stats=dataset.meta.stats,
         # The inference device is automatically set to match the detected hardware, overriding any previous device settings from training to ensure compatibility.
         preprocessor_overrides={"device_processor": {"device": str(policy.config.device)}},
