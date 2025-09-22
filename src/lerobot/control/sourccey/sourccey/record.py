@@ -38,7 +38,7 @@ def record(cfg: SourcceyRecordConfig):
     # Create the robot and teleoperator configurations
     robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
     teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port=cfg.left_arm_port, right_arm_port=cfg.right_arm_port, id=cfg.id)
-    keyboard_config = KeyboardTeleopConfig(id=cfg.keyboard_port)
+    keyboard_config = KeyboardTeleopConfig(id=cfg.keyboard)
 
     robot = SourcceyClient(robot_config)
     leader_arm = BiSourcceyLeader(teleop_arm_config)
