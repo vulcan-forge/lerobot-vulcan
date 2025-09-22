@@ -25,8 +25,16 @@ def _init_rerun(session_name: str = "lerobot_control_loop") -> None:
     batch_size = os.getenv("RERUN_FLUSH_NUM_BYTES", "8000")
     os.environ["RERUN_FLUSH_NUM_BYTES"] = batch_size
     rr.init(session_name)
+
+    # Get the current recording and ensure it's connected
+    recording = rr.get_global_data_recording()
+    if recording is None:
+        print("ERROR: No global data recording found!")
+        return
+
+    # Always spawn a new viewer
     memory_limit = os.getenv("LEROBOT_RERUN_MEMORY_LIMIT", "10%")
-    rr.spawn(memory_limit=memory_limit)
+    recording.spawn(memory_limit=memory_limit)
 
 
 def _is_scalar(x):
@@ -42,23 +50,14 @@ def log_rerun_data(
     observation: dict[str, Any] | None = None,
     action: dict[str, Any] | None = None,
 ) -> None:
-    """
-    Logs observation and action data to Rerun for real-time visualization.
+    """Logs observation and action data to Rerun for real-time visualization."""
 
-    This function iterates through the provided observation and action dictionaries and sends their contents
-    to the Rerun viewer. It handles different data types appropriately:
-    - Scalar values (floats, ints) are logged as `rr.Scalar`.
-    - 3D NumPy arrays that resemble images (e.g., with 1, 3, or 4 channels first) are transposed
-      from CHW to HWC format and logged as `rr.Image`.
-    - 1D NumPy arrays are logged as a series of individual scalars, with each element indexed.
-    - Other multi-dimensional arrays are flattened and logged as individual scalars.
+    # Get the current recording
+    recording = rr.get_global_data_recording()
+    if recording is None:
+        print("ERROR: No recording available for logging!")
+        return
 
-    Keys are automatically namespaced with "observation." or "action." if not already present.
-
-    Args:
-        observation: An optional dictionary containing observation data to log.
-        action: An optional dictionary containing action data to log.
-    """
     if observation:
         for k, v in observation.items():
             if v is None:
@@ -66,7 +65,7 @@ def log_rerun_data(
             key = k if str(k).startswith("observation.") else f"observation.{k}"
 
             if _is_scalar(v):
-                rr.log(key, rr.Scalar(float(v)))
+                rr.log(key, rr.Scalar(float(v)), recording=recording)
             elif isinstance(v, np.ndarray):
                 arr = v
                 # Convert CHW -> HWC when needed
@@ -74,9 +73,9 @@ def log_rerun_data(
                     arr = np.transpose(arr, (1, 2, 0))
                 if arr.ndim == 1:
                     for i, vi in enumerate(arr):
-                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)))
+                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)), recording=recording)
                 else:
-                    rr.log(key, rr.Image(arr), static=True)
+                    rr.log(key, rr.Image(arr), static=True, recording=recording)
 
     if action:
         for k, v in action.items():
@@ -85,13 +84,13 @@ def log_rerun_data(
             key = k if str(k).startswith("action.") else f"action.{k}"
 
             if _is_scalar(v):
-                rr.log(key, rr.Scalar(float(v)))
+                rr.log(key, rr.Scalar(float(v)), recording=recording)
             elif isinstance(v, np.ndarray):
                 if v.ndim == 1:
                     for i, vi in enumerate(v):
-                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)))
+                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)), recording=recording)
                 else:
                     # Fall back to flattening higher-dimensional arrays
                     flat = v.flatten()
                     for i, vi in enumerate(flat):
-                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)))
+                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)), recording=recording)
