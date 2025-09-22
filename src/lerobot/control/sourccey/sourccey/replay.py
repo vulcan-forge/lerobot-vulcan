@@ -11,6 +11,7 @@ import logging
 from pprint import pformat
 from dataclasses import asdict
 from lerobot.utils.utils import init_logging
+from lerobot.constants import HF_LEROBOT_HOME
 
 @dataclass
 class DatasetReplayConfig:
@@ -19,7 +20,7 @@ class DatasetReplayConfig:
     # Episode to replay.
     episode: int
     # Root directory where the dataset will be stored (e.g. 'dataset/path').
-    root: str | Path | None = None
+    root: str  = HF_LEROBOT_HOME
     # Limit the frames per second. By default, uses the policy fps.
     fps: int = 30
 

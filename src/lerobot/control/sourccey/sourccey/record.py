@@ -19,7 +19,7 @@ class SourcceyRecordConfig:
     remote_ip: str = "192.168.1.237"
     left_arm_port: str = "COM3"
     right_arm_port: str = "COM8"
-    keyboard_port: str = "keyboard"
+    keyboard: str = "keyboard"
     fps: int = 30
     dataset: DatasetRecordConfig
 
