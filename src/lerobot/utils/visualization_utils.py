@@ -25,16 +25,8 @@ def _init_rerun(session_name: str = "lerobot_control_loop") -> None:
     batch_size = os.getenv("RERUN_FLUSH_NUM_BYTES", "8000")
     os.environ["RERUN_FLUSH_NUM_BYTES"] = batch_size
     rr.init(session_name)
-
-    # Get the recording stream and spawn from it
-    recording = rr.get_global_data_recording()
-    if recording is None:
-        print("ERROR: No global data recording found!")
-        return
-
     memory_limit = os.getenv("LEROBOT_RERUN_MEMORY_LIMIT", "10%")
-    recording.spawn(memory_limit=memory_limit)
-    print("Rerun viewer spawned successfully")
+    rr.spawn(memory_limit=memory_limit)
 
 
 def _is_scalar(x):
@@ -51,13 +43,6 @@ def log_rerun_data(
     action: dict[str, Any] | None = None,
 ) -> None:
     """Logs observation and action data to Rerun for real-time visualization."""
-
-    # Get the same recording stream that was used for spawning
-    recording = rr.get_global_data_recording()
-    if recording is None:
-        print("ERROR: No recording available for logging!")
-        return
-
     if observation:
         for k, v in observation.items():
             if v is None:
@@ -65,7 +50,7 @@ def log_rerun_data(
             key = k if str(k).startswith("observation.") else f"observation.{k}"
 
             if _is_scalar(v):
-                rr.log(key, rr.Scalar(float(v)), recording=recording)
+                rr.log(key, rr.Scalar(float(v)))
             elif isinstance(v, np.ndarray):
                 arr = v
                 # Convert CHW -> HWC when needed
@@ -73,9 +58,9 @@ def log_rerun_data(
                     arr = np.transpose(arr, (1, 2, 0))
                 if arr.ndim == 1:
                     for i, vi in enumerate(arr):
-                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)), recording=recording)
+                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)))
                 else:
-                    rr.log(key, rr.Image(arr), static=True, recording=recording)
+                    rr.log(key, rr.Image(arr), static=True)
 
     if action:
         for k, v in action.items():
@@ -84,13 +69,13 @@ def log_rerun_data(
             key = k if str(k).startswith("action.") else f"action.{k}"
 
             if _is_scalar(v):
-                rr.log(key, rr.Scalar(float(v)), recording=recording)
+                rr.log(key, rr.Scalar(float(v)))
             elif isinstance(v, np.ndarray):
                 if v.ndim == 1:
                     for i, vi in enumerate(v):
-                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)), recording=recording)
+                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)))
                 else:
                     # Fall back to flattening higher-dimensional arrays
                     flat = v.flatten()
                     for i, vi in enumerate(flat):
-                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)), recording=recording)
+                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)))
