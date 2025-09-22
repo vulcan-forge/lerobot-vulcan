@@ -10,7 +10,6 @@ from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import _init_rerun
 from lerobot.record import record_loop
 from lerobot.configs import parser
-from lerobot.configs.policies import PreTrainedConfig
 
 @dataclass
 class DatasetEvaluateConfig:
@@ -27,8 +26,7 @@ class DatasetEvaluateConfig:
 class SourcceyEvaluateConfig:
     id: str = "sourccey"
     remote_ip: str = "192.168.1.237"
-    model_name: str = "act__sourccey-001__wave_hand-001"
-    model_path: str = "sourccey-001/act__sourccey-001__wave_hand-001"
+    model_path: str = "sourccey-001/act_model_1/checkpoints/000400/pretrained_model"
     dataset: DatasetEvaluateConfig = DatasetEvaluateConfig()
 
 @parser.wrap()
