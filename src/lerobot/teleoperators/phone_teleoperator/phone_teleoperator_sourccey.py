@@ -591,10 +591,16 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     self.motor_positions_read = False
                     
                     # Continuously return rest position until phone reconnects
-                    rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
-                    # Flip shoulder_lift only for rest pose to match hardware
-                    if len(rest_pose_deg) > 1:
-                        rest_pose_deg[1] = -rest_pose_deg[1]
+                    if self.arm_side == "right":
+                        # Right arm: use rest_pose_right with shoulder_lift flip for hardware compatibility
+                        rest_pose_deg = list(np.rad2deg(getattr(self.config, "rest_pose_right", self.config.rest_pose)))
+                        if len(rest_pose_deg) > 1:
+                            rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for right arm hardware
+                    else:
+                        # Left arm: use rest_pose with shoulder_lift flip for hardware compatibility
+                        rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
+                        if len(rest_pose_deg) > 1:
+                            rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for left arm hardware
                     return self._format_action_dict(rest_pose_deg)
                 
                 # Get the last known data (may be stale) for continued operation
@@ -610,9 +616,16 @@ class PhoneTeleoperatorSourccey(Teleoperator):
 
             if not self.start_teleop:
                 # Teleop inactive: keep arms at rest, but allow base commands if configured
-                rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
-                if len(rest_pose_deg) > 1:
-                    rest_pose_deg[1] = -rest_pose_deg[1]
+                if self.arm_side == "right":
+                    # Right arm: use rest_pose_right with shoulder_lift flip for hardware compatibility
+                    rest_pose_deg = list(np.rad2deg(getattr(self.config, "rest_pose_right", self.config.rest_pose)))
+                    if len(rest_pose_deg) > 1:
+                        rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for right arm hardware
+                else:
+                    # Left arm: use rest_pose with shoulder_lift flip for hardware compatibility
+                    rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
+                    if len(rest_pose_deg) > 1:
+                        rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for left arm hardware
                 self._phone_connected = False
                 self.teleop_start_time = None
                 self.motor_positions_read = False
