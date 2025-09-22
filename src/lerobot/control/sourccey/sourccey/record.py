@@ -8,10 +8,21 @@ from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourcc
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import _init_rerun
-from lerobot.record import DatasetRecordConfig, record_loop
+from lerobot.record import record_loop
 from lerobot.configs import parser
 from dataclasses import dataclass
 from lerobot.constants import HF_LEROBOT_HOME
+
+@dataclass
+class DatasetRecordConfig:
+    repo_id: str = "local/sourccey-001__tape-cup10"
+    root: str = HF_LEROBOT_HOME
+    num_episodes: int = 1
+    episode_time_s: int = 30
+    reset_time_s: int = 1
+    task: str = "Put red tape in cup"
+    push_to_hub: bool = False
+    private: bool = False
 
 @dataclass
 class SourcceyRecordConfig:
@@ -22,16 +33,6 @@ class SourcceyRecordConfig:
     keyboard: str = "keyboard"
     fps: int = 30
     dataset: DatasetRecordConfig = DatasetRecordConfig()
-
-class DatasetRecordConfig:
-    repo_id: str = "local/sourccey-001__tape-cup10"
-    root: str = HF_LEROBOT_HOME
-    num_episodes: int = 1
-    episode_time_s: int = 30
-    reset_time_s: int = 1
-    task_description: str = "Put red tape in cup"
-    push_to_hub: bool = False
-    private: bool = False
 
 @parser.wrap()
 def record(cfg: SourcceyRecordConfig):
