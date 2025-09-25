@@ -117,10 +117,10 @@ class SourcceyFollower(Robot):
 
             if motor == "gripper":
                 # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
-                self.bus.write("P_Coefficient", motor, 250)
+                self.bus.write("P_Coefficient", motor, 225)
                 # Set I_Coefficient and D_Coefficient to default value 0 and 32
-                self.bus.write("I_Coefficient", motor, 10)
-                self.bus.write("D_Coefficient", motor, 32)
+                self.bus.write("I_Coefficient", motor, 20)
+                self.bus.write("D_Coefficient", motor, 25)
                 self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
                 self.bus.write("Protection_Current", motor, 400)  # 50% of max current to avoid burnout
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
