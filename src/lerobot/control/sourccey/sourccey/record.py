@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 @dataclass
 class DatasetRecordConfig:
-    repo_id: str = "sourccey-001/sourccey-003__towel-fold-a1"
+    repo_id: str = "sourccey-003/sourccey-003__towel-fold-a2colin"
     num_episodes: int = 10
     episode_time_s: int = 60
     reset_time_s: int = 5
