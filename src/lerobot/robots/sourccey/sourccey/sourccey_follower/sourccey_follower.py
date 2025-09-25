@@ -122,11 +122,11 @@ class SourcceyFollower(Robot):
 
             if motor == "gripper":
                 self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
-                self.bus.write("Protection_Current", motor, 250)  # 50% of max current to avoid burnout
+                self.bus.write("Protection_Current", motor, 400)  # 50% of max current to avoid burnout
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
             else:
                 self.bus.write("Max_Torque_Limit", motor, 800)  # 80% of max torque
-                self.bus.write("Protection_Current", motor, 400)  # 80% of max current
+                self.bus.write("Protection_Current", motor, 800)  # 80% of max current
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
 
     def setup_motors(self) -> None:

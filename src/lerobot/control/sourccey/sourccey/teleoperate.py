@@ -13,9 +13,15 @@ from lerobot.configs import parser
 @dataclass
 class SourcceyTeleoperateConfig:
     id: str = "sourccey"
+<<<<<<< HEAD
     remote_ip: str = "192.168.1.243"
     left_arm_port: str = "/dev/ttyACM0"
     right_arm_port: str = "/dev/ttyACM1"
+=======
+    remote_ip: str = "192.168.1.238"
+    left_arm_port: str = "COM15"
+    right_arm_port: str = "COM14"
+>>>>>>> 777de59c59fd174f3e77f7ee88bc15ef59c1340f
     keyboard_port: str = "keyboard"
     fps: int = 30
 
