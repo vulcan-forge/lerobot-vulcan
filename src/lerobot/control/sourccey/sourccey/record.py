@@ -14,11 +14,11 @@ from dataclasses import dataclass
 
 @dataclass
 class DatasetRecordConfig:
-    repo_id: str = "sourccey-001/sourccey-001__wave_hand-001"
-    num_episodes: int = 1
-    episode_time_s: int = 30
-    reset_time_s: int = 1
-    task: str = "Wave your hand"
+    repo_id: str = "sourccey-001/sourccey-003__towel-fold-a1"
+    num_episodes: int = 10
+    episode_time_s: int = 60
+    reset_time_s: int = 5
+    task: str = "fold the towel"
     fps: int = 30
     push_to_hub: bool = False
     private: bool = False
@@ -26,9 +26,9 @@ class DatasetRecordConfig:
 @dataclass
 class SourcceyRecordConfig:
     id: str = "sourccey"
-    remote_ip: str = "192.168.1.237"
-    left_arm_port: str = "COM3"
-    right_arm_port: str = "COM8"
+    remote_ip: str = "192.168.1.243"
+    left_arm_port: str = "/dev/ttyACM0"
+    right_arm_port: str = "/dev/ttyACM1"
     keyboard: str = "keyboard"
     dataset: DatasetRecordConfig = DatasetRecordConfig()
 
