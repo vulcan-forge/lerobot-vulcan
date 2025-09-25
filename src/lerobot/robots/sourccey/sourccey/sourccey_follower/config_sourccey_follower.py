@@ -27,7 +27,7 @@ class SourcceyFollowerConfig(RobotConfig):
     max_relative_target: int | None = None
 
     # `max_current_safety_threshold` is the maximum current threshold for safety purposes.
-    max_current_safety_threshold: int = 500
+    max_current_safety_threshold: int = 1000
 
     # `max_current_calibration_threshold` is the maximum current threshold for calibration purposes.
     max_current_calibration_threshold: int = 75
