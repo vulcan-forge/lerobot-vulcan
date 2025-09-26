@@ -18,12 +18,35 @@ import base64
 import json
 import logging
 import time
+import tempfile
+import os
 
 import cv2
 import zmq
 
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
 from .sourccey import Sourccey
+
+
+def update_teleop_status(active=True, nickname="sourccey"):
+    """Update the teleop status file that the desktop app monitors."""
+    try:
+        temp_dir = tempfile.gettempdir()
+        status_file = os.path.join(temp_dir, "teleop_status.json")
+        
+        current_time = int(time.time())
+        status = {
+            "active": active,
+            "last_command_time": current_time,
+            "source": "external",
+            "nickname": nickname
+        }
+        
+        with open(status_file, 'w') as f:
+            json.dump(status, f, indent=2)
+            
+    except Exception as e:
+        logging.warning(f"Failed to update teleop status: {e}")
 
 
 class SourcceyHost:
@@ -80,6 +103,9 @@ def main():
                 _action_sent = robot.send_action(data)
                 robot.update()
 
+                # Update teleop status when commands are received
+                update_teleop_status(active=True, nickname="sourccey")
+
                 last_cmd_time = time.time()
                 watchdog_active = False
             except zmq.Again:
@@ -96,6 +122,8 @@ def main():
                 )
                 watchdog_active = True
                 robot.stop_base()
+                # Clear teleop status when watchdog triggers
+                update_teleop_status(active=False, nickname="sourccey")
 
             if observation is not None and observation != {}:
                 previous_observation = observation
