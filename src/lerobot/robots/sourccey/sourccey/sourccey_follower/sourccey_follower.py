@@ -130,8 +130,8 @@ class SourcceyFollower(Robot):
                 # Set I_Coefficient and D_Coefficient to default value 0 and 32
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 32)
-                self.bus.write("Max_Torque_Limit", motor, 2000)  # 80% of max torque
-                self.bus.write("Protection_Current", motor, 2500)  # 80% of max current
+                self.bus.write("Max_Torque_Limit", motor, 2000)
+                self.bus.write("Protection_Current", motor, 2500)
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
             else:
                 # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
@@ -139,8 +139,8 @@ class SourcceyFollower(Robot):
                 # Set I_Coefficient and D_Coefficient to default value 0 and 32
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 32)
-                self.bus.write("Max_Torque_Limit", motor, 800)  # 80% of max torque
-                self.bus.write("Protection_Current", motor, 800)  # 80% of max current
+                self.bus.write("Max_Torque_Limit", motor, 1200)  # 80% of max torque
+                self.bus.write("Protection_Current", motor, 1200)  # 80% of max current
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
 
     def setup_motors(self) -> None:
