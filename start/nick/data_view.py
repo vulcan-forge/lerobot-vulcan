@@ -124,6 +124,126 @@ class LeRobotDatasetViewer:
             for col in self.episodes_df.columns:
                 print(f"  {col}: {row[col]}")
 
+    def analyze_episodes_metadata_detailed(self):
+        """Analyze episodes metadata in detail to look for size indicators."""
+        if self.episodes_df is None:
+            print("No episodes data loaded.")
+            return
+
+        print("\n" + "="*60)
+        print("DETAILED EPISODES METADATA ANALYSIS")
+        print("="*60)
+
+        print(f"Episodes DataFrame Shape: {self.episodes_df.shape}")
+        print(f"All Columns: {list(self.episodes_df.columns)}")
+
+        # Look for size-related columns
+        size_related_cols = [col for col in self.episodes_df.columns if any(keyword in col.lower() for keyword in ['size', 'bytes', 'mb', 'file_size', 'chunk', 'file_index'])]
+        print(f"\nSize-related columns: {size_related_cols}")
+
+        # Show all data for the episode
+        print(f"\nComplete Episode 0 Data:")
+        for col in self.episodes_df.columns:
+            value = self.episodes_df.iloc[0][col]
+            print(f"  {col}: {value}")
+
+        # Check if there are any file path or chunk information
+        file_related_cols = [col for col in self.episodes_df.columns if any(keyword in col.lower() for keyword in ['file', 'chunk', 'path', 'index'])]
+        print(f"\nFile/Chunk-related columns: {file_related_cols}")
+
+        for col in file_related_cols:
+            value = self.episodes_df.iloc[0][col]
+            print(f"  {col}: {value}")
+
+    def analyze_episode_sizes_from_metadata(self):
+        """Analyze episode sizes using metadata without processing actual files."""
+        if self.episodes_df is None:
+            print("No episodes data loaded.")
+            return
+
+        print("\n" + "="*60)
+        print("EPISODE SIZE ANALYSIS FROM METADATA")
+        print("="*60)
+
+        for idx, row in self.episodes_df.iterrows():
+            episode_idx = row['episode_index']
+            length = row['length']
+
+            print(f"\nEpisode {episode_idx}:")
+            print(f"  Length: {length} frames")
+
+            # Data range information
+            data_from = row['dataset_from_index']
+            data_to = row['dataset_to_index']
+            data_range = data_to - data_from
+            print(f"  Data range: {data_from} to {data_to} ({data_range} frames)")
+
+            # Video information
+            if 'videos/observation.images.main/from_timestamp' in row:
+                video_from = row['videos/observation.images.main/from_timestamp']
+                video_to = row['videos/observation.images.main/to_timestamp']
+                video_duration = video_to - video_from
+                print(f"  Video duration: {video_from:.3f} to {video_to:.3f} seconds ({video_duration:.3f} seconds)")
+
+                # Calculate frames per second
+                if video_duration > 0:
+                    fps = length / video_duration
+                    print(f"  Effective FPS: {fps:.2f}")
+
+            # Image count (actual video frames)
+            if 'stats/observation.images.main/count' in row:
+                image_count = row['stats/observation.images.main/count'][0]
+                print(f"  Image frames: {image_count}")
+                print(f"  Missing image frames: {length - image_count}")
+
+                # Calculate percentage of frames with images
+                image_percentage = (image_count / length) * 100
+                print(f"  Image coverage: {image_percentage:.1f}%")
+
+            # File organization
+            data_chunk = row['data/chunk_index']
+            data_file = row['data/file_index']
+            print(f"  Data file: chunk-{data_chunk:03d}/file-{data_file:03d}.parquet")
+
+            if 'videos/observation.images.main/chunk_index' in row:
+                video_chunk = row['videos/observation.images.main/chunk_index']
+                video_file = row['videos/observation.images.main/file_index']
+                print(f"  Video file: chunk-{video_chunk:03d}/file-{video_file:03d}.mp4")
+
+            # Estimate data size per frame (rough calculation)
+            if self.info and 'features' in self.info:
+                features = self.info['features']
+
+                # Calculate approximate bytes per frame for non-video data
+                bytes_per_frame = 0
+                for feature_name, feature_info in features.items():
+                    if feature_info.get('dtype') != 'video':  # Skip video data
+                        dtype = feature_info.get('dtype', 'float32')
+                        shape = feature_info.get('shape', [1])
+
+                        # Estimate bytes based on dtype
+                        if dtype == 'float32':
+                            bytes_per_element = 4
+                        elif dtype == 'float64':
+                            bytes_per_element = 8
+                        elif dtype == 'int64':
+                            bytes_per_element = 8
+                        elif dtype == 'int32':
+                            bytes_per_element = 4
+                        else:
+                            bytes_per_element = 4  # Default assumption
+
+                        # Calculate total elements
+                        total_elements = 1
+                        for dim in shape:
+                            total_elements *= dim
+
+                        bytes_per_frame += bytes_per_element * total_elements
+
+                estimated_data_size_mb = (bytes_per_frame * length) / (1024**2)
+                print(f"  Estimated non-video data size: {estimated_data_size_mb:.2f} MB")
+                print(f"  Estimated bytes per frame (non-video): {bytes_per_frame} bytes")
+
     def analyze_robot_data(self):
         """Analyze robot-specific data (actions, observations)."""
         if self.data_df is None:
@@ -238,6 +358,59 @@ class LeRobotDatasetViewer:
         export_df.to_csv(output_file, index=False)
         print(f"✓ Exported to {output_file}")
 
+    def get_file_sizes_without_processing(self):
+        """Get file sizes by examining the file system without processing content."""
+        print("\n" + "="*60)
+        print("FILE SIZES (WITHOUT PROCESSING CONTENT)")
+        print("="*60)
+
+        # Get parquet file sizes
+        if self.data_file.exists():
+            disk_size = self.data_file.stat().st_size / (1024**2)
+            print(f"Main Data Parquet File: {disk_size:.2f} MB")
+
+        if self.episodes_file.exists():
+            disk_size = self.episodes_file.stat().st_size / (1024**2)
+            print(f"Episodes Metadata Parquet File: {disk_size:.2f} MB")
+
+        # Get video file sizes
+        video_dir = self.dataset_path / "videos"
+        if video_dir.exists():
+            total_video_size = 0.0
+            video_files = []
+
+            for video_key_dir in video_dir.iterdir():
+                if video_key_dir.is_dir():
+                    print(f"\nVideo Key: {video_key_dir.name}")
+                    for chunk_dir in video_key_dir.iterdir():
+                        if chunk_dir.is_dir() and chunk_dir.name.startswith("chunk-"):
+                            for video_file in chunk_dir.glob("*.mp4"):
+                                video_size = video_file.stat().st_size / (1024**2)
+                                total_video_size += video_size
+                                video_files.append(video_file)
+                                print(f"  {video_file.name}: {video_size:.2f} MB")
+
+            if video_files:
+                print(f"\nTotal Video Files: {len(video_files)}")
+                print(f"Total Video Size: {total_video_size:.2f} MB")
+                print(f"Average Video File Size: {total_video_size/len(video_files):.2f} MB")
+
+                # Calculate size per episode if we have episode info
+                if self.episodes_df is not None and len(self.episodes_df) > 0:
+                    total_episodes = len(self.episodes_df)
+                    avg_video_size_per_episode = total_video_size / total_episodes
+                    print(f"Average Video Size per Episode: {avg_video_size_per_episode:.2f} MB")
+
+                    # Calculate size per frame
+                    total_image_frames = 0
+                    for idx, row in self.episodes_df.iterrows():
+                        if 'stats/observation.images.main/count' in row:
+                            total_image_frames += row['stats/observation.images.main/count'][0]
+
+                    if total_image_frames > 0:
+                        size_per_frame = total_video_size / total_image_frames
+                        print(f"Average Size per Video Frame: {size_per_frame:.2f} MB")
+
     def run_full_analysis(self):
         """Run a complete analysis of the dataset."""
         print("Starting full dataset analysis...")
@@ -246,6 +419,9 @@ class LeRobotDatasetViewer:
         self.print_dataset_info()
         self.print_data_summary()
         self.analyze_episodes()
+        self.analyze_episodes_metadata_detailed()
+        self.analyze_episode_sizes_from_metadata()  # Add this
+        self.get_file_sizes_without_processing()    # Add this
         self.analyze_robot_data()
         self.plot_data(save_plots=True)
         self.export_sample_data()
@@ -253,7 +429,7 @@ class LeRobotDatasetViewer:
 def main():
     """Main function to run the data viewer."""
     # Dataset path
-    dataset_path = r"C:\Users\Nicholas\.cache\huggingface\lerobot\local\combined_dataset"
+    dataset_path = r"C:\Users\Nicholas\.cache\huggingface\lerobot\so100_follower-001\dataset"
 
     # Create viewer instance
     viewer = LeRobotDatasetViewer(dataset_path)
