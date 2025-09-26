@@ -124,6 +124,15 @@ class SourcceyFollower(Robot):
                 self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
                 self.bus.write("Protection_Current", motor, 400)  # 50% of max current to avoid burnout
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
+            elif motor == "shoulder_lift":
+                # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
+                self.bus.write("P_Coefficient", motor, 16)
+                # Set I_Coefficient and D_Coefficient to default value 0 and 32
+                self.bus.write("I_Coefficient", motor, 0)
+                self.bus.write("D_Coefficient", motor, 32)
+                self.bus.write("Max_Torque_Limit", motor, 2000)  # 80% of max torque
+                self.bus.write("Protection_Current", motor, 2500)  # 80% of max current
+                self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
             else:
                 # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
                 self.bus.write("P_Coefficient", motor, 16)
