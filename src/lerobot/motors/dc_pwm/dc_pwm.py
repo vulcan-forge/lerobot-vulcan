@@ -205,7 +205,7 @@ class PWMProtocolHandler(ProtocolHandler):
         target_velocity = max(-1.0, min(1.0, target_velocity))  # clamp
         self.motor_states[motor_id]["target_velocity"] = target_velocity
 
-    def update_velocity(self, motor_id: int, max_step: float = 0.05) -> None:
+    def update_velocity(self, motor_id: int, max_step: float = 1.0) -> None:
         """
         Gradually update the motor velocity toward its target using a slew-rate limiter.
         Call this periodically (e.g., every 10–20 ms).
