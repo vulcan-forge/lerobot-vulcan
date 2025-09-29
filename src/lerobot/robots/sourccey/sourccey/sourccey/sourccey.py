@@ -15,34 +15,21 @@
 # limitations under the License.
 
 import logging
-import random
-import time
 from functools import cached_property
-from itertools import chain
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import threading
 
 from lerobot.cameras.utils import make_cameras_from_configs
-from lerobot.constants import OBS_IMAGES, OBS_STATE
-from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
-from lerobot.motors import Motor, MotorCalibration, MotorNormMode
-from lerobot.motors.dc_pwm.dc_pwm import PWMDCMotorsController, PWMProtocolHandler
-from lerobot.motors.feetech import (
-    FeetechMotorsBus,
-    OperatingMode,
-)
-from lerobot.motors.dc_motors_controller import DCMotor, MotorNormMode
+from lerobot.motors.dc_pwm.dc_pwm import PWMDCMotorsController
 
 from lerobot.robots.robot import Robot
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower import SourcceyFollower
-from lerobot.robots.utils import ensure_safe_goal_position
 from .config_sourccey import SourcceyConfig
 
 logger = logging.getLogger(__name__)
-
 
 class Sourccey(Robot):
     """
@@ -58,8 +45,6 @@ class Sourccey(Robot):
     def __init__(self, config: SourcceyConfig):
         super().__init__(config)
         self.config = config
-        # Optional limiter set by CLI: None | "left" | "right"
-        self.limit_arm: str | None = None
 
         left_arm_config = SourcceyFollowerConfig(
             id=f"{config.id}_left" if config.id else None,
@@ -90,7 +75,6 @@ class Sourccey(Robot):
             config=self.config.dc_motors_config,
         )
 
-
     def __del__(self):
         self.disconnect()
 
@@ -120,63 +104,37 @@ class Sourccey(Robot):
 
     @property
     def is_connected(self) -> bool:
-        left_ok = self.left_arm.is_connected if (self.limit_arm is None or self.limit_arm == "left") else True
-        right_ok = self.right_arm.is_connected if (self.limit_arm is None or self.limit_arm == "right") else True
-        # Cameras: only require target cameras for selected arm(s)
-        target_cam_keys = self._target_camera_keys()
-        cams_ok = all(self.cameras[k].is_connected for k in target_cam_keys)
-        return left_ok and right_ok and cams_ok
+        arms_connected = self.left_arm.is_connected and self.right_arm.is_connected
+        cams_connected = all(self.cameras[k].is_connected for k in self.cameras.keys())
+        return arms_connected and cams_connected
 
     def connect(self, calibrate: bool = True) -> None:
-        # Connect only requested arm if limit set; else both
-        if self.limit_arm == "left":
-            self.left_arm.connect(calibrate)
-        elif self.limit_arm == "right":
-            self.right_arm.connect(calibrate)
-        else:
-            self.left_arm.connect(calibrate)
-            self.right_arm.connect(calibrate)
+        self.left_arm.connect(calibrate)
+        self.right_arm.connect(calibrate)
 
         self.dc_motors_controller.connect()
 
         # Connect only target cameras
-        for cam_key in self._target_camera_keys():
+        for cam_key in self.cameras.keys():
             self.cameras[cam_key].connect()
 
     def disconnect(self):
         print("Disconnecting Sourccey")
-        if self.left_arm.is_connected and self.limit_arm == "left":
-            self.left_arm.disconnect()
-        elif self.right_arm.is_connected and self.limit_arm == "right":
-            self.right_arm.disconnect()
-        elif self.left_arm.is_connected and self.right_arm.is_connected:
-            self.left_arm.disconnect()
-            self.right_arm.disconnect()
+        self.left_arm.disconnect()
+        self.right_arm.disconnect()
 
         self.stop_base()
         self.dc_motors_controller.disconnect()
 
         # Disconnect only those we connected
-        for cam_key in self._target_camera_keys():
-            cam = self.cameras[cam_key]
-            if cam.is_connected:
-                cam.disconnect()
+        for cam_key in self.cameras.keys():
+            self.cameras[cam_key].disconnect()
 
     @property
     def is_calibrated(self) -> bool:
-        if self.limit_arm == "left":
-            return self.left_arm.is_calibrated
-        if self.limit_arm == "right":
-            return self.right_arm.is_calibrated
         return self.left_arm.is_calibrated and self.right_arm.is_calibrated
 
     def calibrate(self) -> None:
-        if self.limit_arm == "left":
-            self.left_arm.calibrate()
-            return
-        if self.limit_arm == "right":
-            self.right_arm.calibrate()
-            return
         self.left_arm.calibrate()
         self.right_arm.calibrate()
 
@@ -224,20 +182,19 @@ class Sourccey(Robot):
     def get_observation(self) -> dict[str, Any]:
         try:
             obs_dict = {}
-            if self.limit_arm is None or self.limit_arm == "left":
-                left_obs = self.left_arm.get_observation()
-                obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
-            if self.limit_arm is None or self.limit_arm == "right":
-                right_obs = self.right_arm.get_observation()
-                obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
+
+            left_obs = self.left_arm.get_observation()
+            obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
+
+            right_obs = self.right_arm.get_observation()
+            obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
 
             base_wheel_vel = self.dc_motors_controller.get_velocities()
             base_vel = self._wheel_normalized_to_body(base_wheel_vel)
             obs_dict.update(base_vel)
 
-            for cam_key in self._target_camera_keys():
-                cam = self.cameras[cam_key]
-                obs_dict[cam_key] = cam.async_read()
+            for cam_key in self.cameras.keys():
+                obs_dict[cam_key] = self.cameras[cam_key].async_read()
 
             return obs_dict
         except Exception as e:
@@ -253,20 +210,11 @@ class Sourccey(Robot):
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}
 
-            if self.limit_arm is None or self.limit_arm == "left":
-                # Skip empty left actions to prevent StopIteration error
-                if left_action:
-                    sent_left = self.left_arm.send_action(left_action)
-                    prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
-                else:
-                    prefixed_send_action_left = {}
-            if self.limit_arm is None or self.limit_arm == "right":
-                # Skip empty right actions to prevent StopIteration error
-                if right_action:
-                    sent_right = self.right_arm.send_action(right_action)
-                    prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
-                else:
-                    prefixed_send_action_right = {}
+            sent_left = self.left_arm.send_action(left_action)
+            sent_right = self.right_arm.send_action(right_action)
+
+            prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
+            prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
 
             # Base velocity
             wheel_action = self._body_to_wheel_normalized(
@@ -274,16 +222,19 @@ class Sourccey(Robot):
                 base_goal_vel.get("y.vel", 0.0),
                 base_goal_vel.get("theta.vel", 0.0)
             )
-            self.dc_motors_controller.set_velocities(wheel_action)
+
+            linear_actuator_action = self._body_to_linear_actuator_normalized(
+                base_goal_vel.get("z.vel", 0.0)
+            )
+
+            dc_motors_action = {**wheel_action, **linear_actuator_action}
+            print(f"DC motors action: {dc_motors_action}")
+            self.dc_motors_controller.set_velocities(dc_motors_action)
 
             sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_vel}
             return sent_action
         except Exception as e:
             print(f"Error sending action: {e}")
-            print(f"Exception type: {type(e).__name__}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
-            print(f"Action that caused error: {action}")
             return {}
 
     # Base Functions
@@ -293,18 +244,12 @@ class Sourccey(Robot):
     def update(self):
         self.dc_motors_controller.update_velocity()
 
-    def _target_camera_keys(self) -> list[str]:
-        """Return camera keys to connect/check based on limit_arm.
-        We keep front cameras always. We exclude the wrist camera on the non-selected arm.
-        """
-        keys = list(self.cameras.keys())
-        if self.limit_arm == "left":
-            # Exclude right wrist camera if present
-            return [k for k in keys if k != "wrist_right"]
-        if self.limit_arm == "right":
-            # Exclude left wrist camera if present
-            return [k for k in keys if k != "wrist_left"]
-        return keys
+    # Round to prevent floating-point precision issues and handle -0.0
+    def clean_value(self, val):
+        rounded = round(val, 8)
+
+        # Convert -0.0 to 0.0 and very small values to 0.0
+        return 0.0 if abs(rounded) < 1e-10 else rounded
 
     def _body_to_wheel_normalized(
         self,
@@ -360,14 +305,24 @@ class Sourccey(Robot):
         velocity_vector = m_pinv.dot(wheel_array)
         x, y, theta = velocity_vector
 
-        # Round to prevent floating-point precision issues and handle -0.0
-        def clean_value(val):
-            rounded = round(val, 8)
-            # Convert -0.0 to 0.0 and very small values to 0.0
-            return 0.0 if abs(rounded) < 1e-10 else rounded
-
         return {
-            "x.vel": clean_value(x),
-            "y.vel": clean_value(y),
-            "theta.vel": clean_value(theta),
+            "x.vel": self.clean_value(x),
+            "y.vel": self.clean_value(y),
+            "theta.vel": self.clean_value(theta),
+        }
+
+    def _body_to_linear_actuator_normalized(
+        self,
+        z: float,
+    ) -> dict:
+        return {
+            "linear_actuator": self.clean_value(z),
+        }
+
+    def _linear_actuator_normalized_to_body(
+        self,
+        linear_actuator_normalized: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "z.vel": self.clean_value(linear_actuator_normalized["linear_actuator"]),
         }

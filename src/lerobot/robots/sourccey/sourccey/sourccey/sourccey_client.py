@@ -61,10 +61,10 @@ class SourcceyClient(Robot):
 
         # Define three speed levels and a current index
         self.speed_levels = [
-            {"x": 0.25, "y": 0.25, "theta": 0.25},  # slow
-            {"x": 0.5,  "y": 0.5,  "theta": 0.5},   # medium
-            {"x": 0.75, "y": 0.75, "theta": 0.75},  # fast
-            {"x": 1.0,  "y": 1.0,  "theta": 1.0},   # max
+            {"x": 0.25, "y": 0.25, "z": 0.25, "theta": 0.25},  # slow
+            {"x": 0.5,  "y": 0.5,  "z": 0.5, "theta": 0.5},   # medium
+            {"x": 0.75, "y": 0.75, "z": 0.75, "theta": 0.75},  # fast
+            {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # max
         ]
         self.speed_index = 3  # Start at max
 
@@ -89,6 +89,7 @@ class SourcceyClient(Robot):
                 "right_gripper.pos",
                 "x.vel",
                 "y.vel",
+                "z.vel",
                 "theta.vel",
             ),
             float,
@@ -270,7 +271,7 @@ class SourcceyClient(Robot):
         for cam_name, frame in frames.items():
             if frame is None:
                 logging.warning("Frame is None")
-                frame = np.zeros((640, 360, 3), dtype=np.uint8)
+                frame = np.zeros((640, 480, 3), dtype=np.uint8)
             obs_dict[cam_name] = frame
 
         return obs_dict
@@ -284,10 +285,12 @@ class SourcceyClient(Robot):
         speed_setting = self.speed_levels[self.speed_index]
         x_speed = speed_setting["x"]
         y_speed = speed_setting["y"]
+        z_speed = speed_setting["z"]
         theta_speed = speed_setting["theta"]
 
         x_cmd = 0.0
         y_cmd = 0.0
+        z_cmd = 0.0
         theta_cmd = 0.0
 
         if self.teleop_keys["forward"] in pressed_keys:
@@ -298,6 +301,10 @@ class SourcceyClient(Robot):
             y_cmd += y_speed
         if self.teleop_keys["right"] in pressed_keys:
             y_cmd -= y_speed
+        if self.teleop_keys["up"] in pressed_keys:
+            z_cmd += z_speed
+        if self.teleop_keys["down"] in pressed_keys:
+            z_cmd -= z_speed
         if self.teleop_keys["rotate_left"] in pressed_keys:
             theta_cmd += theta_speed
         if self.teleop_keys["rotate_right"] in pressed_keys:
@@ -306,10 +313,11 @@ class SourcceyClient(Robot):
         return {
             "x.vel": x_cmd,
             "y.vel": y_cmd,
+            "z.vel": z_cmd,
             "theta.vel": theta_cmd,
         }
 
-    def _from_analog_to_base_action(self, x: float, y: float, theta: float):
+    def _from_analog_to_base_action(self, x: float, y: float, z: float, theta: float):
         """Map analog base inputs (in [-1,1]) through the same speed scaling used for keyboard.
 
         Ensures behavior is consistent with `_from_keyboard_to_base_action` speed levels.
@@ -317,16 +325,19 @@ class SourcceyClient(Robot):
         # Clamp to [-1, 1]
         x_in = max(-1.0, min(1.0, float(x)))
         y_in = max(-1.0, min(1.0, float(y)))
+        z_in = max(-1.0, min(1.0, float(z)))
         theta_in = max(-1.0, min(1.0, float(theta)))
 
         speed_setting = self.speed_levels[self.speed_index]
         x_speed = speed_setting["x"]
         y_speed = speed_setting["y"]
+        z_speed = speed_setting["z"]
         theta_speed = speed_setting["theta"]
 
         return {
             "x.vel": float(x_in * x_speed),
             "y.vel": float(y_in * y_speed),
+            "z.vel": float(z_in * z_speed),
             "theta.vel": float(theta_in * theta_speed),
         }
 

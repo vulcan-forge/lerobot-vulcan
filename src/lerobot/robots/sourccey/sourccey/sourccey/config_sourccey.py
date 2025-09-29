@@ -108,11 +108,13 @@ class SourcceyClientConfig(RobotConfig):
             "right": "d",
             "rotate_left": "z",
             "rotate_right": "x",
+            "up": "e",
+            "down": "q",
             # Speed control
             "speed_up": "r",
             "speed_down": "f",
             # quit teleop
-            "quit": "q",
+            "quit": "space",
         }
     )
 

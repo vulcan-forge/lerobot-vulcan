@@ -38,16 +38,16 @@ except ImportError:
 
 class QKeyHandler:
     """Handles Q key for immediate exit using pynput"""
-    
+
     def __init__(self):
         self.should_exit = False
         self.listener = None
-        
+
     def start(self):
         """Start the Q key listener"""
         if not PYNPUT_AVAILABLE:
             return
-            
+
         def on_press(key):
             try:
                 if key.char == 'q' or key.char == 'Q':
@@ -56,10 +56,10 @@ class QKeyHandler:
                     os._exit(0)  # Force immediate exit
             except AttributeError:
                 pass
-                
+
         self.listener = keyboard.Listener(on_press=on_press, suppress=False)
         self.listener.start()
-        
+
     def stop(self):
         """Stop the Q key listener"""
         if self.listener:
@@ -68,7 +68,7 @@ class QKeyHandler:
 
 class ThreadedKeyboardHandler:
     """Handles keyboard input in a separate thread to avoid blocking"""
-    
+
     def __init__(self, robot):
         self.robot = robot
         self.keyboard = None
@@ -77,21 +77,21 @@ class ThreadedKeyboardHandler:
         self.lock = threading.Lock()
         self.thread = None
         self.running = False
-        
+
     def start(self):
         """Start the keyboard handler in a separate thread"""
         self.keyboard = KeyboardTeleop(self.keyboard_config)
         self.keyboard.connect()
-        
+
         if not self.keyboard.is_connected:
             print("WARNING: Keyboard not connected - wheel control disabled")
             return
-            
+
         self.running = True
         self.thread = threading.Thread(target=self._keyboard_loop, daemon=True)
         self.thread.start()
         print("Threaded keyboard handler started")
-        
+
     def stop(self):
         """Stop the keyboard handler"""
         self.running = False
@@ -102,27 +102,27 @@ class ThreadedKeyboardHandler:
                 self.keyboard.disconnect()
             except:
                 pass
-                
+
     def _keyboard_loop(self):
         """Main keyboard loop running in separate thread"""
         while self.running:
             try:
                 # Get keyboard input
                 keyboard_keys = self.keyboard.get_action()
-                
+
                 # Convert to base action
                 base_action = self.robot._from_keyboard_to_base_action(keyboard_keys)
-                
+
                 # Update current action thread-safely
                 with self.lock:
                     self.current_base_action = base_action
-                    
+
                 time.sleep(1/60)  # 60 Hz keyboard polling
-                
+
             except Exception as e:
                 print(f"Keyboard thread error: {e}")
                 time.sleep(0.1)
-                
+
     def get_base_action(self):
         """Get the current base action thread-safely"""
         with self.lock:
@@ -133,10 +133,10 @@ def find_sourccey_model_path():
     """Find the Sourccey URDF path."""
     current_file = Path(__file__)
     sourccey_model_path = current_file.parent.parent.parent / "src" / "lerobot" / "robots" / "sourccey" / "sourccey" / "sourccey" / "model"
-    
+
     if not sourccey_model_path.exists():
         raise FileNotFoundError(f"Could not find Sourccey model directory at {sourccey_model_path}")
-    
+
     urdf_path = str(sourccey_model_path / "Arm.urdf")
     print(f"Using URDF: {urdf_path}")
     return urdf_path
@@ -150,13 +150,13 @@ def main():
     parser.add_argument('remote_ip', nargs='?', default='192.168.1.237',
                        help='Remote host IP address (default: 192.168.1.237)')
     args = parser.parse_args()
-    
+
     print(f"Controlling {args.arm_side} arm")
     print(f"Remote host IP: {args.remote_ip}")
-    
+
     # Get URDF path
     urdf_path = find_sourccey_model_path()
-    
+
     # Robot configuration for remote host
     robot_config = SourcceyClientConfig(remote_ip=args.remote_ip, id="sourccey")
     robot = SourcceyClient(robot_config)
@@ -175,21 +175,21 @@ def main():
         gripper_min_pos=0.0,
         gripper_max_pos=50.0,
     )
-    
+
     # Initialize teleoperator, threaded keyboard handler, and Q key handler
     phone_teleop = PhoneTeleoperatorSourccey(phone_config)
-    
+
     # Toggle this to bypass all modifications and use raw IK solver
     phone_teleop.tune["bypass_all_mods"] = False  # Set to True for raw IK behavior
-    
+
     threaded_keyboard = ThreadedKeyboardHandler(robot)
     q_key_handler = QKeyHandler()
-    
+
     try:
         # Connect phone teleoperator first (this starts the gRPC server)
         print("Connecting to phone teleoperator...")
         phone_teleop.connect()
-        
+
         # Connect to remote robot host
         print(f"Connecting to remote robot host at {args.remote_ip}...")
         try:
@@ -197,25 +197,25 @@ def main():
         except Exception as e:
             print(f"WARNING: Could not connect to remote robot: {e}")
             print("Continuing with phone teleop only (gRPC server will still work)...")
-        
+
         # Start threaded keyboard handler
         print("Starting threaded keyboard handler...")
         threaded_keyboard.start()
-        
+
         # Start Q key handler for immediate exit
         print("Starting Q key handler...")
         q_key_handler.start()
-        
+
         # Initialize rerun viewer for visualization
         print("Initializing rerun viewer...")
         _init_rerun(session_name=f"phone_sourccey_{args.arm_side}_teleop")
-        
+
         if not phone_teleop.is_connected:
             raise ValueError("Phone teleoperator is not connected!")
-        
+
         if not robot.is_connected:
             print("WARNING: Robot not connected - phone teleop will work but no robot control")
-        
+
         print(f"Phone teleoperation ready for {args.arm_side} arm!")
         print(f"- Connected to remote host at {args.remote_ip}")
         print("- Phone controls robot arm")
@@ -224,7 +224,7 @@ def main():
         print("- Use your phone to control the robot")
         print("- Press Q to exit immediately")
         print("- Rerun viewer is running for real-time visualization")
-        
+
         # Main control loop
         while True:
             try:
@@ -236,27 +236,27 @@ def main():
 
                 # Get arm action from phone teleoperator (handles all logic internally)
                 arm_action = phone_teleop.get_action(observation)
-                
+
                 # Get base action from threaded keyboard handler
                 base_action = threaded_keyboard.get_base_action()
-                
 
                 # Combine arm and wheel actions
                 # If phone provided base velocities, map them via client's analog path to match keyboard scaling
                 phone_x = arm_action.get("x.vel", 0.0)
                 phone_y = arm_action.get("y.vel", 0.0)
+                phone_z = arm_action.get("z.vel", 0.0)
                 phone_theta = arm_action.get("theta.vel", 0.0)
 
                 if any(abs(v) > 0.0 for v in (phone_x, phone_y, phone_theta)):
-                    analog_base = robot._from_analog_to_base_action(phone_x, phone_y, phone_theta)
+                    analog_base = robot._from_analog_to_base_action(phone_x, phone_y, phone_z, phone_theta)
                 else:
-                    analog_base = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+                    analog_base = {"x.vel": 0.0, "y.vel": 0.0, "z.vel": 0.0, "theta.vel": 0.0}
 
                 # Keyboard overrides phone when non-zero
                 kb_active = any(abs(base_action.get(k, 0.0)) > 0.0 for k in ("x.vel","y.vel","theta.vel"))
                 effective_base = base_action if kb_active else analog_base
                 action = {**arm_action, **effective_base}
-                
+
                 # Send combined action to robot (if connected)
                 if robot.is_connected:
                     # Debug: show base command being sent and source
@@ -272,20 +272,20 @@ def main():
                     # Just print the action for debugging when robot not connected
                     if any(abs(v) > 0.0 for v in [action.get("x.vel", 0), action.get("y.vel", 0), action.get("theta.vel", 0)]):
                         print(f"DEBUG: Would send base action: {action}")
-                
+
                 # Visualize with rerun
                 log_rerun_data(observation=observation, action=action)
-                
+
                 # Control frequency
                 time.sleep(max(0, 1/30))  # Target ~30 Hz
-                
+
             except KeyboardInterrupt:
                 print("\nStopping teleoperation...")
                 break
             except Exception as e:
                 print(f"Error in control loop: {e}")
                 time.sleep(0.1)
-    
+
     finally:
         # Cleanup
         print("Disconnecting devices...")
@@ -309,4 +309,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()
