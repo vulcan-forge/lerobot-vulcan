@@ -228,7 +228,6 @@ class Sourccey(Robot):
             )
 
             dc_motors_action = {**wheel_action, **linear_actuator_action}
-            print(f"DC motors action: {dc_motors_action}")
             self.dc_motors_controller.set_velocities(dc_motors_action)
 
             sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_vel}
