@@ -21,8 +21,8 @@ PI5_ALL_GPIO_PINS = [
 ]
 
 # Pi 5 Optimal Settings for DRV8871DDAR
-PI5_OPTIMAL_FREQUENCY = 15000  # 15kHz - more compatible with gpiozero
-PI5_MAX_FREQUENCY = 15000      # 15kHz - Pi 5 can handle higher frequencies
+PI5_OPTIMAL_FREQUENCY = 25000  # 25kHz - more compatible with gpiozero
+PI5_MAX_FREQUENCY = 25000      # 25kHz - Pi 5 can handle higher frequencies
 PI5_RESOLUTION = 12            # 12-bit resolution
 
 
@@ -258,10 +258,12 @@ class PWMProtocolHandler(ProtocolHandler):
 
     def set_pwm(self, motor_id: int, duty_cycle: float) -> None:
         """
-        Set PWM duty cycle (0..1) respecting current direction.
+        Set PWM duty cycle (0..0.98) respecting current direction.
         Uses symmetric PWM: IN1 for forward, IN2 for reverse.
         """
-        duty_cycle = max(0.0, min(1.0, duty_cycle))
+
+        # Cap your duty to 0.98 (to avoid DRV8871's fixed off-time weirdness at 100%)
+        duty_cycle = max(0.0, min(0.98, duty_cycle))
         self.motor_states[motor_id]["pwm"] = duty_cycle
 
         direction = self.motor_states[motor_id].get("direction", 1)
