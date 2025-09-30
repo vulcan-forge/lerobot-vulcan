@@ -236,13 +236,13 @@ class PWMProtocolHandler(ProtocolHandler):
         in2 = self.in2_channels.get(motor_id)
 
         if new_velocity > 0:
-            if in1: in1.value = pwm_duty
-            if in2: in2.off()
+            if in1: in1.value = pwm_duty   # PWM
+            if in2: in2.on()               # held HIGH (1)
             state["direction"] = 1
 
         elif new_velocity < 0:
-            if in1: in1.off()
-            if in2: in2.value = pwm_duty
+            if in1: in1.on()               # held HIGH (1)
+            if in2: in2.value = pwm_duty   # PWM
             state["direction"] = -1
 
         else:
