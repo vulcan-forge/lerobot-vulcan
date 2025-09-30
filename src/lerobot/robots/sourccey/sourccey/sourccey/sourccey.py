@@ -1,24 +1,6 @@
-#!/usr/bin/env python
-
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import logging
 from functools import cached_property
 from typing import Any
-import time
-import cv2
 import numpy as np
 import threading
 
@@ -26,7 +8,7 @@ from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.motors.dc_pwm.dc_pwm import PWMDCMotorsController
 
 from lerobot.robots.robot import Robot
-from lerobot.robots.sourccey.sourccey.protobuf.generated import sourccey_robot_pb2
+from lerobot.robots.sourccey.sourccey.protobuf.sourccey_protobuf import SourcceyProtobuf
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower import SourcceyFollower
 from .config_sourccey import SourcceyConfig
@@ -76,6 +58,9 @@ class Sourccey(Robot):
             motors=self.config.dc_motors,
             config=self.config.dc_motors_config,
         )
+
+        # Initialize protobuf converter
+        self.protobuf_converter = SourcceyProtobuf(robot_id=self.config.id or "sourccey")
 
     def __del__(self):
         self.disconnect()
@@ -252,137 +237,6 @@ class Sourccey(Robot):
 
         # Convert -0.0 to 0.0 and very small values to 0.0
         return 0.0 if abs(rounded) < 1e-10 else rounded
-
-    def to_protobuf(self) -> sourccey_robot_pb2.SourcceyRobotState:
-        """Convert current robot state to protobuf message."""
-        try:
-            msg = sourccey_robot_pb2.SourcceyRobotState()
-
-            # Set robot identification
-            msg.robot_id = self.config.id or "sourccey"
-
-            # Get current observation
-            obs = self.get_observation()
-
-            # Set left arm state
-            left_arm_msg = msg.left_arm
-            left_arm_msg.arm_id = "left"
-            left_arm_msg.orientation = "left"
-
-            # Set left arm motor positions
-            left_motor_pos = left_arm_msg.motor_positions
-            left_motor_pos.shoulder_pan = obs.get("left_shoulder_pan.pos", 0.0)
-            left_motor_pos.shoulder_lift = obs.get("left_shoulder_lift.pos", 0.0)
-            left_motor_pos.elbow_flex = obs.get("left_elbow_flex.pos", 0.0)
-            left_motor_pos.wrist_flex = obs.get("left_wrist_flex.pos", 0.0)
-            left_motor_pos.wrist_roll = obs.get("left_wrist_roll.pos", 0.0)
-            left_motor_pos.gripper = obs.get("left_gripper.pos", 0.0)
-
-            # Set left arm status
-            left_arm_msg.is_connected = self.left_arm.is_connected
-            left_arm_msg.is_calibrated = self.left_arm.is_calibrated
-            left_arm_msg.observation_timestamp = time.time()
-
-            # Set right arm state
-            right_arm_msg = msg.right_arm
-            right_arm_msg.arm_id = "right"
-            right_arm_msg.orientation = "right"
-
-            # Set right arm motor positions
-            right_motor_pos = right_arm_msg.motor_positions
-            right_motor_pos.shoulder_pan = obs.get("right_shoulder_pan.pos", 0.0)
-            right_motor_pos.shoulder_lift = obs.get("right_shoulder_lift.pos", 0.0)
-            right_motor_pos.elbow_flex = obs.get("right_elbow_flex.pos", 0.0)
-            right_motor_pos.wrist_flex = obs.get("right_wrist_flex.pos", 0.0)
-            right_motor_pos.wrist_roll = obs.get("right_wrist_roll.pos", 0.0)
-            right_motor_pos.gripper = obs.get("right_gripper.pos", 0.0)
-
-            # Set right arm status
-            right_arm_msg.is_connected = self.right_arm.is_connected
-            right_arm_msg.is_calibrated = self.right_arm.is_calibrated
-            right_arm_msg.observation_timestamp = time.time()
-
-            # Set base velocity
-            base_vel = msg.base_velocity
-            base_vel.x_vel = obs.get("x.vel", 0.0)
-            base_vel.y_vel = obs.get("y.vel", 0.0)
-            base_vel.theta_vel = obs.get("theta.vel", 0.0)
-            base_vel.z_vel = obs.get("z.vel", 0.0)
-
-            # Set robot-level cameras
-            for cam_key in self.cameras.keys():
-                if cam_key in obs and isinstance(obs[cam_key], np.ndarray):
-                    camera = msg.robot_cameras.add()
-                    camera.name = cam_key
-                    camera.jpeg_data = cv2.imencode('.jpg', obs[cam_key])[1].tobytes()
-                    camera.width = obs[cam_key].shape[1]
-                    camera.height = obs[cam_key].shape[0]
-                    camera.quality = 90
-                    camera.timestamp = time.time()
-
-            # Set robot status
-            msg.robot_connected = self.is_connected
-            msg.both_arms_calibrated = self.is_calibrated
-            msg.robot_timestamp = time.time()
-
-            return msg
-
-        except ImportError as e:
-            logger.error(f"Failed to import protobuf modules: {e}")
-            logger.error("Run the protobuf setup script first: bash src/lerobot/robots/sourccey/sourccey/protobuf/compile.py")
-            raise
-        except Exception as e:
-            logger.error(f"Failed to convert to protobuf: {e}")
-            raise
-
-    def from_protobuf_action(self, action_msg: sourccey_robot_pb2.SourcceyRobotAction) -> dict[str, Any]:
-        """Convert protobuf action to internal format."""
-        try:
-            action = {}
-
-            # Convert left arm action
-            if action_msg.HasField('left_arm_action'):
-                left_motor_pos = action_msg.left_arm_action.target_positions
-                action.update({
-                    "left_shoulder_pan.pos": left_motor_pos.shoulder_pan,
-                    "left_shoulder_lift.pos": left_motor_pos.shoulder_lift,
-                    "left_elbow_flex.pos": left_motor_pos.elbow_flex,
-                    "left_wrist_flex.pos": left_motor_pos.wrist_flex,
-                    "left_wrist_roll.pos": left_motor_pos.wrist_roll,
-                    "left_gripper.pos": left_motor_pos.gripper,
-                })
-
-            # Convert right arm action
-            if action_msg.HasField('right_arm_action'):
-                right_motor_pos = action_msg.right_arm_action.target_positions
-                action.update({
-                    "right_shoulder_pan.pos": right_motor_pos.shoulder_pan,
-                    "right_shoulder_lift.pos": right_motor_pos.shoulder_lift,
-                    "right_elbow_flex.pos": right_motor_pos.elbow_flex,
-                    "right_wrist_flex.pos": right_motor_pos.wrist_flex,
-                    "right_wrist_roll.pos": right_motor_pos.wrist_roll,
-                    "right_gripper.pos": right_motor_pos.gripper,
-                })
-
-            # Convert base action
-            if action_msg.HasField('base_action'):
-                base_vel = action_msg.base_action
-                action.update({
-                    "x.vel": base_vel.x_vel,
-                    "y.vel": base_vel.y_vel,
-                    "theta.vel": base_vel.theta_vel,
-                    "z.vel": base_vel.z_vel,
-                })
-
-            return action
-
-        except ImportError as e:
-            logger.error(f"Failed to import protobuf modules: {e}")
-            logger.error("Run the protobuf setup script first: bash src/lerobot/robots/sourccey/sourccey/protobuf/compile.py")
-            raise
-        except Exception as e:
-            logger.error(f"Failed to convert from protobuf: {e}")
-            raise
 
     ##################################################################################
     # Private Kinematic Functions

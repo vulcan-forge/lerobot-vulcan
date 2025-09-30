@@ -27,27 +27,8 @@ import zmq
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
 from .sourccey import Sourccey
 
-
-def update_teleop_status(active=True, nickname="sourccey"):
-    """Update the teleop status file that the desktop app monitors."""
-    try:
-        temp_dir = tempfile.gettempdir()
-        status_file = os.path.join(temp_dir, "teleop_status.json")
-
-        current_time = int(time.time())
-        status = {
-            "active": active,
-            "last_command_time": current_time,
-            "source": "external",
-            "nickname": nickname
-        }
-
-        with open(status_file, 'w') as f:
-            json.dump(status, f, indent=2)
-
-    except Exception as e:
-        logging.warning(f"Failed to update teleop status: {e}")
-
+# Import protobuf modules
+from ..protobuf.generated import sourccey_robot_pb2
 
 class SourcceyHost:
     def __init__(self, config: SourcceyHostConfig):
@@ -68,7 +49,6 @@ class SourcceyHost:
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
-
 
 def main():
     logging.info("Configuring Sourccey")
@@ -97,16 +77,41 @@ def main():
         while duration < host.connection_time_s:
             loop_start_time = time.time()
             try:
-                msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
-                data = dict(json.loads(msg))
+                # Receive protobuf message instead of JSON
+                msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
 
+                 # ADD THIS: Measure message processing time
+                message_start_time = time.perf_counter()
+                msg_size_kb = len(msg_bytes) / 1024
+
+                # Convert protobuf to action dictionary using existing method
+                robot_action = sourccey_robot_pb2.SourcceyRobotAction()
+                robot_action.ParseFromString(msg_bytes)
+                data = robot.from_protobuf_action(robot_action)
+
+                # ADD THIS: Calculate conversion time
+                conversion_time_ms = (time.perf_counter() - message_start_time) * 1000
+                total_messages_processed += 1
+                total_conversion_time += conversion_time_ms
+
+                # Send action to robot
                 _action_sent = robot.send_action(data)
-
-                # Update teleop status when commands are received
-                update_teleop_status(active=True, nickname="sourccey")
 
                 last_cmd_time = time.time()
                 watchdog_active = False
+
+                # ADD THIS: Log every 5 seconds
+                current_time = time.time()
+                if current_time - last_performance_log_time >= 5.0:
+                    avg_conversion_time = total_conversion_time / total_messages_processed if total_messages_processed > 0 else 0
+                    logging.info(f"Performance Stats (5s): Messages={total_messages_processed}, "
+                               f"Avg Conversion Time={avg_conversion_time:.2f}ms, "
+                               f"Last Message Size={msg_size_kb:.1f}KB")
+
+                    # Reset counters
+                    last_performance_log_time = current_time
+                    total_messages_processed = 0
+                    total_conversion_time = 0.0
             except zmq.Again:
                 if not watchdog_active:
                     # logging.warning("No command available")
@@ -121,34 +126,28 @@ def main():
                 )
                 watchdog_active = True
                 robot.stop_base()
-                # Clear teleop status when watchdog triggers
-                update_teleop_status(active=False, nickname="sourccey")
 
             if observation is not None and observation != {}:
                 previous_observation = observation
             observation = robot.get_observation()
 
-            # Encode ndarrays to base64 strings
-            for cam_key, _ in robot.cameras.items():
-                if cam_key in observation:
-                    ret, buffer = cv2.imencode(
-                        ".jpg", observation[cam_key], [int(cv2.IMWRITE_JPEG_QUALITY), 90]
-                    )
-                    if ret:
-                        observation[cam_key] = base64.b64encode(buffer).decode("utf-8")
-                    else:
-                        observation[cam_key] = ""
-
             # Send the observation to the remote agent
             try:
                 # Don't send an empty observation
-                # Maybe we send the last observation instead? Nick - 7/29/2025
                 if observation is None or observation == {}:
                     observation = previous_observation
                     logging.warning("No observation received. Sending previous observation.")
-                host.zmq_observation_socket.send_string(json.dumps(observation), flags=zmq.NOBLOCK)
+
+                if observation is not None and observation != {}:
+                    # Convert observation to protobuf using existing method
+                    robot_state = robot.to_protobuf()
+
+                    # Send protobuf message instead of JSON
+                    host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
             except zmq.Again:
                 logging.info("Dropping observation, no client connected")
+            except Exception as e:
+                logging.error(f"Failed to send observation: {e}")
 
             # Ensure a short sleep to avoid overloading the CPU.
             elapsed = time.time() - loop_start_time
@@ -165,7 +164,6 @@ def main():
         host.disconnect()
 
     logging.info("Finished Sourccey cleanly")
-
 
 if __name__ == "__main__":
     main()
