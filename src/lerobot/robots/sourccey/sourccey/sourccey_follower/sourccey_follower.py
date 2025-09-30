@@ -197,10 +197,10 @@ class SourcceyFollower(Robot):
         self.bus.sync_write("Goal_Position", goal_pos)
 
         # Check safety after sending goals
-        overcurrent_motors = self._check_current_safety()
-        if overcurrent_motors and len(overcurrent_motors) > 0:
-            logger.warning(f"Safety triggered: {overcurrent_motors} current > {self.config.max_current_safety_threshold}mA")
-            return self._handle_overcurrent_motors(overcurrent_motors, goal_pos, present_pos)
+        # overcurrent_motors = self._check_current_safety()
+        # if overcurrent_motors and len(overcurrent_motors) > 0:
+        #     logger.warning(f"Safety triggered: {overcurrent_motors} current > {self.config.max_current_safety_threshold}mA")
+        #     return self._handle_overcurrent_motors(overcurrent_motors, goal_pos, present_pos)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
     def _check_current_safety(self) -> list[str]:
