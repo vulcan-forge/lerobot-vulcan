@@ -25,7 +25,6 @@ PI5_OPTIMAL_FREQUENCY = 25000  # 25kHz - more compatible with gpiozero
 PI5_MAX_FREQUENCY = 25000      # 25kHz - Pi 5 can handle higher frequencies
 PI5_RESOLUTION = 12            # 12-bit resolution
 
-
 class PWMProtocolHandler(ProtocolHandler):
     """
     PWM protocol handler optimized for DRV8871DDAR H-bridge motor drivers.
