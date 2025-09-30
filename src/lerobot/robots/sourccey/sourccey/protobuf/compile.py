@@ -99,14 +99,10 @@ This module contains the compiled protobuf classes.
 
 # Import all generated modules
 try:
-    from . import sourccey_common_pb2
-    from . import sourccey_follower_pb2
-    from . import sourccey_robot_pb2
+    from . import sourccey_pb2
 
     __all__ = [
-        'sourccey_common_pb2',
-        'sourccey_follower_pb2',
-        'sourccey_robot_pb2'
+        'sourccey_pb2'
     ]
 except ImportError as e:
     print(f"Warning: Could not import protobuf modules: {e}")
@@ -156,31 +152,59 @@ def test_protobuf_functionality():
     sys.path.insert(0, str(generated_dir))
 
     try:
-        # Test sourccey_common_pb2
-        import sourccey_common_pb2
-        motor_joint = sourccey_common_pb2.MotorJoint()
+        # Test sourccey_pb2
+        import sourccey_pb2
+
+        # Test MotorJoint
+        motor_joint = sourccey_pb2.MotorJoint()
         motor_joint.shoulder_pan = 1.0
         motor_joint.shoulder_lift = 2.0
+        motor_joint.elbow_flex = 3.0
+        motor_joint.wrist_flex = 4.0
+        motor_joint.wrist_roll = 5.0
+        motor_joint.gripper = 6.0
         print("  ✓ MotorJoint can be created and populated")
 
-        # Test sourccey_follower_pb2
-        import sourccey_follower_pb2
-        follower_state = sourccey_follower_pb2.SourcceyFollowerState()
-        follower_state.arm_id = "left"
-        follower_state.motor_positions.CopyFrom(motor_joint)
-        print("  ✓ SourcceyFollowerState can be created and populated")
+        # Test BaseVelocity
+        base_velocity = sourccey_pb2.BaseVelocity()
+        base_velocity.x_vel = 1.0
+        base_velocity.y_vel = 2.0
+        base_velocity.z_vel = 3.0
+        base_velocity.theta_vel = 4.0
+        print("  ✓ BaseVelocity can be created and populated")
 
-        # Test sourccey_robot_pb2
-        import sourccey_robot_pb2
-        robot_state = sourccey_robot_pb2.SourcceyRobotState()
-        robot_state.robot_id = "test_robot"
-        robot_state.left_arm.CopyFrom(follower_state)
+        # Test CameraImage
+        camera_image = sourccey_pb2.CameraImage()
+        camera_image.name = "test_camera"
+        camera_image.jpeg_data = b"fake_jpeg_data"
+        camera_image.width = 640
+        camera_image.height = 480
+        camera_image.quality = 90
+        camera_image.timestamp = 1234567890.0
+        print("  ✓ CameraImage can be created and populated")
+
+        # Test SourcceyRobotState
+        robot_state = sourccey_pb2.SourcceyRobotState()
+        robot_state.left_arm_joints.CopyFrom(motor_joint)
+        robot_state.right_arm_joints.CopyFrom(motor_joint)
+        robot_state.base_velocity.CopyFrom(base_velocity)
+        robot_state.left_wrist_camera.append(camera_image)
+        robot_state.right_wrist_camera.append(camera_image)
+        robot_state.left_front_camera.append(camera_image)
+        robot_state.right_front_camera.append(camera_image)
         print("  ✓ SourcceyRobotState can be created and populated")
 
+        # Test SourcceyRobotAction
+        robot_action = sourccey_pb2.SourcceyRobotAction()
+        robot_action.left_arm_target_joints.CopyFrom(motor_joint)
+        robot_action.right_arm_target_joints.CopyFrom(motor_joint)
+        robot_action.base_target_velocity.CopyFrom(base_velocity)
+        print("  ✓ SourcceyRobotAction can be created and populated")
+
         # Test serialization
-        serialized = robot_state.SerializeToString()
-        deserialized = sourccey_robot_pb2.SourcceyRobotState()
-        deserialized.ParseFromString(serialized)
+        serialized_state = robot_state.SerializeToString()
+        deserialized_state = sourccey_pb2.SourcceyRobotState()
+        deserialized_state.ParseFromString(serialized_state)
         print("  ✓ Serialization and deserialization works")
 
         return True
@@ -230,7 +254,7 @@ def main():
     if verify_success and functionality_success:
         print("\n✅ All protobuf files compiled successfully!")
         print(f"Generated {len(generated_files)} Python modules in 'generated/' directory.")
-        print("\nYou can now use the protobuf methods in Sourccey and SourcceyFollower classes.")
+        print("\nYou can now use the protobuf methods in Sourccey classes.")
     else:
         print("\n⚠️  Compilation completed but some tests failed.")
         if not verify_success:

@@ -32,7 +32,7 @@ from lerobot.robots.robot import Robot
 from .config_sourccey import SourcceyClientConfig, SourcceyConfig
 
 # Import protobuf modules
-from ..protobuf.generated import sourccey_robot_pb2
+from ..protobuf.generated import sourccey_pb2
 from ..protobuf.sourccey_protobuf import SourcceyProtobuf
 
 
@@ -75,7 +75,7 @@ class SourcceyClient(Robot):
         self.logs = {}
 
         # Initialize protobuf converter
-        self.protobuf_converter = SourcceyProtobuf(robot_id=self.id or "sourccey_client")
+        self.protobuf_converter = SourcceyProtobuf()
 
     @cached_property
     def _state_ft(self) -> dict[str, type]:
@@ -250,7 +250,7 @@ class SourcceyClient(Robot):
 
         # 3. Parse the protobuf message
         try:
-            robot_state = sourccey_robot_pb2.SourcceyRobotState()
+            robot_state = sourccey_pb2.SourcceyRobotState()
             robot_state.ParseFromString(latest_message_bytes)
             observation = self.protobuf_converter.protobuf_to_observation(robot_state)
         except Exception as e:

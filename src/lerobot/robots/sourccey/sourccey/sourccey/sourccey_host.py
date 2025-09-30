@@ -28,7 +28,7 @@ from .config_sourccey import SourcceyConfig, SourcceyHostConfig
 from .sourccey import Sourccey
 
 # Import protobuf modules
-from ..protobuf.generated import sourccey_robot_pb2
+from ..protobuf.generated import sourccey_pb2
 
 class SourcceyHost:
     def __init__(self, config: SourcceyHostConfig):
@@ -67,6 +67,12 @@ def main():
     watchdog_active = False
     logging.info("Waiting for commands...")
     print("Waiting for commands...")
+
+    # Initialize performance tracking variables
+    total_messages_processed = 0
+    total_conversion_time = 0.0
+    last_performance_log_time = time.time()
+
     try:
         # Business logic
         start = time.perf_counter()
@@ -85,7 +91,7 @@ def main():
                 msg_size_kb = len(msg_bytes) / 1024
 
                 # Convert protobuf to action dictionary using existing method
-                robot_action = sourccey_robot_pb2.SourcceyRobotAction()
+                robot_action = sourccey_pb2.SourcceyRobotAction()
                 robot_action.ParseFromString(msg_bytes)
                 data = robot.from_protobuf_action(robot_action)
 
