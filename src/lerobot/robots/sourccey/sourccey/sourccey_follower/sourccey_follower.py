@@ -4,12 +4,14 @@ import time
 from typing import Any
 from venv import logger
 
+import cv2
 import numpy as np
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.motors.feetech.feetech import FeetechMotorsBus, OperatingMode
 from lerobot.motors.motors_bus import Motor, MotorNormMode
 from lerobot.robots.robot import Robot
+from lerobot.robots.sourccey.sourccey.protobuf.generated import sourccey_follower_pb2
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import SourcceyFollowerCalibrator
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.utils import ensure_safe_goal_position
@@ -264,5 +266,53 @@ class SourcceyFollower(Robot):
             cam.disconnect()
 
         logger.info(f"{self} disconnected.")
+
+    def to_protobuf(self) -> sourccey_follower_pb2.SourcceyFollowerState:
+        """Convert current state to protobuf message."""
+        msg = sourccey_follower_pb2.SourcceyFollowerState()
+
+        # Set arm identification
+        msg.arm_id = self.config.orientation
+        msg.orientation = self.config.orientation
+
+        # Set motor positions
+        obs = self.get_observation()
+        motor_pos = msg.motor_positions
+        motor_pos.shoulder_pan = obs.get("shoulder_pan.pos", 0.0)
+        motor_pos.shoulder_lift = obs.get("shoulder_lift.pos", 0.0)
+        motor_pos.elbow_flex = obs.get("elbow_flex.pos", 0.0)
+        motor_pos.wrist_flex = obs.get("wrist_flex.pos", 0.0)
+        motor_pos.wrist_roll = obs.get("wrist_roll.pos", 0.0)
+        motor_pos.gripper = obs.get("gripper.pos", 0.0)
+
+        # Set camera data
+        for cam_name, cam_data in obs.items():
+            if isinstance(cam_data, np.ndarray):  # Camera image
+                camera = msg.cameras.add()
+                camera.name = cam_name
+                camera.jpeg_data = cv2.imencode('.jpg', cam_data)[1].tobytes()
+                camera.width = cam_data.shape[1]
+                camera.height = cam_data.shape[0]
+                camera.quality = 90
+                camera.timestamp = time.time()
+
+        # Set status
+        msg.is_connected = self.is_connected
+        msg.is_calibrated = self.is_calibrated
+        msg.observation_timestamp = time.time()
+
+        return msg
+
+    def from_protobuf_action(self, action_msg: sourccey_follower_pb2.SourcceyFollowerAction) -> dict:
+        """Convert protobuf action to internal format."""
+        motor_pos = action_msg.target_positions
+        return {
+            "shoulder_pan.pos": motor_pos.shoulder_pan,
+            "shoulder_lift.pos": motor_pos.shoulder_lift,
+            "elbow_flex.pos": motor_pos.elbow_flex,
+            "wrist_flex.pos": motor_pos.wrist_flex,
+            "wrist_roll.pos": motor_pos.wrist_roll,
+            "gripper.pos": motor_pos.gripper,
+        }
 
 

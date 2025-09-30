@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+import "sourccey_common.proto";
+
+package sourccey;
+
+// Single sourccey follower arm state
+message SourcceyFollowerState {
+    // Arm identification
+    string arm_id = 1;                    // "left" or "right"
+    string orientation = 2;               // "left" or "right"
+
+    // Motor positions (6 joints)
+    MotorJoint motor_positions = 3;
+
+    // Motor currents (for safety monitoring)
+    MotorJoint motor_currents = 4;
+
+    // Camera data
+    repeated CameraImage cameras = 5;
+
+    // Safety and status
+    SafetyStatus safety_status = 6;
+
+    // Timestamps
+    double observation_timestamp = 7;
+    double motor_read_timestamp = 8;
+
+    // Connection status
+    bool is_connected = 9;
+    bool is_calibrated = 10;
+}
+
+// Single follower arm action
+message SourcceyFollowerAction {
+    string arm_id = 1;
+    MotorJoint target_positions = 2;
+    double timestamp = 3;
+}

@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+import "sourccey_common.proto";
+import "sourccey_follower.proto";
+
+package sourccey;
+
+// Complete sourccey robot state (2 arms + base)
+message SourcceyRobotState {
+    // Robot identification
+    string robot_id = 1;
+
+    // Left arm state
+    SourcceyFollowerState left_arm = 2;
+
+    // Right arm state
+    SourcceyFollowerState right_arm = 3;
+
+    // Base/mobile platform
+    BaseVelocity base_velocity = 4;
+
+    // Additional robot-level cameras
+    repeated CameraImage robot_cameras = 5;
+
+    // Overall robot status
+    SafetyStatus robot_safety_status = 6;
+
+    // Timestamps
+    double robot_timestamp = 7;
+
+    // Connection status
+    bool robot_connected = 8;
+    bool both_arms_calibrated = 9;
+}
+
+// Complete sourccey robot action
+message SourcceyRobotAction {
+    string robot_id = 1;
+
+    // Arm actions
+    SourcceyFollowerAction left_arm_action = 2;
+    SourcceyFollowerAction right_arm_action = 3;
+
+    // Base action
+    BaseVelocity base_action = 4;
+
+    double timestamp = 5;
+}
