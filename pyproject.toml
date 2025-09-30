@@ -109,7 +109,9 @@ sourccey = [
     "lerobot[feetech]",
     "pyzmq>=26.2.1",
     "gpiozero>=2.0.1 ; sys_platform == 'linux'",
-    "lgpio>=0.2.2 ; sys_platform == 'linux'"
+    "lgpio>=0.2.2 ; sys_platform == 'linux'",
+    "grpcio-tools>=1.73.1",
+    "protobuf>=6.31.0"
 ]
 reachy2 = ["reachy2_sdk>=1.0.14"]
 kinematics = ["lerobot[placo-dep]"]
