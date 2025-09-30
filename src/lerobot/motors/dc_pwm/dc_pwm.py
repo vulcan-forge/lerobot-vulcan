@@ -197,13 +197,16 @@ class PWMProtocolHandler(ProtocolHandler):
         """Get current motor velocity."""
         return self.motor_states.get(motor_id, {}).get("velocity", 0.0)
 
-    def set_velocity(self, motor_id: int, target_velocity: float) -> None:
+    def set_velocity(self, motor_id: int, target_velocity: float, instant: bool = True) -> None:
         """
         Set the target velocity for the motor (-1.0 to 1.0).
         Actual velocity will be slewed toward this value in update_velocity().
         """
         target_velocity = max(-1.0, min(1.0, target_velocity))  # clamp
         self.motor_states[motor_id]["target_velocity"] = target_velocity
+
+        if instant:
+            self.update_velocity(motor_id, 1.0)
 
     def update_velocity(self, motor_id: int, max_step: float = 1.0) -> None:
         """

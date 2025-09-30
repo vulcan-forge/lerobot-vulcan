@@ -241,7 +241,8 @@ class Sourccey(Robot):
         self.dc_motors_controller.set_velocities({"front_left": 0, "front_right": 0, "rear_left": 0, "rear_right": 0})
 
     def update(self):
-        self.dc_motors_controller.update_velocity()
+        # Can be used to update the robot every cycle. Such as potentially a motor
+        pass
 
     # Round to prevent floating-point precision issues and handle -0.0
     def clean_value(self, val):

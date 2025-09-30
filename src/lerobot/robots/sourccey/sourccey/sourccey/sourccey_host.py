@@ -33,7 +33,7 @@ def update_teleop_status(active=True, nickname="sourccey"):
     try:
         temp_dir = tempfile.gettempdir()
         status_file = os.path.join(temp_dir, "teleop_status.json")
-        
+
         current_time = int(time.time())
         status = {
             "active": active,
@@ -41,10 +41,10 @@ def update_teleop_status(active=True, nickname="sourccey"):
             "source": "external",
             "nickname": nickname
         }
-        
+
         with open(status_file, 'w') as f:
             json.dump(status, f, indent=2)
-            
+
     except Exception as e:
         logging.warning(f"Failed to update teleop status: {e}")
 
@@ -101,7 +101,6 @@ def main():
                 data = dict(json.loads(msg))
 
                 _action_sent = robot.send_action(data)
-                robot.update()
 
                 # Update teleop status when commands are received
                 update_teleop_status(active=True, nickname="sourccey")
