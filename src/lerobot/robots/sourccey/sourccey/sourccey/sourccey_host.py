@@ -95,29 +95,12 @@ def main():
                 robot_action.ParseFromString(msg_bytes)
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
 
-                # ADD THIS: Calculate conversion time
-                conversion_time_ms = (time.perf_counter() - message_start_time) * 1000
-                total_messages_processed += 1
-                total_conversion_time += conversion_time_ms
-
                 # Send action to robot
+                print('Sending action to robot', data)
                 _action_sent = robot.send_action(data)
 
                 last_cmd_time = time.time()
                 watchdog_active = False
-
-                # ADD THIS: Log every 5 seconds
-                current_time = time.time()
-                if current_time - last_performance_log_time >= 5.0:
-                    avg_conversion_time = total_conversion_time / total_messages_processed if total_messages_processed > 0 else 0
-                    logging.info(f"Performance Stats (5s): Messages={total_messages_processed}, "
-                               f"Avg Conversion Time={avg_conversion_time:.2f}ms, "
-                               f"Last Message Size={msg_size_kb:.1f}KB")
-
-                    # Reset counters
-                    last_performance_log_time = current_time
-                    total_messages_processed = 0
-                    total_conversion_time = 0.0
             except zmq.Again:
                 if not watchdog_active:
                     # logging.warning("No command available")

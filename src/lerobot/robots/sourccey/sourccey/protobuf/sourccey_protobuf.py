@@ -94,21 +94,10 @@ class SourcceyProtobuf:
                 if isinstance(cam_data, np.ndarray):
                     camera = sourccey_pb2.CameraImage()
                     camera.name = cam_key
-                    camera.jpeg_data = cv2.imencode('.jpg', cam_data)[1].tobytes()
-                    camera.width = cam_data.shape[1]
-                    camera.height = cam_data.shape[0]
-                    camera.quality = 90
-                    camera.timestamp = time.time()
-
-                    # Add to appropriate camera list based on name
-                    if "left_wrist" in cam_key.lower():
-                        msg.left_wrist_camera.append(camera)
-                    elif "right_wrist" in cam_key.lower():
-                        msg.right_wrist_camera.append(camera)
-                    elif "left_front" in cam_key.lower():
-                        msg.left_front_camera.append(camera)
-                    elif "right_front" in cam_key.lower():
-                        msg.right_front_camera.append(camera)
+                    # Encode as JPEG and store raw bytes
+                    _, encoded_img = cv2.imencode('.jpg', cam_data)
+                    camera.image_data = encoded_img.tobytes()
+                    msg.cameras.append(camera)
 
             return msg
 
@@ -196,41 +185,11 @@ class SourcceyProtobuf:
             observation["theta.vel"] = base_vel.theta_vel
             observation["z.vel"] = base_vel.z_vel
 
-            # Process cameras
-            for camera in robot_state.left_wrist_camera:
-                if camera.jpeg_data:
+            # Process cameras from the cameras list
+            for camera in robot_state.cameras:
+                if camera.image_data:
                     try:
-                        nparr = np.frombuffer(camera.jpeg_data, np.uint8)
-                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                        if frame is not None:
-                            observation[camera.name] = frame
-                    except Exception as e:
-                        logger.warning(f"Failed to decode camera image {camera.name}: {e}")
-
-            for camera in robot_state.right_wrist_camera:
-                if camera.jpeg_data:
-                    try:
-                        nparr = np.frombuffer(camera.jpeg_data, np.uint8)
-                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                        if frame is not None:
-                            observation[camera.name] = frame
-                    except Exception as e:
-                        logger.warning(f"Failed to decode camera image {camera.name}: {e}")
-
-            for camera in robot_state.left_front_camera:
-                if camera.jpeg_data:
-                    try:
-                        nparr = np.frombuffer(camera.jpeg_data, np.uint8)
-                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                        if frame is not None:
-                            observation[camera.name] = frame
-                    except Exception as e:
-                        logger.warning(f"Failed to decode camera image {camera.name}: {e}")
-
-            for camera in robot_state.right_front_camera:
-                if camera.jpeg_data:
-                    try:
-                        nparr = np.frombuffer(camera.jpeg_data, np.uint8)
+                        nparr = np.frombuffer(camera.image_data, np.uint8)
                         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                         if frame is not None:
                             observation[camera.name] = frame
