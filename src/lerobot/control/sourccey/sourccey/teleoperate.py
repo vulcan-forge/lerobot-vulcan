@@ -44,6 +44,7 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
         t0 = time.perf_counter()
 
         observation = robot.get_observation()
+
         arm_action = leader_arm.get_action()
 
         keyboard_keys = keyboard.get_action()

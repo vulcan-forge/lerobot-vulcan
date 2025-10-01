@@ -86,11 +86,6 @@ def main():
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
 
-                 # ADD THIS: Measure message processing time
-                message_start_time = time.perf_counter()
-                msg_size_kb = len(msg_bytes) / 1024
-                print('Received message size', msg_size_kb)
-
                 # Convert protobuf to action dictionary using existing method
                 robot_action = sourccey_pb2.SourcceyRobotAction()
                 robot_action.ParseFromString(msg_bytes)
