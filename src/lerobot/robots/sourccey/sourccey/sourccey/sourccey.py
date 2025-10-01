@@ -60,7 +60,7 @@ class Sourccey(Robot):
         )
 
         # Initialize protobuf converter
-        self.protobuf_converter = SourcceyProtobuf(robot_id=self.config.id or "sourccey")
+        self.protobuf_converter = SourcceyProtobuf()
 
     def __del__(self):
         self.disconnect()
