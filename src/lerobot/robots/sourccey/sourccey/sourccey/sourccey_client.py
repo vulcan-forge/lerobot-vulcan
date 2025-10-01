@@ -244,9 +244,6 @@ class SourcceyClient(Robot):
         # 1. Get the latest message bytes from the socket
         latest_message_bytes = self._poll_and_get_latest_message()
 
-        # Print the size of the latest message
-        print('Latest message byte size', len(latest_message_bytes) / 1024)
-
         # 2. If no message, return cached data
         if latest_message_bytes is None:
             return self.last_frames, self.last_remote_state
