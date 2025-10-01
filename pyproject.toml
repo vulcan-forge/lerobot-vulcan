@@ -57,12 +57,10 @@ classifiers = [
 keywords = ["lerobot", "huggingface", "robotics",  "machine learning", "artificial intelligence"]
 
 dependencies = [
-
     # Hugging Face dependencies
     "datasets>=2.19.0,<=3.6.0", # TODO: Bumb dependency
     "diffusers>=0.27.2",
     "huggingface-hub[hf-transfer,cli]>=0.34.2",
-
     # Core dependencies
     "cmake>=3.29.0.1",
     "einops>=0.8.0",
@@ -73,19 +71,17 @@ dependencies = [
     "pynput>=1.7.7",
     "pyserial>=3.5",
     "wandb>=0.20.0",
-
     "torch>=2.2.1,<2.10.0", # Allow 2.2.x through 2.9.x (including nightly)
     "torchcodec>=0.2.1,<0.6.0; sys_platform != 'win32' and (sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l')) and (sys_platform != 'darwin' or platform_machine != 'x86_64')", # TODO: Bumb dependency
     "torchvision>=0.21.0,<0.25.0", # Allow 0.21.x through 0.24.x (including nightly)
-
     "draccus==0.10.0", # TODO: Remove ==
     "gymnasium>=0.29.1,<1.0.0", # TODO: Bumb dependency
     "rerun-sdk>=0.21.0,<0.23.0", # TODO: Bumb dependency
-
     # Support dependencies
     "deepdiff>=7.0.1,<9.0.0",
     "imageio[ffmpeg]>=2.34.0,<3.0.0",
     "termcolor>=2.4.0,<4.0.0",
+    "grpcio==1.73.1",
 ]
 
 # Optional dependencies
