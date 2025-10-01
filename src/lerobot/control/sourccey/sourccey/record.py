@@ -10,11 +10,11 @@ from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import _init_rerun
 from lerobot.record import record_loop
 from lerobot.configs import parser
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass
 class DatasetRecordConfig:
-    repo_id: str = "sourccey-003/sourccey-003__towel-fold-a3colin"
+    repo_id: str = "sourccey-003/sourccey-003__towel-fold-a1myles"
     num_episodes: int = 10
     episode_time_s: int = 60
     reset_time_s: int = 5
@@ -26,11 +26,11 @@ class DatasetRecordConfig:
 @dataclass
 class SourcceyRecordConfig:
     id: str = "sourccey"
-    remote_ip: str = "192.168.1.243"
-    left_arm_port: str = "/dev/ttyACM0"
-    right_arm_port: str = "/dev/ttyACM1"
+    remote_ip: str = "10.42.0.1"
+    left_arm_port: str = "COM15"
+    right_arm_port: str = "COM14"
     keyboard: str = "keyboard"
-    dataset: DatasetRecordConfig = DatasetRecordConfig()
+    dataset: DatasetRecordConfig = field(default_factory=DatasetRecordConfig)
 
 @parser.wrap()
 def record(cfg: SourcceyRecordConfig):
