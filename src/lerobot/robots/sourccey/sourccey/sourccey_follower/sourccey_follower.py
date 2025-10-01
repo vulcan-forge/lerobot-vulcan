@@ -11,7 +11,7 @@ from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.motors.feetech.feetech import FeetechMotorsBus, OperatingMode
 from lerobot.motors.motors_bus import Motor, MotorNormMode
 from lerobot.robots.robot import Robot
-from lerobot.robots.sourccey.sourccey.protobuf.generated import sourccey_follower_pb2
+from lerobot.robots.sourccey.sourccey.protobuf.generated import sourccey_pb2
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import SourcceyFollowerCalibrator
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.utils import ensure_safe_goal_position
@@ -267,9 +267,9 @@ class SourcceyFollower(Robot):
 
         logger.info(f"{self} disconnected.")
 
-    def to_protobuf(self) -> sourccey_follower_pb2.SourcceyFollowerState:
+    def to_protobuf(self) -> sourccey_pb2.SourcceyState:
         """Convert current state to protobuf message."""
-        msg = sourccey_follower_pb2.SourcceyFollowerState()
+        msg = sourccey_pb2.SourcceyState()
 
         # Set arm identification
         msg.arm_id = self.config.orientation
@@ -303,7 +303,7 @@ class SourcceyFollower(Robot):
 
         return msg
 
-    def from_protobuf_action(self, action_msg: sourccey_follower_pb2.SourcceyFollowerAction) -> dict:
+    def from_protobuf_action(self, action_msg: sourccey_pb2.SourcceyAction) -> dict:
         """Convert protobuf action to internal format."""
         motor_pos = action_msg.target_positions
         return {
