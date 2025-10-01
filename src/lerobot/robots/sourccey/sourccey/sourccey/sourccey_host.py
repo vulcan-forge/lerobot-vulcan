@@ -89,6 +89,7 @@ def main():
                  # ADD THIS: Measure message processing time
                 message_start_time = time.perf_counter()
                 msg_size_kb = len(msg_bytes) / 1024
+                print('Received message size', msg_size_kb)
 
                 # Convert protobuf to action dictionary using existing method
                 robot_action = sourccey_pb2.SourcceyRobotAction()
@@ -96,7 +97,6 @@ def main():
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
 
                 # Send action to robot
-                print('Sending action to robot', data)
                 _action_sent = robot.send_action(data)
 
                 last_cmd_time = time.time()

@@ -252,9 +252,7 @@ class SourcceyClient(Robot):
         try:
             robot_state = sourccey_pb2.SourcceyRobotState()
             robot_state.ParseFromString(latest_message_bytes)
-            print(robot_state)
             observation = self.protobuf_converter.protobuf_to_observation(robot_state)
-            print(observation)
         except Exception as e:
             logging.error(f"Error parsing protobuf observation: {e}")
             return self.last_frames, self.last_remote_state
