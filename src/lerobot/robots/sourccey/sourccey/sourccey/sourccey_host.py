@@ -93,7 +93,7 @@ def main():
                 # Convert protobuf to action dictionary using existing method
                 robot_action = sourccey_pb2.SourcceyRobotAction()
                 robot_action.ParseFromString(msg_bytes)
-                data = robot.from_protobuf_action(robot_action)
+                data = robot.protobuf_converter.protobuf_to_action(robot_action)
 
                 # ADD THIS: Calculate conversion time
                 conversion_time_ms = (time.perf_counter() - message_start_time) * 1000
@@ -146,7 +146,7 @@ def main():
 
                 if observation is not None and observation != {}:
                     # Convert observation to protobuf using existing method
-                    robot_state = robot.to_protobuf()
+                    robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
 
                     # Send protobuf message instead of JSON
                     host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
