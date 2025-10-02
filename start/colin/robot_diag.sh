@@ -1,4 +1,4 @@
-sudo tee /usr/local/bin/robot_diag.sh >/dev/null <<'EOF'
+#sudo tee /usr/local/bin/robot_diag.sh >/dev/null <<'EOF'
 #!/usr/bin/env bash
 # robot_diag.sh — robust 1 Hz collector (no strict mode), writes to /tmp/robot_diag_YYYYmmdd_HHMMSS
 # Optional env: CONTROL_PC=10.20.0.2  IFACE=wlan0|wlan1  PORTS=":8000,:5600"  DURATION=300  INTERVAL=1
