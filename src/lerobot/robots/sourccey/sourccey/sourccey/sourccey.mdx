@@ -99,33 +99,34 @@ python src/lerobot/scripts/train.py \
 ```
 
 python src/lerobot/scripts/train.py \
-  --dataset.repo_id=local/ai_test_2 \
+  --dataset.repo_id=local/sourccey-003__tape-cup-1-10__combined  \
   --policy.type=act \
-  --output_dir=outputs/train/act__ai_test_2 \
-  --job_name=act__ai_test_2 \
+  --output_dir=outputs/train/act__sourccey-003__tape-cup-1-10__combined \
+  --job_name=act__sourccey-003__tape-cup-1-10__combined  \
   --policy.device=cuda \
-  --save_freq=10000 \
-  --policy.push_to_hub=false \
   --wandb.enable=false \
-  --steps=20000
+  --policy.push_to_hub=false \
+  --steps=200000 \
+  --save_freq=20000
 
 
 
 ```bash
 torchrun --nproc_per_node=2 src/lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey-001__tape-cup1-5-combined  \
+  --dataset.repo_id=local/sourccey-003__tape-cup-1-10__combined \
   --policy.type=act \
-  --output_dir=outputs/train/act__sourccey-001__tape-cup1-5-combined \
-  --job_name=act__sourccey-001__tape-cup1-5-combined  \
+  --output_dir=outputs/train/act__sourccey-003__tape-cup-1-10__combined \
+  --job_name=act__sourccey-003__tape-cup-1-10__combined  \
   --policy.device=cuda \
   --wandb.enable=false \
   --policy.push_to_hub=false \
-  --steps=100000 \
+  --steps=300000 \
   --save_freq=20000 \
   --batch_size=64 \
   --distributed_training=true \
   --num_gpus=2
 ```
+
 
 ---- Train on Pretrained SmolVLA model
 
