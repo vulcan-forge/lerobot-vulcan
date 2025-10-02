@@ -3,6 +3,7 @@ from functools import cached_property
 from typing import Any
 import numpy as np
 import threading
+import time
 
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.motors.dc_pwm.dc_pwm import PWMDCMotorsController
@@ -141,8 +142,11 @@ class Sourccey(Robot):
                 kwargs={"reversed": True, "full_reset": full_reset}
             )
 
-            # Start both threads
+            # Start left arm immediately
             left_thread.start()
+
+            # Wait 3 seconds before starting right arm
+            time.sleep(3)
             right_thread.start()
 
             # Wait for both threads to complete

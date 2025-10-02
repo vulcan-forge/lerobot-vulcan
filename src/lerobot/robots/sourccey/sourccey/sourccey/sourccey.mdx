@@ -13,7 +13,7 @@ uv run -m lerobot.auto_calibrate \
 # For hard reset:
 ```bash
 uv run -m lerobot.auto_calibrate \
-    --robot.type=sourccey\
+    --robot.type=sourccey \
     --robot.id=sourccey \
     --full_reset=True
 ```
@@ -41,6 +41,10 @@ To teleoperate, SSH into your Raspberry Pi, navigate to the lerobot repo and run
 uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 
 uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host_degrees
+```
+
+```
+cat /etc/udev/rules.d/99-robot-hardware-ports.rules
 ```
 
 ```
