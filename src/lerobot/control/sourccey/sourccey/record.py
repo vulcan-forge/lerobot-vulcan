@@ -14,11 +14,11 @@ from dataclasses import dataclass, field
 
 @dataclass
 class DatasetRecordConfig:
-    repo_id: str = "sourccey-003/sourccey-003__towel-fold-a1myles"
+    repo_id: str = "sourccey-003/sourccey-003__tape-cup-1__myles"
     num_episodes: int = 10
     episode_time_s: int = 60
     reset_time_s: int = 5
-    task: str = "fold the towel"
+    task: str = "put the tape in the cup with the left arm"
     fps: int = 30
     push_to_hub: bool = False
     private: bool = False
