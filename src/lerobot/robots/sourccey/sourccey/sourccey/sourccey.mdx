@@ -165,15 +165,8 @@ torchrun --nproc_per_node=2 lerobot/scripts/train.py \
 
 ```bash
 python src/lerobot/datasets/combine_dataset/combine_dataset.py \
-    --repo_ids local/sourccey-001__tape-cup1 local/sourccey-001__tape-cup2 local/sourccey-001__tape-cup3 local/sourccey-001__tape-cup4 local/sourccey-001__tape-cup5 \
-    --output_repo_id=local/sourccey-001__tape-cup1-5-combined \
-    --push_to_hub=0
-```
-
-```bash
-python src/lerobot/datasets/combine_dataset/combine_dataset.py \
-    --dataset_paths sourccey-004/sourccey-003__tape-cup-1__myles sourccey-004/sourccey-003__tape-cup-2__myles \
-    --output_path=sourccey-004/sourccey-003__tape-cup__myles__combined
+    --dataset_paths='["sourccey-004/sourccey-003__tape-cup-1__myles", "sourccey-004/sourccey-003__tape-cup-2__myles"]' \
+    --output_path='sourccey-004/sourccey-003__tape-cup__myles__combined'
 ```
 
 ---

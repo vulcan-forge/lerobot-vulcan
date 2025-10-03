@@ -8,6 +8,7 @@ into a single dataset with proper metadata handling, chunking, and validation.
 import argparse
 import logging
 import shutil
+import json
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -120,6 +121,7 @@ def combine_v3_datasets(
         datasets=datasets,
         output_path=output_local_path,
         task_content_to_index=task_content_to_index,
+        data_file_size_in_mb=data_file_size_in_mb,
     )
     logging.info("")
 
@@ -236,14 +238,39 @@ def _validate_dataset_compatibility(datasets: List[LeRobotDataset]) -> None:
     logging.info("All datasets validated as compatible ✓")
 
 
+def _parse_dataset_paths(dataset_paths_arg: str) -> List[str]:
+    """
+    Parse dataset paths from command line argument.
+    Supports both space-separated format and JSON array format.
+    
+    Args:
+        dataset_paths_arg: String containing dataset paths
+        
+    Returns:
+        List of dataset path strings
+    """
+    # Try to parse as JSON array first
+    if dataset_paths_arg.strip().startswith('[') and dataset_paths_arg.strip().endswith(']'):
+        try:
+            return json.loads(dataset_paths_arg)
+        except json.JSONDecodeError as e:
+            logging.warning(f"Failed to parse as JSON array: {e}")
+            # If JSON parsing fails, fall back to space-separated parsing
+            pass
+    
+    # Parse as space-separated arguments
+    # Handle both quoted and unquoted arguments
+    import shlex
+    return shlex.split(dataset_paths_arg)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Combine multiple LeRobot v3.0 datasets into a single dataset")
     parser.add_argument(
         "--dataset_paths",
         type=str,
-        nargs="+",
         required=True,
-        help="List of dataset paths/repo IDs to combine (e.g., `repo_id/dataset1 repo_id/dataset2`).",
+        help="Dataset paths to combine. Can be space-separated (e.g., 'repo1/dataset1 repo2/dataset2') or JSON array format (e.g., '[\"repo1/dataset1\", \"repo2/dataset2\"]').",
     )
     parser.add_argument(
         "--output_path",
@@ -295,9 +322,14 @@ def main():
 
     args = parser.parse_args()
 
+    # Parse dataset paths
+    dataset_paths = _parse_dataset_paths(args.dataset_paths)
+    
+    logging.info(f"Parsed dataset paths: {dataset_paths}")
+
     # Run the combination
     combined_dataset = combine_v3_datasets(
-        dataset_paths=args.dataset_paths,
+        dataset_paths=dataset_paths,
         output_path=args.output_path,
         data_file_size_in_mb=args.data_file_size_in_mb,
         video_file_size_in_mb=args.video_file_size_in_mb,
