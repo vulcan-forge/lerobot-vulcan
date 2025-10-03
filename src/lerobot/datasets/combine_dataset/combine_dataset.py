@@ -88,7 +88,6 @@ def combine_v3_datasets(
 
     # Create output directory
     if output_local_path.exists():
-        logging.info(f"Removing existing output directory: {output_local_path}")
         shutil.rmtree(output_local_path)
     output_local_path.mkdir(parents=True, exist_ok=True)
 
@@ -113,6 +112,7 @@ def combine_v3_datasets(
     # Step 1: Combine tasks metadata
     logging.info("Step 1: Combining tasks metadata...")
     task_content_to_index = combine_tasks_metadata(datasets, output_local_path)
+    logging.info("")
 
     # Step 2: Combine episodes metadata
     logging.info("Step 2: Combining episodes metadata...")
@@ -121,10 +121,12 @@ def combine_v3_datasets(
         output_path=output_local_path,
         task_content_to_index=task_content_to_index,
     )
+    logging.info("")
 
     # Step 3: Combine statistics metadata
     logging.info("Step 3: Combining statistics metadata...")
     combine_stats_metadata(datasets, output_local_path)
+    logging.info("")
 
     # Step 4: Create combined info metadata
     logging.info("Step 4: Creating combined info metadata...")
@@ -138,6 +140,7 @@ def combine_v3_datasets(
         video_file_size_in_mb=video_file_size_in_mb,
         chunk_size=chunk_size,
     )
+    logging.info("")
 
     # Step 5: Combine parquet data files
     logging.info("Step 5: Combining parquet data files...")
@@ -148,7 +151,8 @@ def combine_v3_datasets(
         data_file_size_in_mb=data_file_size_in_mb,
         image_keys=first_dataset.meta.image_keys,
     )
-
+    logging.info("")
+    
     # Step 6: Combine video files (if any)
     if first_dataset.meta.video_keys:
         logging.info("Step 6: Combining video files...")
@@ -160,7 +164,8 @@ def combine_v3_datasets(
         )
     else:
         logging.info("Step 6: No video files to combine")
-
+    logging.info("")
+    
     # Create dataset card
     if push_to_hub:
         logging.info("Creating dataset card...")

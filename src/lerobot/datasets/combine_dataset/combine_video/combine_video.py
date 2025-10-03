@@ -38,18 +38,14 @@ def combine_video_files(
         logging.info("No video keys found in datasets")
         return
     
-    logging.info(f"Found video keys: {video_keys}")
-    
     for video_key in video_keys:
-        logging.info(f"Processing video key: {video_key}")
-        
         chunk_idx, file_idx = 0, 0
         current_video_files = []
         current_size_mb = 0.0
         total_videos_processed = 0
         
         for dataset_idx, dataset in enumerate(datasets):
-            logging.info(f"Processing videos for dataset {dataset_idx + 1}/{len(datasets)}")
+            logging.info(f"Processing videos with key: {video_key} for dataset {dataset_idx + 1}/{len(datasets)}")
             
             video_dir = dataset.meta.root / "videos" / video_key
             if not video_dir.exists():
@@ -61,8 +57,6 @@ def combine_video_files(
             if not video_files:
                 logging.warning(f"No video files found in {video_dir}")
                 continue
-            
-            logging.info(f"Found {len(video_files)} video files in {video_dir}")
             
             for video_file in sorted(video_files):
                 try:
@@ -91,11 +85,9 @@ def combine_video_files(
         # Write remaining videos
         if current_video_files:
             _write_video_file(current_video_files, output_path, video_key, chunk_idx, file_idx)
-            logging.info(f"Wrote final video batch chunk-{chunk_idx:03d}/file-{file_idx:03d}.mp4 with {len(current_video_files)} videos")
-        
-        logging.info(f"Completed video key '{video_key}': processed {total_videos_processed} videos")
-    
-    logging.info("Video files combined successfully")
+
+    logging.info("✓ Video files combined successfully")
+    logging.info("")
 
 
 def _find_video_files(video_dir: Path) -> List[Path]:
@@ -176,7 +168,6 @@ def combine_video_files_by_camera(
     # Get all video keys from the first dataset
     video_keys = datasets[0].meta.video_keys
     if not video_keys:
-        logging.info("No video keys found in datasets")
         return
     
     for video_key in video_keys:
@@ -218,7 +209,7 @@ def combine_video_files_by_camera(
         if current_video_files:
             _write_video_file(current_video_files, output_path, output_video_key, chunk_idx, file_idx)
     
-    logging.info("Video files combined by camera successfully")
+    logging.info("✓ Video files combined by camera successfully")
 
 
 def validate_video_files(video_files: List[Path]) -> List[Path]:

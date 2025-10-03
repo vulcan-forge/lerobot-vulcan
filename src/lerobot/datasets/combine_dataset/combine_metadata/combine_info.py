@@ -36,8 +36,7 @@ def combine_info_metadata(
     # Write the combined info
     write_info(combined_meta.info, output_path)
     
-    logging.info(f"Info metadata updated: {total_episodes} episodes, {total_frames} frames, {total_tasks} tasks")
-
+    logging.info(f"✓ Info metadata combined successfully: {total_episodes} episodes, {total_frames} frames, {total_tasks} tasks")
 
 def create_combined_info_metadata(
     datasets: List[Any],
@@ -65,7 +64,6 @@ def create_combined_info_metadata(
     Returns:
         Combined info metadata dictionary
     """
-    logging.info("Creating combined info metadata...")
     
     # Use the first dataset as the base for metadata
     first_dataset = datasets[0]
@@ -98,17 +96,9 @@ def create_combined_info_metadata(
     
     # Features should be the same across all datasets (already validated)
     # Keep the features from the first dataset
-    logging.info("Features validated as compatible across all datasets")
     
     # Write the combined info
     write_info(combined_info, output_path)
-    
-    logging.info(f"Combined info metadata created successfully")
-    logging.info(f"  - Total episodes: {total_episodes}")
-    logging.info(f"  - Total frames: {total_frames}")
-    logging.info(f"  - Total tasks: {total_tasks}")
-    logging.info(f"  - Robot type: {combined_info.get('robot_type', 'N/A')}")
-    logging.info(f"  - FPS: {combined_info.get('fps', 'N/A')}")
     
     return combined_info
 
@@ -145,9 +135,6 @@ def _validate_compatible_features(datasets: List[Any]) -> None:
         
         if dataset.meta.robot_type != first_dataset.meta.robot_type:
             raise ValueError(f"Dataset {i+1} has incompatible robot type: {dataset.meta.robot_type} vs {first_dataset.meta.robot_type}")
-    
-    logging.info("All datasets validated as compatible ✓")
-
 
 def update_info_totals(
     info_dict: Dict[str, Any],

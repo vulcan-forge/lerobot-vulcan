@@ -23,20 +23,17 @@ def combine_stats_metadata(datasets: List[Any], output_path: Path) -> None:
         dataset_stats = _load_dataset_stats(dataset.meta.root)
         if dataset_stats:
             all_dataset_stats.append(dataset_stats)
-            logging.info(f"Loaded stats for dataset with {len(dataset_stats)} features")
     
     # Combine and write stats
     if all_dataset_stats:
         combined_stats = _combine_dataset_stats(all_dataset_stats)
         write_stats(combined_stats, output_path)
-        logging.info(f"Combined stats for {len(combined_stats)} features")
     else:
         # Create empty stats if no dataset stats were loaded
         empty_stats = {}
         write_stats(empty_stats, output_path)
-        logging.warning("No dataset stats found, created empty stats file")
     
-    logging.info("Statistics metadata combined successfully")
+    logging.info("✓ Statistics metadata combined successfully")
 
 
 def _load_dataset_stats(dataset_root: Path) -> Dict[str, Any]:
@@ -64,16 +61,12 @@ def _combine_dataset_stats(dataset_stats_list: List[Dict[str, Any]]) -> Dict[str
     if len(dataset_stats_list) == 1:
         return dataset_stats_list[0]
     
-    logging.info(f"Combining stats from {len(dataset_stats_list)} datasets")
-    
     combined_stats = {}
     
     # Get all unique keys across all datasets
     all_keys = set()
     for stats in dataset_stats_list:
         all_keys.update(stats.keys())
-    
-    logging.info(f"Found {len(all_keys)} unique features across all datasets")
     
     for key in all_keys:
         # Collect all values for this key across datasets

@@ -50,8 +50,6 @@ def combine_parquet_files(
             logging.warning(f"No parquet files found in dataset {dataset_idx + 1}: {data_dir}")
             continue
         
-        logging.info(f"Found {len(parquet_files)} parquet files in dataset {dataset_idx + 1}")
-        
         for parquet_file in sorted(parquet_files):
             try:
                 df = pd.read_parquet(parquet_file)
@@ -76,8 +74,7 @@ def combine_parquet_files(
                 if current_size_mb >= data_file_size_in_mb:
                     # Write current file
                     _write_data_file(current_df, output_path, chunk_idx, file_idx, image_keys)
-                    logging.info(f"Wrote data file chunk-{chunk_idx:03d}/file-{file_idx:03d}.parquet with {len(current_df)} rows")
-                    
+
                     # Move to next file
                     chunk_idx, file_idx = update_chunk_file_indices(chunk_idx, file_idx, chunk_size)
                     current_df = None
@@ -89,16 +86,12 @@ def combine_parquet_files(
         # Update offsets for next dataset
         episode_offset += dataset.meta.total_episodes
         frame_offset += dataset.meta.total_frames
-        
-        logging.info(f"Completed dataset {dataset_idx + 1}: {dataset.meta.total_episodes} episodes, {dataset.meta.total_frames} frames")
-    
+
     # Write remaining data if any
     if current_df is not None:
         _write_data_file(current_df, output_path, chunk_idx, file_idx, image_keys)
-        logging.info(f"Wrote final data file chunk-{chunk_idx:03d}/file-{file_idx:03d}.parquet with {len(current_df)} rows")
-    
-    logging.info("Parquet files combined successfully")
 
+    logging.info("✓ Parquet files combined successfully")
 
 def _write_data_file(df: pd.DataFrame, output_path: Path, chunk_idx: int, file_idx: int, image_keys: List[str]) -> None:
     """Write a data file with proper handling for images."""
@@ -110,7 +103,6 @@ def _write_data_file(df: pd.DataFrame, output_path: Path, chunk_idx: int, file_i
             to_parquet_with_hf_images(df, path)
         else:
             df.to_parquet(path, index=False)
-        logging.debug(f"Successfully wrote data file: {path}")
     except Exception as e:
         logging.error(f"Error writing data file {path}: {e}")
         raise

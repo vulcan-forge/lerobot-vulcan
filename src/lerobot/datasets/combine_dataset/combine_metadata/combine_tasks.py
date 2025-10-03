@@ -46,7 +46,6 @@ def combine_tasks_metadata(datasets: List[Any], output_path: Path) -> Dict[str, 
             task_strings = list(dataset_tasks.keys()) if isinstance(dataset_tasks, dict) else []
         
         dataset_task_counts.append(len(task_strings))
-        logging.info(f"Dataset {dataset_idx + 1} has {len(task_strings)} tasks")
         
         # Process each task string
         for task_string in task_strings:
@@ -72,20 +71,7 @@ def combine_tasks_metadata(datasets: List[Any], output_path: Path) -> Dict[str, 
     # Write tasks
     write_tasks(tasks_df, output_path)
     
-    # Log summary
-    total_datasets = len(datasets)
-    datasets_with_tasks = sum(1 for count in dataset_task_counts if count > 0)
-    total_unique_tasks = len(all_tasks)
-    
-    logging.info(f"Tasks combination completed:")
-    logging.info(f"  - Processed {total_datasets} datasets")
-    logging.info(f"  - {datasets_with_tasks} datasets had tasks")
-    logging.info(f"  - Combined {total_unique_tasks} unique tasks")
-    logging.info(f"  - Task indices: {list(all_tasks.keys())}")
-    
-    # Log task details
-    for task_idx, task_string in all_tasks.items():
-        logging.info(f"    Task {task_idx}: '{task_string}'")
+    logging.info(f"Tasks combination completed successfully")
     
     return task_content_to_index
 
@@ -102,8 +88,6 @@ def validate_task_compatibility(datasets: List[Any]) -> bool:
     """
     if not datasets:
         return True
-    
-    logging.info("Validating task compatibility across datasets...")
     
     # Check that all datasets have the same task structure
     first_dataset = datasets[0]
@@ -133,7 +117,6 @@ def validate_task_compatibility(datasets: List[Any]) -> bool:
             logging.error(f"Dataset {i+1} has incompatible task structure")
             return False
     
-    logging.info("Task compatibility validation passed ✓")
     return True
 
 

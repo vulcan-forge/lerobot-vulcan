@@ -49,10 +49,6 @@ def combine_episodes_metadata(
         # Load episodes metadata WITHOUT filtering out stats columns
         # This ensures we get all the data that contributes to file size
         episodes_dataset = load_nested_dataset(dataset.meta.root / "meta" / "episodes")
-        
-        logging.info(f"Dataset {dataset_idx + 1} has {len(episodes_dataset)} episodes")
-        logging.info(f"Dataset {dataset_idx + 1} episodes columns: {list(episodes_dataset.features.keys())}")
-        
         for episode_idx, episode_data in enumerate(episodes_dataset):
             # Create new episode data
             new_episode_data = dict(episode_data)
@@ -109,7 +105,7 @@ def combine_episodes_metadata(
     _write_episodes_with_chunking(all_episodes_data, output_path, data_file_size_in_mb)
     
     logging.info(f"Combined {len(all_episodes_data)} episodes successfully")
-    
+
     return (
         current_episode_offset,
         current_frame_offset,
@@ -123,7 +119,6 @@ def _write_episodes_with_chunking(
     data_file_size_in_mb: int,
 ) -> None:
     """Write episodes metadata with proper chunking based on file size limits."""
-    logging.info("Writing episodes metadata with chunking...")
     
     if not episodes_data:
         logging.warning("No episodes data to write")
@@ -131,9 +126,6 @@ def _write_episodes_with_chunking(
     
     # Convert to DataFrame
     episodes_df = pd.DataFrame(episodes_data)
-    
-    logging.info(f"Episodes DataFrame shape: {episodes_df.shape}")
-    logging.info(f"Episodes DataFrame columns: {list(episodes_df.columns)}")
     
     # Initialize chunking variables
     chunk_idx = 0
@@ -164,9 +156,6 @@ def _write_episodes_with_chunking(
     # Write remaining episodes if any
     if not current_df.empty:
         _write_episodes_file(current_df, output_path, chunk_idx, file_idx)
-    
-    logging.info(f"Episodes metadata written across {chunk_idx + 1} chunks")
-
 
 def _write_episodes_file(
     episodes_df: pd.DataFrame,
@@ -180,15 +169,9 @@ def _write_episodes_file(
     
     episodes_file = episodes_dir / f"file-{file_idx:03d}.parquet"
     episodes_df.to_parquet(episodes_file, index=False)
-    
-    file_size_mb = get_parquet_file_size_in_mb(episodes_file)
-    logging.info(f"Episodes metadata written to {episodes_file} ({len(episodes_df)} episodes, {file_size_mb:.2f} MB)")
-
 
 def _validate_episode_data(episodes_data: List[Dict]) -> None:
     """Validate that episode data is properly combined."""
-    logging.info("Validating combined episode data...")
-    
     if not episodes_data:
         logging.warning("No episodes data to validate")
         return
@@ -217,5 +200,3 @@ def _validate_episode_data(episodes_data: List[Dict]) -> None:
         if ep['length'] != expected_length:
             logging.error(f"Episode {i} length mismatch: stored={ep['length']}, calculated={expected_length}")
             raise ValueError("Episode length mismatch")
-    
-    logging.info("Episode data validation passed ✓")
