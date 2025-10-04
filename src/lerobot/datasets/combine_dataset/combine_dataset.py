@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Any
 
-from lerobot.constants import HF_LEROBOT_HOME
+from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.datasets.combine_dataset.combine_metadata.combine_info import create_combined_info_metadata
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import (

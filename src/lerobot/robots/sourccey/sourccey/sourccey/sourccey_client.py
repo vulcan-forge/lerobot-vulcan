@@ -25,8 +25,8 @@ import numpy as np
 import torch
 import zmq
 
-from lerobot.constants import OBS_IMAGES, OBS_STATE
-from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.utils.constants import OBS_IMAGES, OBS_STATE
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from lerobot.robots.robot import Robot
 from .config_sourccey import SourcceyClientConfig, SourcceyConfig

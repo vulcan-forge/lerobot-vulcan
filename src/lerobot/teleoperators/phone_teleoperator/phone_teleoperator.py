@@ -81,7 +81,7 @@ except ImportError as e:
         "Please install with: pip install pyroki viser yourdfpy"
     ) from e
 
-from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.teleoperators.teleoperator import Teleoperator
 
 from .config_phone_teleoperator import PhoneTeleoperatorConfig

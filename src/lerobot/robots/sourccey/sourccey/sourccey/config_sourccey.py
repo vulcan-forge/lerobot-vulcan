@@ -19,7 +19,7 @@ from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.motors.dc_motors_controller import DCMotor, MotorNormMode
 
 from lerobot.robots.config import RobotConfig
-from lerobot.constants import HF_LEROBOT_CONFIGURATION
+from lerobot.utils.constants import HF_LEROBOT_CONFIGURATION
 
 
 def sourccey_cameras_config() -> dict[str, CameraConfig]:
