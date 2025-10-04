@@ -99,10 +99,10 @@ python src/lerobot/scripts/train.py \
 ```
 
 python src/lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey-003__tape-cup-1-10__combined  \
+  --dataset.repo_id=sourccey-004/sourccey-003__tape-cup__myles__combined  \
   --policy.type=act \
-  --output_dir=outputs/train/act__sourccey-003__tape-cup-1-10__combined \
-  --job_name=act__sourccey-003__tape-cup-1-10__combined  \
+  --output_dir=outputs/train/act__sourccey-003__tape-cup__myles__combined \
+  --job_name=act__sourccey-003__tape-cup__myles__combined  \
   --policy.device=cuda \
   --wandb.enable=false \
   --policy.push_to_hub=false \
@@ -163,9 +163,23 @@ torchrun --nproc_per_node=2 lerobot/scripts/train.py \
 
 ----- Combine Dataset functions
 
+
+--DO NOT HAVE TRAILING COMMAS WHEN USING THE COMBINE DATASET IT WONT WORK
+--AND WILL SEND YOU ON A WILD GOOSE CHASE BECAUSE THE ERROR IS NONSENSICAL!!!
 ```bash
 python src/lerobot/datasets/combine_dataset/combine_dataset.py \
-    --dataset_paths='["sourccey-004/sourccey-003__tape-cup-1__myles", "sourccey-004/sourccey-003__tape-cup-2__myles"]' \
+    --dataset_paths='[
+      "sourccey-004/sourccey-003__tape-cup-1__myles", 
+      "sourccey-004/sourccey-003__tape-cup-2__myles",
+      "sourccey-004/sourccey-003__tape-cup-3__myles",
+      "sourccey-004/sourccey-003__tape-cup-4__myles",
+      "sourccey-004/sourccey-003__tape-cup-5__myles",
+      "sourccey-004/sourccey-003__tape-cup-6__myles",
+      "sourccey-004/sourccey-003__tape-cup-7__myles",
+      "sourccey-004/sourccey-003__tape-cup-8__myles",
+      "sourccey-004/sourccey-003__tape-cup-9__myles",
+      "sourccey-004/sourccey-003__tape-cup-10__myles"
+    ]' \
     --output_path='sourccey-004/sourccey-003__tape-cup__myles__combined'
 ```
 

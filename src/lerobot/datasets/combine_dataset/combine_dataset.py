@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 from lerobot.constants import HF_LEROBOT_HOME
+from lerobot.datasets.combine_dataset.combine_metadata.combine_info import create_combined_info_metadata
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import (
     create_lerobot_dataset_card,
@@ -26,7 +27,6 @@ from lerobot.utils.utils import init_logging
 from lerobot.datasets.combine_dataset.combine_metadata.combine_episodes import combine_episodes_metadata
 from lerobot.datasets.combine_dataset.combine_metadata.combine_tasks import combine_tasks_metadata
 from lerobot.datasets.combine_dataset.combine_metadata.combine_stats import combine_stats_metadata
-from lerobot.datasets.combine_dataset.combine_metadata.combine_info import create_combined_info_metadata
 from lerobot.datasets.combine_dataset.combine_parquet.combine_parquet import combine_parquet_files
 from lerobot.datasets.combine_dataset.combine_video.combine_video import combine_video_files
 
@@ -167,7 +167,7 @@ def combine_v3_datasets(
     else:
         logging.info("Step 6: No video files to combine")
     logging.info("")
-    
+
     # Create dataset card
     if push_to_hub:
         logging.info("Creating dataset card...")
@@ -213,7 +213,7 @@ def _validate_dataset_compatibility(datasets: List[LeRobotDataset]) -> None:
     if len(datasets) == 1:
         logging.info("Only one dataset provided, no compatibility check needed")
         return
-    
+
     logging.info("Validating dataset compatibility...")
     
     first_dataset = datasets[0]
@@ -252,16 +252,26 @@ def _parse_dataset_paths(dataset_paths_arg: str) -> List[str]:
     # Try to parse as JSON array first
     if dataset_paths_arg.strip().startswith('[') and dataset_paths_arg.strip().endswith(']'):
         try:
-            return json.loads(dataset_paths_arg)
+            # Clean up the JSON string by removing trailing commas
+            cleaned_arg = dataset_paths_arg.strip()
+            # Remove trailing comma before the closing bracket
+            cleaned_arg = cleaned_arg.replace(',]', ']').replace(', ]', ']')
+            
+            parsed_paths = json.loads(cleaned_arg)
+            # Filter out empty strings and None values
+            filtered_paths = [path for path in parsed_paths if path and isinstance(path, str) and path.strip()]
+            return filtered_paths
         except json.JSONDecodeError as e:
             logging.warning(f"Failed to parse as JSON array: {e}")
             # If JSON parsing fails, fall back to space-separated parsing
             pass
     
     # Parse as space-separated arguments
-    # Handle both quoted and unquoted arguments
     import shlex
-    return shlex.split(dataset_paths_arg)
+    parsed_paths = shlex.split(dataset_paths_arg)
+    # Filter out empty strings and brackets
+    filtered_paths = [path for path in parsed_paths if path and path.strip() and path not in ['[', ']']]
+    return filtered_paths
 
 
 def main():
