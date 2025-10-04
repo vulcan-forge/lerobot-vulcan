@@ -99,10 +99,10 @@ python src/lerobot/scripts/train.py \
 ```
 
 python src/lerobot/scripts/train.py \
-  --dataset.repo_id=sourccey-004/sourccey-003__tape-cup__myles__combined  \
+  --dataset.repo_id=sourccey-004/sourccey-003__tape-cup__myles__combined-2  \
   --policy.type=act \
-  --output_dir=outputs/train/act__sourccey-003__tape-cup__myles__combined \
-  --job_name=act__sourccey-003__tape-cup__myles__combined  \
+  --output_dir=outputs/train/act__sourccey-003__tape-cup__myles__combined-2 \
+  --job_name=act__sourccey-003__tape-cup__myles__combined-2  \
   --policy.device=cuda \
   --wandb.enable=false \
   --policy.push_to_hub=false \
@@ -180,7 +180,19 @@ python src/lerobot/datasets/combine_dataset/combine_dataset.py \
       "sourccey-004/sourccey-003__tape-cup-9__myles",
       "sourccey-004/sourccey-003__tape-cup-10__myles"
     ]' \
-    --output_path='sourccey-004/sourccey-003__tape-cup__myles__combined'
+    --output_path='sourccey-004/sourccey-003__tape-cup__myles__combined-2'
+```
+
+```
+,
+      "sourccey-004/sourccey-003__tape-cup-3__myles",
+      "sourccey-004/sourccey-003__tape-cup-4__myles",
+      "sourccey-004/sourccey-003__tape-cup-5__myles",
+      "sourccey-004/sourccey-003__tape-cup-6__myles",
+      "sourccey-004/sourccey-003__tape-cup-7__myles",
+      "sourccey-004/sourccey-003__tape-cup-8__myles",
+      "sourccey-004/sourccey-003__tape-cup-9__myles",
+      "sourccey-004/sourccey-003__tape-cup-10__myles"
 ```
 
 ---

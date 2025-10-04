@@ -63,11 +63,11 @@ def combine_v3_datasets(
         raise ValueError("No dataset paths provided")
 
     if data_file_size_in_mb is None:
-        data_file_size_in_mb = DEFAULT_DATA_FILE_SIZE_IN_MB
+        data_file_size_in_mb = DEFAULT_DATA_FILE_SIZE_IN_MB * 4
     if video_file_size_in_mb is None:
-        video_file_size_in_mb = DEFAULT_VIDEO_FILE_SIZE_IN_MB
+        video_file_size_in_mb = DEFAULT_VIDEO_FILE_SIZE_IN_MB * 4
     if chunk_size is None:
-        chunk_size = DEFAULT_CHUNK_SIZE
+        chunk_size = DEFAULT_CHUNK_SIZE * 4
 
     logging.info(f"Combining {len(dataset_paths)} datasets...")
 
@@ -291,19 +291,19 @@ def main():
     parser.add_argument(
         "--data_file_size_in_mb",
         type=int,
-        default=DEFAULT_DATA_FILE_SIZE_IN_MB,
+        default=DEFAULT_DATA_FILE_SIZE_IN_MB * 4,
         help="Maximum size for data files in MB.",
     )
     parser.add_argument(
         "--video_file_size_in_mb",
         type=int,
-        default=DEFAULT_VIDEO_FILE_SIZE_IN_MB,
+        default=DEFAULT_VIDEO_FILE_SIZE_IN_MB * 4,
         help="Maximum size for video files in MB.",
     )
     parser.add_argument(
         "--chunk_size",
         type=int,
-        default=DEFAULT_CHUNK_SIZE,
+        default=DEFAULT_CHUNK_SIZE * 4,
         help="Maximum number of files per chunk.",
     )
     parser.add_argument(
