@@ -38,7 +38,9 @@ def combine_parquet_files(
     frame_offset = 0
     
     for dataset_idx, dataset in enumerate(datasets):
-        logging.info(f"Processing parquet files for dataset {dataset_idx + 1}/{len(datasets)}")
+        # Log progress every 100 datasets
+        if dataset_idx % 100 == 0:            
+            logging.info(f"Processing parquet files for datasets {dataset_idx + 1} - {len(datasets)}")
         
         data_dir = dataset.meta.root / "data"
         if not data_dir.exists():
@@ -134,7 +136,9 @@ def combine_parquet_files_with_episode_mapping(
     frame_offset = 0
     
     for dataset_idx, dataset in enumerate(datasets):
-        logging.info(f"Processing parquet files for dataset {dataset_idx + 1}/{len(datasets)}")
+        # Log progress every 100 datasets
+        if dataset_idx % 100 == 0:            
+            logging.info(f"Processing parquet files for datasets {dataset_idx + 1} - {len(datasets)}")
         
         data_dir = dataset.meta.root / "data"
         if not data_dir.exists():

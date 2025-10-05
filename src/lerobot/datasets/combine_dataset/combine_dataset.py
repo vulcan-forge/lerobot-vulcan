@@ -24,7 +24,7 @@ from lerobot.datasets.utils import (
 from lerobot.utils.utils import init_logging
 
 # Import our modular functions - use absolute imports
-from lerobot.datasets.combine_dataset.combine_metadata.combine_episodes import combine_episodes_metadata
+from lerobot.datasets.combine_dataset.combine_metadata.combine_episodes import combine_episodes_metadata, update_episode_video_indices
 from lerobot.datasets.combine_dataset.combine_metadata.combine_tasks import combine_tasks_metadata
 from lerobot.datasets.combine_dataset.combine_metadata.combine_stats import combine_stats_metadata
 from lerobot.datasets.combine_dataset.combine_parquet.combine_parquet import combine_parquet_files
@@ -63,11 +63,11 @@ def combine_v3_datasets(
         raise ValueError("No dataset paths provided")
 
     if data_file_size_in_mb is None:
-        data_file_size_in_mb = DEFAULT_DATA_FILE_SIZE_IN_MB * 4
+        data_file_size_in_mb = DEFAULT_DATA_FILE_SIZE_IN_MB* 1
     if video_file_size_in_mb is None:
-        video_file_size_in_mb = DEFAULT_VIDEO_FILE_SIZE_IN_MB * 4
+        video_file_size_in_mb = DEFAULT_VIDEO_FILE_SIZE_IN_MB* 1
     if chunk_size is None:
-        chunk_size = DEFAULT_CHUNK_SIZE * 4
+        chunk_size = DEFAULT_CHUNK_SIZE* 1
 
     logging.info(f"Combining {len(dataset_paths)} datasets...")
 
@@ -115,13 +115,14 @@ def combine_v3_datasets(
     task_content_to_index = combine_tasks_metadata(datasets, output_local_path)
     logging.info("")
 
-    # Step 2: Combine episodes metadata
+    # Step 2: Combine episodes metadata (WITHOUT video file indices - will be updated later)
     logging.info("Step 2: Combining episodes metadata...")
     episode_offset, frame_offset, video_timestamp_offset = combine_episodes_metadata(
         datasets=datasets,
         output_path=output_local_path,
         task_content_to_index=task_content_to_index,
         data_file_size_in_mb=data_file_size_in_mb,
+        update_video_indices=False,  # Don't update video indices yet
     )
     logging.info("")
 
@@ -164,6 +165,10 @@ def combine_v3_datasets(
             chunk_size=chunk_size,
             video_file_size_in_mb=video_file_size_in_mb,
         )
+        
+        # Step 6b: Update episode metadata with correct video file indices
+        logging.info("Step 6b: Updating episode metadata with correct video file indices...")
+        update_episode_video_indices(output_local_path, datasets)
     else:
         logging.info("Step 6: No video files to combine")
     logging.info("")
@@ -291,19 +296,19 @@ def main():
     parser.add_argument(
         "--data_file_size_in_mb",
         type=int,
-        default=DEFAULT_DATA_FILE_SIZE_IN_MB * 4,
+        default=DEFAULT_DATA_FILE_SIZE_IN_MB* 1,
         help="Maximum size for data files in MB.",
     )
     parser.add_argument(
         "--video_file_size_in_mb",
         type=int,
-        default=DEFAULT_VIDEO_FILE_SIZE_IN_MB * 4,
+        default=DEFAULT_VIDEO_FILE_SIZE_IN_MB* 1,
         help="Maximum size for video files in MB.",
     )
     parser.add_argument(
         "--chunk_size",
         type=int,
-        default=DEFAULT_CHUNK_SIZE * 4,
+        default=DEFAULT_CHUNK_SIZE* 1,
         help="Maximum number of files per chunk.",
     )
     parser.add_argument(

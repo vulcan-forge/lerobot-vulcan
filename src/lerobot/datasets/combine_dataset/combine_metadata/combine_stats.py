@@ -14,8 +14,6 @@ def combine_stats_metadata(datasets: List[Any], output_path: Path) -> None:
         datasets: List of LeRobotDataset objects
         output_path: Output directory path
     """
-    logging.info("Combining statistics metadata...")
-    
     all_dataset_stats = []
     
     for dataset in datasets:

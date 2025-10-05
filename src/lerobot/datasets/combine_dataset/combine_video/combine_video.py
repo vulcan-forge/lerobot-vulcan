@@ -89,7 +89,9 @@ def _combine_videos_by_episode_order(
     
     # Process datasets in order
     for dataset_idx, dataset in enumerate(datasets):
-        logging.info(f"Processing videos for dataset {dataset_idx + 1}/{len(datasets)}")
+        # Log progress every 100 datasets
+        if dataset_idx % 100 == 0:            
+            logging.info(f"Processing videos for datasets {dataset_idx + 1} - {len(datasets)}")
         
         # Get video files for this dataset
         video_dir = dataset.meta.root / "videos" / video_key

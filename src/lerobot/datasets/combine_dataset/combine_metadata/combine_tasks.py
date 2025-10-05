@@ -17,9 +17,7 @@ def combine_tasks_metadata(datasets: List[Any], output_path: Path) -> Dict[str, 
         
     Returns:
         Mapping from task strings to task indices
-    """
-    logging.info("Combining tasks metadata...")
-    
+    """    
     if not datasets:
         logging.warning("No datasets provided for task combination")
         return {}
@@ -29,7 +27,10 @@ def combine_tasks_metadata(datasets: List[Any], output_path: Path) -> Dict[str, 
     dataset_task_counts = []
     
     for dataset_idx, dataset in enumerate(datasets):
-        logging.info(f"Processing tasks for dataset {dataset_idx + 1}/{len(datasets)}")
+
+        # Log progress every 100 datasets
+        if dataset_idx % 100 == 0:            
+            logging.info(f"Processing tasks for datasets {dataset_idx + 1} - {len(datasets)}")
         
         # Validate that dataset has tasks
         if not hasattr(dataset.meta, 'tasks') or dataset.meta.tasks is None:
