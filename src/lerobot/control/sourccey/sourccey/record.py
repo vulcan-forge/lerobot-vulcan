@@ -28,7 +28,7 @@ class SourcceyRecordConfig:
     id: str = "sourccey"
     remote_ip: str = "192.168.1.244"
     left_arm_port: str = "/dev/ttyACM0"
-    right_arm_port: str = "/dev/ttyACM0"
+    right_arm_port: str = "/dev/ttyACM1"
     keyboard: str = "keyboard"
     dataset: DatasetRecordConfig = field(default_factory=DatasetRecordConfig)
 
