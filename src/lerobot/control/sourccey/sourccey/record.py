@@ -8,17 +8,17 @@ from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourcc
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
-from lerobot.record import record_loop
+from lerobot.scripts.lerobot_record import record_loop
 from lerobot.configs import parser
 from dataclasses import dataclass, field
 
 @dataclass
 class DatasetRecordConfig:
-    repo_id: str = "sourccey-003/sourccey-003__tape-cup-1__myles"
+    repo_id: str = "sourccey-003/sourccey-002__towel-fold-a001-colin"
     num_episodes: int = 10
     episode_time_s: int = 60
     reset_time_s: int = 5
-    task: str = "put the tape in the cup with the left arm"
+    task: str = "fold the towel"
     fps: int = 30
     push_to_hub: bool = False
     private: bool = False
@@ -26,9 +26,9 @@ class DatasetRecordConfig:
 @dataclass
 class SourcceyRecordConfig:
     id: str = "sourccey"
-    remote_ip: str = "10.42.0.1"
-    left_arm_port: str = "COM15"
-    right_arm_port: str = "COM14"
+    remote_ip: str = "192.168.1.244"
+    left_arm_port: str = "/dev/ttyACM0"
+    right_arm_port: str = "/dev/ttyACM0"
     keyboard: str = "keyboard"
     dataset: DatasetRecordConfig = field(default_factory=DatasetRecordConfig)
 
