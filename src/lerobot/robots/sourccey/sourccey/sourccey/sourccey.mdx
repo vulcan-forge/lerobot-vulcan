@@ -5,14 +5,14 @@ Sourccey Commands
 ###
 
 ```bash
-uv run -m lerobot.auto_calibrate \
+uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
     --robot.type=sourccey \
     --robot.id=sourccey
 ```
 
 # For hard reset:
 ```bash
-uv run -m lerobot.auto_calibrate \
+uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
     --robot.type=sourccey \
     --robot.id=sourccey \
     --full_reset=True
@@ -21,7 +21,7 @@ uv run -m lerobot.auto_calibrate \
 # For Teleoperators
 
 ```bash
-python -m lerobot.auto_calibrate \
+python src/lerobot/scripts/sourccey/auto_calibrate.py \
   --teleop.type=bi_sourccey_leader \
   --teleop.id=bi_sourccey_leader \
   --teleop.left_arm_port="COM15" \
@@ -99,10 +99,10 @@ python src/lerobot/scripts/train.py \
 ```
 
 python src/lerobot/scripts/lerobot_train.py \
-  --dataset.repo_id=sourccey-004/sourccey-003__tape-cup__myles__combined-3  \
+  --dataset.repo_id=sourccey-003/sourccey-003__tape-cup__myles__combined  \
   --policy.type=act \
-  --output_dir=outputs/train/act__sourccey-003__tape-cup__myles__combined-3 \
-  --job_name=act__sourccey-003__tape-cup__myles__combined-3  \
+  --output_dir=outputs/train/act__sourccey-003__tape-cup__myles__combined \
+  --job_name=act__sourccey-003__tape-cup__myles__combined  \
   --policy.device=cuda \
   --wandb.enable=false \
   --policy.push_to_hub=false \
@@ -112,11 +112,11 @@ python src/lerobot/scripts/lerobot_train.py \
 
 
 ```bash
-torchrun --nproc_per_node=2 src/lerobot/scripts/train.py \
-  --dataset.repo_id=local/sourccey-003__tape-cup-1-10__combined \
+torchrun --nproc_per_node=2 src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id=sourccey-003/sourccey-003__tape-cup__myles__combined \
   --policy.type=act \
-  --output_dir=outputs/train/act__sourccey-003__tape-cup-1-10__combined \
-  --job_name=act__sourccey-003__tape-cup-1-10__combined  \
+  --output_dir=outputs/train/act__sourccey-003__tape-cup__myles__combined \
+  --job_name=act__sourccey-003__tape-cup__myles__combined  \
   --policy.device=cuda \
   --wandb.enable=false \
   --policy.push_to_hub=false \
@@ -163,36 +163,24 @@ torchrun --nproc_per_node=2 lerobot/scripts/train.py \
 
 ----- Combine Dataset functions
 
-
 --DO NOT HAVE TRAILING COMMAS WHEN USING THE COMBINE DATASET IT WONT WORK
 --AND WILL SEND YOU ON A WILD GOOSE CHASE BECAUSE THE ERROR IS NONSENSICAL!!!
-```bash
-python src/lerobot/datasets/combine_dataset/combine_dataset.py \
-    --dataset_paths='[
-      "sourccey-004/sourccey-003__tape-cup-1__myles", 
-      "sourccey-004/sourccey-003__tape-cup-2__myles",
-      "sourccey-004/sourccey-003__tape-cup-3__myles",
-      "sourccey-004/sourccey-003__tape-cup-4__myles",
-      "sourccey-004/sourccey-003__tape-cup-5__myles",
-      "sourccey-004/sourccey-003__tape-cup-6__myles",
-      "sourccey-004/sourccey-003__tape-cup-7__myles",
-      "sourccey-004/sourccey-003__tape-cup-8__myles",
-      "sourccey-004/sourccey-003__tape-cup-9__myles",
-      "sourccey-004/sourccey-003__tape-cup-10__myles"
-    ]' \
-    --output_path="sourccey-004/sourccey-003__tape-cup__myles__combined-3"
-```
 
-```
-,
-      "sourccey-004/sourccey-003__tape-cup-3__myles",
-      "sourccey-004/sourccey-003__tape-cup-4__myles",
-      "sourccey-004/sourccey-003__tape-cup-5__myles",
-      "sourccey-004/sourccey-003__tape-cup-6__myles",
-      "sourccey-004/sourccey-003__tape-cup-7__myles",
-      "sourccey-004/sourccey-003__tape-cup-8__myles",
-      "sourccey-004/sourccey-003__tape-cup-9__myles",
-      "sourccey-004/sourccey-003__tape-cup-10__myles"
+```bash
+python src/lerobot/scripts/sourccey/combine_datasets.py \
+    --dataset_paths='[
+      "sourccey-003/sourccey-003__tape-cup-1__myles",
+      "sourccey-003/sourccey-003__tape-cup-2__myles",
+      "sourccey-003/sourccey-003__tape-cup-3__myles",
+      "sourccey-003/sourccey-003__tape-cup-4__myles",
+      "sourccey-003/sourccey-003__tape-cup-5__myles",
+      "sourccey-003/sourccey-003__tape-cup-6__myles",
+      "sourccey-003/sourccey-003__tape-cup-7__myles",
+      "sourccey-003/sourccey-003__tape-cup-8__myles",
+      "sourccey-003/sourccey-003__tape-cup-9__myles",
+      "sourccey-003/sourccey-003__tape-cup-10__myles"
+    ]' \
+    --output_path="sourccey-003/sourccey-003__tape-cup__myles__combined"
 ```
 
 ---

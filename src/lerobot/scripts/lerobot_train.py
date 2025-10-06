@@ -36,7 +36,7 @@ from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import get_device_from_parameters
 from lerobot.rl.wandb_utils import WandBLogger
-from lerobot.scripts.lerobot_eval import eval_policy_all
+from lerobot.scripts.lerobot_eval import eval_policy, eval_policy_all
 from lerobot.utils.logging_utils import AverageMeter, MetricsTracker
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.train_utils import (
@@ -352,7 +352,7 @@ def train(cfg: TrainPipelineConfig):
                         wandb_log_dict.update(output_dict)
                     wandb_logger.log_dict(wandb_log_dict, step)
                 train_tracker.reset_averages()
-            
+
             if cfg.save_checkpoint and is_saving_step:
                 logging.info(f"Checkpoint policy after step {step}")
                 checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
@@ -397,7 +397,7 @@ def train(cfg: TrainPipelineConfig):
                     wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
                     wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
                     wandb_logger.log_video(eval_info["video_paths"][0], step, mode="eval")
-                    
+
     if eval_env:
         eval_env.close()
 
