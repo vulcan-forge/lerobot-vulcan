@@ -7,7 +7,7 @@ from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_lead
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourccey_leader import BiSourcceyLeaderConfig
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
-from lerobot.utils.visualization_utils import _init_rerun
+from lerobot.utils.visualization_utils import init_rerun
 from lerobot.record import record_loop
 from lerobot.configs import parser
 from dataclasses import dataclass, field
@@ -63,7 +63,7 @@ def record(cfg: SourcceyRecordConfig):
         image_writer_threads=4,
     )
 
-    _init_rerun(session_name="sourccey_record")
+    init_rerun(session_name="sourccey_record")
 
     listener, events = init_keyboard_listener()
 

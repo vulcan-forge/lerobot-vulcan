@@ -7,7 +7,7 @@ from lerobot.processor import make_default_processors
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
-from lerobot.utils.visualization_utils import _init_rerun
+from lerobot.utils.visualization_utils import init_rerun
 from lerobot.record import record_loop
 from lerobot.configs import parser
 
@@ -69,7 +69,7 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
     listener, events = init_keyboard_listener()
-    _init_rerun(session_name="recording")
+    init_rerun(session_name="recording")
 
     if not robot.is_connected:
         raise ValueError("Robot is not connected!")
