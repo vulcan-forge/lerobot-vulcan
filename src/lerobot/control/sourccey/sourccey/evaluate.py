@@ -8,7 +8,7 @@ from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, Sour
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
-from lerobot.record import record_loop
+from lerobot.scripts.lerobot_record import record_loop
 from lerobot.configs import parser
 
 @dataclass
