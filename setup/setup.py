@@ -371,14 +371,21 @@ class SetupScript:
         self.print_summary()
         return len(self.errors) == 0
 
-def main():
-    """Main entry point"""
+################################################################
+# Main function
+################################################################
+def setup():
+    """Setup the project"""
     setup = SetupScript()
     success = setup.run()
+    return success
+
+def main():
+    """Main entry point"""
+    success = setup()
 
     if not success:
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()
