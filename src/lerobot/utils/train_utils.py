@@ -110,7 +110,16 @@ def save_checkpoint(
         preprocessor: The preprocessor/pipeline to save. Defaults to None.
     """
     pretrained_dir = checkpoint_dir / PRETRAINED_MODEL_DIR
-    policy.save_pretrained(pretrained_dir)
+
+    # Handle DistributedDataParallel wrapped models
+    if hasattr(policy, 'module'):
+        # If policy is wrapped with DDP, access the underlying module
+        actual_policy = policy.module
+    else:
+        # If policy is not wrapped, use it directly
+        actual_policy = policy
+
+    actual_policy.save_pretrained(pretrained_dir)
     cfg.save_pretrained(pretrained_dir)
     if preprocessor is not None:
         preprocessor.save_pretrained(pretrained_dir)
