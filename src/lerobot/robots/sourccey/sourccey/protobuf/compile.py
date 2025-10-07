@@ -287,7 +287,7 @@ def validate_proto_structure():
         print(f"  ✗ Error validating proto file: {e}")
         return False
 
-def main():
+def compile_sourccey_protobuf():
     """Main compilation function."""
     print("Sourccey Protobuf Compiler")
     print("=" * 40)
@@ -344,6 +344,9 @@ def main():
         if not functionality_success:
             print("  - Functionality testing failed")
         sys.exit(1)
+
+def main():
+    compile_sourccey_protobuf()
 
 if __name__ == "__main__":
     main()
