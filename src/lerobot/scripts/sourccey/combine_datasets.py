@@ -24,7 +24,6 @@ def combine_datasets(
     """
     logging.info(f"Combining {len(dataset_paths)} datasets into {output_path}")
 
-    # Simply call the existing aggregate function
     aggregate_datasets(
         repo_ids=dataset_paths,
         aggr_repo_id=output_path
