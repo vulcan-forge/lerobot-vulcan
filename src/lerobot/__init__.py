@@ -45,6 +45,10 @@ When implementing a new policy class (e.g. `DiffusionPolicy`) follow these steps
 """
 
 import itertools
+import warnings
+
+# Global warning filter: Show each warning only once
+warnings.simplefilter("once", UserWarning)
 
 from lerobot.__version__ import __version__  # noqa: F401
 
