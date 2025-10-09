@@ -207,6 +207,8 @@ class OncePerMinuteWarningHandler:
     def __init__(self):
         self.seen_warnings: Dict[str, float] = {}
         self.timeout = 60.0  # 60 seconds
+        # Store the original showwarning function
+        self._original_showwarning = warnings.showwarning
 
     def __call__(self, message, category, filename, lineno, file=None, line=None):
         # Create a unique key for this warning
@@ -225,8 +227,8 @@ class OncePerMinuteWarningHandler:
         # Clean up old entries
         self._cleanup_old_entries(current_time)
 
-        # Show the warning using the default handler
-        warnings._showwarning(message, category, filename, lineno, file, line)
+        # Show the warning using the original handler
+        self._original_showwarning(message, category, filename, lineno, file, line)
 
     def _cleanup_old_entries(self, current_time: float):
         """Remove entries older than timeout to prevent memory leaks."""

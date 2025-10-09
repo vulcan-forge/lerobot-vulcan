@@ -45,7 +45,6 @@ When implementing a new policy class (e.g. `DiffusionPolicy`) follow these steps
 """
 
 import itertools
-import warnings
 
 from lerobot.__version__ import __version__  # noqa: F401
 
