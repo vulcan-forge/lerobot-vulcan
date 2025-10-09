@@ -1108,7 +1108,7 @@ class MotorsBus(abc.ABC):
             comm, error = self.packet_handler.writeTxRx(self.port_handler, motor_id, addr, length, data)
             if self._is_comm_success(comm):
                 break
-            logger.debug(
+            logger.warning(
                 f"Failed to sync write @{addr=} ({length=}) on id={motor_id} with {value=} ({n_try=}): "
                 + self.packet_handler.getTxRxResult(comm)
             )
@@ -1182,7 +1182,7 @@ class MotorsBus(abc.ABC):
             comm = self.sync_reader.txRxPacket()
             if self._is_comm_success(comm):
                 break
-            logger.debug(
+            logger.warning(
                 f"Failed to sync read @{addr=} ({length=}) on {motor_ids=} ({n_try=}): "
                 + self.packet_handler.getTxRxResult(comm)
             )
