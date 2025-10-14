@@ -70,7 +70,7 @@ dependencies = [
     "packaging>=24.2",
     "pynput>=1.7.7",
     "pyserial>=3.5",
-    "wandb>=0.22.1",
+    "wandb>=0.20.0",
     "torch>=2.2.1,<2.10.0", # Allow 2.2.x through 2.9.x (including nightly)
     "torchcodec>=0.2.1,<0.6.0; sys_platform != 'win32' and (sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l')) and (sys_platform != 'darwin' or platform_machine != 'x86_64')", # TODO: Bumb dependency
     "torchvision>=0.21.0,<0.25.0", # Allow 0.21.x through 0.24.x (including nightly)
