@@ -54,6 +54,7 @@ from lerobot.teleoperators import (  # noqa: F401
 )
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
 from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.sourccey_leader import SourcceyLeader
+from lerobot.utils.import_utils import register_third_party_devices
 from lerobot.utils.utils import init_logging
 
 
@@ -85,6 +86,7 @@ def calibrate(cfg: CalibrateConfig):
 
 
 def main():
+    register_third_party_devices()
     calibrate()
 
 
