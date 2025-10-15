@@ -14,11 +14,11 @@ from dataclasses import dataclass, field
 
 @dataclass
 class DatasetRecordConfig:
-    repo_id: str = "sourccey-003/sourccey-002__towel-fold-a001-colin"
-    num_episodes: int = 10
+    repo_id: str = "sourccey-003/sourccey-002__follow-me-005-2"
+    num_episodes: int = 5
     episode_time_s: int = 60
     reset_time_s: int = 5
-    task: str = "fold the towel"
+    task: str = "Follow me"
     fps: int = 30
     push_to_hub: bool = False
     private: bool = False
@@ -27,8 +27,8 @@ class DatasetRecordConfig:
 class SourcceyRecordConfig:
     id: str = "sourccey"
     remote_ip: str = "192.168.1.244"
-    left_arm_port: str = "/dev/ttyACM0"
-    right_arm_port: str = "/dev/ttyACM1"
+    left_arm_port: str = "COM4"
+    right_arm_port: str = "COM3"
     keyboard: str = "keyboard"
     dataset: DatasetRecordConfig = field(default_factory=DatasetRecordConfig)
 
