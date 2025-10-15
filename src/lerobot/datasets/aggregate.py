@@ -225,7 +225,7 @@ def aggregate_datasets(
     meta_idx = {"chunk": 0, "file": 0}
     data_idx = {"chunk": 0, "file": 0}
     videos_idx = {
-        key: {"chunk": 0, "file": 0, "episode_duration": 0, "episode_offset": 0 } for key in video_keys
+        key: {"chunk": 0, "file": 0, "episode_duration": 0, "episode_offset": 0, "src_to_offset": {} } for key in video_keys
     }
 
     dst_meta.episodes = {}
