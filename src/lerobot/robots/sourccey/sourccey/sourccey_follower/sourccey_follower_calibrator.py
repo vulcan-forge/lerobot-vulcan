@@ -206,7 +206,7 @@ class SourcceyFollowerCalibrator:
                     "drive_mode": 0,
                     "homing_offset": 1640,
                     "range_min": 425,
-                    "range_max": 2047
+                    "range_max": 2150
                 }
             }
         else:
