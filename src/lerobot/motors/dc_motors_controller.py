@@ -221,10 +221,11 @@ class BaseDCMotorsController(abc.ABC):
             self._step_velocity_state = {}
 
         now = time.time()
-        step_size = 0.05
         step_interval = 1.0
+        ramp_duration = 0.2  # Total time to ramp from 0.05 to full
+        start_velocity = 0.05  # Initial ramp starting value
 
-        # Add a start_time to the state for 0.5s at 0.5 velocity
+        # Add a start_time to the state for 0.2s ramp
         state = self._step_velocity_state.get(motor_id, {
             "last_call_time": 0,
             "last_sent_velocity": 0.0,
@@ -242,32 +243,32 @@ class BaseDCMotorsController(abc.ABC):
             # Also reset the ramp start_time
             state["start_time"] = now
 
-        # Insert logic for first 0.5 seconds to use velocity = 0.5 (sign-respecting)
         effective_velocity = velocity
         if normalize:
             direction = 1.0 if effective_velocity >= 0 else -1.0
             target_velocity = abs(effective_velocity)
-            before_step = state["last_sent_velocity"]
-            new_velocity = before_step + step_size
-            # Respect the sign of the target
-            if new_velocity > target_velocity:
-                new_velocity = target_velocity
-
-            # 0.5 second ramp logic
             elapsed_since_start = now - state.get("start_time", now)
-            if target_velocity >= 1.0:  # Only apply if target is 1.0
-                if elapsed_since_start < 0.5:
-                    target_velocity = 0.5
-                    if new_velocity > target_velocity:
-                        new_velocity = target_velocity
 
-            effective_velocity = new_velocity * direction
+            if target_velocity >= 1.0 and elapsed_since_start < ramp_duration:
+                # Ramp from start_velocity (0.05) to 1.0 in ramp_duration (0.2s)
+                ramped_velocity = start_velocity + ((1.0 - start_velocity) * min(elapsed_since_start / ramp_duration, 1.0))
+                ramped_velocity = min(ramped_velocity, target_velocity)  # don't exceed target_velocity
+                effective_velocity = ramped_velocity * direction
+            else:
+                # Step logic for other cases or after ramp
+                before_step = state["last_sent_velocity"]
+                step_size = 0.05
+                new_velocity = before_step + step_size
+
+                if new_velocity > target_velocity:
+                    new_velocity = target_velocity
+
+                effective_velocity = new_velocity * direction
 
             logger.debug(
-                f"[set_velocity] Motor {motor} (id={motor_id}) step increment: "
-                f"last={before_step:.4f}, step_size={step_size:.4f}, "
-                f"target={target_velocity:.4f}, new={new_velocity:.4f}, output_velocity={effective_velocity:.4f}, "
-                f"elapsed_since_start={elapsed_since_start:.4f}"
+                f"[set_velocity] Motor {motor} (id={motor_id}) ramp/step: "
+                f"elapsed_since_start={elapsed_since_start:.4f}, "
+                f"output_velocity={effective_velocity:.4f}"
             )
             state["last_sent_velocity"] = abs(effective_velocity)
             state["active"] = True
