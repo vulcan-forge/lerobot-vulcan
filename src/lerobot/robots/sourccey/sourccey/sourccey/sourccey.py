@@ -202,8 +202,6 @@ class Sourccey(Robot):
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}
 
-            print(f"Printing log 5")
-
             sent_left = self.left_arm.send_action(left_action)
             sent_right = self.right_arm.send_action(right_action)
 
