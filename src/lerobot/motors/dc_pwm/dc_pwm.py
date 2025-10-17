@@ -278,16 +278,17 @@ class PWMProtocolHandler(ProtocolHandler):
             return
 
         try:
-            if duty_cycle == 0.0:
-                in1.off(); in2.off()
-            elif direction > 0:   # forward
-                in1.value = duty_cycle
+            if direction > 0:   # forward
+                #in1.value = duty_cycle
+                in1.on()
                 in2.off()
             elif direction < 0:   # reverse
+                #in1.value = duty_cycle
                 in1.off()
-                in2.value = duty_cycle
+                in2.on()
             else:
-                in1.off(); in2.off()
+                in1.off()
+                in2.off()
             logger.debug(f"Motor {motor_id} PWM={duty_cycle:.3f} dir={'FWD' if direction>0 else 'REV' if direction<0 else 'STOP'}")
         except Exception as e:
             logger.warning(f"Error setting PWM for motor {motor_id}: {e}")

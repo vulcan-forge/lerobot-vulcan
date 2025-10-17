@@ -73,6 +73,7 @@ class Sourccey(Robot):
             f"{motor}.pos": float for motor in self.right_arm.bus.motors} | {
                 "x.vel": float,
                 "y.vel": float,
+                "z.vel": float,
                 "theta.vel": float,
             }
 
