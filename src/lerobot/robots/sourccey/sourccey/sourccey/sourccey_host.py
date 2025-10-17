@@ -67,6 +67,7 @@ def main():
     watchdog_active = False
     logging.info("Waiting for commands...")
     print("Waiting for commands...")
+    print(f"Printing log 3")
 
     # Initialize performance tracking variables
     total_messages_processed = 0
@@ -85,6 +86,9 @@ def main():
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
+
+                logging.info("Printing log 4")
+                print(f"Printing log 4")
 
                 # Convert protobuf to action dictionary using existing method
                 robot_action = sourccey_pb2.SourcceyRobotAction()

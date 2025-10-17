@@ -219,8 +219,12 @@ class BaseDCMotorsController(abc.ABC):
         logger.debug(f"Set motor {motor} velocity to {velocity}")
 
     def set_velocities(self, motors: dict[NameOrID, float], normalize: bool = True) -> None:
+        
+        print(f"Setting velocities: {motors}")
         if not self._is_connected:
             return
+        
+        
 
         """
         Set motor velocities.
