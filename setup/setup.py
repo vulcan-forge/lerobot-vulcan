@@ -227,9 +227,51 @@ class SetupScript:
 
         # Check if venv exists and handle accordingly
         if self.check_venv_exists():
-            self.print_success("Using existing virtual environment")
-            return True
+            self.print_success("Found existing virtual environment")
 
+            # ALWAYS check if dependencies are installed, even if venv exists
+            python_path = self.get_venv_python_path()
+            if not python_path.exists():
+                self.print_error("Virtual environment Python interpreter not found")
+                self.print_error("Removing corrupted .venv and recreating...")
+                try:
+                    shutil.rmtree(self.project_root / '.venv')
+                    self.print_success("Corrupted .venv removed")
+                except Exception as e:
+                    self.print_error(f"Failed to remove corrupted .venv: {e}")
+                    return False
+            else:
+                # Test if lerobot module can be imported
+                self.print_status("Verifying dependencies in existing virtual environment...")
+                try:
+                    result = subprocess.run([
+                        str(python_path), "-c", "import lerobot; print('lerobot available')"
+                    ], capture_output=True, text=True, timeout=10)
+
+                    if result.returncode != 0:
+                        self.print_warning("Existing virtual environment is missing dependencies")
+                        self.print_status("Installing missing dependencies...")
+
+                        # Install dependencies with uv or pip
+                        if self.check_command_exists("uv"):
+                            subprocess.run(["uv", "pip", "install", "-e", ".[feetech,smolvla,sourccey]"],
+                                         check=True, cwd=self.project_root)
+                            self.print_success("Dependencies installed with uv")
+                        else:
+                            pip_path = python_path.parent / ("Scripts" if platform.system() == "Windows" else "bin") / "pip"
+                            subprocess.run([str(pip_path), "install", "-e", ".[feetech,smolvla,sourccey]"],
+                                         check=True, cwd=self.project_root)
+                            self.print_success("Dependencies installed with pip")
+                    else:
+                        self.print_success("Dependencies are already installed and verified")
+
+                except subprocess.CalledProcessError as e:
+                    self.print_error(f"Error checking/installing dependencies: {e}")
+                    return False
+
+                return True
+
+        # If we get here, either no venv exists or we removed a corrupted one
         try:
             # Check if uv is available
             if self.check_command_exists("uv"):
