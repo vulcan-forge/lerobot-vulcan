@@ -221,7 +221,7 @@ class BaseDCMotorsController(abc.ABC):
             self._step_velocity_state = {}
 
         now = time.time()
-        step_size = 0.6
+        step_size = 0.5
         step_interval = 1.0
 
         # Add a start_time to the state for 0.5s at 0.5 velocity
