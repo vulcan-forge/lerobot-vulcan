@@ -257,9 +257,8 @@ class BaseDCMotorsController(abc.ABC):
             if not state.get("ramp_complete", False) and elapsed_since_start < ramp_duration:
                 # Calculate where we are in the ramp [0,1]
                 progress = min(elapsed_since_start / ramp_duration, 1.0)
-                # Slow start, fast finish curve
-                curve = (math.exp(5.0 * progress) - 1.0) / (math.exp(5.0) - 1.0)
-                current_velocity = ramp_start_velocity + (ramp_end_velocity - ramp_start_velocity) * curve
+                # Linear ramp
+                current_velocity = ramp_start_velocity + (ramp_end_velocity - ramp_start_velocity) * progress
                 ramped_velocity = min(current_velocity, target_velocity)
                 effective_velocity = ramped_velocity * direction
                 if progress >= 1.0:
