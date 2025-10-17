@@ -222,15 +222,18 @@ class BaseDCMotorsController(abc.ABC):
 
         now = time.time()
         step_interval = 1.0
-        ramp_duration = 0.2  # Total time to ramp from 0.5 to full (if reached)
-        start_velocity = 0.5  # Initial ramp starting value
 
-        # Add a start_time to the state for 0.2s ramp
+        # values for the custom ramp
+        ramp_start_velocity = 0.05  # start at 0.05
+        ramp_end_velocity = 1.0     # ramp up to 1.0
+        ramp_duration = 0.1         # duration for ramp (seconds)
+
         state = self._step_velocity_state.get(motor_id, {
             "last_call_time": 0,
             "last_sent_velocity": 0.0,
             "active": False,
             "start_time": now,  # first call will set this
+            "ramp_complete": False,
         })
 
         # If more than 1s elapsed since this motor was updated, reset
@@ -240,8 +243,8 @@ class BaseDCMotorsController(abc.ABC):
                 "Resetting step velocity to 0.0."
             )
             state["last_sent_velocity"] = 0.0
-            # Also reset the ramp start_time
             state["start_time"] = now
+            state["ramp_complete"] = False
 
         effective_velocity = velocity
         if normalize:
@@ -249,13 +252,16 @@ class BaseDCMotorsController(abc.ABC):
             target_velocity = abs(effective_velocity)
             elapsed_since_start = now - state.get("start_time", now)
 
-            if target_velocity >= 1.0 and elapsed_since_start < ramp_duration:
-                # Ramp from start_velocity (0.5) to 1.0 in ramp_duration (0.2s)
-                ramped_velocity = start_velocity + ((1.0 - start_velocity) * min(elapsed_since_start / ramp_duration, 1.0))
-                ramped_velocity = min(ramped_velocity, target_velocity)  # don't exceed target_velocity
+            # Custom: ramp from 0.05 to 1.0 in 0.1 seconds at the start
+            if not state.get("ramp_complete", False) and elapsed_since_start < ramp_duration:
+                # Calculate where we are in the ramp [0,1]
+                progress = min(elapsed_since_start / ramp_duration, 1.0)
+                current_velocity = ramp_start_velocity + (ramp_end_velocity - ramp_start_velocity) * progress
+                ramped_velocity = min(current_velocity, target_velocity)
                 effective_velocity = ramped_velocity * direction
+                if progress >= 1.0:
+                    state["ramp_complete"] = True
             else:
-                # Step logic for other cases or after ramp
                 before_step = state["last_sent_velocity"]
                 step_size = 0.5
                 new_velocity = before_step + step_size
