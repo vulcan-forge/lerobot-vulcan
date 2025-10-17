@@ -222,8 +222,8 @@ class BaseDCMotorsController(abc.ABC):
 
         now = time.time()
         step_interval = 1.0
-        ramp_duration = 0.2  # Total time to ramp from 0.05 to full
-        start_velocity = 0.05  # Initial ramp starting value
+        ramp_duration = 0.2  # Total time to ramp from 0.5 to full (if reached)
+        start_velocity = 0.5  # Initial ramp starting value
 
         # Add a start_time to the state for 0.2s ramp
         state = self._step_velocity_state.get(motor_id, {
@@ -250,17 +250,21 @@ class BaseDCMotorsController(abc.ABC):
             elapsed_since_start = now - state.get("start_time", now)
 
             if target_velocity >= 1.0 and elapsed_since_start < ramp_duration:
-                # Ramp from start_velocity (0.05) to 1.0 in ramp_duration (0.2s)
+                # Ramp from start_velocity (0.5) to 1.0 in ramp_duration (0.2s)
                 ramped_velocity = start_velocity + ((1.0 - start_velocity) * min(elapsed_since_start / ramp_duration, 1.0))
                 ramped_velocity = min(ramped_velocity, target_velocity)  # don't exceed target_velocity
                 effective_velocity = ramped_velocity * direction
             else:
                 # Step logic for other cases or after ramp
                 before_step = state["last_sent_velocity"]
-                step_size = 0.05
+                step_size = 0.5
                 new_velocity = before_step + step_size
 
                 if new_velocity > target_velocity:
+                    new_velocity = target_velocity
+
+                # If already at or above step_size, jump to target_velocity directly
+                if before_step >= step_size or (before_step + step_size) > target_velocity:
                     new_velocity = target_velocity
 
                 effective_velocity = new_velocity * direction
