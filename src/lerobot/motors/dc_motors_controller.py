@@ -224,25 +224,16 @@ class BaseDCMotorsController(abc.ABC):
         step_size = 0.45
         step_interval = 1.0
 
-        # Add a start_time to the state for 0.5s at 0.5 velocity
         state = self._step_velocity_state.get(motor_id, {
             "last_call_time": 0,
             "last_sent_velocity": 0.0,
             "active": False,
-            "start_time": now,  # first call will set this
+            "start_time": now,
         })
 
-        # If more than 1s elapsed since this motor was updated, reset
         if now - state["last_call_time"] > step_interval:
-            logger.debug(
-                f"Motor {motor} (id={motor_id}) last called {now - state['last_call_time']:.2f}s ago. "
-                "Resetting step velocity to 0.0."
-            )
             state["last_sent_velocity"] = 0.0
-            # Also reset the ramp start_time
             state["start_time"] = now
-
-        # Insert logic for first 0.5 seconds to use velocity = 0.5 (sign-respecting)
         effective_velocity = velocity
         if normalize:
             direction = 1.0 if effective_velocity >= 0 else -1.0
@@ -253,29 +244,17 @@ class BaseDCMotorsController(abc.ABC):
             if new_velocity > target_velocity:
                 new_velocity = target_velocity
 
-            # 0.5 second ramp logic
             elapsed_since_start = now - state.get("start_time", now)
-            if target_velocity >= 1.0:  # Only apply if target is 1.0
+            if target_velocity >= 1.0:
                 if elapsed_since_start < 0.5:
                     target_velocity = 0.5
                     if new_velocity > target_velocity:
                         new_velocity = target_velocity
 
             effective_velocity = new_velocity * direction
-
-            logger.debug(
-                f"[set_velocity] Motor {motor} (id={motor_id}) step increment: "
-                f"last={before_step:.4f}, step_size={step_size:.4f}, "
-                f"target={target_velocity:.4f}, new={new_velocity:.4f}, output_velocity={effective_velocity:.4f}, "
-                f"elapsed_since_start={elapsed_since_start:.4f}"
-            )
             state["last_sent_velocity"] = abs(effective_velocity)
             state["active"] = True
         else:
-            # If velocity set directly, update state to follow future ramps properly
-            logger.debug(
-                f"[set_velocity] Motor {motor} (id={motor_id}) direct set: velocity={velocity:.4f}"
-            )
             state["last_sent_velocity"] = abs(velocity)
             state["active"] = True
 
@@ -283,7 +262,6 @@ class BaseDCMotorsController(abc.ABC):
         self._step_velocity_state[motor_id] = state
 
         self.protocol_handler.set_velocity(motor_id, effective_velocity if normalize else velocity)
-        logger.debug(f"Set motor {motor} velocity to {effective_velocity if normalize else velocity}")
 
     def set_velocities(self, motors: dict[NameOrID, float], normalize: bool = True) -> None:
         if not self._is_connected:
