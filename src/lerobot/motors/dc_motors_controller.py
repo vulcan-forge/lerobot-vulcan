@@ -215,7 +215,7 @@ class BaseDCMotorsController(abc.ABC):
             # Clamp to [-1, 1]
             velocity = max(-1.0, min(1.0, velocity))
 
-        import time
+        import time, math
 
         if not hasattr(self, "_step_velocity_state"):
             self._step_velocity_state = {}
@@ -223,18 +223,18 @@ class BaseDCMotorsController(abc.ABC):
         now = time.time()
         step_interval = 1.0
 
-        # Ramping parameters
-        ramp_start_velocity = 0.05  # start of smooth ramp
-        ramp_duration = 2.0         # total ramp duration (seconds)
-        pre_kick_duration = 0.05    # first 50ms for quick kick
-        pre_kick_velocity = 0.3     # quick kick magnitude
+        # --- Ramping parameters ---
+        pre_kick_velocity = 0.4       # 40% duty initial pulse
+        pre_kick_duration = 0.15      # 150 ms (long enough to start motion)
+        ramp_start_velocity = 0.15    # after motion starts, begin here
+        ramp_end_velocity = 1.0       # target normalized speed
+        ramp_duration = 0.7           # ramp time (sec) after kick
 
-        # Add a start_time to the state for 0.5s at 0.5 velocity
         state = self._step_velocity_state.get(motor_id, {
             "last_call_time": 0,
             "last_sent_velocity": 0.0,
-            "active": False,
-            "start_time": now,  # first call will set this
+            "start_time": now,
+            "ramp_complete": False,
         })
 
         # If more than 1s elapsed since this motor was updated, reset
@@ -246,41 +246,38 @@ class BaseDCMotorsController(abc.ABC):
             state["last_sent_velocity"] = 0.0
             # Also reset the ramp start_time
             state["start_time"] = now
+            state["ramp_complete"] = False
 
         effective_velocity = velocity
         if normalize:
             direction = 1.0 if effective_velocity >= 0 else -1.0
             target_velocity = abs(effective_velocity)
-            elapsed_since_start = now - state.get("start_time", now)
+            elapsed = now - state.get("start_time", now)
 
-            # 50ms pre-kick to overcome static friction, then smooth linear ramp
-            progress = 0.0
-            if elapsed_since_start < pre_kick_duration:
+            # --- 1. Pre-kick phase: brief 40% pulse ---
+            if elapsed < pre_kick_duration:
                 effective_velocity = pre_kick_velocity * direction
+
+            # --- 2. Exponential ramp phase ---
             else:
-                # progress across the remainder of the ramp window
-                remaining_duration = max(ramp_duration - pre_kick_duration, 1e-6)
-                progress = min((elapsed_since_start - pre_kick_duration) / remaining_duration, 1.0)
-                ramp_end_velocity = target_velocity
-                current_velocity = ramp_start_velocity + (ramp_end_velocity - ramp_start_velocity) * progress
-                # Do not exceed target velocity
-                current_velocity = min(current_velocity, ramp_end_velocity)
+                progress = min((elapsed - pre_kick_duration) / max(ramp_duration, 1e-6), 1.0)
+                # Exponential ease-out ramp curve
+                curve = (math.exp(4 * progress) - 1) / (math.exp(4) - 1)
+                current_velocity = ramp_start_velocity + (ramp_end_velocity - ramp_start_velocity) * curve
+                current_velocity = min(current_velocity, target_velocity)
                 effective_velocity = current_velocity * direction
 
+                if progress >= 1.0:
+                    state["ramp_complete"] = True
+
             logger.debug(
-                f"[set_velocity] Motor {motor} (id={motor_id}) pre_kick+ramp: "
-                f"elapsed_since_start={elapsed_since_start:.4f}, progress={progress:.4f}, "
-                f"target={target_velocity:.4f}, output_velocity={effective_velocity:.4f}"
+                f"[set_velocity] Motor {motor} (id={motor_id}) "
+                f"elapsed={elapsed:.3f}s, output={effective_velocity:.3f}, "
+                f"phase={'kick' if elapsed < pre_kick_duration else 'ramp'}"
             )
             state["last_sent_velocity"] = abs(effective_velocity)
-            state["active"] = True
         else:
-            # If velocity set directly, update state to follow future ramps properly
-            logger.debug(
-                f"[set_velocity] Motor {motor} (id={motor_id}) direct set: velocity={velocity:.4f}"
-            )
             state["last_sent_velocity"] = abs(velocity)
-            state["active"] = True
 
         state["last_call_time"] = now
         self._step_velocity_state[motor_id] = state
