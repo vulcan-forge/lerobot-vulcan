@@ -270,8 +270,32 @@ class SetupScript:
             self.print_error(f"Failed to setup Python environment: {e}")
             return False
 
+    def cleanup_evdev_conflict(self) -> bool:
+        """Clean up evdev package conflicts"""
+        self.print_status("Cleaning up evdev package conflicts...")
+
+        try:
+            # Try to uninstall evdev via pip first
+            subprocess.run([sys.executable, "-m", "pip", "uninstall", "evdev", "-y"],
+                        capture_output=True, text=True)
+
+            # Also try with uv
+            if self.check_command_exists("uv"):
+                subprocess.run(["uv", "pip", "uninstall", "evdev"],
+                            capture_output=True, text=True)
+
+            self.print_success("evdev cleanup completed")
+            return True
+
+        except Exception as e:
+            self.print_warning(f"evdev cleanup had issues: {e}")
+            return True  # Continue anyway
+
     def compile_profobufs(self):
         """Compile Sourccey protobuf"""
+        # Clean up evdev conflicts first
+        self.cleanup_evdev_conflict()
+
         try:
             # Use uv to run the Python command if available, otherwise fall back to direct Python
             if self.check_command_exists("uv"):
