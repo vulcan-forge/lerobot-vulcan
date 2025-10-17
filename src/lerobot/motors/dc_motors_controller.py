@@ -227,7 +227,7 @@ class BaseDCMotorsController(abc.ABC):
         # values for the custom ramp
         ramp_start_velocity = 0.05  # start at 0.05
         ramp_end_velocity = 1.0     # ramp up to 1.0
-        ramp_duration = 0.1         # duration for ramp (seconds)
+        ramp_duration = 1.5         # duration for ramp (seconds)
 
         state = self._step_velocity_state.get(motor_id, {
             "last_call_time": 0,
@@ -253,7 +253,7 @@ class BaseDCMotorsController(abc.ABC):
             target_velocity = abs(effective_velocity)
             elapsed_since_start = now - state.get("start_time", now)
 
-            # Custom: ramp from 0.05 to 1.0 in 0.1 seconds at the start
+            # Custom: ramp from 0.05 to 1.0 in 1.5 seconds at the start
             if not state.get("ramp_complete", False) and elapsed_since_start < ramp_duration:
                 # Calculate where we are in the ramp [0,1]
                 progress = min(elapsed_since_start / ramp_duration, 1.0)
