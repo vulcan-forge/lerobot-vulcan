@@ -208,8 +208,12 @@ class BaseDCMotorsController(abc.ABC):
         if not self._is_connected:
             logger.info(f"{self} is not connected.")
             return
+        
+        print(f"Setting velocity for motor {motor} to {velocity}")
 
         motor_id = self._get_motor_id(motor)
+
+        print(f"Motor ID: {motor_id}")
 
         if normalize:
             # Clamp to [-1, 1]
