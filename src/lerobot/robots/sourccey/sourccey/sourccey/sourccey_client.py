@@ -342,9 +342,9 @@ class SourcceyClient(Robot):
         theta_cmd = 0.0
 
         if self.teleop_keys["forward"] in pressed_keys:
-            x_cmd += x_speed
-        if self.teleop_keys["backward"] in pressed_keys:
             x_cmd -= x_speed
+        if self.teleop_keys["backward"] in pressed_keys:
+            x_cmd += x_speed
         if self.teleop_keys["left"] in pressed_keys:
             y_cmd += y_speed
         if self.teleop_keys["right"] in pressed_keys:
