@@ -261,7 +261,13 @@ class BaseDCMotorsController(abc.ABC):
         state["last_call_time"] = now
         self._step_velocity_state[motor_id] = state
 
-        self.protocol_handler.set_velocity(motor_id, effective_velocity if normalize else velocity)
+        # Make the final velocity half (0.5x)
+        if normalize:
+            send_velocity = effective_velocity * 0.5
+        else:
+            send_velocity = velocity * 0.5
+
+        self.protocol_handler.set_velocity(motor_id, send_velocity)
 
     def set_velocities(self, motors: dict[NameOrID, float], normalize: bool = True) -> None:
         if not self._is_connected:
