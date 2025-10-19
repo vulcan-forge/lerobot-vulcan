@@ -265,11 +265,15 @@ class BaseDCMotorsController(abc.ABC):
         state["last_call_time"] = now
         self._step_velocity_state[motor_id] = state
 
-        # Make the final velocity half (0.5x)
+        # Determine velocity multiplier based on motor name
+        motor_name = self._id_to_name_dict.get(motor_id, "")
+        velocity_multiplier = 1.0 if motor_name == "linear_actuator" else 0.5
+
+        # Apply velocity multiplier
         if normalize:
-            send_velocity = effective_velocity * 0.5
+            send_velocity = effective_velocity * velocity_multiplier
         else:
-            send_velocity = velocity * 0.5
+            send_velocity = velocity * velocity_multiplier
 
         self.protocol_handler.set_velocity(motor_id, send_velocity)
 
