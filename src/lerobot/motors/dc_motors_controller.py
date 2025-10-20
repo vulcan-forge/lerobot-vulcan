@@ -300,14 +300,14 @@ class BaseDCMotorsController(abc.ABC):
         
 
         """
-        Set motor velocities instantly without ramp-up.
+        Set motor velocities.
 
         Args:
             motors: Dictionary of motor names or IDs and target velocities
             normalize: Whether to normalize the velocity
         """
         for motor, velocity in motors.items():
-            self.set_velocity_instant(motor, velocity, normalize)
+            self.set_velocity(motor, velocity, normalize)
 
     def update_velocity(self, motor: NameOrID | None = None, max_step: float = 1.0) -> None:
         """Update motor velocity."""
