@@ -236,6 +236,13 @@ class BaseDCMotorsController(abc.ABC):
             # Clamp to [-1, 1]
             velocity = max(-1.0, min(1.0, velocity))
 
+        # ---- Multiply the target velocity by 3 ----
+        velocity = velocity * 3
+
+        # If normalize was True, we may now be outside [-1, 1], clamp again:
+        if normalize:
+            velocity = max(-1.0, min(1.0, velocity))
+
         import time
 
         if not hasattr(self, "_step_velocity_state"):
