@@ -219,16 +219,13 @@ class BaseDCMotorsController(abc.ABC):
             self.protocol_handler.set_velocity(motor_id, velocity)
             logger.debug(f"Set motor {motor} velocity to {velocity}")
         else:
+            # Determine max velocity based on motor type
+            motor_name = self._id_to_name_dict.get(motor_id, "")
+            max_velocity = 1.0 if motor_name == "linear_actuator" else 0.9
+            
             if normalize:
-                # Clamp to [-1, 1]
-                velocity = max(-1.8, min(1.8, velocity))
-
-            # ---- Multiply the target velocity by 3 ----
-            velocity = velocity * 1.8
-
-            # If normalize was True, we may now be outside [-1, 1], clamp again:
-            if normalize:
-                velocity = max(-1.8, min(1.8, velocity))
+                # Clamp to motor-specific max velocity
+                velocity = max(-max_velocity, min(max_velocity, velocity))
 
             import time
 
@@ -276,15 +273,11 @@ class BaseDCMotorsController(abc.ABC):
             state["last_call_time"] = now
             self._step_velocity_state[motor_id] = state
 
-            # Determine velocity multiplier based on motor name
-            motor_name = self._id_to_name_dict.get(motor_id, "")
-            velocity_multiplier = 1.0 if motor_name == "linear_actuator" else 0.5
-
-            # Apply velocity multiplier
+            # Send velocity directly (already normalized to correct max)
             if normalize:
-                send_velocity = effective_velocity * velocity_multiplier
+                send_velocity = effective_velocity
             else:
-                send_velocity = velocity * velocity_multiplier
+                send_velocity = velocity
 
             self.protocol_handler.set_velocity(motor_id, send_velocity)
 
