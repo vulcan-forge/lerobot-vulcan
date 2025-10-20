@@ -196,9 +196,30 @@ class BaseDCMotorsController(abc.ABC):
 
         return {motor: self.get_velocity(motor) for motor in self.motors.keys()}
 
+    def set_velocity_instant(self, motor: NameOrID, velocity: float, normalize: bool = True) -> None:
+        """
+        Set motor velocity instantly without ramp-up.
+
+        Args:
+            motor: Motor name or ID
+            velocity: Target velocity (-1 to 1 if normalized, otherwise in RPM)
+            normalize: Whether to normalize the velocity
+        """
+        if not self._is_connected:
+            logger.info(f"{self} is not connected.")
+            return
+
+        motor_id = self._get_motor_id(motor)
+
+        if normalize:
+            # Clamp to [-1, 1]
+            velocity = max(-1.0, min(1.0, velocity))
+
+        self.protocol_handler.set_velocity(motor_id, velocity)
+
     def set_velocity(self, motor: NameOrID, velocity: float, normalize: bool = True) -> None:
         """
-        Set motor velocity.
+        Set motor velocity with ramp-up.
 
         Args:
             motor: Motor name or ID
@@ -279,14 +300,14 @@ class BaseDCMotorsController(abc.ABC):
         
 
         """
-        Set motor velocities.
+        Set motor velocities instantly without ramp-up.
 
         Args:
             motors: Dictionary of motor names or IDs and target velocities
             normalize: Whether to normalize the velocity
         """
         for motor, velocity in motors.items():
-            self.set_velocity(motor, velocity, normalize)
+            self.set_velocity_instant(motor, velocity, normalize)
 
     def update_velocity(self, motor: NameOrID | None = None, max_step: float = 1.0) -> None:
         """Update motor velocity."""
