@@ -213,14 +213,14 @@ class BaseDCMotorsController(abc.ABC):
 
         if normalize:
             # Clamp to [-1, 1]
-            velocity = max(-1.8, min(1.8, velocity))
+            velocity = max(-1.4, min(1.4, velocity))
 
         # ---- Multiply the target velocity by 3 ----
-        velocity = velocity * 1.8
+        velocity = velocity * 1.4
 
         # If normalize was True, we may now be outside [-1, 1], clamp again:
         if normalize:
-            velocity = max(-1.8, min(1.8, velocity))
+            velocity = max(-1.4, min(1.4, velocity))
 
         import time
 
