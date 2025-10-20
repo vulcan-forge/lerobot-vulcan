@@ -52,7 +52,7 @@ def sourccey_dc_motors_config() -> dict:
     return {
         "in1_pins": [17,23,24,26,5], # Physical pins: [11, 16, 18, 37, 29]
         "in2_pins": [27,22,25,16,6], # Physical pins: [13, 15, 22, 36, 31]
-        "pwm_frequency": 1000,  # 5 kHz - balance between performance and noise reduction
+        "pwm_frequency": 8000,  # 5 kHz - balance between performance and noise reduction
     }
 
 @RobotConfig.register_subclass("sourccey")
