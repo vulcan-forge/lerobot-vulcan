@@ -221,7 +221,7 @@ class BaseDCMotorsController(abc.ABC):
         else:
             # Determine max velocity based on motor type
             motor_name = self._id_to_name_dict.get(motor_id, "")
-            max_velocity = 1.0 if motor_name == "linear_actuator" else 0.9
+            max_velocity = 1.0 if motor_name == "linear_actuator" else 1.0
             
             if normalize:
                 # Clamp to motor-specific max velocity
