@@ -20,16 +20,16 @@ PI5_ALL_GPIO_PINS = [
     22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41
 ]
 
-# Pi 5 Optimal Settings for DRV8871DDAR
+# Pi 5 Optimal Settings for DRV8874PWPR
 PI5_OPTIMAL_FREQUENCY = 25000  # 25kHz - more compatible with gpiozero
 PI5_MAX_FREQUENCY = 25000      # 25kHz - Pi 5 can handle higher frequencies
 PI5_RESOLUTION = 12            # 12-bit resolution
 
 class PWMProtocolHandler(ProtocolHandler):
     """
-    PWM protocol handler optimized for DRV8871DDAR H-bridge motor drivers.
+    PWM protocol handler optimized for DRV8874PWPR H-bridge motor drivers.
 
-    DRV8871DDAR Features:
+    DRV8874PWPR Features:
     - IN1: PWM speed control (hardware PWM recommended)
     - IN2: Direction control (regular GPIO)
     - Built-in current limiting and thermal protection
@@ -38,7 +38,7 @@ class PWMProtocolHandler(ProtocolHandler):
     Configuration:
     - in1_pins: IN1 pins (PWM speed control)
     - in2_pins: IN2 pins (direction control)
-    - pwm_frequency: 25000Hz (optimal for DRV8871DDAR)
+    - pwm_frequency: 25000Hz (optimal for DRV8874PWPR)
     """
 
     def __init__(self, config: Dict, motors: Dict[str, DCMotor]):
@@ -96,14 +96,14 @@ class PWMProtocolHandler(ProtocolHandler):
 
         # Validate motor count
         motor_count = len(self.in1_pins)
-        logger.info(f"Configuring {motor_count} DRV8871DDAR motors with gpiozero")
+        logger.info(f"Configuring {motor_count} DRV8874PWPR motors with gpiozero")
 
     def _import_gpiozero(self):
         """Import gpiozero."""
         try:
             import gpiozero
             self.gpiozero = gpiozero
-            logger.info("Using gpiozero for DRV8871DDAR motor control")
+            logger.info("Using gpiozero for DRV8874PWPR motor control")
 
         except ImportError:
             raise ImportError(
@@ -130,7 +130,7 @@ class PWMProtocolHandler(ProtocolHandler):
             logger.warning(f"Error closing {label}: {e}")
 
     def connect(self) -> None:
-        """Initialize gpiozero for DRV8871DDAR motor drivers with symmetric PWM on IN1 and IN2."""
+        """Initialize gpiozero for DRV8874PWPR motor drivers with symmetric PWM on IN1 and IN2."""
         try:
             for motor_id, (in1_pin, in2_pin) in enumerate(zip(self.in1_pins, self.in2_pins), start=1):
                 self.motor_states[motor_id] = {
@@ -153,7 +153,7 @@ class PWMProtocolHandler(ProtocolHandler):
                 logger.debug(f"Motor {motor_id} IN2 setup on pin {in2_pin}")
 
             total_pins = len(self.in1_pins) + len(self.in2_pins)
-            logger.info(f"DRV8871DDAR setup complete: {len(self.in1_pins)} motors, {total_pins} GPIOs used")
+            logger.info(f"DRV8874PWPR setup complete: {len(self.in1_pins)} motors, {total_pins} GPIOs used")
             logger.info(f"PWM frequency: {self.pwm_frequency} Hz")
         except Exception as e:
             logger.error(f"Motor driver setup failed: {e}")
@@ -167,7 +167,7 @@ class PWMProtocolHandler(ProtocolHandler):
         for motor_id, channel in self.in2_channels.items():
             self._safe_close(channel, f"IN2 (motor {motor_id})")
 
-        logger.info("DRV8871DDAR motor driver disconnected")
+        logger.info("DRV8874PWPR motor driver disconnected")
 
     # Position Functions
     def get_position(self, motor_id: int) -> Optional[float]:
@@ -305,7 +305,7 @@ class PWMProtocolHandler(ProtocolHandler):
         self.motor_states[motor_id]["enabled"] = False
         logger.debug(f"Motor {motor_id} disabled")
 
-    # Helper methods for DRV8871DDAR-specific functionality
+    # Helper methods for DRV8874PWPR-specific functionality
     def _get_direction(self, motor_id: int) -> bool:
         """Get motor direction."""
         if motor_id not in self.in2_channels:
@@ -314,7 +314,7 @@ class PWMProtocolHandler(ProtocolHandler):
 
     def _set_direction(self, motor_id: int, forward: bool) -> None:
         """
-        Set motor direction for DRV8871DDAR.
+        Set motor direction for DRV8874PWPR.
         This method updates the direction state and applies appropriate PWM.
         """
         if motor_id not in self.in2_channels:
@@ -340,10 +340,10 @@ class PWMProtocolHandler(ProtocolHandler):
         except Exception as e:
             logger.warning(f"Error setting direction for motor {motor_id}: {e}")
 
-    # DRV8871DDAR-specific convenience methods
+    # DRV8874PWPR-specific convenience methods
     def activate_brake(self, motor_id: int) -> None:
         """
-        Activate motor brake for DRV8871DDAR.
+        Activate motor brake for DRV8874PWPR.
         Brake mode: IN1 = HIGH, IN2 = HIGH
         """
         in1 = self.in1_channels.get(motor_id)
@@ -363,7 +363,7 @@ class PWMProtocolHandler(ProtocolHandler):
 
     def release_brake(self, motor_id: int) -> None:
         """
-        Release motor brake for DRV8871DDAR.
+        Release motor brake for DRV8874PWPR.
         Coast mode: IN1 = LOW, IN2 = LOW
         """
         in1 = self.in1_channels.get(motor_id)
@@ -406,7 +406,7 @@ class PWMProtocolHandler(ProtocolHandler):
         return pwm
 
 class PWMDCMotorsController(BaseDCMotorsController):
-    """PWM-based DC motor controller optimized for DRV8871DDAR H-bridge drivers."""
+    """PWM-based DC motor controller optimized for DRV8874PWPR H-bridge drivers."""
 
     def __init__(self, config: dict | None = None, motors: dict[str, DCMotor] | None = None, protocol: str = "pwm"):
         super().__init__(config, motors, protocol)

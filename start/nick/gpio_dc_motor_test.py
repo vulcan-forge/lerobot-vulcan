@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test single DRV8871DDAR motor - 4 functions, 3 seconds each.
+Test single DRV8874PWPR motor - 4 functions, 3 seconds each.
 """
 
 import time
@@ -37,7 +37,7 @@ def test_four_functions():
             config=motor_config,
         )
 
-        print("=== DRV8871DDAR Single Motor Test ===")
+        print("=== DRV8874PWPR Single Motor Test ===")
         print("Motor: Front Left Wheel")
         print(f"Pins: IN1=GPIO {motor_config['in1_pins'][0]} (PWM), IN2=GPIO {motor_config['in2_pins'][0]} (Direction)")
         print()
