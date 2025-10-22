@@ -84,6 +84,7 @@ class MotorConfigConfig:
 
 def configure_robot_motors(robot: Robot, baud_rate: int) -> None:
     """Configure motor bus baud rate for a robot."""
+    print(f"Configuring robot motor bus baud rate to {baud_rate}")
     logging.info(f"Configuring robot motor bus baud rate to {baud_rate}")
 
     # Check if robot has motor bus
