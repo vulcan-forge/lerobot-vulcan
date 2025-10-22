@@ -322,7 +322,6 @@ class Sourccey(Robot):
             "z.vel": self.clean_value(linear_actuator_normalized["linear_actuator"]),
         }
 
-
     ##################################################################################
     # Motor Configuration Functions
     ##################################################################################
