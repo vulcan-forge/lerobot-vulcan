@@ -25,16 +25,16 @@ from lerobot.utils.constants import HF_LEROBOT_CONFIGURATION
 def sourccey_cameras_config() -> dict[str, CameraConfig]:
     config = {
          "front_left": OpenCVCameraConfig(
-             index_or_path="/dev/cameraFrontLeft", fps=30, width=640, height=360
+             index_or_path="/dev/cameraFrontLeft", fps=30, width=320, height=240
          ),
          "front_right": OpenCVCameraConfig(
-             index_or_path="/dev/cameraFrontRight", fps=30, width=640, height=360
+             index_or_path="/dev/cameraFrontRight", fps=30, width=320, height=240
          ),
          "wrist_left": OpenCVCameraConfig(
-             index_or_path="/dev/cameraWristLeft", fps=30, width=640, height=360
+             index_or_path="/dev/cameraWristLeft", fps=30, width=320, height=240
          ),
          "wrist_right": OpenCVCameraConfig(
-             index_or_path="/dev/cameraWristRight", fps=30, width=640, height=360
+             index_or_path="/dev/cameraWristRight", fps=30, width=320, height=240
          ),
     }
     return config
@@ -52,7 +52,7 @@ def sourccey_dc_motors_config() -> dict:
     return {
         "in1_pins": [17,23,24,26,5], # Physical pins: [11, 16, 18, 37, 29]
         "in2_pins": [27,22,25,16,6], # Physical pins: [13, 15, 22, 36, 31]
-        "pwm_frequency": 1000,
+        "pwm_frequency": 10000,  # 5 kHz - balance between performance and noise reduction
     }
 
 @RobotConfig.register_subclass("sourccey")

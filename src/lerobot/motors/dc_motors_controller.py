@@ -196,9 +196,9 @@ class BaseDCMotorsController(abc.ABC):
 
         return {motor: self.get_velocity(motor) for motor in self.motors.keys()}
 
-    def set_velocity(self, motor: NameOrID, velocity: float, normalize: bool = True) -> None:
+    def set_velocity(self, motor: NameOrID, velocity: float, normalize: bool = True, instant: bool = False) -> None:
         """
-        Set motor velocity.
+        Set motor velocity with ramp-up.
 
         Args:
             motor: Motor name or ID
@@ -211,17 +211,80 @@ class BaseDCMotorsController(abc.ABC):
 
         motor_id = self._get_motor_id(motor)
 
-        if normalize:
-            # Clamp to [-1, 1]
-            velocity = max(-1.0, min(1.0, velocity))
+        if instant:
+            if normalize:
+                # Clamp to [-1, 1]
+                velocity = max(-1.0, min(1.0, velocity))
 
-        self.protocol_handler.set_velocity(motor_id, velocity)
-        logger.debug(f"Set motor {motor} velocity to {velocity}")
+            self.protocol_handler.set_velocity(motor_id, velocity)
+            logger.debug(f"Set motor {motor} velocity to {velocity}")
+        else:
+            # Determine max velocity based on motor type
+            motor_name = self._id_to_name_dict.get(motor_id, "")
+            max_velocity = 1.0 if motor_name == "linear_actuator" else 1.0
+            
+            if normalize:
+                # Clamp to motor-specific max velocity
+                velocity = max(-max_velocity, min(max_velocity, velocity))
+
+            import time
+
+            if not hasattr(self, "_step_velocity_state"):
+                self._step_velocity_state = {}
+
+            now = time.time()
+            step_size = 0.45
+            step_interval = 1.0
+
+            state = self._step_velocity_state.get(motor_id, {
+                "last_call_time": 0,
+                "last_sent_velocity": 0.0,
+                "active": False,
+                "start_time": now,
+            })
+
+            if now - state["last_call_time"] > step_interval:
+                state["last_sent_velocity"] = 0.0
+                state["start_time"] = now
+            effective_velocity = velocity
+            if normalize:
+                direction = 1.0 if effective_velocity >= 0 else -1.0
+                target_velocity = abs(effective_velocity)
+                before_step = state["last_sent_velocity"]
+                new_velocity = before_step + step_size
+                # Respect the sign of the target
+                if new_velocity > target_velocity:
+                    new_velocity = target_velocity
+
+                elapsed_since_start = now - state.get("start_time", now)
+                if target_velocity >= 1.0:
+                    if elapsed_since_start < 0.5:
+                        target_velocity = 0.5
+                        if new_velocity > target_velocity:
+                            new_velocity = target_velocity
+
+                effective_velocity = new_velocity * direction
+                state["last_sent_velocity"] = abs(effective_velocity)
+                state["active"] = True
+            else:
+                state["last_sent_velocity"] = abs(velocity)
+                state["active"] = True
+
+            state["last_call_time"] = now
+            self._step_velocity_state[motor_id] = state
+
+            # Send velocity directly (already normalized to correct max)
+            if normalize:
+                send_velocity = effective_velocity
+            else:
+                send_velocity = velocity
+
+            self.protocol_handler.set_velocity(motor_id, send_velocity)
 
     def set_velocities(self, motors: dict[NameOrID, float], normalize: bool = True) -> None:
         if not self._is_connected:
             return
-
+        
         """
         Set motor velocities.
 

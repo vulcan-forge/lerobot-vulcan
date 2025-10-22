@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test DRV8871DDAR motors with custom GPIO pins - 4 functions, 3 seconds each.
+Test DRV8874PWPR motors with custom GPIO pins - 4 functions, 3 seconds each.
 Generic function to test any motor by passing GPIO pins.
 """
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def test_motor(pwm_pin, direction_pin, motor_name="Motor"):
     """
-    Test a single DRV8871DDAR motor with specified GPIO pins - 1 cycle only.
+    Test a single DRV8874PWPR motor with specified GPIO pins - 1 cycle only.
 
     Args:
         pwm_pin (int): GPIO pin for PWM (IN1)
@@ -45,7 +45,7 @@ def test_motor(pwm_pin, direction_pin, motor_name="Motor"):
             config=motor_config,
         )
 
-        print(f"=== DRV8871DDAR {motor_name} Test ===")
+        print(f"=== DRV8874PWPR {motor_name} Test ===")
         print(f"Motor: {motor_name}")
         print(f"Pins: IN1=GPIO {pwm_pin} (PWM), IN2=GPIO {direction_pin} (Direction)")
         print()

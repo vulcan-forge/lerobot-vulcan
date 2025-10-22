@@ -25,8 +25,8 @@ class DatasetEvaluateConfig:
 @dataclass
 class SourcceyEvaluateConfig:
     id: str = "sourccey"
-    remote_ip: str = "192.168.1.237"
-    model_path: str = "sourccey-001/act_model_1/checkpoints/000400/pretrained_model"
+    remote_ip: str = "192.168.1.244"
+    model_path: str = "sourccey-002/act__sourccey-002__towel-fold-b-colin-combined/checkpoints/200000/pretrained_model"
     dataset: DatasetEvaluateConfig = DatasetEvaluateConfig()
 
 @parser.wrap()
