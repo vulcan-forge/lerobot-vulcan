@@ -81,50 +81,6 @@ class MotorConfigConfig:
 
         self.device = self.robot if self.robot else self.teleop
 
-
-def configure_robot_motors(robot: Robot, baud_rate: int) -> None:
-    """Configure motor bus baud rate for a robot."""
-    print(f"Configuring robot motor bus baud rate to {baud_rate}")
-    logging.info(f"Configuring robot motor bus baud rate to {baud_rate}")
-
-    # Check if robot has motor bus
-    if hasattr(robot, 'bus') and hasattr(robot.bus, 'set_baudrate'):
-        current_baudrate = robot.bus.get_baudrate()
-        logging.info(f"Current baud rate: {current_baudrate}")
-
-        robot.bus.set_baudrate(baud_rate)
-        new_baudrate = robot.bus.get_baudrate()
-        logging.info(f"New baud rate: {new_baudrate}")
-
-        if new_baudrate == baud_rate:
-            logging.info("✅ Successfully configured robot motor bus baud rate")
-        else:
-            logging.error(f"❌ Failed to set baud rate. Expected {baud_rate}, got {new_baudrate}")
-    else:
-        logging.warning("Robot does not have a motor bus or set_baudrate method")
-
-
-def configure_teleoperator_motors(teleop: Teleoperator, baud_rate: int) -> None:
-    """Configure motor bus baud rate for a teleoperator."""
-    logging.info(f"Configuring teleoperator motor bus baud rate to {baud_rate}")
-
-    # Check if teleoperator has motor bus
-    if hasattr(teleop, 'bus') and hasattr(teleop.bus, 'set_baudrate'):
-        current_baudrate = teleop.bus.get_baudrate()
-        logging.info(f"Current baud rate: {current_baudrate}")
-
-        teleop.bus.set_baudrate(baud_rate)
-        new_baudrate = teleop.bus.get_baudrate()
-        logging.info(f"New baud rate: {new_baudrate}")
-
-        if new_baudrate == baud_rate:
-            logging.info("✅ Successfully configured teleoperator motor bus baud rate")
-        else:
-            logging.error(f"❌ Failed to set baud rate. Expected {baud_rate}, got {new_baudrate}")
-    else:
-        logging.warning("Teleoperator does not have a motor bus or set_baudrate method")
-
-
 @draccus.wrap()
 def motor_config(cfg: MotorConfigConfig):
     """Configure motor bus baud rate for a robot or teleoperator."""
@@ -135,10 +91,8 @@ def motor_config(cfg: MotorConfigConfig):
     # Create device instance
     if isinstance(cfg.device, RobotConfig):
         device = make_robot_from_config(cfg.device)
-        configure_robot_motors(device, cfg.baud_rate)
     elif isinstance(cfg.device, TeleoperatorConfig):
         device = make_teleoperator_from_config(cfg.device)
-        configure_teleoperator_motors(device, cfg.baud_rate)
     else:
         raise ValueError(f"Unsupported device type: {type(cfg.device)}")
 
@@ -146,7 +100,13 @@ def motor_config(cfg: MotorConfigConfig):
         # Connect without calibration (we just need to configure baud rate)
         device.connect(calibrate=False)
 
-        # Configuration is done in the specific functions above
+        # Check if device supports baud rate configuration
+        if hasattr(device, 'set_baud_rate'):
+            logging.info(f"Setting baud rate to {cfg.baud_rate}")
+            device.set_baud_rate(cfg.baud_rate)
+            logging.info("✅ Successfully configured motor bus baud rate")
+        else:
+            logging.warning("Device does not support baud rate configuration")
 
     except Exception as e:
         logging.error(f"Motor configuration failed: {e}")
