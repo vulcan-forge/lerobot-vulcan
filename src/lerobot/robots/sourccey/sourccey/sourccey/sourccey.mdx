@@ -18,6 +18,13 @@ uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
     --full_reset=True
 ```
 
+```bash
+uv run src/lerobot/scripts/sourccey/motor_config.py \
+    --robot.type=sourccey \
+    --robot.id=sourccey \
+    --baud_rate=1000000
+```
+
 # For Teleoperators
 
 ```bash
@@ -33,6 +40,15 @@ python -m lerobot.calibrate \
     --teleop.type=sourccey_leader \
     --teleop.port=COM28 \
     --teleop.id=sourccey_leader
+```
+
+```bash
+uv run src/lerobot/scripts/sourccey/motor_config.py \
+    --teleop.type=bi_sourccey_leader \
+    --teleop.id=bi_sourccey_leader \
+    --teleop.left_arm_port="COM28" \
+    --teleop.right_arm_port="COM4"
+    --baud_rate=1000000
 ```
 
 To teleoperate, SSH into your Raspberry Pi, navigate to the lerobot repo and run this command:
@@ -84,7 +100,9 @@ python src/lerobot/control/sourccey/sourccey/replay.py
 python src/lerobot/control/sourccey/sourccey/evaluate.py
 ```
 
---- ACT Training
+---
+
+ACT Training
 
 ```bash
 python src/lerobot/scripts/train.py \
@@ -99,17 +117,15 @@ python src/lerobot/scripts/train.py \
 ```
 
 python src/lerobot/scripts/lerobot_train.py \
-  --dataset.repo_id=sourccey-003/sourccey-003__tape-cup__myles__combined  \
-  --policy.type=act \
-  --output_dir=outputs/train/act__sourccey-003__tape-cup__myles__combined \
-  --job_name=act__sourccey-003__tape-cup__myles__combined  \
-  --policy.device=cuda \
-  --wandb.enable=false \
-  --policy.push_to_hub=false \
-  --steps=200000 \
-  --save_freq=20000
-
-
+ --dataset.repo_id=sourccey-003/sourccey-003**tape-cup**myles**combined \
+ --policy.type=act \
+ --output_dir=outputs/train/act**sourccey-003**tape-cup**myles**combined \
+ --job_name=act**sourccey-003**tape-cup**myles\_\_combined \
+ --policy.device=cuda \
+ --wandb.enable=false \
+ --policy.push_to_hub=false \
+ --steps=200000 \
+ --save_freq=20000
 
 ```bash
 torchrun --nproc_per_node=2 src/lerobot/scripts/lerobot_train.py \
@@ -126,7 +142,6 @@ torchrun --nproc_per_node=2 src/lerobot/scripts/lerobot_train.py \
   --distributed_training=true \
   --num_gpus=2
 ```
-
 
 ---- Train on Pretrained SmolVLA model
 

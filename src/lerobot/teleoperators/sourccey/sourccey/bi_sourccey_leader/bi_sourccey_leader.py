@@ -138,3 +138,10 @@ class BiSourcceyLeader(Teleoperator):
     def disconnect(self) -> None:
         self.left_arm.disconnect()
         self.right_arm.disconnect()
+
+    ##################################################################################
+    # Motor Configuration Functions
+    ##################################################################################
+    def set_baud_rate(self, baud_rate: int) -> None:
+        self.left_arm.bus.set_baudrate(baud_rate)
+        self.right_arm.bus.set_baudrate(baud_rate)
