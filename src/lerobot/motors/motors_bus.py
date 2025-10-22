@@ -991,7 +991,7 @@ class MotorsBus(abc.ABC):
         motor: str,
         *,
         normalize: bool = True,
-        num_retry: int = 3,
+        num_retry: int = 5,
     ) -> Value:
         """Read a register from a motor.
 
@@ -1000,7 +1000,7 @@ class MotorsBus(abc.ABC):
             motor (str): Motor name.
             normalize (bool, optional): When `True` (default) scale the value to a user-friendly range as
                 defined by the calibration.
-            num_retry (int, optional): Retry attempts.  Defaults to `3`.
+            num_retry (int, optional): Retry attempts.  Defaults to `5`.
 
         Returns:
             Value: Raw or normalised value depending on *normalize*.
@@ -1074,7 +1074,7 @@ class MotorsBus(abc.ABC):
             value (Value): Value to write.  If *normalize* is `True` the value is first converted to raw
                 units.
             normalize (bool, optional): Enable or disable normalisation. Defaults to `True`.
-            num_retry (int, optional): Retry attempts.  Defaults to `3`.
+            num_retry (int, optional): Retry attempts.  Defaults to `5`.
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(
@@ -1126,7 +1126,7 @@ class MotorsBus(abc.ABC):
         motors: str | list[str] | None = None,
         *,
         normalize: bool = True,
-        num_retry: int = 3,
+        num_retry: int = 5,
     ) -> dict[str, Value]:
         """Read the same register from several motors at once.
 
@@ -1134,7 +1134,7 @@ class MotorsBus(abc.ABC):
             data_name (str): Register name.
             motors (str | list[str] | None, optional): Motors to query. `None` (default) reads every motor.
             normalize (bool, optional): Normalisation flag.  Defaults to `True`.
-            num_retry (int, optional): Retry attempts.  Defaults to `3`.
+            num_retry (int, optional): Retry attempts.  Defaults to `5`.
 
         Returns:
             dict[str, Value]: Mapping *motor name → value*.
@@ -1220,7 +1220,7 @@ class MotorsBus(abc.ABC):
         values: Value | dict[str, Value],
         *,
         normalize: bool = True,
-        num_retry: int = 3,
+        num_retry: int = 5,
     ) -> None:
         """Write the same register on multiple motors.
 
@@ -1233,7 +1233,7 @@ class MotorsBus(abc.ABC):
             values (Value | dict[str, Value]): Either a single value (applied to every motor) or a mapping
                 *motor name → value*.
             normalize (bool, optional): If `True` (default) convert values from the user range to raw units.
-            num_retry (int, optional): Retry attempts.  Defaults to `3`.
+            num_retry (int, optional): Retry attempts.  Defaults to `5`.
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(
