@@ -321,3 +321,10 @@ class Sourccey(Robot):
         return {
             "z.vel": self.clean_value(linear_actuator_normalized["linear_actuator"]),
         }
+
+    ##################################################################################
+    # Motor Configuration Functions
+    ##################################################################################
+    def set_baud_rate(self, baud_rate: int) -> None:
+        self.left_arm.bus.set_baudrate(baud_rate)
+        self.right_arm.bus.set_baudrate(baud_rate)
