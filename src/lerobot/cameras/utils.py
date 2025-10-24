@@ -53,14 +53,14 @@ def make_cameras_from_configs(camera_configs: dict[str, CameraConfig]) -> dict[s
 
 
 def get_cv2_rotation(rotation: Cv2Rotation) -> int | None:
-    import cv2
+    import cv2  # type: ignore  # TODO: add type stubs for OpenCV
 
     if rotation == Cv2Rotation.ROTATE_90:
-        return cv2.ROTATE_90_CLOCKWISE
+        return int(cv2.ROTATE_90_CLOCKWISE)
     elif rotation == Cv2Rotation.ROTATE_180:
-        return cv2.ROTATE_180
+        return int(cv2.ROTATE_180)
     elif rotation == Cv2Rotation.ROTATE_270:
-        return cv2.ROTATE_90_COUNTERCLOCKWISE
+        return int(cv2.ROTATE_90_COUNTERCLOCKWISE)
     else:
         return None
 
@@ -69,9 +69,10 @@ def get_cv2_backend() -> int:
     import cv2
 
     if platform.system() == "Windows":
-        # return cv2.CAP_MSMF  # Use MSMF for Windows instead of AVFOUNDATION
+        # return int(cv2.CAP_MSMF)  # Use MSMF for Windows instead of AVFOUNDATION, only if newer driver support is available
+        # CAP_DSHOW is the default backend for Windows, it is more stable than CAP_MSMF but is more legacy.
         return cv2.CAP_DSHOW
     # elif platform.system() == "Darwin":  # macOS
     #     return cv2.CAP_AVFOUNDATION
     else:  # Linux and others
-        return cv2.CAP_ANY
+        return int(cv2.CAP_ANY)

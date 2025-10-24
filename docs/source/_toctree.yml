@@ -17,6 +17,8 @@
     title: Train RL in Simulation
   - local: async
     title: Use Async Inference
+  - local: multi_gpu_training
+    title: Multi GPU training
   title: "Tutorials"
 - sections:
   - local: lerobot-dataset-v3
@@ -35,6 +37,8 @@
     title: π₀ (Pi0)
   - local: pi05
     title: π₀.₅ (Pi05)
+  - local: groot
+    title: NVIDIA GR00T N1.5
   title: "Policies"
 - sections:
   - local: il_sim
