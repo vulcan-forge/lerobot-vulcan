@@ -100,11 +100,7 @@ class LeRobotDatasetMetadata:
             if force_cache_sync:
                 raise FileNotFoundError
             self.load_metadata()
-        except FileNotFoundError:
-            # 6/22/2025, only attempt to pull from repo if explicitly asking for it
-            # This is to avoid pulling from repo if the dataset is not found locally
-            pass
-        except NotADirectoryError:
+        except (FileNotFoundError, NotADirectoryError):
             if is_valid_version(self.revision):
                 self.revision = get_safe_version(self.repo_id, self.revision)
 
@@ -516,7 +512,7 @@ class LeRobotDatasetMetadata:
         obj.repo_id = repo_id
         obj.root = Path(root) if root is not None else HF_LEROBOT_HOME / repo_id
 
-        obj.root.mkdir(parents=True, exist_ok=True)
+        obj.root.mkdir(parents=True, exist_ok=False)
 
         features = {**features, **DEFAULT_FEATURES}
         _validate_feature_names(features)
