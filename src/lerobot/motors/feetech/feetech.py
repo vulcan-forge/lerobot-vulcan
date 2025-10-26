@@ -452,7 +452,7 @@ class FeetechMotorsBus(MotorsBus):
                 del rxpacket[0:idx]
                 rx_length = rx_length - idx
 
-    def broadcast_ping(self, num_retry: int = 3, raise_on_error: bool = False) -> dict[int, int] | None:
+    def broadcast_ping(self, num_retry: int = 5, raise_on_error: bool = False) -> dict[int, int] | None:
         self._assert_protocol_is_compatible("broadcast_ping")
         for n_try in range(1 + num_retry):
             ids_status, comm = self._broadcast_ping()
