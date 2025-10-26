@@ -1059,7 +1059,7 @@ class MotorsBus(abc.ABC):
         return value, comm, error
 
     def write(
-        self, data_name: str, motor: str, value: Value, *, normalize: bool = True, num_retry: int = 3
+        self, data_name: str, motor: str, value: Value, *, normalize: bool = True, num_retry: int = 5
     ) -> None:
         """Write a value to a single motor's register.
 

@@ -36,23 +36,6 @@ DEFAULT_PNG_FILE_PATH = TEST_ARTIFACTS_DIR / "image_160x120.png"
 TEST_IMAGE_SIZES = ["128x128", "160x120", "320x180", "480x270"]
 TEST_IMAGE_PATHS = [TEST_ARTIFACTS_DIR / f"image_{size}.png" for size in TEST_IMAGE_SIZES]
 
-
-def _check_opencv_can_open_image_files():
-    """Check if OpenCV can open image files as video sources."""
-    try:
-        # Try to open the default test image file
-        if not DEFAULT_PNG_FILE_PATH.exists():
-            return False
-            
-        # Try to open with VideoCapture
-        cap = cv2.VideoCapture(str(DEFAULT_PNG_FILE_PATH))
-        can_open = cap.isOpened()
-        cap.release()
-        return can_open
-    except Exception:
-        return False
-
-
 def _check_opencv_backends_available():
     """Check if OpenCV has working backends for image files."""
     try:
@@ -80,8 +63,9 @@ def _check_opencv_backends_available():
 def _check_opencv_image_support():
     """Check if OpenCV can handle image files on this platform."""
     if sys.platform == "win32":
-        # On Windows, check if we have proper codecs
-        return _check_opencv_can_open_image_files()
+        # On Windows, VideoCapture with DirectShow backend doesn't support image files
+        # This is a known limitation - DirectShow can't open static image files as video sources
+        return False
     else:
         # On Linux/macOS, assume it works (usually does)
         return True
