@@ -1,6 +1,5 @@
-#!/usr/bin/env python
-
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 Vulcan Robotics, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +14,6 @@
 # limitations under the License.
 
 import logging
-import time
 
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
@@ -86,6 +84,13 @@ class SourcceyLeader(Teleoperator):
         self.configure()
         logger.info(f"{self} connected.")
 
+    def disconnect(self) -> None:
+        if not self.is_connected:
+            DeviceNotConnectedError(f"{self} is not connected.")
+
+        self.bus.disconnect()
+        logger.info(f"{self} disconnected.")
+
     @property
     def is_calibrated(self) -> bool:
         return self.bus.is_calibrated
@@ -155,12 +160,4 @@ class SourcceyLeader(Teleoperator):
         return action
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
-        # TODO(rcadene, aliberts): Implement force feedback
         raise NotImplementedError
-
-    def disconnect(self) -> None:
-        if not self.is_connected:
-            DeviceNotConnectedError(f"{self} is not connected.")
-
-        self.bus.disconnect()
-        logger.info(f"{self} disconnected.")

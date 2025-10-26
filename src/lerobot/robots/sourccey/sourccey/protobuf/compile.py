@@ -5,7 +5,6 @@ This script compiles all .proto files into Python modules.
 """
 
 import importlib
-import os
 import sys
 import subprocess
 import pathlib

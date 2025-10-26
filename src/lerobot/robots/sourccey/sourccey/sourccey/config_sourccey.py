@@ -1,4 +1,5 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 Vulcan Robotics, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,12 +15,11 @@
 
 from dataclasses import dataclass, field
 
-from lerobot.cameras.configs import CameraConfig, Cv2Rotation
+from lerobot.cameras.configs import CameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.motors.dc_motors_controller import DCMotor, MotorNormMode
 
 from lerobot.robots.config import RobotConfig
-from lerobot.utils.constants import HF_LEROBOT_CONFIGURATION
 
 
 def sourccey_cameras_config() -> dict[str, CameraConfig]:

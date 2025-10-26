@@ -1,3 +1,18 @@
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 Vulcan Robotics, Inc. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
 from functools import cached_property
 from typing import Any
@@ -66,6 +81,9 @@ class Sourccey(Robot):
     def __del__(self):
         self.disconnect()
 
+    ###################################################################
+    # Properties and Attributes
+    ###################################################################
     @property
     def _state_ft(self) -> dict[str, type]:
         return {
@@ -97,6 +115,9 @@ class Sourccey(Robot):
         cams_connected = all(self.cameras[k].is_connected for k in self.cameras.keys())
         return arms_connected and cams_connected
 
+    ###################################################################
+    # Connection Management
+    ###################################################################
     def connect(self, calibrate: bool = True) -> None:
         self.left_arm.connect(calibrate)
         self.right_arm.connect(calibrate)
@@ -119,6 +140,9 @@ class Sourccey(Robot):
         for cam_key in self.cameras.keys():
             self.cameras[cam_key].disconnect()
 
+    ###################################################################
+    # Calibration and Configuration Management
+    ###################################################################
     @property
     def is_calibrated(self) -> bool:
         return self.left_arm.is_calibrated and self.right_arm.is_calibrated
@@ -171,6 +195,10 @@ class Sourccey(Robot):
         self.left_arm.setup_motors()
         self.right_arm.setup_motors()
 
+    ###################################################################
+    # Data Management
+    ###################################################################
+    
     def get_observation(self) -> dict[str, Any]:
         try:
             obs_dict = {}
@@ -228,20 +256,16 @@ class Sourccey(Robot):
             print(f"Error sending action: {e}")
             return {}
 
-    # Base Functions
-    def stop_base(self):
-        self.dc_motors_controller.set_velocities({"front_left": 0, "front_right": 0, "rear_left": 0, "rear_right": 0})
-
+    ###################################################################
+    # Control Management
+    ###################################################################
     def update(self):
         # Can be used to update the robot every cycle. Such as potentially a motor
         pass
 
-    # Round to prevent floating-point precision issues and handle -0.0
-    def clean_value(self, val):
-        rounded = round(val, 8)
-
-        # Convert -0.0 to 0.0 and very small values to 0.0
-        return 0.0 if abs(rounded) < 1e-10 else rounded
+    # Base Functions
+    def stop_base(self):
+        self.dc_motors_controller.set_velocities({"front_left": 0, "front_right": 0, "rear_left": 0, "rear_right": 0})
 
     ##################################################################################
     # Private Kinematic Functions
@@ -321,6 +345,13 @@ class Sourccey(Robot):
         return {
             "z.vel": self.clean_value(linear_actuator_normalized["linear_actuator"]),
         }
+
+    # Round to prevent floating-point precision issues and handle -0.0
+    def clean_value(self, val):
+        rounded = round(val, 8)
+
+        # Convert -0.0 to 0.0 and very small values to 0.0
+        return 0.0 if abs(rounded) < 1e-10 else rounded
 
     ##################################################################################
     # Motor Configuration Functions

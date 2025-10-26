@@ -1,6 +1,5 @@
-#!/usr/bin/env python
-
 # Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 Vulcan Robotics, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -73,6 +72,10 @@ class BiSourcceyLeader(Teleoperator):
         self.left_arm.connect(calibrate)
         self.right_arm.connect(calibrate)
 
+    def disconnect(self) -> None:
+        self.left_arm.disconnect()
+        self.right_arm.disconnect()
+
     @property
     def is_calibrated(self) -> bool:
         return self.left_arm.is_calibrated and self.right_arm.is_calibrated
@@ -134,10 +137,6 @@ class BiSourcceyLeader(Teleoperator):
             self.left_arm.send_feedback(left_feedback)
         if right_feedback:
             self.right_arm.send_feedback(right_feedback)
-
-    def disconnect(self) -> None:
-        self.left_arm.disconnect()
-        self.right_arm.disconnect()
 
     ##################################################################################
     # Motor Configuration Functions

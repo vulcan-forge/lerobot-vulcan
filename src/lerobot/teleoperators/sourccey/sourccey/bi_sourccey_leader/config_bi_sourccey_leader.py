@@ -1,6 +1,5 @@
-#!/usr/bin/env python
-
 # Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 Vulcan Robotics, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +16,6 @@
 from dataclasses import dataclass
 
 from lerobot.teleoperators.config import TeleoperatorConfig
-
 
 @TeleoperatorConfig.register_subclass("bi_sourccey_leader")
 @dataclass

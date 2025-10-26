@@ -1,4 +1,5 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 Vulcan Robotics, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# TODO(aliberts, Steven, Pepijn): use gRPC calls instead of zmq?
-
 import base64
 import json
 import logging
@@ -22,19 +21,16 @@ from typing import Any, Dict, Optional, Tuple
 
 import cv2
 import numpy as np
-import torch
 import zmq
 
-from lerobot.utils.constants import OBS_IMAGES, OBS_STATE
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from lerobot.robots.robot import Robot
-from .config_sourccey import SourcceyClientConfig, SourcceyConfig
+from .config_sourccey import SourcceyClientConfig
 
 # Import protobuf modules
 from ..protobuf.generated import sourccey_pb2
 from ..protobuf.sourccey_protobuf import SourcceyProtobuf
-
 
 class SourcceyClient(Robot):
     config_class = SourcceyClientConfig
@@ -77,6 +73,9 @@ class SourcceyClient(Robot):
         # Initialize protobuf converter
         self.protobuf_converter = SourcceyProtobuf()
 
+    ###################################################################
+    # Properties and Attributes
+    ###################################################################
     @cached_property
     def _state_ft(self) -> dict[str, type]:
         return dict.fromkeys(
@@ -125,6 +124,9 @@ class SourcceyClient(Robot):
     def is_calibrated(self) -> bool:
         pass
 
+    ###################################################################
+    # Connection Management
+    ###################################################################
     def connect(self) -> None:
         """Establishes ZMQ sockets with the remote mobile robot"""
 
@@ -155,6 +157,119 @@ class SourcceyClient(Robot):
     def calibrate(self) -> None:
         pass
 
+    def configure(self):
+        pass
+
+    def disconnect(self):
+        """Cleans ZMQ comms"""
+
+        if not self._is_connected:
+            raise DeviceNotConnectedError(
+                "SourcceyClient is not connected. You need to run `robot.connect()` before disconnecting."
+            )
+        self.zmq_observation_socket.close()
+        self.zmq_cmd_socket.close()
+        self.zmq_context.term()
+        self._is_connected = False
+
+    ###################################################################
+    # Data Management
+    ###################################################################
+    def get_observation(self) -> dict[str, Any]:
+        """
+        Capture observations from the remote robot: current follower arm positions,
+        present wheel speeds (converted to body-frame velocities: x, y, theta),
+        and a camera frame. Receives over ZMQ, translate to body-frame vel
+        """
+        if not self._is_connected:
+            raise DeviceNotConnectedError("SourcceyClient is not connected. You need to run `robot.connect()`.")
+
+        frames, obs_dict = self._get_data()
+
+        # Loop over each configured camera
+        for cam_name, frame in frames.items():
+            if frame is None:
+                logging.warning("Frame is None")
+                frame = np.zeros((640, 480, 3), dtype=np.uint8)
+            obs_dict[cam_name] = frame
+
+        return obs_dict
+
+    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        """Command sourccey to move to a target joint configuration. Translates to motor space + sends over ZMQ
+
+        Args:
+            action (np.ndarray): array containing the goal positions for the motors.
+
+        Raises:
+            RobotDeviceNotConnectedError: if robot is not connected.
+
+        Returns:
+            np.ndarray: the action sent to the motors, potentially clipped.
+        """
+        if not self._is_connected:
+            raise DeviceNotConnectedError(
+                "ManipulatorRobot is not connected. You need to run `robot.connect()`."
+            )
+
+        # Convert action to protobuf and send
+        robot_action = self.protobuf_converter.action_to_protobuf(action)
+        self.zmq_cmd_socket.send(robot_action.SerializeToString())
+
+        # TODO(Steven): Remove the np conversion when it is possible to record a non-numpy array value
+        actions = np.array([action.get(k, 0.0) for k in self._state_order], dtype=np.float32)
+
+        action_sent = {key: actions[i] for i, key in enumerate(self._state_order)}
+        action_sent["action"] = actions
+        return action_sent
+
+    ###################################################################
+    # Private Data Management
+    ###################################################################
+    def _get_data(self) -> Tuple[Dict[str, np.ndarray], Dict[str, Any], Dict[str, Any]]:
+        """
+        Polls the video socket for the latest observation data.
+
+        Attempts to retrieve and decode the latest message within a short timeout.
+        If successful, updates and returns the new frames, speed, and arm state.
+        If no new data arrives or decoding fails, returns the last known values.
+        """
+
+        # 1. Get the latest message bytes from the socket
+        latest_message_bytes = self._poll_and_get_latest_message()
+
+        # 2. If no message, return cached data
+        if latest_message_bytes is None:
+            return self.last_frames, self.last_remote_state
+
+        # 3. Parse the protobuf message
+        try:
+            robot_state = sourccey_pb2.SourcceyRobotState()
+            robot_state.ParseFromString(latest_message_bytes)
+            observation = self.protobuf_converter.protobuf_to_observation(robot_state)
+        except Exception as e:
+            logging.error(f"Error parsing protobuf observation: {e}")
+            return self.last_frames, self.last_remote_state
+
+        # 4. If protobuf parsing failed, return cached data
+        if observation is None:
+            return self.last_frames, self.last_remote_state
+
+        # 5. Process the valid observation data
+        try:
+            new_frames, new_state = self._remote_state_from_obs(observation)
+        except Exception as e:
+            logging.error(f"Error processing observation data, serving last observation: {e}")
+            return self.last_frames, self.last_remote_state
+
+        self.last_frames = new_frames
+        self.last_remote_state = new_state
+
+        return new_frames, new_state
+    
+    ###################################################################
+    # Private Message and Parsing Functions
+    ###################################################################
     def _poll_and_get_latest_message(self) -> Optional[bytes]:
         """Polls the ZMQ socket for a limited time and returns the latest message bytes."""
         poller = zmq.Poller()
@@ -232,98 +347,9 @@ class SourcceyClient(Robot):
 
         return current_frames, obs_dict
 
-    def _get_data(self) -> Tuple[Dict[str, np.ndarray], Dict[str, Any], Dict[str, Any]]:
-        """
-        Polls the video socket for the latest observation data.
-
-        Attempts to retrieve and decode the latest message within a short timeout.
-        If successful, updates and returns the new frames, speed, and arm state.
-        If no new data arrives or decoding fails, returns the last known values.
-        """
-
-        # 1. Get the latest message bytes from the socket
-        latest_message_bytes = self._poll_and_get_latest_message()
-
-        # 2. If no message, return cached data
-        if latest_message_bytes is None:
-            return self.last_frames, self.last_remote_state
-
-        # 3. Parse the protobuf message
-        try:
-            robot_state = sourccey_pb2.SourcceyRobotState()
-            robot_state.ParseFromString(latest_message_bytes)
-            observation = self.protobuf_converter.protobuf_to_observation(robot_state)
-        except Exception as e:
-            logging.error(f"Error parsing protobuf observation: {e}")
-            return self.last_frames, self.last_remote_state
-
-        # 4. If protobuf parsing failed, return cached data
-        if observation is None:
-            return self.last_frames, self.last_remote_state
-
-        # 5. Process the valid observation data
-        try:
-            new_frames, new_state = self._remote_state_from_obs(observation)
-        except Exception as e:
-            logging.error(f"Error processing observation data, serving last observation: {e}")
-            return self.last_frames, self.last_remote_state
-
-        self.last_frames = new_frames
-        self.last_remote_state = new_state
-
-        return new_frames, new_state
-
-    def get_observation(self) -> dict[str, Any]:
-        """
-        Capture observations from the remote robot: current follower arm positions,
-        present wheel speeds (converted to body-frame velocities: x, y, theta),
-        and a camera frame. Receives over ZMQ, translate to body-frame vel
-        """
-        if not self._is_connected:
-            raise DeviceNotConnectedError("SourcceyClient is not connected. You need to run `robot.connect()`.")
-
-        frames, obs_dict = self._get_data()
-
-        # Loop over each configured camera
-        for cam_name, frame in frames.items():
-            if frame is None:
-                logging.warning("Frame is None")
-                frame = np.zeros((640, 480, 3), dtype=np.uint8)
-            obs_dict[cam_name] = frame
-
-        return obs_dict
-
-    def configure(self):
-        pass
-
-    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        """Command sourccey to move to a target joint configuration. Translates to motor space + sends over ZMQ
-
-        Args:
-            action (np.ndarray): array containing the goal positions for the motors.
-
-        Raises:
-            RobotDeviceNotConnectedError: if robot is not connected.
-
-        Returns:
-            np.ndarray: the action sent to the motors, potentially clipped.
-        """
-        if not self._is_connected:
-            raise DeviceNotConnectedError(
-                "ManipulatorRobot is not connected. You need to run `robot.connect()`."
-            )
-
-        # Convert action to protobuf and send
-        robot_action = self.protobuf_converter.action_to_protobuf(action)
-        self.zmq_cmd_socket.send(robot_action.SerializeToString())
-
-        # TODO(Steven): Remove the np conversion when it is possible to record a non-numpy array value
-        actions = np.array([action.get(k, 0.0) for k in self._state_order], dtype=np.float32)
-
-        action_sent = {key: actions[i] for i, key in enumerate(self._state_order)}
-        action_sent["action"] = actions
-        return action_sent
-
+    ###################################################################
+    # Private Control Functions
+    ###################################################################
     def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray):
         # Speed control
         if self.teleop_keys["speed_up"] in pressed_keys:
@@ -389,14 +415,4 @@ class SourcceyClient(Robot):
             "theta.vel": float(theta_in * theta_speed),
         }
 
-    def disconnect(self):
-        """Cleans ZMQ comms"""
-
-        if not self._is_connected:
-            raise DeviceNotConnectedError(
-                "SourcceyClient is not connected. You need to run `robot.connect()` before disconnecting."
-            )
-        self.zmq_observation_socket.close()
-        self.zmq_cmd_socket.close()
-        self.zmq_context.term()
-        self._is_connected = False
+    

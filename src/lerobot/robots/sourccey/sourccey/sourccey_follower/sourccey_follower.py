@@ -1,22 +1,32 @@
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 Vulcan Robotics, Inc. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from functools import cached_property
-import json
 import time
 from typing import Any
 from venv import logger
 
-import cv2
 import numpy as np
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.motors.feetech.feetech import FeetechMotorsBus, OperatingMode
 from lerobot.motors.motors_bus import Motor, MotorNormMode
 from lerobot.robots.robot import Robot
-from lerobot.robots.sourccey.sourccey.protobuf.generated import sourccey_pb2
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import SourcceyFollowerCalibrator
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.utils import ensure_safe_goal_position
-import os
-from pathlib import Path
 
 class SourcceyFollower(Robot):
     config_class = SourcceyFollowerConfig
@@ -54,6 +64,9 @@ class SourcceyFollower(Robot):
         if (self.is_connected):
             self.disconnect()
 
+    ###################################################################
+    # Properties and Attributes
+    ###################################################################
     @property
     def _motors_ft(self) -> dict[str, type]:
         return {f"{motor}.pos": float for motor in self.bus.motors}
@@ -72,6 +85,9 @@ class SourcceyFollower(Robot):
     def action_features(self) -> dict[str, type]:
         return self._motors_ft
 
+    ###################################################################
+    # Connection Management
+    ###################################################################
     @property
     def is_connected(self) -> bool:
         return self.bus.is_connected and all(cam.is_connected for cam in self.cameras.values())
@@ -97,6 +113,20 @@ class SourcceyFollower(Robot):
         self.configure()
         logger.info(f"{self} connected.")
 
+    def disconnect(self) -> None:
+        print(f"Disconnecting Sourccey {self.config.orientation} Follower")
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        self.bus.disconnect()
+        for cam in self.cameras.values():
+            cam.disconnect()
+
+        logger.info(f"{self} disconnected.")
+
+    ###################################################################
+    # Calibration and Configuration Management
+    ################################################################### 
     @property
     def is_calibrated(self) -> bool:
         return self.bus.is_calibrated
@@ -145,6 +175,9 @@ class SourcceyFollower(Robot):
             self.bus.setup_motor(motor)
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
+    ###################################################################
+    # Data Management
+    ###################################################################
     def get_observation(self) -> dict[str, Any]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
@@ -199,12 +232,13 @@ class SourcceyFollower(Robot):
         self.bus.sync_write("Goal_Position", goal_pos)
 
         # Check safety after sending goals
-        # overcurrent_motors = self._check_current_safety()
-        # if overcurrent_motors and len(overcurrent_motors) > 0:
-        #     logger.warning(f"Safety triggered: {overcurrent_motors} current > {self.config.max_current_safety_threshold}mA")
-        #     return self._handle_overcurrent_motors(overcurrent_motors, goal_pos, present_pos)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
+    ###################################################################
+    # Safety Functions (Must be used after extremely extensive testing
+    # to ensure these functions don't make joints anything unsafe
+    # or break the arm.)
+    ###################################################################
     def _check_current_safety(self) -> list[str]:
         """
         Check if any motor is over current limit and return safety status.
@@ -255,14 +289,3 @@ class SourcceyFollower(Robot):
         goal_pos_raw = {k.replace(".pos", ""): v for k, v in modified_goal_pos.items()}
         self.bus.sync_write("Goal_Position", goal_pos_raw)
         return modified_goal_pos
-
-    def disconnect(self) -> None:
-        print(f"Disconnecting Sourccey {self.config.orientation} Follower")
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
-        self.bus.disconnect()
-        for cam in self.cameras.values():
-            cam.disconnect()
-
-        logger.info(f"{self} disconnected.")

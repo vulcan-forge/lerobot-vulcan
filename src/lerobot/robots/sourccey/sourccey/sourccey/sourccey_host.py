@@ -1,6 +1,5 @@
-#!/usr/bin/env python
-
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 Vulcan Robotics, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,14 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import base64
-import json
 import logging
 import time
-import tempfile
-import os
 
-import cv2
 import zmq
 
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
@@ -58,21 +52,14 @@ def main():
     logging.info("Connecting Sourccey")
     robot.connect()
 
-    logging.info("Starting HostAgent")
+    logging.info("Starting Host")
     host_config = SourcceyHostConfig()
     host = SourcceyHost(host_config)
 
     last_cmd_time = time.time()
-    last_print_time = time.time()
     watchdog_active = False
-    logging.info("Waiting for commands...")
+
     print("Waiting for commands...")
-
-    # Initialize performance tracking variables
-    total_messages_processed = 0
-    total_conversion_time = 0.0
-    last_performance_log_time = time.time()
-
     try:
         # Business logic
         start = time.perf_counter()
