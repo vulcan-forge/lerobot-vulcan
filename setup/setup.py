@@ -270,6 +270,35 @@ class SetupScript:
             self.print_error(f"Failed to setup Python environment: {e}")
             return False
 
+    def fix_final_ownership(self) -> bool:
+        """Restore project directory ownership to the normal user after setup."""
+        if platform.system() == "Windows":
+            return True  # No-op on Windows
+            
+        self.print_status("Restoring project directory ownership to normal user...")
+        
+        user = os.environ.get("SUDO_USER") or os.environ.get("USER", "sourccey")
+        project_root_str = str(self.project_root)
+        
+        try:
+            # Remove immutable flags that might prevent ownership changes
+            subprocess.run(["sudo", "chattr", "-i", "-R", project_root_str], check=False)
+            
+            # Restore ownership
+            subprocess.run(["sudo", "chown", "-R", f"{user}:{user}", project_root_str], check=True)
+            
+            # Restore permissions
+            subprocess.run(["sudo", "chmod", "-R", "u+rwX", project_root_str], check=True)
+            
+            self.print_success(f"Ownership successfully restored to {user}.")
+            return True
+        except subprocess.CalledProcessError as e:
+            self.print_error(f"Failed to restore ownership: {e}")
+            return False
+        except Exception as e:
+            self.print_warning(f"Could not restore ownership: {e}")
+            return True  # Continue anyway
+
     def cleanup_evdev_conflict(self) -> bool:
         """Clean up evdev package conflicts"""
         self.print_status("Cleaning up evdev package conflicts...")
@@ -406,6 +435,11 @@ class SetupScript:
 
         if not all(setup_steps):
             self.print_error("Project setup failed.")
+            return False
+
+        # Final ownership fix (Unix systems only)
+        if not self.fix_final_ownership():
+            self.print_error("Failed to restore project ownership.")
             return False
 
         self.print_summary()
