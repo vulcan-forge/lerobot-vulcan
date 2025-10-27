@@ -29,9 +29,13 @@ def test_arm_motors(arm_name, port, motor_info):
             # Create a bus with only this motor
             norm_mode = MotorNormMode.RANGE_0_100 if motor_name == "gripper" else MotorNormMode.RANGE_M100_100
             
+            # Motors 2 and 8 (shoulder_lift) use sts3250, others use sts3215
+            motor_model = "sts3250" if motor_id in [2, 8] else "sts3215"
+            print(f"  Motor Model: {motor_model}")
+            
             bus = FeetechMotorsBus(
                 port=port,
-                motors={motor_name: Motor(motor_id, "sts3215", norm_mode)},
+                motors={motor_name: Motor(motor_id, motor_model, norm_mode)},
                 protocol_version=0
             )
             
