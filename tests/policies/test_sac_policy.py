@@ -40,9 +40,38 @@ def _check_cpp_compiler_available():
     """Check if C++ compiler is available for PyTorch compilation."""
     try:
         if sys.platform == "win32":
-            # On Windows, check for MSVC compiler
+            # On Windows, check for MSVC compiler and verify it can compile
             subprocess.check_output(["cl", "/help"], stderr=subprocess.STDOUT)
-            return True
+
+            # Test if the compiler can actually compile with standard headers
+            import tempfile
+            import os
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.cpp', delete=False) as f:
+                    f.write('#include <algorithm>\nint main() { return 0; }\n')
+                    test_file = f.name
+
+                try:
+                    # Try to compile a simple C++ program
+                    subprocess.check_output(
+                        ["cl", "/c", "/nologo", test_file],
+                        stderr=subprocess.STDOUT,
+                        timeout=30
+                    )
+                    return True
+                except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                    # Compiler exists but can't compile (missing headers, etc.)
+                    return False
+                finally:
+                    # Clean up
+                    obj_file = test_file.replace('.cpp', '.obj')
+                    if os.path.exists(obj_file):
+                        os.unlink(obj_file)
+                    if os.path.exists(test_file):
+                        os.unlink(test_file)
+            except (OSError, IOError):
+                # Couldn't create temp file
+                return False
         else:
             # On Unix-like systems, check for gcc or clang
             try:
