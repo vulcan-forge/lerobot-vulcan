@@ -50,7 +50,6 @@ def test_arm_motors(arm_name, port, motor_info):
                 try:
                     # Read raw position without normalization (no calibration needed)
                     position = bus.read("Present_Position", motor_name, num_retry=3, normalize=False)
-                    print(f"  Read {i+1}: Success - Raw Position = {position}")
                     success_count += 1
                     time.sleep(0.1)
                 except Exception as e:
