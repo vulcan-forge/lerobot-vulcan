@@ -1,30 +1,20 @@
 """
 Motor Diagnostics Script - Test individual motors to find communication issues.
 
-This script tests motors 7-12 (right arm) one by one to identify which motor
-is failing during sync read operations.
+This script tests motors 1-6 (left arm) and 7-12 (right arm) one by one to 
+identify which motor is failing during sync read operations.
 """
 import time
 from lerobot.motors.feetech import FeetechMotorsBus
 from lerobot.motors import Motor, MotorNormMode
 
-def test_individual_motors():
-    """Test each motor individually to identify communication issues."""
-    
-    # Define motor IDs and names for the right arm
-    motor_info = {
-        7: "shoulder_pan",
-        8: "shoulder_lift",
-        9: "elbow_flex",
-        10: "wrist_flex",
-        11: "wrist_roll",
-        12: "gripper"
-    }
-    
-    port = "COM6"  # Right arm port
+
+def test_arm_motors(arm_name, port, motor_info):
+    """Test each motor on a specific arm individually."""
     
     print("=" * 70)
-    print("Right Arm Motor Diagnostics - Testing motors 7-12 individually")
+    print(f"{arm_name} Motor Diagnostics - Testing motors {list(motor_info.keys())}")
+    print(f"Port: {port}")
     print("=" * 70)
     print()
     
@@ -90,9 +80,13 @@ def test_individual_motors():
         print()
         time.sleep(0.5)
     
-    # Print summary
+    return results
+
+
+def print_arm_summary(arm_name, results):
+    """Print summary for a specific arm."""
     print("=" * 70)
-    print("DIAGNOSTIC SUMMARY")
+    print(f"{arm_name} DIAGNOSTIC SUMMARY")
     print("=" * 70)
     print()
     
@@ -118,12 +112,75 @@ def test_individual_motors():
     
     print()
     print("=" * 70)
+    print()
+
+
+def test_both_arms():
+    """Test both left and right arms."""
     
-    return results
+    # Define motor configurations for both arms
+    left_arm_motors = {
+        1: "shoulder_pan",
+        2: "shoulder_lift",
+        3: "elbow_flex",
+        4: "wrist_flex",
+        5: "wrist_roll",
+        6: "gripper"
+    }
+    
+    right_arm_motors = {
+        7: "shoulder_pan",
+        8: "shoulder_lift",
+        9: "elbow_flex",
+        10: "wrist_flex",
+        11: "wrist_roll",
+        12: "gripper"
+    }
+    
+    # Port symbolic links
+    left_port = "robotLeftArm"
+    right_port = "robotRightArm"
+    
+    all_results = {}
+    
+    # Test left arm
+    print("\n")
+    left_results = test_arm_motors("LEFT ARM", left_port, left_arm_motors)
+    all_results['left'] = left_results
+    print_arm_summary("LEFT ARM", left_results)
+    
+    # Test right arm
+    print("\n")
+    right_results = test_arm_motors("RIGHT ARM", right_port, right_arm_motors)
+    all_results['right'] = right_results
+    print_arm_summary("RIGHT ARM", right_results)
+    
+    # Overall summary
+    print("=" * 70)
+    print("OVERALL SYSTEM SUMMARY")
+    print("=" * 70)
+    print()
+    
+    left_issues = sum(1 for r in left_results.values() if r["status"] != "OK")
+    right_issues = sum(1 for r in right_results.values() if r["status"] != "OK")
+    
+    print(f"Left Arm:  {6 - left_issues}/6 motors OK")
+    print(f"Right Arm: {6 - right_issues}/6 motors OK")
+    print()
+    
+    if left_issues == 0 and right_issues == 0:
+        print("✓ ALL MOTORS ARE FUNCTIONING PROPERLY!")
+    else:
+        print("⚠ ISSUES DETECTED - See individual arm summaries above for details")
+    
+    print()
+    print("=" * 70)
+    
+    return all_results
 
 if __name__ == "__main__":
     try:
-        results = test_individual_motors()
+        results = test_both_arms()
     except KeyboardInterrupt:
         print("\n\nDiagnostic interrupted by user.")
     except Exception as e:
