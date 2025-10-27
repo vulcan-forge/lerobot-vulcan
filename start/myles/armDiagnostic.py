@@ -138,8 +138,8 @@ def test_both_arms():
     }
     
     # Port symbolic links
-    left_port = "robotLeftArm"
-    right_port = "robotRightArm"
+    left_port = "/dev/robotLeftArm"
+    right_port = "/dev/robotRightArm"
     
     all_results = {}
     
