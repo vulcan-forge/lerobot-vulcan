@@ -45,7 +45,7 @@ def mock_rerun(monkeypatch):
         calls.append((key, obj, kwargs))
 
     dummy_rr = SimpleNamespace(
-        Scalars=DummyScalar,
+        Scalar=DummyScalar,
         Image=DummyImage,
         log=dummy_log,
         init=lambda *a, **k: None,
@@ -95,7 +95,7 @@ def test_log_rerun_data_envtransition_scalars_and_image(mock_rerun):
     }
     act = {
         "action.throttle": 0.7,
-        # 1D array should log individual Scalars with suffix _i
+        # 1D array should log individual Scalar with suffix _i
         "action.vector": np.array([1.0, 2.0], dtype=np.float32),
     }
     transition = {
@@ -109,10 +109,10 @@ def test_log_rerun_data_envtransition_scalars_and_image(mock_rerun):
     vu.log_rerun_data(observation=obs_data, action=action_data)
 
     # We expect:
-    # - observation.state.temperature -> Scalars
+    # - observation.state.temperature -> Scalar
     # - observation.camera -> Image (HWC) with static=True
-    # - action.throttle -> Scalars
-    # - action.vector_0, action.vector_1 -> Scalars
+    # - action.throttle -> Scalar
+    # - action.vector_0, action.vector_1 -> Scalar
     expected_keys = {
         f"{OBS_STATE}.temperature",
         "observation.camera",
@@ -177,7 +177,7 @@ def test_log_rerun_data_plain_list_ordering_and_prefixes(mock_rerun):
     logged = set(_keys(calls))
     assert logged == expected
 
-    # Scalars
+    # Scalar
     t = _obj_for(calls, "observation.temp")
     assert type(t).__name__ == "DummyScalar"
     assert t.value == pytest.approx(1.5)

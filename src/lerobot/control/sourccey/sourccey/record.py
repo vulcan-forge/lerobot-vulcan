@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class DatasetRecordConfig:
-    repo_id: str = "sourccey-003/sourccey-002__follow-me-005-2"
+    repo_id: str = "sourccey-003/sourccey-003__tyler_eaxmpel"
     num_episodes: int = 5
     episode_time_s: int = 60
     reset_time_s: int = 5
@@ -26,7 +26,7 @@ class DatasetRecordConfig:
 @dataclass
 class SourcceyRecordConfig:
     id: str = "sourccey"
-    remote_ip: str = "192.168.1.244"
+    remote_ip: str = "192.168.1.243"
     left_arm_port: str = "COM4"
     right_arm_port: str = "COM3"
     keyboard: str = "keyboard"
