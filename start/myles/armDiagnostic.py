@@ -46,7 +46,7 @@ def test_arm_motors(arm_name, port, motor_info):
             success_count = 0
             fail_count = 0
             
-            for i in range(5):
+            for i in range(50):
                 try:
                     # Read raw position without normalization (no calibration needed)
                     position = bus.read("Present_Position", motor_name, num_retry=3, normalize=False)
@@ -66,10 +66,10 @@ def test_arm_motors(arm_name, port, motor_info):
                 "name": motor_name,
                 "success": success_count,
                 "failed": fail_count,
-                "status": "OK" if success_count == 5 else "ISSUE" if success_count > 0 else "FAILED"
+                "status": "OK" if success_count == 50 else "ISSUE" if success_count > 0 else "FAILED"
             }
             
-            print(f"  Summary: {success_count}/5 successful reads")
+            print(f"  Summary: {success_count}/50 successful reads")
             print(f"  Status: {results[motor_id]['status']}")
             
         except Exception as e:
@@ -77,7 +77,7 @@ def test_arm_motors(arm_name, port, motor_info):
             results[motor_id] = {
                 "name": motor_name,
                 "success": 0,
-                "failed": 5,
+                "failed": 50,
                 "status": "FAILED",
                 "error": str(e)
             }
@@ -98,7 +98,7 @@ def print_arm_summary(arm_name, results):
     for motor_id, result in results.items():
         status_symbol = "✓" if result["status"] == "OK" else "⚠" if result["status"] == "ISSUE" else "✗"
         print(f"{status_symbol} Motor {motor_id:2d} ({result['name']:15s}): {result['status']:6s} - "
-              f"{result['success']}/5 reads successful")
+              f"{result['success']}/50 reads successful")
     
     print()
     
