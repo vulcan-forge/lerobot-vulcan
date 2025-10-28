@@ -164,31 +164,15 @@ class SetupScript:
         return (self.project_root / '.venv').exists()
 
     def handle_existing_venv(self) -> bool:
-        """Handle existing .venv directory"""
-        while True:
-            response = input("\n.venv already exists. What would you like to do?\n"
-                            "1: Skip venv creation (keep existing)\n"
-                            "2: Delete and recreate venv\n"
-                            "3: Exit\n"
-                            "Choose (1-3): ").strip()
-
-            if response == '1':
-                self.print_status("Keeping existing venv...")
-                return True
-            elif response == '2':
-                self.print_status("Removing existing venv...")
-                try:
-                    shutil.rmtree(self.project_root / '.venv')
-                    self.print_success("Existing venv removed")
-                    return False  # venv no longer exists
-                except Exception as e:
-                    self.print_error(f"Error removing .venv: {e}")
-                    return True  # keep existing if can't remove
-            elif response == '3':
-                self.print_status("Exiting setup...")
-                sys.exit(0)
-            else:
-                self.print_error("Invalid choice. Please choose 1, 2, or 3.")
+        """Handle existing .venv directory - always delete and recreate"""
+        self.print_status("Removing existing venv...")
+        try:
+            shutil.rmtree(self.project_root / '.venv')
+            self.print_success("Existing venv removed")
+            return False  # venv no longer exists
+        except Exception as e:
+            self.print_error(f"Error removing .venv: {e}")
+            return True  # keep existing if can't remove
 
     #################################################################
     # Setup functions
@@ -274,22 +258,22 @@ class SetupScript:
         """Restore project directory ownership to the normal user after setup."""
         if platform.system() == "Windows":
             return True  # No-op on Windows
-            
+
         self.print_status("Restoring project directory ownership to normal user...")
-        
+
         user = os.environ.get("SUDO_USER") or os.environ.get("USER", "sourccey")
         project_root_str = str(self.project_root)
-        
+
         try:
             # Remove immutable flags that might prevent ownership changes
             subprocess.run(["sudo", "chattr", "-i", "-R", project_root_str], check=False)
-            
+
             # Restore ownership
             subprocess.run(["sudo", "chown", "-R", f"{user}:{user}", project_root_str], check=True)
-            
+
             # Restore permissions
             subprocess.run(["sudo", "chmod", "-R", "u+rwX", project_root_str], check=True)
-            
+
             self.print_success(f"Ownership successfully restored to {user}.")
             return True
         except subprocess.CalledProcessError as e:
@@ -413,13 +397,12 @@ class SetupScript:
         # Check uv (optional)
         uv_available = self.check_uv()
         if not uv_available:
-            install_uv = input("\nWould you like to install uv now? (y/n): ").strip().lower()
-            if install_uv in ['y', 'yes']:
-                if not self.install_uv():
-                    self.print_warning("Failed to install uv, will use pip instead")
-                else:
-                    # Exit so user can restart with uv in PATH
-                    return True
+            self.print_status("uv not found, attempting to install automatically...")
+            if not self.install_uv():
+                self.print_warning("Failed to install uv, will use pip instead")
+            else:
+                # Exit so user can restart with uv in PATH
+                return True
 
         if not all(checks):
             self.print_error("System requirements check failed. Please install missing dependencies.")
