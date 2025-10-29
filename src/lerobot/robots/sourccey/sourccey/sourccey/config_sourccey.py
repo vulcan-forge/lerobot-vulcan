@@ -31,10 +31,10 @@ def sourccey_cameras_config() -> dict[str, CameraConfig]:
              index_or_path="/dev/cameraFrontRight", fps=30, width=640, height=480
          ),
          "wrist_left": OpenCVCameraConfig(
-             index_or_path="/dev/cameraWristLeft", fps=30, width=320, height=240
+             index_or_path="/dev/cameraWristLeft", fps=30, width=640, height=480
          ),
          "wrist_right": OpenCVCameraConfig(
-             index_or_path="/dev/cameraWristRight", fps=30, width=320, height=240
+             index_or_path="/dev/cameraWristRight", fps=30, width=640, height=480
          ),
     }
     return config
