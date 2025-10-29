@@ -67,8 +67,8 @@ def main():
                 time.sleep(1)
             print("HOST: Countdown finished. Disabling torque now.")
             try:
-                robot.left_arm.disable_torque()
-                robot.right_arm.disable_torque()
+                robot.left_arm.bus.disable_torque()
+                robot.right_arm.bus.disable_torque()
                 print("HOST: Disabled torque on both arms after countdown")
             except Exception as e:
                 print(f"HOST: Failed to disable torque after countdown: {e}")
@@ -103,8 +103,8 @@ def main():
                 if untorque_val is not None and untorque_val:
                     print("HOST: Received untorque_all=True in protobuf message")
                     try:
-                        robot.left_arm.disable_torque()
-                        robot.right_arm.disable_torque()
+                        robot.left_arm.bus.disable_torque()
+                        robot.right_arm.bus.disable_torque()
                         print("HOST: Disabled torque on both arms")
                     except Exception as e:
                         print(f"HOST: Failed to disable torque: {e}")
