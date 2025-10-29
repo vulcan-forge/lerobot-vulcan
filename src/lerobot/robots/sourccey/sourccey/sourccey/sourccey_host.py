@@ -86,14 +86,18 @@ def main():
 
                 # If per-arm untorque flags are set, disable torque and block those arm's positions
                 try:
+                    print(f"HOST: Flags received - untorque_left={data.get('untorque_left', False)} untorque_right={data.get('untorque_right', False)}")
                     if data.get("untorque_left", False):
+                        print("HOST: untorque_left=True -> disabling left torque and stripping left_* positions")
                         robot.left_arm.bus.disable_torque()
                         # Strip left arm positions
                         data = {k: v for k, v in data.items() if not k.startswith("left_")}
                     if data.get("untorque_right", False):
+                        print("HOST: untorque_right=True -> disabling right torque and stripping right_* positions")
                         robot.right_arm.bus.disable_torque()
                         # Strip right arm positions
                         data = {k: v for k, v in data.items() if not k.startswith("right_")}
+                    print(f"HOST: Action after strip contains keys: {list(data.keys())}")
                 except Exception as e:
                     print(f"HOST: Error applying per-arm untorque flags: {e}")
 
