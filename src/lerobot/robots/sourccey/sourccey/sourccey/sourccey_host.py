@@ -82,6 +82,15 @@ def main():
                 untorque_val = getattr(robot_action, "untorque_all", None)
                 if untorque_val is not None and untorque_val:
                     print("HOST: Received untorque_all=True in protobuf message")
+                    try:
+                        robot.left_arm.disable_torque()
+                        robot.right_arm.disable_torque()
+                        print("HOST: Disabled torque on both arms")
+                    except Exception as e:
+                        print(f"HOST: Failed to disable torque: {e}")
+                    last_cmd_time = time.time()
+                    watchdog_active = False
+                    continue
                 elif untorque_val is None:
                     print("HOST: DEBUG - untorque_all field not present in protobuf (needs regeneration)")
                 elif untorque_val is False:

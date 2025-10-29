@@ -52,8 +52,10 @@ class SourcceyProtobuf:
             if "untorque_all" in action:
                 try:
                     robot_action.untorque_all = bool(action.get("untorque_all", False))
-                except AttributeError:
+                    print(f"CLIENT: DEBUG - Set untorque_all={robot_action.untorque_all} in protobuf")
+                except AttributeError as e:
                     # Field not present in generated module yet
+                    print(f"CLIENT: DEBUG - untorque_all field not present (AttributeError: {e})")
                     pass
 
             return robot_action
