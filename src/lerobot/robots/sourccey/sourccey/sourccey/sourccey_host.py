@@ -15,7 +15,6 @@
 
 import logging
 import time
-import threading
 
 import zmq
 
@@ -45,6 +44,7 @@ class SourcceyHost:
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
 
+
 def main():
     logging.info("Configuring Sourccey")
     robot_config = SourcceyConfig(id="sourccey")
@@ -58,24 +58,6 @@ def main():
     host = SourcceyHost(host_config)
 
     print("Waiting for commands...")
-
-    # Start a non-blocking 30s countdown that disables torque while the host keeps running
-    def _countdown_and_untorque():
-        try:
-            for remaining in range(30, 0, -1):
-                print(f"HOST: Disabling torque in {remaining}s", flush=True)
-                time.sleep(1)
-            print("HOST: Countdown finished. Disabling torque now.")
-            try:
-                robot.left_arm.bus.disable_torque()
-                robot.right_arm.bus.disable_torque()
-                print("HOST: Disabled torque on both arms after countdown")
-            except Exception as e:
-                print(f"HOST: Failed to disable torque after countdown: {e}")
-        except Exception as e:
-            print(f"HOST: Countdown thread error: {e}")
-
-    threading.Thread(target=_countdown_and_untorque, daemon=True).start()
 
     last_cmd_time = time.time()
     watchdog_active = False
