@@ -59,8 +59,6 @@ def main():
 
     print("Waiting for commands...")
 
-    untorque_left_prev = False
-    untorque_right_prev = False
     last_cmd_time = time.time()
     watchdog_active = False
 
@@ -81,37 +79,9 @@ def main():
                 robot_action = sourccey_pb2.SourcceyRobotAction()
                 robot_action.ParseFromString(msg_bytes)
 
-                # Note: per-arm untorque flags are handled after conversion below
-
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
-
-                # If per-arm untorque flags are set, disable torque and block those arm's positions
-                try:
-                    left_flag = bool(data.get("untorque_left", False))
-                    right_flag = bool(data.get("untorque_right", False))
-
-                    # Left arm handling
-                    if left_flag:
-                        if not untorque_left_prev:
-                            robot.left_arm.bus.disable_torque()
-                        data = {k: v for k, v in data.items() if not k.startswith("left_")}
-                    elif untorque_left_prev and not left_flag:
-                        robot.left_arm.bus.enable_torque()
-
-                    # Right arm handling
-                    if right_flag:
-                        if not untorque_right_prev:
-                            robot.right_arm.bus.disable_torque()
-                        data = {k: v for k, v in data.items() if not k.startswith("right_")}
-                    elif untorque_right_prev and not right_flag:
-                        robot.right_arm.bus.enable_torque()
-
-                    untorque_left_prev = left_flag
-                    untorque_right_prev = right_flag
-                except Exception as e:
-                    logging.error("Error applying per-arm untorque flags: %s", e)
-
-                # Send action to robot
+                
+                # Send action to robot (untorque handling is automatic)
                 _action_sent = robot.send_action(data)
 
                 last_cmd_time = time.time()
