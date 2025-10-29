@@ -61,6 +61,8 @@ def main():
 
     last_cmd_time = time.time()
     watchdog_active = False
+    untorque_left_prev = False
+    untorque_right_prev = False
 
     try:
         # Business logic
@@ -86,17 +88,35 @@ def main():
 
                 # If per-arm untorque flags are set, disable torque and block those arm's positions
                 try:
-                    print(f"HOST: Flags received - untorque_left={data.get('untorque_left', False)} untorque_right={data.get('untorque_right', False)}")
-                    if data.get("untorque_left", False):
-                        print("HOST: untorque_left=True -> disabling left torque and stripping left_* positions")
+                    left_flag = bool(data.get("untorque_left", False))
+                    right_flag = bool(data.get("untorque_right", False))
+                    print(f"HOST: Flags received - untorque_left={left_flag} untorque_right={right_flag}")
+
+                    # Left arm handling
+                    if left_flag:
+                        if not untorque_left_prev:
+                            print("HOST: Left falling->rising: disabling left torque")
+                        print("HOST: untorque_left=True -> stripping left_* positions")
                         robot.left_arm.bus.disable_torque()
-                        # Strip left arm positions
                         data = {k: v for k, v in data.items() if not k.startswith("left_")}
-                    if data.get("untorque_right", False):
-                        print("HOST: untorque_right=True -> disabling right torque and stripping right_* positions")
+                    elif untorque_left_prev and not left_flag:
+                        print("HOST: Left rising->falling: enabling left torque")
+                        robot.left_arm.bus.enable_torque()
+
+                    # Right arm handling
+                    if right_flag:
+                        if not untorque_right_prev:
+                            print("HOST: Right falling->rising: disabling right torque")
+                        print("HOST: untorque_right=True -> stripping right_* positions")
                         robot.right_arm.bus.disable_torque()
-                        # Strip right arm positions
                         data = {k: v for k, v in data.items() if not k.startswith("right_")}
+                    elif untorque_right_prev and not right_flag:
+                        print("HOST: Right rising->falling: enabling right torque")
+                        robot.right_arm.bus.enable_torque()
+
+                    untorque_left_prev = left_flag
+                    untorque_right_prev = right_flag
+
                     print(f"HOST: Action after strip contains keys: {list(data.keys())}")
                 except Exception as e:
                     print(f"HOST: Error applying per-arm untorque flags: {e}")

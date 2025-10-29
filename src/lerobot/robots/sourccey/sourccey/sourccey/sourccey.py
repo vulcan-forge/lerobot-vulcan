@@ -230,8 +230,15 @@ class Sourccey(Robot):
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}
 
-            sent_left = self.left_arm.send_action(left_action)
-            sent_right = self.right_arm.send_action(right_action)
+            # Only send to followers if there are keys for that arm
+            if left_action:
+                sent_left = self.left_arm.send_action(left_action)
+            else:
+                sent_left = {}
+            if right_action:
+                sent_right = self.right_arm.send_action(right_action)
+            else:
+                sent_right = {}
 
             prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
             prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
