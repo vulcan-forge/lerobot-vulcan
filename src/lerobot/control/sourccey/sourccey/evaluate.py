@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
 from lerobot.policies.act.modeling_act import ACTPolicy
@@ -13,11 +13,11 @@ from lerobot.configs import parser
 
 @dataclass
 class DatasetEvaluateConfig:
-    repo_id: str = "sourccey-001/eval__act__sourccey-001__wave_hand-001"
+    repo_id: str = "sourccey-003/eval__act__sourccey-003__myles__large-towel-fold-a-001-010"
     num_episodes: int = 1
     episode_time_s: int = 30
     reset_time_s: int = 1
-    task: str = "Wave your hand"
+    task: str = "Fold the large towel in half"
     fps: int = 30
     push_to_hub: bool = False
     private: bool = False
@@ -25,9 +25,9 @@ class DatasetEvaluateConfig:
 @dataclass
 class SourcceyEvaluateConfig:
     id: str = "sourccey"
-    remote_ip: str = "192.168.1.244"
-    model_path: str = "sourccey-002/act__sourccey-002__towel-fold-b-colin-combined/checkpoints/200000/pretrained_model"
-    dataset: DatasetEvaluateConfig = DatasetEvaluateConfig()
+    remote_ip: str = "192.168.1.243"
+    model_path: str = "outputs/train/act__sourccey-003__myles__large-towel-fold-a-001-010/checkpoints/200000/pretrained_model"
+    dataset: DatasetEvaluateConfig = field(default_factory=DatasetEvaluateConfig)
 
 @parser.wrap()
 def evaluate(cfg: SourcceyEvaluateConfig):
