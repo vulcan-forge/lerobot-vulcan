@@ -23,7 +23,7 @@ from lerobot.robots.config import RobotConfig
 def sourccey_cameras_config() -> dict[str, CameraConfig]:
     return {
         "wrist": OpenCVCameraConfig(
-            index_or_path="/dev/video0", fps=30, width=640, height=480
+            index_or_path="/dev/video0", fps=30, width=320, height=240
         ),
     }
 

@@ -81,14 +81,15 @@ def main():
 
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
                 
-                # Send action to robot (untorque handling is automatic)
+                # Send action to robot
                 _action_sent = robot.send_action(data)
 
                 last_cmd_time = time.time()
                 watchdog_active = False
             except zmq.Again:
-                # No command available this cycle
-                pass
+                if not watchdog_active:
+                    # logging.warning("No command available")
+                    pass
             except Exception as e:
                 logging.error("Message fetching failed: %s", e)
 
