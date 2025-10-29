@@ -56,6 +56,22 @@ def main():
     host_config = SourcceyHostConfig()
     host = SourcceyHost(host_config)
 
+    # Countdown before automatically disabling torque
+    try:
+        print("HOST: Safety countdown - will disable torque in 30 seconds...")
+        for remaining in range(30, 0, -1):
+            print(f"HOST: Disabling torque in {remaining}s", end="\r", flush=True)
+            time.sleep(1)
+        print("\nHOST: Countdown finished. Disabling torque now.")
+        try:
+            robot.left_arm.disable_torque()
+            robot.right_arm.disable_torque()
+            print("HOST: Disabled torque on both arms after countdown")
+        except Exception as e:
+            print(f"HOST: Failed to disable torque after countdown: {e}")
+    except Exception as e:
+        print(f"HOST: Countdown skipped due to error: {e}")
+
     last_cmd_time = time.time()
     watchdog_active = False
 
