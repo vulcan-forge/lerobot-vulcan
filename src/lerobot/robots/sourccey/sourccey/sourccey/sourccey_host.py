@@ -59,8 +59,6 @@ def main():
 
     print("Waiting for commands...")
 
-    last_cmd_time = time.time()
-    watchdog_active = False
     untorque_left_prev = False
     untorque_right_prev = False
 
@@ -76,7 +74,6 @@ def main():
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
-                print(f"HOST: Received message from client ({len(msg_bytes)} bytes)")
 
                 # Convert protobuf to action dictionary using existing method
                 robot_action = sourccey_pb2.SourcceyRobotAction()
@@ -90,36 +87,27 @@ def main():
                 try:
                     left_flag = bool(data.get("untorque_left", False))
                     right_flag = bool(data.get("untorque_right", False))
-                    print(f"HOST: Flags received - untorque_left={left_flag} untorque_right={right_flag}")
 
                     # Left arm handling
                     if left_flag:
                         if not untorque_left_prev:
-                            print("HOST: Left falling->rising: disabling left torque")
-                        print("HOST: untorque_left=True -> stripping left_* positions")
-                        robot.left_arm.bus.disable_torque()
+                            robot.left_arm.bus.disable_torque()
                         data = {k: v for k, v in data.items() if not k.startswith("left_")}
                     elif untorque_left_prev and not left_flag:
-                        print("HOST: Left rising->falling: enabling left torque")
                         robot.left_arm.bus.enable_torque()
 
                     # Right arm handling
                     if right_flag:
                         if not untorque_right_prev:
-                            print("HOST: Right falling->rising: disabling right torque")
-                        print("HOST: untorque_right=True -> stripping right_* positions")
-                        robot.right_arm.bus.disable_torque()
+                            robot.right_arm.bus.disable_torque()
                         data = {k: v for k, v in data.items() if not k.startswith("right_")}
                     elif untorque_right_prev and not right_flag:
-                        print("HOST: Right rising->falling: enabling right torque")
                         robot.right_arm.bus.enable_torque()
 
                     untorque_left_prev = left_flag
                     untorque_right_prev = right_flag
-
-                    print(f"HOST: Action after strip contains keys: {list(data.keys())}")
                 except Exception as e:
-                    print(f"HOST: Error applying per-arm untorque flags: {e}")
+                    logging.error("Error applying per-arm untorque flags: %s", e)
 
                 # Send action to robot
                 _action_sent = robot.send_action(data)

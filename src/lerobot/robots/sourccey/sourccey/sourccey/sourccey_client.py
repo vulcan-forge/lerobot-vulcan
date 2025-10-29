@@ -404,10 +404,8 @@ class SourcceyClient(Robot):
 
             if left_key and (left_key in pressed) and (left_key not in self._prev_keys):
                 self.untorque_left_active = not self.untorque_left_active
-                print(f"CLIENT: untorque_left toggled to {self.untorque_left_active}")
             if right_key and (right_key in pressed) and (right_key not in self._prev_keys):
                 self.untorque_right_active = not self.untorque_right_active
-                print(f"CLIENT: untorque_right toggled to {self.untorque_right_active}")
 
             # Always include current flags so host can enforce per-arm blocking
             action["untorque_left"] = self.untorque_left_active

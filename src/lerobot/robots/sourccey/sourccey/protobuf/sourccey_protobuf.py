@@ -47,17 +47,7 @@ class SourcceyProtobuf:
             base_action.theta_vel = float(action.get("theta.vel", 0.0))
             base_action.z_vel = float(action.get("z.vel", 0.0))
             robot_action.base_target_velocity.CopyFrom(base_action)
-
-            # Minimal control flag: untorque_all
-            if "untorque_all" in action:
-                try:
-                    robot_action.untorque_all = bool(action.get("untorque_all", False))
-                    print(f"CLIENT: DEBUG - Set untorque_all={robot_action.untorque_all} in protobuf")
-                except AttributeError as e:
-                    # Field not present in generated module yet
-                    print(f"CLIENT: DEBUG - untorque_all field not present (AttributeError: {e})")
-                    pass
-
+            
             # Per-arm flags
             if "untorque_left" in action:
                 try:
@@ -167,14 +157,8 @@ class SourcceyProtobuf:
             })
 
             # Per-arm flags from protobuf
-            try:
-                action["untorque_left"] = bool(getattr(action_msg, "untorque_left", False))
-            except Exception:
-                action["untorque_left"] = False
-            try:
-                action["untorque_right"] = bool(getattr(action_msg, "untorque_right", False))
-            except Exception:
-                action["untorque_right"] = False
+            action["untorque_left"] = bool(getattr(action_msg, "untorque_left", False))
+            action["untorque_right"] = bool(getattr(action_msg, "untorque_right", False))
 
             return action
 
