@@ -72,14 +72,20 @@ def main():
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
+                print(f"HOST: Received message from client ({len(msg_bytes)} bytes)")
 
                 # Convert protobuf to action dictionary using existing method
                 robot_action = sourccey_pb2.SourcceyRobotAction()
                 robot_action.ParseFromString(msg_bytes)
 
                 # Minimal print: detect the untorque_all flag on the protobuf
-                if getattr(robot_action, "untorque_all", False):
+                untorque_val = getattr(robot_action, "untorque_all", None)
+                if untorque_val is not None and untorque_val:
                     print("HOST: Received untorque_all=True in protobuf message")
+                elif untorque_val is None:
+                    print("HOST: DEBUG - untorque_all field not present in protobuf (needs regeneration)")
+                elif untorque_val is False:
+                    print("HOST: DEBUG - untorque_all field exists but is False")
 
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
 
