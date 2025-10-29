@@ -384,12 +384,21 @@ class SourcceyClient(Robot):
         if self.teleop_keys["rotate_right"] in pressed_keys:
             theta_cmd -= theta_speed
 
-        return {
+        action = {
             "x.vel": x_cmd,
             "y.vel": y_cmd,
             "z.vel": z_cmd,
             "theta.vel": theta_cmd,
         }
+
+        # Integrated keyboard control: untorque_all flag on 'untorque' key
+        try:
+            if self.teleop_keys.get("untorque") in pressed_keys:
+                action["untorque_all"] = True
+        except Exception:
+            pass
+
+        return action
 
     def _from_analog_to_base_action(self, x: float, y: float, z: float, theta: float):
         """Map analog base inputs (in [-1,1]) through the same speed scaling used for keyboard.

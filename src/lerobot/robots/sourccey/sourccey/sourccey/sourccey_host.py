@@ -76,6 +76,11 @@ def main():
                 # Convert protobuf to action dictionary using existing method
                 robot_action = sourccey_pb2.SourcceyRobotAction()
                 robot_action.ParseFromString(msg_bytes)
+
+                # Minimal print: detect the untorque_all flag on the protobuf
+                if getattr(robot_action, "untorque_all", False):
+                    print("HOST: Received untorque_all=True in protobuf message")
+
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
 
                 # Send action to robot

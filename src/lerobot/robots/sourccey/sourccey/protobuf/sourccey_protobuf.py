@@ -48,6 +48,14 @@ class SourcceyProtobuf:
             base_action.z_vel = float(action.get("z.vel", 0.0))
             robot_action.base_target_velocity.CopyFrom(base_action)
 
+            # Minimal control flag: untorque_all
+            if "untorque_all" in action:
+                try:
+                    robot_action.untorque_all = bool(action.get("untorque_all", False))
+                except AttributeError:
+                    # Field not present in generated module yet
+                    pass
+
             return robot_action
 
         except ImportError as e:

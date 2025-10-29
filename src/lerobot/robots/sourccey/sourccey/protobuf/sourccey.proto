@@ -47,4 +47,7 @@ message SourcceyRobotAction {
 
     // Base Action
     BaseVelocity base_target_velocity = 3;
+
+    // Host control actions
+    bool untorque_all = 4;
 }
