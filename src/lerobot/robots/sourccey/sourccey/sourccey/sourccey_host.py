@@ -61,6 +61,8 @@ def main():
 
     untorque_left_prev = False
     untorque_right_prev = False
+    last_cmd_time = time.time()
+    watchdog_active = False
 
     try:
         # Business logic
@@ -115,9 +117,8 @@ def main():
                 last_cmd_time = time.time()
                 watchdog_active = False
             except zmq.Again:
-                if not watchdog_active:
-                    # logging.warning("No command available")
-                    pass
+                # No command available this cycle
+                pass
             except Exception as e:
                 logging.error("Message fetching failed: %s", e)
 
