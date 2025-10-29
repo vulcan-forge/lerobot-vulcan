@@ -73,6 +73,11 @@ class SourcceyClient(Robot):
         # Initialize protobuf converter
         self.protobuf_converter = SourcceyProtobuf()
 
+        # Per-arm untorque toggle state and key edge detection
+        self.untorque_left_active = False
+        self.untorque_right_active = False
+        self._prev_keys: set[str] = set()
+
     ###################################################################
     # Properties and Attributes
     ###################################################################
@@ -391,10 +396,24 @@ class SourcceyClient(Robot):
             "theta.vel": theta_cmd,
         }
 
-        # Integrated keyboard control: untorque_all flag on 'untorque' key
+        # Integrated keyboard controls: toggle per-arm untorque on key press (edge-triggered)
         try:
-            if self.teleop_keys.get("untorque") in pressed_keys:
-                action["untorque_all"] = True
+            pressed = set(pressed_keys)
+            left_key = self.teleop_keys.get("untorque_left")
+            right_key = self.teleop_keys.get("untorque_right")
+
+            if left_key and (left_key in pressed) and (left_key not in self._prev_keys):
+                self.untorque_left_active = not self.untorque_left_active
+                print(f"CLIENT: untorque_left toggled to {self.untorque_left_active}")
+            if right_key and (right_key in pressed) and (right_key not in self._prev_keys):
+                self.untorque_right_active = not self.untorque_right_active
+                print(f"CLIENT: untorque_right toggled to {self.untorque_right_active}")
+
+            # Always include current flags so host can enforce per-arm blocking
+            action["untorque_left"] = self.untorque_left_active
+            action["untorque_right"] = self.untorque_right_active
+
+            self._prev_keys = pressed
         except Exception:
             pass
 

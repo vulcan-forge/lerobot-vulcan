@@ -98,25 +98,22 @@ def main():
                 robot_action = sourccey_pb2.SourcceyRobotAction()
                 robot_action.ParseFromString(msg_bytes)
 
-                # Minimal print: detect the untorque_all flag on the protobuf
-                untorque_val = getattr(robot_action, "untorque_all", None)
-                if untorque_val is not None and untorque_val:
-                    print("HOST: Received untorque_all=True in protobuf message")
-                    try:
-                        robot.left_arm.bus.disable_torque()
-                        robot.right_arm.bus.disable_torque()
-                        print("HOST: Disabled torque on both arms")
-                    except Exception as e:
-                        print(f"HOST: Failed to disable torque: {e}")
-                    last_cmd_time = time.time()
-                    watchdog_active = False
-                    continue
-                elif untorque_val is None:
-                    print("HOST: DEBUG - untorque_all field not present in protobuf (needs regeneration)")
-                elif untorque_val is False:
-                    print("HOST: DEBUG - untorque_all field exists but is False")
+                # Note: per-arm untorque flags are handled after conversion below
 
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
+
+                # If per-arm untorque flags are set, disable torque and block those arm's positions
+                try:
+                    if data.get("untorque_left", False):
+                        robot.left_arm.bus.disable_torque()
+                        # Strip left arm positions
+                        data = {k: v for k, v in data.items() if not k.startswith("left_")}
+                    if data.get("untorque_right", False):
+                        robot.right_arm.bus.disable_torque()
+                        # Strip right arm positions
+                        data = {k: v for k, v in data.items() if not k.startswith("right_")}
+                except Exception as e:
+                    print(f"HOST: Error applying per-arm untorque flags: {e}")
 
                 # Send action to robot
                 _action_sent = robot.send_action(data)

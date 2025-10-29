@@ -58,6 +58,18 @@ class SourcceyProtobuf:
                     print(f"CLIENT: DEBUG - untorque_all field not present (AttributeError: {e})")
                     pass
 
+            # Per-arm flags
+            if "untorque_left" in action:
+                try:
+                    robot_action.untorque_left = bool(action.get("untorque_left", False))
+                except AttributeError:
+                    pass
+            if "untorque_right" in action:
+                try:
+                    robot_action.untorque_right = bool(action.get("untorque_right", False))
+                except AttributeError:
+                    pass
+
             return robot_action
 
         except ImportError as e:
@@ -153,6 +165,16 @@ class SourcceyProtobuf:
                 "theta.vel": base_vel.theta_vel,
                 "z.vel": base_vel.z_vel,
             })
+
+            # Per-arm flags from protobuf
+            try:
+                action["untorque_left"] = bool(getattr(action_msg, "untorque_left", False))
+            except Exception:
+                action["untorque_left"] = False
+            try:
+                action["untorque_right"] = bool(getattr(action_msg, "untorque_right", False))
+            except Exception:
+                action["untorque_right"] = False
 
             return action
 
