@@ -37,8 +37,8 @@ uv run src/lerobot/scripts/sourccey/motor_config.py \
 python src/lerobot/scripts/sourccey/auto_calibrate.py \
   --teleop.type=bi_sourccey_leader \
   --teleop.id=bi_sourccey_leader \
-  --teleop.left_arm_port="COM4" \
-  --teleop.right_arm_port="COM9"
+  --teleop.left_arm_port="COM3" \
+  --teleop.right_arm_port="COM5"
 ```
 
 ```bash
@@ -109,6 +109,13 @@ python src/lerobot/control/sourccey/sourccey/evaluate.py
 ```
 
 ---
+
+Regenerating the Protobuf file
+
+```
+rm -rf src/lerobot/robots/sourccey/sourccey/protobuf/generated
+uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.py
+```
 
 ACT Training
 
