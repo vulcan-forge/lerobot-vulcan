@@ -73,6 +73,11 @@ class SourcceyClient(Robot):
         # Initialize protobuf converter
         self.protobuf_converter = SourcceyProtobuf()
 
+        # Per-arm untorque toggle state and key edge detection
+        self.untorque_left_active = False
+        self.untorque_right_active = False
+        self._prev_keys: set[str] = set()
+
     ###################################################################
     # Properties and Attributes
     ###################################################################
@@ -384,12 +389,33 @@ class SourcceyClient(Robot):
         if self.teleop_keys["rotate_right"] in pressed_keys:
             theta_cmd -= theta_speed
 
-        return {
+        action = {
             "x.vel": x_cmd,
             "y.vel": y_cmd,
             "z.vel": z_cmd,
             "theta.vel": theta_cmd,
         }
+
+        # Integrated keyboard controls: toggle per-arm untorque on key press (edge-triggered)
+        try:
+            pressed = set(pressed_keys)
+            left_key = self.teleop_keys.get("untorque_left")
+            right_key = self.teleop_keys.get("untorque_right")
+
+            if left_key and (left_key in pressed) and (left_key not in self._prev_keys):
+                self.untorque_left_active = not self.untorque_left_active
+            if right_key and (right_key in pressed) and (right_key not in self._prev_keys):
+                self.untorque_right_active = not self.untorque_right_active
+
+            # Always include current flags so host can enforce per-arm blocking
+            action["untorque_left"] = self.untorque_left_active
+            action["untorque_right"] = self.untorque_right_active
+
+            self._prev_keys = pressed
+        except Exception:
+            pass
+
+        return action
 
     def _from_analog_to_base_action(self, x: float, y: float, z: float, theta: float):
         """Map analog base inputs (in [-1,1]) through the same speed scaling used for keyboard.

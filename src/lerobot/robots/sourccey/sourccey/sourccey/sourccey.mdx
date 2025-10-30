@@ -110,6 +110,13 @@ python src/lerobot/control/sourccey/sourccey/evaluate.py
 
 ---
 
+Regenerating the Protobuf file
+
+```
+rm -rf src/lerobot/robots/sourccey/sourccey/protobuf/generated
+uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.py
+```
+
 ACT Training
 
 ```bash

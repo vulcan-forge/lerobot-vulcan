@@ -113,6 +113,9 @@ class SourcceyClientConfig(RobotConfig):
             # Speed control
             "speed_up": "r",
             "speed_down": "f",
+            # Host control (toggle per-arm untorque)
+            "untorque_left": "n",
+            "untorque_right": "m",
             # quit teleop
             "quit": "space",
         }
