@@ -39,6 +39,16 @@ def sourccey_cameras_config() -> dict[str, CameraConfig]:
     }
     return config
 
+def sourccey_motor_models() -> dict[str, str]:
+    return {
+        "shoulder_pan": "sts3215",
+        "shoulder_lift": "sts3250",
+        "elbow_flex": "sts3215",
+        "wrist_flex": "sts3215",
+        "wrist_roll": "sts3215",
+        "gripper": "sts3215",
+    }
+
 def sourccey_dc_motors() -> dict[str, DCMotor]:
     return {
         "front_left": DCMotor(id=1, model="mecanum_wheel", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
@@ -61,22 +71,8 @@ class SourcceyConfig(RobotConfig):
     left_arm_port: str = "/dev/robotLeftArm"
     right_arm_port: str = "/dev/robotRightArm"
 
-    left_arm_motor_models: dict[str, str] = {
-        "shoulder_pan": "sts3215",
-        "shoulder_lift": "sts3250",
-        "elbow_flex": "sts3215",
-        "wrist_flex": "sts3215",
-        "wrist_roll": "sts3215",
-        "gripper": "sts3215",
-    }
-    right_arm_motor_models: dict[str, str] = {
-        "shoulder_pan": "sts3215",
-        "shoulder_lift": "sts3250",
-        "elbow_flex": "sts3215",
-        "wrist_flex": "sts3215",
-        "wrist_roll": "sts3215",
-        "gripper": "sts3215",
-    }
+    left_arm_motor_models: dict[str, str] = field(default_factory=sourccey_motor_models)
+    right_arm_motor_models: dict[str, str] = field(default_factory=sourccey_motor_models)
 
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
 
