@@ -49,6 +49,7 @@ class Sourccey(Robot):
         left_arm_config = SourcceyFollowerConfig(
             id=f"{config.id}_left" if config.id else None,
             calibration_dir=config.calibration_dir,
+            motor_models=config.left_arm_motor_models,
             port=config.left_arm_port,
             disable_torque_on_disconnect=config.left_arm_disable_torque_on_disconnect,
             max_relative_target=config.left_arm_max_relative_target,
@@ -58,6 +59,7 @@ class Sourccey(Robot):
         right_arm_config = SourcceyFollowerConfig(
             id=f"{config.id}_right" if config.id else None,
             calibration_dir=config.calibration_dir,
+            motor_models=config.right_arm_motor_models,
             port=config.right_arm_port,
             orientation="right",
             disable_torque_on_disconnect=config.right_arm_disable_torque_on_disconnect,

@@ -61,6 +61,23 @@ class SourcceyConfig(RobotConfig):
     left_arm_port: str = "/dev/robotLeftArm"
     right_arm_port: str = "/dev/robotRightArm"
 
+    left_arm_motor_models: dict[str, str] = {
+        "shoulder_pan": "sts3215",
+        "shoulder_lift": "sts3250",
+        "elbow_flex": "sts3215",
+        "wrist_flex": "sts3215",
+        "wrist_roll": "sts3215",
+        "gripper": "sts3215",
+    }
+    right_arm_motor_models: dict[str, str] = {
+        "shoulder_pan": "sts3215",
+        "shoulder_lift": "sts3250",
+        "elbow_flex": "sts3215",
+        "wrist_flex": "sts3215",
+        "wrist_roll": "sts3215",
+        "gripper": "sts3215",
+    }
+
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
 
     dc_motors_config: dict = field(default_factory=sourccey_dc_motors_config)
