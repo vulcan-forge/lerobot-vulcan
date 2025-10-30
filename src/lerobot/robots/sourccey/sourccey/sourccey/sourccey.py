@@ -202,7 +202,7 @@ class Sourccey(Robot):
     ###################################################################
     # Data Management
     ###################################################################
-    
+
     def get_observation(self) -> dict[str, Any]:
         try:
             obs_dict = {}
@@ -229,7 +229,7 @@ class Sourccey(Robot):
         try:
             # Apply per-arm untorque flags automatically
             action = self.apply_untorque_flags(action)
-            
+
             left_action = {key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")}
             right_action = {key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")}
             base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
@@ -277,7 +277,7 @@ class Sourccey(Robot):
         """
         Apply per-arm untorque flags: disable/enable torque and strip positions.
         Manages internal state for edge detection.
-        
+
         Returns:
             dict: modified action with positions stripped if untorqued
         """
@@ -325,12 +325,13 @@ class Sourccey(Robot):
     ) -> dict:
         velocity_vector = np.array([x, y, theta])
 
-        # Build the correct kinematic matrix for mechanum wheels
+        # Build the correct kinematic matrix for mecanum wheels
+        # Flip the sign of the lateral (y) column to correct strafing direction
         m = np.array([
-            [ 1,  1, -1], # Front-left wheel
-            [-1,  1, -1], # Front-right wheel
-            [ 1, -1, -1], # Rear-left wheel
-            [-1, -1, -1], # Rear-right wheel
+            [ 1, -1, -1], # Front-left wheel
+            [-1, -1, -1], # Front-right wheel
+            [ 1,  1, -1], # Rear-left wheel
+            [-1,  1, -1], # Rear-right wheel
         ])
 
         wheel_normalized = m.dot(velocity_vector)
@@ -357,16 +358,15 @@ class Sourccey(Robot):
             wheel_normalized["rear_right"],
         ])
 
-        # Build the kinematic matrix for mechanum wheels (same as forward kinematics)
+        # Kinematic matrix for mecanum wheels (must match forward kinematics)
         m = np.array([
-            [ 1,  1, -1], # Front-left wheel
-            [-1,  1, -1], # Front-right wheel
-            [ 1, -1, -1], # Rear-left wheel
-            [-1, -1, -1], # Rear-right wheel
+            [ 1, -1, -1], # Front-left wheel
+            [-1, -1, -1], # Front-right wheel
+            [ 1,  1, -1], # Rear-left wheel
+            [-1,  1, -1], # Rear-right wheel
         ])
 
         # Solve the inverse kinematics: body_velocity = M⁺ · wheel_linear_speeds.
-        # Use pseudo-inverse since we have 4 equations and 3 unknowns
         m_pinv = np.linalg.pinv(m)
         velocity_vector = m_pinv.dot(wheel_array)
         x, y, theta = velocity_vector
