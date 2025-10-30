@@ -81,6 +81,9 @@ def main():
                 # Send action to robot
                 _action_sent = robot.send_action(data)
 
+                # Update the robot
+                robot.update()
+
                 last_cmd_time = time.time()
                 watchdog_active = False
             except zmq.Again:
