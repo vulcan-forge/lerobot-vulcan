@@ -44,12 +44,12 @@ class SourcceyFollower(Robot):
         self.bus = FeetechMotorsBus(
             port=self.config.port,
             motors={
-                "shoulder_pan": Motor(motor_ids[0], "sts3215", norm_mode_body),
-                "shoulder_lift": Motor(motor_ids[1], "sts3250", norm_mode_body),
-                "elbow_flex": Motor(motor_ids[2], "sts3215", norm_mode_body),
-                "wrist_flex": Motor(motor_ids[3], "sts3215", norm_mode_body),
-                "wrist_roll": Motor(motor_ids[4], "sts3215", norm_mode_body),
-                "gripper": Motor(motor_ids[5], "sts3215", MotorNormMode.RANGE_0_100),
+                "shoulder_pan": Motor(motor_ids[0], config.motor_models["shoulder_pan"], norm_mode_body),
+                "shoulder_lift": Motor(motor_ids[1], config.motor_models["shoulder_lift"], norm_mode_body),
+                "elbow_flex": Motor(motor_ids[2], config.motor_models["elbow_flex"], norm_mode_body),
+                "wrist_flex": Motor(motor_ids[3], config.motor_models["wrist_flex"], norm_mode_body),
+                "wrist_roll": Motor(motor_ids[4], config.motor_models["wrist_roll"], norm_mode_body),
+                "gripper": Motor(motor_ids[5], config.motor_models["gripper"], MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )
@@ -126,7 +126,7 @@ class SourcceyFollower(Robot):
 
     ###################################################################
     # Calibration and Configuration Management
-    ################################################################### 
+    ###################################################################
     @property
     def is_calibrated(self) -> bool:
         return self.bus.is_calibrated

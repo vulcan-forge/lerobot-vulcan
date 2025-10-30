@@ -258,6 +258,7 @@ class MotorsBus(abc.ABC):
     model_encoding_table: dict[str, dict]
     model_number_table: dict[str, int]
     model_resolution_table: dict[str, int]
+    model_substitution_table: dict[str, str]
     normalized_data: list[str]
 
     def __init__(
