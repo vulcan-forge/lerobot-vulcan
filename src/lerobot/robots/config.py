@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 import draccus
-from lerobot.constants import HF_LEROBOT_CONFIGURATION
+from lerobot.utils.constants import HF_LEROBOT_CONFIGURATION
 
 
 @dataclass(kw_only=True)

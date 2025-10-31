@@ -1,0 +1,523 @@
+-- Need to clean up all this code and organize all commands in a neat List
+-- We must double check each command to ensure they all work properly before version 0.1.0 launch
+
+---List of commands to help train Sourccey V3 Beta
+
+###
+
+Sourccey Commands
+
+###
+
+```bash
+uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
+    --robot.type=sourccey \
+    --robot.id=sourccey
+```
+
+# For hard reset:
+
+```bash
+uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
+    --robot.type=sourccey \
+    --robot.id=sourccey \
+    --full_reset=True
+```
+
+```bash
+uv run src/lerobot/scripts/sourccey/motor_config.py \
+    --robot.type=sourccey \
+    --robot.id=sourccey \
+    --baud_rate=1000000
+```
+
+# For Teleoperators
+
+```bash
+python src/lerobot/scripts/sourccey/auto_calibrate.py \
+  --teleop.type=bi_sourccey_leader \
+  --teleop.id=bi_sourccey_leader \
+  --teleop.left_arm_port="COM3" \
+  --teleop.right_arm_port="COM8"
+```
+
+```bash
+python -m lerobot.calibrate \
+    --teleop.type=sourccey_leader \
+    --teleop.port=COM28 \
+    --teleop.id=sourccey_leader
+```
+
+```bash
+uv run src/lerobot/scripts/sourccey/motor_config.py \
+    --teleop.type=bi_sourccey_leader \
+    --teleop.id=bi_sourccey_leader \
+    --teleop.left_arm_port="COM28" \
+    --teleop.right_arm_port="COM4"
+    --baud_rate=1000000
+```
+
+To teleoperate, SSH into your Raspberry Pi, navigate to the lerobot repo and run this command:
+
+```
+uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
+
+uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host_degrees
+```
+
+```
+cat /etc/udev/rules.d/99-robot-hardware-ports.rules
+```
+
+```
+uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.py
+```
+
+```
+nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_left.json
+nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_right.json
+cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_left.json
+cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_right.json
+```
+
+###
+
+Computer Commands
+
+###
+
+Then on your computer run the below source command then the teleoperate command
+
+```
+source .venv/bin/activate
+```
+
+```
+python src/lerobot/control/sourccey/sourccey/teleoperate.py
+```
+
+```
+python src/lerobot/control/sourccey/sourccey/record.py
+```
+
+```
+python src/lerobot/control/sourccey/sourccey/replay.py
+```
+
+```
+python src/lerobot/control/sourccey/sourccey/evaluate.py
+```
+
+---
+
+Regenerating the Protobuf file
+
+```
+rm -rf src/lerobot/robots/sourccey/sourccey/protobuf/generated
+uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.py
+```
+
+ACT Training
+
+```bash
+python src/lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey-001__tape-cup1 \
+  --policy.type=act \
+  --output_dir=outputs/train/act__sourccey-001__tape-cup1 \
+  --job_name=act__sourccey-001__tape-cup1 \
+  --policy.device=cuda \
+  --wandb.enable=false \
+  --policy.push_to_hub=false \
+  --steps=100000
+```
+
+python src/lerobot/scripts/lerobot_train.py \
+ --dataset.repo_id=sourccey-003/sourccey-003**tape-cup**myles**combined \
+ --policy.type=act \
+ --output_dir=outputs/train/act**sourccey-003**tape-cup**myles**combined \
+ --job_name=act**sourccey-003**tape-cup**myles\_\_combined \
+ --policy.device=cuda \
+ --wandb.enable=false \
+ --policy.push_to_hub=false \
+ --steps=200000 \
+ --save_freq=20000
+
+```bash
+torchrun --nproc_per_node=2 src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id=sourccey-003/sourccey-003__tape-cup__myles__combined \
+  --policy.type=act \
+  --output_dir=outputs/train/act__sourccey-003__tape-cup__myles__combined \
+  --job_name=act__sourccey-003__tape-cup__myles__combined  \
+  --policy.device=cuda \
+  --wandb.enable=false \
+  --policy.push_to_hub=false \
+  --steps=300000 \
+  --save_freq=20000 \
+  --batch_size=64 \
+  --distributed_training=true \
+  --num_gpus=2
+```
+
+---- Train on Pretrained SmolVLA model
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python lerobot/scripts/train.py \
+ --dataset.repo_id=local/sourccey_v2beta_towel_010_a \
+ --policy.path=lerobot/smolvla_base \
+ --policy.device=cuda \
+ --output_dir=outputs/train/smolvla_base_sourccey_v2beta_towel_010_a \
+ --job_name=smolvla_base_sourccey_v2beta_towel_010_a \
+ --wandb.enable=false \
+ --steps=100000 \
+ --batch_size=4
+```
+
+```bash
+torchrun --nproc_per_node=2 lerobot/scripts/train.py \
+ --dataset.repo_id=local/sourccey_v2beta_towel_010_a \
+ --policy.path=lerobot/smolvla_base \
+ --policy.device=cuda \
+ --output_dir=outputs/train/smolvla_base_sourccey_v2beta_towel_010_a \
+ --job_name=smolvla_base_sourccey_v2beta_towel_010_a \
+ --wandb.enable=false \
+ --steps=100000 \
+ --batch_size=8 \
+ --distributed_training=true \
+ --num_gpus=2
+```
+
+---
+
+--steps=200000 \
+ --batch_size=64 \
+
+----- Combine Dataset functions
+
+--DO NOT HAVE TRAILING COMMAS WHEN USING THE COMBINE DATASET IT WONT WORK
+--AND WILL SEND YOU ON A WILD GOOSE CHASE BECAUSE THE ERROR IS NONSENSICAL!!!
+
+```bash
+python src/lerobot/scripts/sourccey/combine_datasets.py \
+    --dataset_paths='[
+      "sourccey-003/sourccey-003__tape-cup-1__myles",
+      "sourccey-003/sourccey-003__tape-cup-2__myles",
+      "sourccey-003/sourccey-003__tape-cup-3__myles",
+      "sourccey-003/sourccey-003__tape-cup-4__myles",
+      "sourccey-003/sourccey-003__tape-cup-5__myles",
+      "sourccey-003/sourccey-003__tape-cup-6__myles",
+      "sourccey-003/sourccey-003__tape-cup-7__myles",
+      "sourccey-003/sourccey-003__tape-cup-8__myles",
+      "sourccey-003/sourccey-003__tape-cup-9__myles",
+      "sourccey-003/sourccey-003__tape-cup-10__myles",
+      "sourccey-003/sourccey-003__tape-cup-11__myles",
+      "sourccey-003/sourccey-003__tape-cup-12__myles",
+      "sourccey-003/sourccey-003__tape-cup-13__myles",
+      "sourccey-003/sourccey-003__tape-cup-14__myles",
+      "sourccey-003/sourccey-003__tape-cup-15__myles",
+      "sourccey-003/sourccey-003__tape-cup-16__myles",
+      "sourccey-003/sourccey-003__tape-cup-17__myles",
+      "sourccey-003/sourccey-003__tape-cup-18__myles",
+      "sourccey-003/sourccey-003__tape-cup-19__myles",
+      "sourccey-003/sourccey-003__tape-cup-20__myles",
+      "sourccey-003/sourccey-003__tape-cup-21__myles",
+      "sourccey-003/sourccey-003__tape-cup-22__myles",
+      "sourccey-003/sourccey-003__tape-cup-23__myles",
+      "sourccey-003/sourccey-003__tape-cup-24__myles",
+      "sourccey-003/sourccey-003__tape-cup-25__myles"
+    ]' \
+    --output_path="sourccey-003/sourccey-003__tape-cup__myles__combined-1-25-4"
+```
+
+---
+
+## -- SO100
+
+python -m lerobot.find_port
+python -m lerobot.find_cameras
+
+python -m lerobot.record \
+ --robot.type=so100_follower \
+ --robot.port=/dev/ttyUSB0 \
+ --robot.id=so100_follower \
+ --robot.cameras="{laptop: {type: opencv, index_or_path: /dev/video0, width: 640, height: 480, fps: 30}}" \
+ --teleop.type=so100_leader \
+ --teleop.port=/dev/ttyUSB1 \
+ --teleop.id=so100_leader \
+ --dataset.repo_id=local/so100-001-test \
+ --dataset.num_episodes=10 \
+ --dataset.single_task="Grab the tap and put it in the cup" \
+ --dataset.push_to_hub=false \
+ --display_data=true
+
+python -m lerobot.record \
+ --robot.type=so100_follower \
+ --robot.port=COM28 \
+ --robot.id=so100_follower \
+ --robot.cameras="{laptop: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+ --teleop.type=so100_leader \
+ --teleop.port=COM29 \
+ --teleop.id=so100_leader \
+ --dataset.repo_id=local/so100-001-test \
+ --dataset.num_episodes=10 \
+ --dataset.single_task="Grab the tap and put it in the cup" \
+ --dataset.push_to_hub=false \
+ --display_data=true
+
+torchrun --nproc_per_node=2 lerobot/scripts/train.py \
+ --dataset.repo_id=local/so100-001-test \
+ --policy.type=act \
+ --output_dir=outputs/train/act_so100-001-test \
+ --job_name=act_so100-001-test \
+ --policy.device=cuda \
+ --wandb.enable=false \
+ --steps=100000 \
+ --save_freq=10000 \
+ --batch_size=32 \
+ --distributed_training=true \
+ --num_gpus=2
+
+python -m lerobot.record \
+ --robot.type=so100_follower \
+ --robot.port=/dev/ttyUSB0 \
+ --robot.id=so100_follower \
+ --robot.cameras="{laptop: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+ --dataset.repo_id=local/eval_so100-001-test \
+ --dataset.num_episodes=1 \
+ --dataset.single_task="Grab the tap and put it in the cup" \
+ --dataset.push_to_hub=false \
+ --policy.path=outputs/train/act_so100-001-test/checkpoints/040000/pretrained_model \
+ --display_data=true
+
+## -- Server SO100
+
+```
+python -m lerobot.record
+  --robot.type=so100_double_follower \
+  --robot.left_port=/dev/robotLeft \
+  --robot.right_port=/dev/ttyUSB2 \
+  --robot.id=double_so100_follower \
+  --robot.cameras="{ front: {type: opencv, index_or_path: '/dev/video0', width: 640, height: 480, fps: 30}, side: {type: opencv, index_or_path: '/dev/video2', width: 640, height: 480, fps: 30 }" \
+  --teleop.type=so100_double_leader \
+  --teleop.type=so100_double_leader \
+  --teleop.left_port=/dev/ttyUSB1 \
+  --teleop.right_port=/dev/ttyUSB0 \
+  --teleop.id=so100_double_leader \
+  --dataset.repo_id=local/double_so100_towelfold_000 \
+  --dataset.num_episodes=1 \
+  --dataset.single_task="Dual arm manipulation task" \
+  --dataset.push_to_hub=false
+```
+
+---
+
+## Sourccey SO100 Test
+
+```
+lerobot-teleoperate \
+  --robot.type=bi_so100_follower \
+  --robot.left_arm_port=/dev/robotLeftArm \
+  --robot.right_arm_port=/dev/robotRightArm \
+  --robot.id=bi_so100_follower \
+  --robot.cameras="{ cameraFrontLeft: {type: opencv, index_or_path: '/dev/video2', width: 640, height: 360, fps: 30}, cameraFrontRight: {type: opencv, index_or_path: '/dev/cameraFrontRight', width: 640, height: 360, fps: 30 }, cameraWristLeft: {type: opencv, index_or_path: '/dev/video4', width: 640, height: 360, fps: 30}, cameraWristRight: {type: opencv, index_or_path: '/dev/video6', width: 640, height: 360, fps: 30} }" \
+  --teleop.type=bi_so100_leader \
+  --teleop.left_arm_port=/dev/ttyACM3 \
+  --teleop.right_arm_port=/dev/ttyACM2 \
+  --teleop.id=bi_so100_leader
+```
+
+```
+nano ~/.cache/huggingface/lerobot/calibration/robots/so100_follower/bi_so100_follower_left.json
+nano ~/.cache/huggingface/lerobot/calibration/robots/so100_follower/bi_so100_follower_right.json
+cat ~/.cache/huggingface/lerobot/calibration/robots/so100_follower/bi_so100_follower_left.json
+cat ~/.cache/huggingface/lerobot/calibration/robots/so100_follower/bi_so100_follower_right.json
+
+nano ~/.cache/huggingface/lerobot/calibration/teleoperators/so100_leader/bi_so100_leader_left.json
+nano ~/.cache/huggingface/lerobot/calibration/teleoperators/so100_leader/bi_so100_leader_right.json
+cat ~/.cache/huggingface/lerobot/calibration/teleoperators/so100_leader/bi_so100_leader_left.json
+cat ~/.cache/huggingface/lerobot/calibration/teleoperators/so100_leader/bi_so100_leader_right.json
+```
+
+```
+lerobot-record \
+  --robot.type=bi_so100_follower \
+  --robot.left_arm_port=/dev/robotLeftArm \
+  --robot.right_arm_port=/dev/robotRightArm \
+  --robot.id=bi_so100_follower \
+  --robot.cameras="{ cameraFrontLeft: {type: opencv, index_or_path: '/dev/video2', width: 640, height: 360, fps: 30}, cameraFrontRight: {type: opencv, index_or_path: '/dev/cameraFrontRight', width: 640, height: 360, fps: 30 }, cameraWristLeft: {type: opencv, index_or_path: '/dev/video4', width: 640, height: 360, fps: 30}, cameraWristRight: {type: opencv, index_or_path: '/dev/video6', width: 640, height: 360, fps: 30} }" \
+  --teleop.type=bi_so100_leader \
+  --teleop.left_arm_port=/dev/ttyACM3 \
+  --teleop.right_arm_port=/dev/ttyACM2 \
+  --teleop.id=bi_so100_leader \
+  --dataset.repo_id=local/ai_test_2 \
+  --dataset.num_episodes=10 \
+  --dataset.episode_time_s=25 \
+  --dataset.reset_time_s=5 \
+  --dataset.single_task="Grab the tape and put it in the cup" \
+  --dataset.push_to_hub=false
+```
+
+```
+cd ~/Desktop/Projects/lerobot-vulcan-nightly
+cd ~/.cache/huggingface/lerobot/local
+rm -r ~/.cache/huggingface/lerobot/local/ai_test_2
+```
+
+python src/lerobot/scripts/train.py \
+ --dataset.repo_id=local/sourccey-001**ai_test_6_shoulder-fast_chrism_combined \
+ --policy.type=act \
+ --output_dir=outputs/train/act**sourccey-001**ai_test_6_shoulder-fast_chrism_combined \
+ --job_name=act**sourccey-001\_\_ai_test_6_shoulder-fast_chrism_combined \
+ --policy.device=cuda \
+ --save_freq=20000 \
+ --policy.push_to_hub=false \
+ --wandb.enable=false \
+ --steps=40000
+
+## Train command 08/19/2025
+
+```
+python src/lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey-001__ai_test_6_shoulder-fast_chrism_combined \
+  --policy.type=act \
+  --output_dir=outputs/train/act__sourccey-001__ai_test_6_shoulder-fast_chrism_combined \
+  --job_name=act__sourccey-001__ai_test_6_shoulder-fast_chrism_combined \
+  --policy.device=cuda \
+  --save_freq=20000 \
+  --policy.push_to_hub=false \
+  --wandb.enable=false \
+  --steps=40000
+```
+
+```
+./venv/Scripts/python src/lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey-001__ai_test_6_shoulder-fast_chrism_combined \
+  --policy.type=act \
+  --output_dir=outputs/train/act__sourccey-001__ai_test_6_shoulder-fast_chrism_combined \
+  --job_name=act__sourccey-001__ai_test_6_shoulder-fast_chrism_combined \
+  --policy.device=cuda \
+  --save_freq=20000 \
+  --policy.push_to_hub=false \
+  --wandb.enable=false \
+  --steps=40000
+```
+
+```
+.venv/Scripts/python src/lerobot/scripts/train.py \
+  --dataset.repo_id=local/sourccey_v3beta-001__ai_test_9 \
+  --policy.type=act \
+  --output_dir=outputs/train/act__dtest__sourccey_v3beta-001__ai_test_9 \
+  --job_name=act__sourccey-001__dtest__sourccey_v3beta-001__ai_test_9 \
+  --policy.device=cuda \
+  --save_freq=20000 \
+  --policy.push_to_hub=false \
+  --wandb.enable=false \
+  --steps=20000
+```
+
+-- SO100
+
+```bash
+python -m lerobot.auto_calibrate \
+    --robot.type=so100_follower \
+    --robot.id=so100_follower-001 \
+    --robot.port=COM37
+```
+
+```bash
+python -m lerobot.auto_calibrate \
+    --teleop.type=so100_leader \
+    --teleop.id=so100_follower-001 \
+    --teleop.port=COM38
+```
+
+```bash
+python src/lerobot/teleoperate.py \
+    --robot.type=so100_follower \
+    --robot.port=COM37 \
+    --robot.id=so100_follower-001 \
+    --robot.cameras="{ main: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+    --teleop.type=so100_leader \
+    --teleop.port=COM38 \
+    --teleop.id=so100_follower-001 \
+    --display_data=True
+```
+
+```bash
+python src/lerobot/teleoperate.py
+    --robot.type=so100_follower
+    --robot.port=COM37
+    --robot.id=so100_follower-001
+    --teleop.type=so100_leader
+    --teleop.port=COM7
+    --teleop.id=so100_follower-001
+    --display_data=true
+    --robot.cameras={"main": { "type": opencv, "index_or_path": 0, "width": 640, "height": 480, "fps": 30}}
+```
+
+```bash
+python src/lerobot/record.py \
+    --robot.type=so100_follower \
+    --robot.port=COM37 \
+    --robot.id=so100_follower-001 \
+    --robot.cameras="{'main': { 'type': opencv, 'index_or_path': 0, 'width': 640, 'height': 480, 'fps': 30}}" \
+    --teleop.type=so100_leader \
+    --teleop.port=COM7 \
+    --teleop.id=so100_follower-001 \
+    --dataset.repo_id=local/dataset \
+    --dataset.num_episodes=3 \
+    --dataset.episode_time_s=30 \
+    --dataset.reset_time_s=1 \
+    --dataset.single_task="Wave your hand" \
+    --dataset.push_to_hub=false
+```
+
+```bash
+python src/lerobot/replay.py \
+    --robot.type=so100_follower \
+    --robot.port=COM4 \
+    --robot.id=so100_follower-001 \
+    --robot.cameras="{ main: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}}" \
+    --dataset.repo_id=local/dataset \
+    --dataset.episode=0
+```
+
+```bash
+python src/lerobot/scripts/train.py \
+ --dataset.repo_id=so100_follower-001/dataset \
+ --policy.type=act \
+ --output_dir=outputs/train/act_model_1 \
+ --job_name=act_model_1 \
+ --policy.device=cuda \
+ --batch_size=8 \
+ --steps=1000 \
+ --wandb.enable=false \
+ --policy.push_to_hub=false
+```
+
+```bash
+python src/lerobot/record.py \
+    --robot.type=so100_follower \
+    --robot.port=COM37 \
+    --robot.id=so100_follower-001 \
+    --robot.cameras="{'main': { 'type': opencv, 'index_or_path': 0, 'width': 640, 'height': 480, 'fps': 30}}" \
+    --teleop.type=so100_leader \
+    --teleop.port=COM7 \
+    --teleop.id=so100_follower-001 \
+    --dataset.repo_id=local/eval_dataset_testl \
+    --dataset.num_episodes=3 \
+    --dataset.episode_time_s=30 \
+    --dataset.reset_time_s=5 \
+    --dataset.single_task="Grab towel and fold it" \
+    --dataset.push_to_hub=false \
+    --policy.path=outputs/train/act_model_1/checkpoints/001000/pretrained_model
+```
+
+```
+python src/lerobot/control/sourccey/sourccey/teleoperate.py \
+  --id="sourccey"
+  --remote_ip="192.168.1.237"
+  --left_arm_port="COM3"
+  --right_arm_port="COM8"
+  --keyboard_port="keyboard"
+  --fps=30
+```

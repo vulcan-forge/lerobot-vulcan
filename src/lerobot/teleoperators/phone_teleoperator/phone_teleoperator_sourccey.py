@@ -81,7 +81,7 @@ except ImportError as e:
         "Please install with: pip install pyroki viser yourdfpy"
     ) from e
 
-from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.teleoperators.teleoperator import Teleoperator
 
 from .config_phone_teleoperator_sourccey import PhoneTeleoperatorSourcceyConfig
@@ -104,6 +104,24 @@ class PhoneTeleoperatorSourccey(Teleoperator):
     def __init__(self, config: PhoneTeleoperatorSourcceyConfig, **kwargs):
         super().__init__(config, **kwargs)
         self.config = config
+        self.arm_side = getattr(self.config, "arm_side", "left").lower()
+        
+        # Set default joint offsets based on arm side if not explicitly provided
+        if hasattr(self.config, "joint_offsets_deg"):
+            if self.config.joint_offsets_deg is None:
+                # Initialize with default values if None
+                self.config.joint_offsets_deg = {
+                    "shoulder_pan": 0.0,
+                    "shoulder_lift": 0.0,
+                    "elbow_flex": 0.0,
+                    "wrist_flex": 0.0,
+                    "wrist_roll": 0.0,
+                }
+            
+            # Set shoulder_pan offset based on arm_side if it's still at default
+            if self.config.joint_offsets_deg.get("shoulder_pan", 0.0) == 0.0:
+                offset_value = 30.0 if self.arm_side == "right" else -30.0
+                self.config.joint_offsets_deg["shoulder_pan"] = offset_value
         
         # Initialize robot model for IK
         self.urdf = None
@@ -120,9 +138,19 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         # Reset position holding - store the position when reset starts
         self.reset_hold_position = None
         
-        # Pose tracking
-        self.current_t_R = np.array(self.config.initial_position)
-        self.current_q_R = np.array(self.config.initial_wxyz)
+        # Store last valid arm position for reset functionality
+        self.last_valid_arm_position = None
+        
+        # Pose tracking (per-arm initial)
+        if self.arm_side == "right":
+            # Store original right arm initial pose for later mirroring when teleop starts
+            self._original_right_position = np.array(getattr(self.config, "initial_position_right", self.config.initial_position))
+            self._original_right_quat = np.array(getattr(self.config, "initial_wxyz_right", self.config.initial_wxyz))
+            self.current_t_R = self._original_right_position.copy()
+            self.current_q_R = self._original_right_quat.copy()
+        else:
+            self.current_t_R = np.array(self.config.initial_position)
+            self.current_q_R = np.array(self.config.initial_wxyz)
         self.initial_phone_quat = None
         self.initial_phone_pos = None
         self.last_precision_mode = False
@@ -142,6 +170,55 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         # Flag to show initial motor positions on first get_action call
         self.initial_positions_shown = False
         
+        # Temporal smoothing state (per controlled arm)
+        self._prev_q = None
+        # Elbow soft stop threshold (radians), computed from URDF limits when available
+        self._elbow_soft_stop = None
+        # Elbow backward block baseline (radians) captured at start of teleop
+        self._elbow_back_limit = None
+        # Direction to block as "backwards": 'increase' or 'decrease'
+        self._elbow_block_direction = getattr(self.config, "elbow_block_direction", "increase")
+        
+        # Tuning parameters (can be edited in-script)
+        # Joint indices: 0 shoulder_pan, 1 shoulder_lift, 2 elbow_flex, 3 wrist_flex, 4 wrist_roll, 5 gripper
+        self.tune = {
+            "lowpass_alpha": 0.25,  # 0..1; lower = smoother
+            "delta_scale": {  # per-joint delta multipliers (post-IK, relative to previous)
+                0: 0.5,  # shoulder_pan
+                1: 1.0,
+                2: 1.0,
+                3: 1.0,
+                4: 1.0,
+                5: 1.0,
+            },
+            "wrist_roll_overhand_bias": {
+                "enabled": True,
+                "index": 4,
+                "target": 0.0,   # radians
+                "blend": 0.05,   # 0..1 small bias
+            },
+            "elbow_soft_stop": {
+                "enabled": True,
+                "index": 2,
+                "fraction_from_lower": 0.25,  # 0..1; 0.25 ~ 6:00 soft stop
+                "below_small_step_deg": 3.0,
+                "below_margin_deg": 8.0,
+                "above_max_down_deg": 25.0,
+            },
+            "elbow_back_block": {
+                "enabled": True,
+                "index": 2,
+                "direction": getattr(self.config, "elbow_block_direction", "increase"),
+                "tolerance_deg": 2.0,
+            },
+            "fixed_rate": {
+                "enabled": True,
+                "joints": {
+                    0: {"step_deg": 2.0, "deadband_deg": 0.2},
+                },
+            },
+        }
+        
         # Connection timeout tracking
         self.last_phone_data_time = None
         self.phone_disconnection_timeout = 3.0  # seconds without data before considering disconnected
@@ -149,15 +226,17 @@ class PhoneTeleoperatorSourccey(Teleoperator):
     @cached_property
     def action_features(self) -> dict[str, type]:
         """Features for the actions produced by this teleoperator."""
-        # Assuming 6 DOF arm + gripper (adjust based on your robot)
-        motor_names = [
+        # Controlled arm depends on arm_side
+        joints = [
             "shoulder_pan.pos",
-            "shoulder_lift.pos", 
+            "shoulder_lift.pos",
             "elbow_flex.pos",
             "wrist_flex.pos",
             "wrist_roll.pos",
-            "gripper.pos"
+            "gripper.pos",
         ]
+        prefix = "left_" if self.arm_side == "left" else "right_"
+        motor_names = [f"{prefix}{j}" for j in joints]
         return {name: float for name in motor_names}
 
     @cached_property
@@ -184,7 +263,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         try:
             # Initialize robot model
             urdf_path = self.config.urdf_path
-            mesh_path = self.config.mesh_path
+            mesh_path = getattr(self.config, "mesh_path", None)
             
             # Resolve relative paths to absolute paths
             if urdf_path and mesh_path:
@@ -213,19 +292,27 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     
                     if sourccey_model_path.exists():
                         auto_urdf_path = str(sourccey_model_path / "Arm.urdf")
-                        auto_mesh_path = str(sourccey_model_path / "meshes")
                         urdf_path = urdf_path or auto_urdf_path
-                        mesh_path = mesh_path or auto_mesh_path
-                        logger.info(f"Auto-detected Sourccey paths - URDF: {urdf_path}, Mesh: {mesh_path}")
+                        if mesh_path:
+                            logger.info(f"Auto-detected Sourccey URDF: {urdf_path}")
+                        else:
+                            logger.info(f"Auto-detected Sourccey URDF (no meshes): {urdf_path}")
                     else:
                         raise FileNotFoundError(f"Could not find Sourccey model directory at {sourccey_model_path}")
                 except Exception as e:
                     logger.warning(f"Could not auto-detect Sourccey paths: {e}")
-                    if not urdf_path or not mesh_path:
-                        raise ValueError("URDF path and mesh path must be provided in config or Sourccey model must be available in lerobot/robots/sourccey/sourccey_v2beta/model/")
+                    if not urdf_path:
+                        raise ValueError("URDF path must be provided in config or model must exist in lerobot/robots/sourccey/sourccey_v2beta/model/")
                 
-            self.urdf = yourdfpy.URDF.load(urdf_path, mesh_dir=mesh_path)
+            # Load URDF; meshes optional
+            if mesh_path:
+                self.urdf = yourdfpy.URDF.load(urdf_path, mesh_dir=mesh_path)
+            else:
+                self.urdf = yourdfpy.URDF.load(urdf_path)
             self.robot = pk.Robot.from_urdf(self.urdf)
+            # Compute elbow soft stop from URDF limits if available
+            frac = float(self.tune["elbow_soft_stop"]["fraction_from_lower"]) if self.tune["elbow_soft_stop"]["enabled"] else 0.25
+            self._compute_elbow_soft_stop(frac)
             
             # Initialize visualization if enabled
             if self.config.enable_visualization:
@@ -241,6 +328,39 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         except Exception as e:
             logger.error(f"Failed to connect {self}: {e}")
             raise
+
+    def _compute_elbow_soft_stop(self, fraction: float = 0.25) -> None:
+        """Compute elbow soft-stop threshold from URDF joint limits.
+
+        By default uses 25% from the lower limit to allow roughly twice the range
+        compared to the prior halfway clamp (closer to 6:00 vs 9:00).
+        """
+        try:
+            joint_name = "elbow_flex"
+            lower = None
+            upper = None
+            jm = getattr(self.urdf, "joint_map", None)
+            if jm and joint_name in jm:
+                limit = getattr(jm[joint_name], "limit", None)
+                lower = getattr(limit, "lower", None)
+                upper = getattr(limit, "upper", None)
+            if (lower is None or upper is None) and hasattr(self.urdf, "joints"):
+                for j in getattr(self.urdf, "joints", []):
+                    if getattr(j, "name", None) == joint_name:
+                        limit = getattr(j, "limit", None)
+                        lower = getattr(limit, "lower", None)
+                        upper = getattr(limit, "upper", None)
+                        break
+            if lower is not None and upper is not None:
+                low = float(lower)
+                up = float(upper)
+                if up < low:
+                    low, up = up, low
+                self._elbow_soft_stop = float(low + fraction * (up - low))
+            else:
+                self._elbow_soft_stop = None
+        except Exception:
+            self._elbow_soft_stop = None
 
     def calibrate(self) -> None:
         """Phone teleoperator doesn't require calibration."""
@@ -275,8 +395,12 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         # Use the initial target pose, not the current robot joint positions
         # The current joint positions are used elsewhere, but the target pose is what we map to
         init_rot_robot = _rotation_from_quat(self.current_q_R, scalar_first=True)
-        self.current_t_R = np.array(self.config.initial_position)
-        self.current_q_R = np.array(self.config.initial_wxyz)
+        if self.arm_side == "right":
+            self.current_t_R = np.array(getattr(self.config, "initial_position_right", self.config.initial_position))
+            self.current_q_R = np.array(getattr(self.config, "initial_wxyz_right", self.config.initial_wxyz))
+        else:
+            self.current_t_R = np.array(self.config.initial_position)
+            self.current_q_R = np.array(self.config.initial_wxyz)
 
         logger.info("Getting initial phone data for mapping setup...")
         logger.info(f"gRPC server listening on port {self.config.grpc_port}")
@@ -334,7 +458,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         scale = (
             self.config.sensitivity_precision if precision_mode 
             else self.config.sensitivity_normal
-        )
+        ) * float(getattr(self.config, "mapping_gain", 1.0))
 
         # Translate
         delta = (phone_pos - self.initial_phone_pos) * scale
@@ -344,7 +468,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         init_rot = _rotation_from_quat(self.initial_phone_quat, scalar_first=True)
         curr_rot = _rotation_from_quat(phone_quat, scalar_first=True)
         relative_rot = init_rot.inv() * curr_rot
-        rotvec = relative_rot.as_rotvec() * self.config.rotation_sensitivity
+        rotvec = relative_rot.as_rotvec() * (self.config.rotation_sensitivity * float(getattr(self.config, "mapping_gain", 1.0)))
         scaled_rot = R.from_rotvec(rotvec)
         quat_scaled = init_rot * scaled_rot
 
@@ -370,26 +494,68 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected")
 
-        # Extract current robot position from observation
-        current_joint_pos_deg = None
+        # Extract current robot positions from observation (controlled arm only)
+        current_left_arm_pos_deg = None
         if observation is not None:
             try:
-                # Extract joint positions from observation (assumes motor names follow pattern)
-                motor_keys = ["shoulder_pan.pos", "shoulder_lift.pos", "elbow_flex.pos", 
-                             "wrist_flex.pos", "wrist_roll.pos", "gripper.pos"]
-                current_joint_pos_deg = [observation.get(key, 0.0) for key in motor_keys]
+                # Define joint name patterns to look for (without any prefix requirements)
+                joint_base_names = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+                
+                # Try to find keys that contain these joint names with .pos suffix
+                found_keys = []
+                for joint_name in joint_base_names:
+                    matching_key = None
+                    # Look for any key that contains the joint name and ends with .pos
+                    for obs_key in observation.keys():
+                        if joint_name in obs_key and obs_key.endswith(".pos"):
+                            matching_key = obs_key
+                            break
+                    
+                    if matching_key:
+                        found_keys.append(matching_key)
+                    else:
+                        # If we can't find a key for this joint, we can't proceed
+                        found_keys = []
+                        break
+                
+                # If we found all required joint keys, extract the values
+                if len(found_keys) == len(joint_base_names):
+                    current_left_arm_pos_deg = [observation[key] for key in found_keys]
+                    logger.debug(f"Found joint keys: {found_keys}")
+                else:
+                    logger.debug(f"Could not find all required joint keys. Available keys: {list(observation.keys())}")
+                    current_left_arm_pos_deg = None
+                        
             except Exception as e:
-                logger.warning(f"Could not extract joint positions from observation: {e}")
+                logger.warning(f"Could not extract left arm joint positions from observation: {e}")
         
-        # If no observation or extraction failed, use rest pose
-        if current_joint_pos_deg is None:
-            # Phone teleoperator always works in degrees (robot is auto-configured)
-            current_joint_pos_deg = list(np.rad2deg(self.config.rest_pose))
-            logger.debug("Using rest pose as current position")
+        # If we successfully extracted position, store it as last valid position
+        if current_left_arm_pos_deg is not None and not all(pos == 0.0 for pos in current_left_arm_pos_deg):
+            self.last_valid_arm_position = current_left_arm_pos_deg.copy()
+        
+        # If no valid observation, use last valid position or return early to avoid unwanted movement
+        if current_left_arm_pos_deg is None:
+            if self.last_valid_arm_position is not None:
+                current_left_arm_pos_deg = self.last_valid_arm_position.copy()
+                logger.debug("Using last valid arm position")
+            else:
+                # No valid observation and no last position - avoid sending arm commands
+                logger.warning("No valid observation data available - skipping arm control to avoid unwanted movement")
+                # Still try to get phone data for base controls if available
+                try:
+                    data = self.pose_service.get_latest_pose(block=False) if self.pose_service else None
+                    if data and getattr(self.config, "enable_base_from_phone", True):
+                        base = data.get("base")
+                        if base:
+                            return self._merge_base_with_action({}, base=base)
+                except Exception:
+                    pass
+                # Return empty action - no arm movement, no base movement
+                return {}
 
         # Show initial motor positions immediately on first call (before phone connection)
         if not self.initial_positions_shown:
-            self._display_motor_positions_formatted(current_joint_pos_deg, "INITIAL ROBOT POSITION")
+            self._display_motor_positions_formatted(current_left_arm_pos_deg, "INITIAL LEFT ARM POSITION")
             self.initial_positions_shown = True
 
         try:
@@ -428,29 +594,49 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     self.motor_positions_read = False
                     
                     # Continuously return rest position until phone reconnects
-                    current_joint_pos_deg = list(np.rad2deg(self.config.rest_pose))
-                    return self._format_action_dict(current_joint_pos_deg)
+                    if self.arm_side == "right":
+                        # Right arm: use rest_pose_right with shoulder_lift flip for hardware compatibility
+                        rest_pose_deg = list(np.rad2deg(getattr(self.config, "rest_pose_right", self.config.rest_pose)))
+                        if len(rest_pose_deg) > 1:
+                            rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for right arm hardware
+                    else:
+                        # Left arm: use rest_pose with shoulder_lift flip for hardware compatibility
+                        rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
+                        if len(rest_pose_deg) > 1:
+                            rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for left arm hardware
+                    return self._format_action_dict(rest_pose_deg)
                 
                 # Get the last known data (may be stale) for continued operation
                 data = self.pose_service.get_latest_pose(block=False)
 
             # Handle phone connection
             if not self._phone_connected:
-                # Pass current position to connection setup (IK solver always expects radians)
+                # Pass current left arm position to connection setup (IK solver always expects radians)
                 # Phone teleoperator always works in degrees (robot is auto-configured)
-                curr_qpos_rad = np.deg2rad(current_joint_pos_deg)
+                curr_qpos_rad = np.deg2rad(current_left_arm_pos_deg)
                 self.quat_RP, self.translation_RP = self._open_phone_connection(curr_qpos_rad)
                 self._phone_connected = True
 
             if not self.start_teleop:
-                # Phone teleoperator always works in degrees (robot is auto-configured)
-                current_joint_pos_deg = list(np.rad2deg(self.config.rest_pose))
+                # Teleop inactive: keep arms at rest, but allow base commands if configured
+                if self.arm_side == "right":
+                    # Right arm: use rest_pose_right with shoulder_lift flip for hardware compatibility
+                    rest_pose_deg = list(np.rad2deg(getattr(self.config, "rest_pose_right", self.config.rest_pose)))
+                    if len(rest_pose_deg) > 1:
+                        rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for right arm hardware
+                else:
+                    # Left arm: use rest_pose with shoulder_lift flip for hardware compatibility
+                    rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
+                    if len(rest_pose_deg) > 1:
+                        rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for left arm hardware
                 self._phone_connected = False
-                # Reset timer when teleop stops
                 self.teleop_start_time = None
                 self.motor_positions_read = False
-                # Return current position when not teleoperating
-                return self._format_action_dict(current_joint_pos_deg)
+                base = data.get("base") if data is not None else None
+                if getattr(self.config, "base_allow_when_inactive", True):
+                    return self._merge_base_with_action(self._format_action_dict(rest_pose_deg), base=base)
+                else:
+                    return self._format_action_dict(rest_pose_deg)
             
             # Start timer when teleop becomes active
             if self.teleop_start_time is None:
@@ -458,7 +644,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             
             # Check if 5 seconds have passed and we haven't read positions yet
             if not self.motor_positions_read and time.time() - self.teleop_start_time >= 5.0:
-                self._read_and_display_motor_positions(current_joint_pos_deg)
+                self._read_and_display_motor_positions(current_left_arm_pos_deg)
                 self.motor_positions_read = True
 
             switch_state = data.get("switch", False) if data is not None else False
@@ -470,30 +656,50 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             
             # Check for reset transition (prev=False, current=True) - reset just started
             if self.prev_is_resetting == False and current_is_resetting == True:
-                self.reset_hold_position = current_joint_pos_deg.copy()
+                # Use the last valid arm position if available, otherwise current position
+                if self.last_valid_arm_position is not None:
+                    self.reset_hold_position = self.last_valid_arm_position.copy()
+                    logger.info("Reset started - holding arm at last valid position")
+                else:
+                    self.reset_hold_position = current_left_arm_pos_deg.copy()
+                    logger.info("Reset started - holding arm at current position")
             
             if current_is_resetting:
                 self.prev_is_resetting = current_is_resetting
                 # Return the captured hold position instead of current drifting position
                 if self.reset_hold_position is not None:
+                    logger.debug(f"Reset active - returning hold position: {self.reset_hold_position}")
+                    if getattr(self.config, "base_allow_when_resetting", True):
+                        base = data.get("base") if data is not None else None
+                        return self._merge_base_with_action(self._format_action_dict(self.reset_hold_position), base=base)
                     return self._format_action_dict(self.reset_hold_position)
                 else:
                     # Fallback if no hold position captured yet
-                    return self._format_action_dict(current_joint_pos_deg)
+                    logger.warning("Reset active but no hold position captured - using current position")
+                    if getattr(self.config, "base_allow_when_resetting", True):
+                        base = data.get("base") if data is not None else None
+                        return self._merge_base_with_action(self._format_action_dict(current_left_arm_pos_deg), base=base)
+                    return self._format_action_dict(current_left_arm_pos_deg)
 
             # Check for reset transition (prev=True, current=False) - reset just ended
             if self.prev_is_resetting == True and current_is_resetting == False:
                 if data is not None:
                     pos, quat = data["position"], data["rotation"]
                     self._reset_mapping(pos, quat)
+                    logger.info("Reset ended - phone mapping reset to current arm position")
+                else:
+                    logger.warning("Reset ended but no phone data available for remapping")
                 self.reset_hold_position = None  # Clear the hold position
 
             self.prev_is_resetting = current_is_resetting
 
             # Ensure we have valid data before processing pose
             if data is None:
-                # If no data available, return current position to maintain stability
-                return self._format_action_dict(current_joint_pos_deg)
+                # If no data available, return current positions to maintain stability
+                return self._merge_base_with_action(
+                    self._format_action_dict(current_left_arm_pos_deg),
+                    base=data.get("base") if data else None
+                )
 
             pos, quat, gripper_value = data["position"], data["rotation"], data["gripper_value"]
 
@@ -502,6 +708,118 @@ class PhoneTeleoperatorSourccey(Teleoperator):
 
             # Solve inverse kinematics (returns radians)
             solution_rad = self._solve_ik(t_robot, q_robot)
+
+            # Temporal smoothing and posture shaping
+            if getattr(self, "tune", None) and self.tune.get("bypass_all_mods", False):
+                self._prev_q = solution_rad
+                solution_final = np.rad2deg(solution_rad)
+                # Update teleop state and apply right arm initial position reversal when teleop starts
+                prev_start_teleop = getattr(self, 'start_teleop', False)
+                self.start_teleop = switch_state
+                
+                # Apply right arm initial position mirroring when teleop becomes active
+                if self.arm_side == "right" and not prev_start_teleop and self.start_teleop:
+                    # Mirror the right arm's initial position when teleop starts
+                    # Apply comprehensive right arm reversals to match movement reversals
+                    self.current_t_R = self._original_right_position.copy()
+                    # Mirror position: flip Y (left-right) and potentially Z (up-down)
+                    self.current_t_R[1] = -self.current_t_R[1]  # Flip Y coordinate (left-right)
+                    
+                    # Also apply quaternion mirroring for right arm orientation
+                    self.current_q_R = self._original_right_quat.copy()
+                    # Mirror orientation by flipping Y and Z components of quaternion
+                    self.current_q_R[2] = -self.current_q_R[2]  # Flip Y component
+                    self.current_q_R[3] = -self.current_q_R[3]  # Flip Z component
+                    
+                    logger.info("Applied comprehensive right arm initial position and orientation mirroring for teleop (bypass mode)")
+                action_ctrl = self._format_action_dict(solution_final)
+                if self.arm_side == "right":
+                    action_ctrl = {k.replace("left_", "right_"): v for k, v in action_ctrl.items()}
+                if not getattr(self.config, "emit_both_arms", True):
+                    return self._merge_base_with_action(action_ctrl, base=data.get("base"))
+                # Only emit the controlled arm - no commands for the other arm
+                return self._merge_base_with_action(action_ctrl, base=data.get("base"))
+
+            try:
+                import numpy as _np
+            except Exception:
+                _np = np
+            alpha = float(self.tune["lowpass_alpha"])  # low-pass filter factor
+            if self._prev_q is None:
+                self._prev_q = solution_rad
+            # Low-pass filter all joints
+            solution_rad = alpha * solution_rad + (1.0 - alpha) * self._prev_q
+
+            # Discourage elbow going down past soft stop (≈ quarter range from lower)
+            ELBOW_IDX = int(self.tune["elbow_soft_stop"]["index"])  # shoulder_pan, shoulder_lift, elbow_flex, ...
+            soft_stop = self._elbow_soft_stop
+            if soft_stop is not None:
+                if solution_rad[ELBOW_IDX] < soft_stop:
+                    # Below soft stop: allow only small downward steps and clamp near soft stop
+                    small_step = _np.deg2rad(float(self.tune["elbow_soft_stop"]["below_small_step_deg"]))
+                    margin = _np.deg2rad(float(self.tune["elbow_soft_stop"]["below_margin_deg"]))
+                    allowed = max(solution_rad[ELBOW_IDX], self._prev_q[ELBOW_IDX] - small_step)
+                    solution_rad[ELBOW_IDX] = max(allowed, soft_stop - margin)
+                else:
+                    # Above soft stop: allow more generous downward motion for responsiveness
+                    max_down_per_call = _np.deg2rad(float(self.tune["elbow_soft_stop"]["above_max_down_deg"]))
+                    solution_rad[ELBOW_IDX] = max(
+                        solution_rad[ELBOW_IDX],
+                        self._prev_q[ELBOW_IDX] - max_down_per_call,
+                    )
+            else:
+                # Fallback if no limits known
+                max_down_per_call = _np.deg2rad(25.0)
+                solution_rad[ELBOW_IDX] = max(
+                    solution_rad[ELBOW_IDX],
+                    self._prev_q[ELBOW_IDX] - max_down_per_call,
+                )
+
+            # Gentle overhand bias on wrist roll
+            WRIST_ROLL_IDX = 4
+            overhand_roll_target = 0.0  # rad
+            solution_rad[WRIST_ROLL_IDX] = 0.95 * solution_rad[WRIST_ROLL_IDX] + 0.05 * overhand_roll_target
+
+            # Per-joint delta scaling (sensitivity)
+            for j_idx, scale in self.tune["delta_scale"].items():
+                j = int(j_idx)
+                s = float(scale)
+                if 0 <= j < len(solution_rad) and s != 1.0:
+                    delta = solution_rad[j] - self._prev_q[j]
+                    solution_rad[j] = self._prev_q[j] + s * delta
+
+            # Per-joint fixed-rate limiter (velocity clamp per update)
+            if self.tune.get("fixed_rate", {}).get("enabled", False):
+                joints_cfg = self.tune["fixed_rate"].get("joints", {})
+                for j_idx, cfg in joints_cfg.items():
+                    j = int(j_idx)
+                    if 0 <= j < len(solution_rad):
+                        step = float(cfg.get("step_deg", 2.0))
+                        deadband = float(cfg.get("deadband_deg", 0.0))
+                        step_rad = _np.deg2rad(step)
+                        deadband_rad = _np.deg2rad(deadband)
+                        target = float(solution_rad[j])
+                        prev = float(self._prev_q[j])
+                        error = target - prev
+                        if abs(error) <= deadband_rad:
+                            solution_rad[j] = prev
+                        else:
+                            direction = 1.0 if error > 0 else -1.0
+                            solution_rad[j] = prev + direction * min(step_rad, abs(error))
+
+            # Strongly prevent elbow from moving "backwards" from initial (12:00) position
+            if self.tune["elbow_back_block"]["enabled"]:
+                ELBOW_IDX = int(self.tune["elbow_back_block"]["index"]) 
+                if self._elbow_back_limit is None:
+                    self._elbow_back_limit = float(solution_rad[ELBOW_IDX])
+                back_margin = _np.deg2rad(float(self.tune["elbow_back_block"]["tolerance_deg"]))
+                direction = str(self.tune["elbow_back_block"]["direction"]).lower()
+                if direction == "decrease":
+                    solution_rad[ELBOW_IDX] = max(solution_rad[ELBOW_IDX], self._elbow_back_limit - back_margin)
+                else:
+                    solution_rad[ELBOW_IDX] = min(solution_rad[ELBOW_IDX], self._elbow_back_limit + back_margin)
+
+            self._prev_q = solution_rad
 
             # Update visualization (expects radians)
             if self.config.enable_visualization and self.urdf_vis:
@@ -515,16 +833,43 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             
             # For Sourccey V2 Beta compatibility (applied in degrees):
 
-            # shoulder_lift (index 1): sign flip only
-            if len(solution_final) > 1:
-                solution_final[1] = -solution_final[1]
+            # shoulder_lift: no sign flip (use IK direction)
 
             # elbow_flex (index 2): no fixed offset or sign change
             #   (axis is +X and rpy now embeds the old –90° roll)
 
-            # wrist_roll (index 4): sign flip only
-            if len(solution_final) > 4:
-                solution_final[4] = -solution_final[4]
+            # Apply joint-level reversals based on arm side
+            if self.arm_side == "right":
+                # Right arm needs comprehensive joint reversals for proper mirroring
+                if len(solution_final) > 0:  # shoulder_pan
+                    solution_final[0] = -solution_final[0]
+                if len(solution_final) > 1:  # shoulder_lift  
+                    solution_final[1] = -solution_final[1]
+                if len(solution_final) > 2:  # elbow_flex
+                    solution_final[2] = -solution_final[2]
+                if len(solution_final) > 3:  # wrist_flex
+                    solution_final[3] = -solution_final[3]
+                if len(solution_final) > 4:  # wrist_roll
+                    solution_final[4] = -solution_final[4]
+            else:
+                # Left arm: only wrist_roll flip for consistency
+                if len(solution_final) > 4:
+                    solution_final[4] = -solution_final[4]
+
+            # Apply optional per-joint offsets (degrees)
+            if getattr(self.config, "joint_offsets_deg", None):
+                offsets = self.config.joint_offsets_deg or {}
+                name_by_index = [
+                    "shoulder_pan",
+                    "shoulder_lift",
+                    "elbow_flex",
+                    "wrist_flex",
+                    "wrist_roll",
+                    "gripper",
+                ]
+                for i, name in enumerate(name_by_index):
+                    if i < len(solution_final) and name in offsets and name != "gripper":
+                        solution_final[i] += float(offsets[name])
 
 
             # Update gripper state - convert percentage (0-100) to gripper position
@@ -533,15 +878,43 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             gripper_position = self.config.gripper_min_pos + (gripper_value / 100.0) * gripper_range
             solution_final[-1] = gripper_position
             
-            # Update teleop state
+            # Update teleop state and apply right arm initial position reversal when teleop starts
+            prev_start_teleop = getattr(self, 'start_teleop', False)
             self.start_teleop = switch_state
+            
+            # Apply right arm initial position mirroring when teleop becomes active
+            if self.arm_side == "right" and not prev_start_teleop and self.start_teleop:
+                # Mirror the right arm's initial position when teleop starts
+                # Apply comprehensive right arm reversals to match movement reversals
+                self.current_t_R = self._original_right_position.copy()
+                # Mirror position: flip Y (left-right) and potentially Z (up-down)
+                self.current_t_R[1] = -self.current_t_R[1]  # Flip Y coordinate (left-right)
+                
+                # Also apply quaternion mirroring for right arm orientation
+                self.current_q_R = self._original_right_quat.copy()
+                # Mirror orientation by flipping Y and Z components of quaternion
+                self.current_q_R[2] = -self.current_q_R[2]  # Flip Y component
+                self.current_q_R[3] = -self.current_q_R[3]  # Flip Z component
+                
+                logger.info("Applied comprehensive right arm initial position and orientation mirroring for teleop")
 
-            return self._format_action_dict(solution_final)
+            # Format action for selected arm
+            action_ctrl = self._format_action_dict(solution_final)
+            if self.arm_side == "right":
+                # Mirror left->right if not at rest or resetting handled below
+                action_ctrl = {k.replace("left_", "right_"): v for k, v in action_ctrl.items()}
+
+            # If only emitting controlled arm, return now
+            if not getattr(self.config, "emit_both_arms", True):
+                return self._merge_base_with_action(action_ctrl, base=data.get("base"))
+
+            # Only emit the controlled arm - no commands for the other arm
+            return self._merge_base_with_action(action_ctrl, base=data.get("base"))
 
         except Exception as e:
             logger.error(f"Error getting action from {self}: {e}")
-            # Return current position on error (safer than rest pose)
-            return self._format_action_dict(current_joint_pos_deg)
+            # Return current positions on error (safer than rest pose)
+            return self._merge_base_with_action(self._format_action_dict(current_left_arm_pos_deg), base=data.get("base") if 'data' in locals() else None)
 
     def _solve_ik(self, target_position: np.ndarray, target_wxyz: np.ndarray) -> list[float]:
         """Solve inverse kinematics for target pose. Returns solution in radians."""
@@ -575,7 +948,43 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             while len(joint_positions) < len(action_keys):
                 joint_positions.append(0.0)
         
-        return {key: pos for key, pos in zip(action_keys, joint_positions)}
+        # Convert all values to Python floats for JSON serialization
+        return {key: float(pos) for key, pos in zip(action_keys, joint_positions)}
+
+    def _merge_base_with_action(self, action: dict[str, Any], base: Optional[dict] = None) -> dict[str, Any]:
+        """Merge base velocities from phone data into action if enabled.
+
+        Applies scaling factors from config and only includes base keys when active.
+        """
+        try:
+            if not getattr(self.config, "enable_base_from_phone", True):
+                return action
+            if not base:
+                return action
+
+            # Read raw analog values (in [-1, 1]) and apply optional scaling
+            x = float(base.get("x.vel", 0.0)) * float(getattr(self.config, "base_scale_x", 1.0))
+            y = float(base.get("y.vel", 0.0)) * float(getattr(self.config, "base_scale_y", 1.0))
+            theta = float(base.get("theta.vel", 0.0)) * float(getattr(self.config, "base_scale_theta", 1.0))
+
+            # If base_active is False but we have non-zero inputs, treat as active
+            is_active = bool(base.get("active", False)) or (abs(x) > 0.0 or abs(y) > 0.0 or abs(theta) > 0.0)
+            if not is_active:
+                return action
+
+            # Debug: Log when phone wheel commands are applied
+            if abs(x) > 0.0 or abs(y) > 0.0 or abs(theta) > 0.0:
+                print(f"DEBUG TELEOP WHEELS: Applying phone wheel command - x={x:.3f}, y={y:.3f}, theta={theta:.3f}")
+
+            # Emit raw analog values in [-1,1]; client will scale via _from_analog_to_base_action
+            merged = {**action}
+            merged["x.vel"] = x
+            merged["y.vel"] = y
+            merged["theta.vel"] = theta
+            return merged
+        except Exception:
+            return action
+
 
     def _read_and_display_motor_positions(self, current_joint_pos: list[float]) -> None:
         """Read and display current motor positions in rest_pose format (radians)."""
@@ -622,6 +1031,10 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             
             # Reset phone disconnection tracking
             self.last_phone_data_time = None
+            
+            # Reset position tracking
+            self.last_valid_arm_position = None
+            self.reset_hold_position = None
             
             logger.info(f"{self} disconnected")
             

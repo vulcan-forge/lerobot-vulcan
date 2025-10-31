@@ -66,8 +66,8 @@ def _solve_ik_jax(
             joint_var,
             jaxlie.SE3.from_rotation_and_translation(jaxlie.SO3(target_wxyz), target_position),
             target_link_index,
-            pos_weight=50.0,
-            ori_weight=10.0,
+            pos_weight=40.0,
+            ori_weight=30.0,
         ),
         pk.costs.limit_cost(
             robot,
@@ -77,7 +77,7 @@ def _solve_ik_jax(
         pk.costs.smoothness_cost(
             robot.joint_var_cls(0),
             robot.joint_var_cls(1),
-            jnp.array([0.2])[None],
+            jnp.array([0.8])[None],
         ),
         # pk.costs.five_point_velocity_cost(
         #     robot,
@@ -114,7 +114,7 @@ def _solve_ik_jax(
         .solve(
             verbose=False,
             linear_solver="dense_cholesky",
-            trust_region=jaxls.TrustRegionConfig(lambda_initial=1.0),
+            trust_region=jaxls.TrustRegionConfig(lambda_initial=5.0),
         )
     )
     return sol[joint_var]

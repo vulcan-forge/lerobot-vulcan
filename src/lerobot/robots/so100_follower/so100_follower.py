@@ -20,16 +20,17 @@ from functools import cached_property
 from typing import Any
 
 from lerobot.cameras.utils import make_cameras_from_configs
-from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.feetech import (
     FeetechMotorsBus,
     OperatingMode,
 )
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
 from .config_so100_follower import SO100FollowerConfig
+from .so100_follower_calibrator import SO100FollowerCalibrator
 
 logger = logging.getLogger(__name__)
 
@@ -45,20 +46,31 @@ class SO100Follower(Robot):
     def __init__(self, config: SO100FollowerConfig):
         super().__init__(config)
         self.config = config
+
+        motor_ids = [1, 2, 3, 4, 5, 6]
+        if config.reversed:
+            motor_ids = [7, 8, 9, 10, 11, 12]
+
+        # TODO: Add the new motors for the double arm
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
         self.bus = FeetechMotorsBus(
             port=self.config.port,
             motors={
-                "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
-                "shoulder_lift": Motor(2, "sts3215", norm_mode_body),
-                "elbow_flex": Motor(3, "sts3215", norm_mode_body),
-                "wrist_flex": Motor(4, "sts3215", norm_mode_body),
-                "wrist_roll": Motor(5, "sts3215", norm_mode_body),
-                "gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
+                "shoulder_pan": Motor(motor_ids[0], "sts3215", norm_mode_body),
+                "shoulder_lift": Motor(motor_ids[1], "sts3215", norm_mode_body),
+                "elbow_flex": Motor(motor_ids[2], "sts3215", norm_mode_body),
+                "wrist_flex": Motor(motor_ids[3], "sts3215", norm_mode_body),
+                "wrist_roll": Motor(motor_ids[4], "sts3215", norm_mode_body),
+                "gripper": Motor(motor_ids[5], "sts3215", MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )
         self.cameras = make_cameras_from_configs(config.cameras)
+
+        # Initialize calibrator
+        self.calibrator = SO100FollowerCalibrator(
+            robot=self
+        )
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -150,6 +162,9 @@ class SO100Follower(Robot):
         self._save_calibration()
         print("Calibration saved to", self.calibration_fpath)
 
+    def auto_calibrate(self, full_reset: bool = False) -> None:
+        self.calibration = self.calibrator.default_calibrate(reversed=self.config.reversed)
+
     def configure(self) -> None:
         with self.bus.torque_disabled():
             self.bus.configure_motors()
@@ -160,6 +175,11 @@ class SO100Follower(Robot):
                 # Set I_Coefficient and D_Coefficient to default value 0 and 32
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 32)
+
+                if motor == "gripper":
+                    self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
+                    self.bus.write("Protection_Current", motor, 250)  # 50% of max current to avoid burnout
+                    self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
 
     def setup_motors(self) -> None:
         for motor in reversed(self.bus.motors):

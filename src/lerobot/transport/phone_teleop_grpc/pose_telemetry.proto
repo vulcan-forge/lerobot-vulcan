@@ -17,6 +17,12 @@ message PoseData {
   bool precision_mode = 7;
   bool reset_mapping = 8;
   bool is_resetting = 9;
+
+  // Base velocity commands (normalized, range ~[-1.0, 1.0])
+  float x_vel = 10;      // forward/backward
+  float y_vel = 11;      // strafe left/right
+  float theta_vel = 12;  // rotational velocity
+  bool base_active = 13; // whether base command should be applied
 }
 
 message PoseResponse {
