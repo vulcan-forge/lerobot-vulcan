@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+message CameraImage {
+    string name = 1;           // e.g., "camera_front", "camera_left", etc.
+    bytes jpeg_data = 2;        // Raw JPEG bytes (no base64!)
+    int32 width = 3;
+    int32 height = 4;
+    int32 quality = 5;          // JPEG quality (0-100)
+}
+
+message RobotObservation {
+    // Left arm joints (6 fields)
+    float left_shoulder_pan = 1;
+    float left_shoulder_lift = 2;
+    float left_elbow_flex = 3;
+    float left_wrist_flex = 4;
+    float left_wrist_roll = 5;
+    float left_gripper = 6;
+
+    // Right arm joints (6 fields)
+    float right_shoulder_pan = 7;
+    float right_shoulder_lift = 8;
+    float right_elbow_flex = 9;
+    float right_wrist_flex = 10;
+    float right_wrist_roll = 11;
+    float right_gripper = 12;
+
+    // Base velocities (4 fields)
+    float x_velocity = 13;
+    float y_velocity = 14;
+    float z_velocity = 15;
+    float theta_velocity = 16;
+
+    // Additional sensor data (6 fields)
+    float battery_level = 17;
+    float temperature = 18;
+    bool emergency_stop = 19;
+    int32 status_code = 20;
+    float cpu_usage = 21;
+    float memory_usage = 22;
+
+    // Camera images (4 cameras)
+    repeated CameraImage cameras = 23;
+
+    // Timestamp
+    double timestamp = 24;
+}

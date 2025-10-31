@@ -13,7 +13,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any
+import logging
+import time
+from typing import Any, Dict
+import warnings
+from collections.abc import Callable
 
 from lerobot.utils.utils import format_big_number
 
@@ -84,6 +88,7 @@ class MetricsTracker:
         "samples",
         "episodes",
         "epochs",
+        "accelerator",
     ]
 
     def __init__(
@@ -93,6 +98,7 @@ class MetricsTracker:
         num_episodes: int,
         metrics: dict[str, AverageMeter],
         initial_step: int = 0,
+        accelerator: Callable | None = None,
     ):
         self.__dict__.update(dict.fromkeys(self.__keys__))
         self._batch_size = batch_size
@@ -106,6 +112,7 @@ class MetricsTracker:
         self.samples = self.steps * self._batch_size
         self.episodes = self.samples / self._avg_samples_per_ep
         self.epochs = self.samples / self._num_frames
+        self.accelerator = accelerator
 
     def __getattr__(self, name: str) -> int | dict[str, AverageMeter] | AverageMeter | Any:
         if name in self.__dict__:
@@ -128,7 +135,7 @@ class MetricsTracker:
         Updates metrics that depend on 'step' for one step.
         """
         self.steps += 1
-        self.samples += self._batch_size
+        self.samples += self._batch_size * (self.accelerator.num_processes if self.accelerator else 1)
         self.episodes = self.samples / self._avg_samples_per_ep
         self.epochs = self.samples / self._num_frames
 
@@ -161,3 +168,94 @@ class MetricsTracker:
         """Resets average meters."""
         for m in self.metrics.values():
             m.reset()
+
+class OncePerMinuteWarningFilter(logging.Filter):
+    """Filter that only allows each unique warning message to be logged once per minute."""
+
+    def __init__(self):
+        super().__init__()
+        self.seen_messages: Dict[str, float] = {}
+        self.timeout = 60.0  # 60 seconds
+
+    def filter(self, record):
+        # Create a unique key for this message
+        message_key = f"{record.levelname}:{record.getMessage()}"
+        current_time = time.time()
+
+        # Check if we've seen this message recently
+        if message_key in self.seen_messages:
+            last_seen = self.seen_messages[message_key]
+            if current_time - last_seen < self.timeout:
+                return False  # Don't log this message again yet
+
+        # Update the timestamp for this message
+        self.seen_messages[message_key] = current_time
+
+        # Clean up old entries to prevent memory leaks
+        self._cleanup_old_entries(current_time)
+
+        return True  # Log this message
+
+    def _cleanup_old_entries(self, current_time: float):
+        """Remove entries older than timeout to prevent memory leaks."""
+        old_keys = [
+            key for key, timestamp in self.seen_messages.items()
+            if current_time - timestamp > self.timeout
+        ]
+        for key in old_keys:
+            del self.seen_messages[key]
+
+class OncePerMinuteWarningHandler:
+    """Handler for Python warnings that only shows each warning once per minute."""
+
+    def __init__(self):
+        self.seen_warnings: Dict[str, float] = {}
+        self.timeout = 60.0  # 60 seconds
+        # Store the original showwarning function
+        self._original_showwarning = warnings.showwarning
+
+    def __call__(self, message, category, filename, lineno, file=None, line=None):
+        # Create a unique key for this warning
+        warning_key = f"{category.__name__}:{message}"
+        current_time = time.time()
+
+        # Check if we've seen this warning recently
+        if warning_key in self.seen_warnings:
+            last_seen = self.seen_warnings[warning_key]
+            if current_time - last_seen < self.timeout:
+                return  # Don't show this warning again yet
+
+        # Update the timestamp for this warning
+        self.seen_warnings[warning_key] = current_time
+
+        # Clean up old entries
+        self._cleanup_old_entries(current_time)
+
+        # Show the warning using the original handler
+        self._original_showwarning(message, category, filename, lineno, file, line)
+
+    def _cleanup_old_entries(self, current_time: float):
+        """Remove entries older than timeout to prevent memory leaks."""
+        old_keys = [
+            key for key, timestamp in self.seen_warnings.items()
+            if current_time - timestamp > self.timeout
+        ]
+        for key in old_keys:
+            del self.seen_warnings[key]
+
+def setup_once_per_minute_logging():
+    """Setup logging and warnings to only show each message once per minute."""
+
+    # Setup logging filter
+    warning_filter = OncePerMinuteWarningFilter()
+
+    # Apply to root logger
+    root_logger = logging.getLogger()
+    root_logger.addFilter(warning_filter)
+
+    # Setup warnings handler
+    warning_handler = OncePerMinuteWarningHandler()
+    warnings.showwarning = warning_handler
+
+    # Set warnings to show once (this works with our custom handler)
+    warnings.simplefilter("once", UserWarning)

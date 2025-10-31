@@ -4,19 +4,14 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol, TypeAlias
 
-from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 NameOrID: TypeAlias = str | int
 
 logger = logging.getLogger(__name__)
 
-
 class MotorNormMode(str, Enum):
-    RANGE_0_100 = "range_0_100"
-    RANGE_M100_100 = "range_m100_100"
-    DEGREES = "degrees"
     PWM_DUTY_CYCLE = "pwm_duty_cycle"  # 0 to 1 for PWM control
-
 
 @dataclass
 class DCMotor:
@@ -24,7 +19,6 @@ class DCMotor:
     model: str
     norm_mode: MotorNormMode
     protocol: str = "pwm"  # pwm, i2c, can, serial
-
 
 class ProtocolHandler(Protocol):
     """Protocol for different DC motor communication methods."""
@@ -41,12 +35,12 @@ class ProtocolHandler(Protocol):
         """Set motor position (0 to 1)."""
         ...
 
-    def set_velocity(self, motor_id: int, velocity: float) -> None:
+    def set_velocity(self, motor_id: int, velocity: float, instant: bool = True) -> None:
         """Set motor velocity (normalized -1 to 1)."""
         ...
 
-    def set_pwm(self, motor_id: int, duty_cycle: float) -> None:
-        """Set PWM duty cycle (0 to 1)."""
+    def update_velocity(self, motor_id: int, max_step: float = 1.0) -> None:
+        """Update motor velocity."""
         ...
 
     def get_position(self, motor_id: int) -> float | None:
@@ -61,6 +55,10 @@ class ProtocolHandler(Protocol):
         """Get current PWM duty cycle."""
         ...
 
+    def set_pwm(self, motor_id: int, duty_cycle: float) -> None:
+        """Set PWM duty cycle (0 to 1)."""
+        ...
+
     def enable_motor(self, motor_id: int) -> None:
         """Enable motor."""
         ...
@@ -68,8 +66,6 @@ class ProtocolHandler(Protocol):
     def disable_motor(self, motor_id: int) -> None:
         """Disable motor."""
         ...
-
-
 class BaseDCMotorsController(abc.ABC):
     """
     Abstract base class for DC motor controllers.
@@ -80,13 +76,13 @@ class BaseDCMotorsController(abc.ABC):
 
     def __init__(
         self,
-        motors: dict[str, DCMotor],
-        protocol: str = "pwm",
         config: dict | None = None,
+        motors: dict[str, DCMotor] | None = None,
+        protocol: str = "pwm",
     ):
-        self.motors = motors
-        self.protocol = protocol
         self.config = config or {}
+        self.motors = motors or {}
+        self.protocol = protocol
 
         self._id_to_name_dict = {m.id: motor for motor, m in self.motors.items()}
         self._name_to_id_dict = {motor: m.id for motor, m in self.motors.items()}
@@ -102,9 +98,9 @@ class BaseDCMotorsController(abc.ABC):
     def __repr__(self):
         return (
             f"{self.__class__.__name__}(\n"
-            f"    Protocol: '{self.protocol}',\n"
-            f"    Motors: {list(self.motors.keys())},\n"
             f"    Config: {self.config}\n"
+            f"    Motors: {list(self.motors.keys())}\n"
+            f"    Protocol: '{self.protocol}'\n"
             ")"
         )
 
@@ -139,10 +135,15 @@ class BaseDCMotorsController(abc.ABC):
         """Create the appropriate protocol handler based on configuration."""
         pass
 
+    ##############################################################################################################################
+    # Connection
+    ##############################################################################################################################
+
     def connect(self) -> None:
         """Connect to the motor controller."""
         if self._is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} is already connected.")
+            logger.info(f"{self} is already connected.")
+            return
 
         self.protocol_handler = self._create_protocol_handler()
         self.protocol_handler.connect()
@@ -152,7 +153,8 @@ class BaseDCMotorsController(abc.ABC):
     def disconnect(self) -> None:
         """Disconnect from the motor controller."""
         if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
+            logger.info(f"{self} is not connected.")
+            return
 
         if self.protocol_handler:
             self.protocol_handler.disconnect()
@@ -160,11 +162,15 @@ class BaseDCMotorsController(abc.ABC):
         self._is_connected = False
         logger.info(f"{self} disconnected.")
 
+    ##############################################################################################################################
     # Position Functions
+    ##############################################################################################################################
+
     def get_position(self, motor: NameOrID) -> float | None:
         """Get current motor position if encoder available."""
         if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
+            logger.info(f"{self} is not connected.")
+            return None
 
         motor_id = self._get_motor_id(motor)
         return self.protocol_handler.get_position(motor_id)
@@ -172,23 +178,36 @@ class BaseDCMotorsController(abc.ABC):
     def set_position(self, motor: NameOrID, position: float) -> None:
         """Set motor position (0 to 1)."""
         if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
+            logger.info(f"{self} is not connected.")
+            return None
 
         motor_id = self._get_motor_id(motor)
         self.protocol_handler.set_position(motor_id, position)
 
+    ##############################################################################################################################
     # Velocity Functions
+    ##############################################################################################################################
+
     def get_velocity(self, motor: NameOrID) -> float:
         """Get current motor velocity."""
         if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
+            logger.info(f"{self} is not connected.")
+            return None
 
         motor_id = self._get_motor_id(motor)
         return self.protocol_handler.get_velocity(motor_id)
 
-    def set_velocity(self, motor: NameOrID, velocity: float, normalize: bool = True) -> None:
+    def get_velocities(self) -> dict[NameOrID, float]:
+        """Get current motor velocities."""
+        if not self._is_connected:
+            logger.info(f"{self} is not connected.")
+            return { }
+
+        return {motor: self.get_velocity(motor) for motor in self.motors.keys()}
+
+    def set_velocity(self, motor: NameOrID, velocity: float, normalize: bool = True,) -> None:
         """
-        Set motor velocity.
+        Set motor velocity with ramp-up.
 
         Args:
             motor: Motor name or ID
@@ -196,22 +215,56 @@ class BaseDCMotorsController(abc.ABC):
             normalize: Whether to normalize the velocity
         """
         if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
+            logger.info(f"{self} is not connected.")
+            return
 
         motor_id = self._get_motor_id(motor)
-
         if normalize:
-            # Clamp to [-1, 1]
-            velocity = max(-1.0, min(1.0, velocity))
+            velocity = max(-1.0, min(1.0, velocity)) # Clamp to [-1, 1]
 
         self.protocol_handler.set_velocity(motor_id, velocity)
         logger.debug(f"Set motor {motor} velocity to {velocity}")
 
+    def set_velocities(self, motors: dict[NameOrID, float], normalize: bool = True) -> None:
+        if not self._is_connected:
+            return
+
+        """
+        Set motor velocities.
+
+        Args:
+            motors: Dictionary of motor names or IDs and target velocities
+            normalize: Whether to normalize the velocity
+        """
+        for motor, velocity in motors.items():
+            self.set_velocity(motor, velocity, normalize)
+
+    ##############################################################################################################################
+    # Update velocity
+    ##############################################################################################################################
+
+    def update_velocity(self, motor: NameOrID | None = None, max_step: float = 1.0) -> None:
+        """Update motor velocity."""
+        if not self._is_connected:
+            logger.info(f"{self} is not connected.")
+            return
+
+        if motor is None:
+            for motor_id in self._id_to_name_dict.keys():
+                self.protocol_handler.update_velocity(motor_id, max_step)
+        else:
+            motor_id = self._get_motor_id(motor)
+            self.protocol_handler.update_velocity(motor_id, max_step)
+
+    ##############################################################################################################################
     # PWM Functions
+    ##############################################################################################################################
+
     def get_pwm(self, motor: NameOrID) -> float:
         """Get current PWM duty cycle."""
         if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
+            logger.info(f"{self} is not connected.")
+            return
 
         motor_id = self._get_motor_id(motor)
         return self.protocol_handler.get_pwm(motor_id)
@@ -225,7 +278,8 @@ class BaseDCMotorsController(abc.ABC):
             duty_cycle: PWM duty cycle (0 to 1)
         """
         if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
+            logger.info(f"{self} is not connected.")
+            return
 
         motor_id = self._get_motor_id(motor)
 
@@ -235,11 +289,15 @@ class BaseDCMotorsController(abc.ABC):
         self.protocol_handler.set_pwm(motor_id, duty_cycle)
         logger.debug(f"Set motor {motor} PWM to {duty_cycle}")
 
+    ##############################################################################################################################
     # Enable/Disable Functions
+    ##############################################################################################################################
+
     def enable_motor(self, motor: NameOrID | None = None) -> None:
         """Enable motor(s)."""
         if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
+            logger.info(f"{self} is not connected.")
+            return
 
         if motor is None:
             # Enable all motors
@@ -252,7 +310,8 @@ class BaseDCMotorsController(abc.ABC):
     def disable_motor(self, motor: NameOrID | None = None) -> None:
         """Disable motor(s)."""
         if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
+            logger.info(f"{self} is not connected.")
+            return
 
         if motor is None:
             # Disable all motors

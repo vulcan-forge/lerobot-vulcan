@@ -32,7 +32,7 @@ import serial
 from deepdiff import DeepDiff
 from tqdm import tqdm
 
-from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.utils.utils import enter_pressed, move_cursor_up
 
 NameOrID: TypeAlias = str | int
@@ -76,6 +76,12 @@ def assert_same_address(model_ctrl_table: dict[str, dict], motor_models: list[st
             f"({list(zip(motor_models, all_bytes, strict=False))})."
         )
 
+MOTOR_MOVEMENT_DATA_NAMES = [
+    "Present_Position",
+    "Goal_Position",
+    "Present_Velocity",
+    "Goal_Velocity"
+]
 
 class MotorNormMode(str, Enum):
     RANGE_0_100 = "range_0_100"
@@ -97,12 +103,6 @@ class Motor:
     id: int
     model: str
     norm_mode: MotorNormMode
-
-
-class JointOutOfRangeError(Exception):
-    def __init__(self, message="Joint is out of range"):
-        self.message = message
-        super().__init__(self.message)
 
 
 class PortHandler(Protocol):
@@ -222,7 +222,7 @@ class MotorsBus(abc.ABC):
     A MotorsBus subclass instance requires a port (e.g. `FeetechMotorsBus(port="/dev/tty.usbmodem575E0031751"`)).
     To find the port, you can run our utility script:
     ```bash
-    python -m lerobot.find_port.py
+    lerobot-find-port.py
     >>> Finding all available ports for the MotorsBus.
     >>> ["/dev/tty.usbmodem575E0032081", "/dev/tty.usbmodem575E0031751"]
     >>> Remove the usb cable from your MotorsBus and press Enter when done.
@@ -258,6 +258,7 @@ class MotorsBus(abc.ABC):
     model_encoding_table: dict[str, dict]
     model_number_table: dict[str, int]
     model_resolution_table: dict[str, int]
+    model_substitution_table: dict[str, str]
     normalized_data: list[str]
 
     def __init__(
@@ -348,7 +349,7 @@ class MotorsBus(abc.ABC):
             raise TypeError(motors)
 
     def _get_ids_values_dict(self, values: Value | dict[str, Value] | None) -> list[str]:
-        if isinstance(values, (int, float)):
+        if isinstance(values, (int | float)):
             return dict.fromkeys(self.ids, values)
         elif isinstance(values, dict):
             return {self.motors[motor].id: val for motor, val in values.items()}
@@ -446,7 +447,7 @@ class MotorsBus(abc.ABC):
         except (FileNotFoundError, OSError, serial.SerialException) as e:
             raise ConnectionError(
                 f"\nCould not connect on port '{self.port}'. Make sure you are using the correct port."
-                "\nTry running `python -m lerobot.find_port`\n"
+                "\nTry running `lerobot-find-port`\n"
             ) from e
 
     @abc.abstractmethod
@@ -700,7 +701,7 @@ class MotorsBus(abc.ABC):
         """
         if motors is None:
             motors = list(self.motors)
-        elif isinstance(motors, (str, int)):
+        elif isinstance(motors, (str | int)):
             motors = [motors]
         elif not isinstance(motors, list):
             raise TypeError(motors)
@@ -728,7 +729,7 @@ class MotorsBus(abc.ABC):
         """
         if motors is None:
             motors = list(self.motors)
-        elif isinstance(motors, (str, int)):
+        elif isinstance(motors, (str | int)):
             motors = [motors]
         elif not isinstance(motors, list):
             raise TypeError(motors)
@@ -807,7 +808,7 @@ class MotorsBus(abc.ABC):
         """
         if motors is None:
             motors = list(self.motors)
-        elif isinstance(motors, (str, int)):
+        elif isinstance(motors, (str | int)):
             motors = [motors]
         elif not isinstance(motors, list):
             raise TypeError(motors)
@@ -991,7 +992,7 @@ class MotorsBus(abc.ABC):
         motor: str,
         *,
         normalize: bool = True,
-        num_retry: int = 3,
+        num_retry: int = 5,
     ) -> Value:
         """Read a register from a motor.
 
@@ -1000,7 +1001,7 @@ class MotorsBus(abc.ABC):
             motor (str): Motor name.
             normalize (bool, optional): When `True` (default) scale the value to a user-friendly range as
                 defined by the calibration.
-            num_retry (int, optional): Retry attempts.  Defaults to `3`.
+            num_retry (int, optional): Retry attempts.  Defaults to `5`.
 
         Returns:
             Value: Raw or normalised value depending on *normalize*.
@@ -1018,7 +1019,6 @@ class MotorsBus(abc.ABC):
         value, _, _ = self._read(addr, length, id_, num_retry=num_retry, raise_on_error=True, err_msg=err_msg)
 
         id_value = self._decode_sign(data_name, {id_: value})
-
         if normalize and data_name in self.normalized_data:
             id_value = self._normalize(id_value)
 
@@ -1060,7 +1060,7 @@ class MotorsBus(abc.ABC):
         return value, comm, error
 
     def write(
-        self, data_name: str, motor: str, value: Value, *, normalize: bool = True, num_retry: int = 3
+        self, data_name: str, motor: str, value: Value, *, normalize: bool = True, num_retry: int = 5
     ) -> None:
         """Write a value to a single motor's register.
 
@@ -1075,7 +1075,7 @@ class MotorsBus(abc.ABC):
             value (Value): Value to write.  If *normalize* is `True` the value is first converted to raw
                 units.
             normalize (bool, optional): Enable or disable normalisation. Defaults to `True`.
-            num_retry (int, optional): Retry attempts.  Defaults to `3`.
+            num_retry (int, optional): Retry attempts.  Defaults to `5`.
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(
@@ -1088,7 +1088,6 @@ class MotorsBus(abc.ABC):
 
         if normalize and data_name in self.normalized_data:
             value = self._unnormalize({id_: value})[id_]
-
         value = self._encode_sign(data_name, {id_: value})[id_]
 
         err_msg = f"Failed to write '{data_name}' on {id_=} with '{value}' after {num_retry + 1} tries."
@@ -1110,7 +1109,7 @@ class MotorsBus(abc.ABC):
             comm, error = self.packet_handler.writeTxRx(self.port_handler, motor_id, addr, length, data)
             if self._is_comm_success(comm):
                 break
-            logger.debug(
+            logger.warning(
                 f"Failed to sync write @{addr=} ({length=}) on id={motor_id} with {value=} ({n_try=}): "
                 + self.packet_handler.getTxRxResult(comm)
             )
@@ -1128,7 +1127,7 @@ class MotorsBus(abc.ABC):
         motors: str | list[str] | None = None,
         *,
         normalize: bool = True,
-        num_retry: int = 3,
+        num_retry: int = 5,
     ) -> dict[str, Value]:
         """Read the same register from several motors at once.
 
@@ -1136,7 +1135,7 @@ class MotorsBus(abc.ABC):
             data_name (str): Register name.
             motors (str | list[str] | None, optional): Motors to query. `None` (default) reads every motor.
             normalize (bool, optional): Normalisation flag.  Defaults to `True`.
-            num_retry (int, optional): Retry attempts.  Defaults to `3`.
+            num_retry (int, optional): Retry attempts.  Defaults to `5`.
 
         Returns:
             dict[str, Value]: Mapping *motor name → value*.
@@ -1164,9 +1163,8 @@ class MotorsBus(abc.ABC):
         )
 
         ids_values = self._decode_sign(data_name, ids_values)
-
         if normalize and data_name in self.normalized_data:
-            ids_values = self._normalize(ids_values)
+            ids_values = self._normalize(ids_values,)
 
         return {self._id_to_name(id_): value for id_, value in ids_values.items()}
 
@@ -1185,7 +1183,7 @@ class MotorsBus(abc.ABC):
             comm = self.sync_reader.txRxPacket()
             if self._is_comm_success(comm):
                 break
-            logger.debug(
+            logger.warning(
                 f"Failed to sync read @{addr=} ({length=}) on {motor_ids=} ({n_try=}): "
                 + self.packet_handler.getTxRxResult(comm)
             )
@@ -1223,7 +1221,7 @@ class MotorsBus(abc.ABC):
         values: Value | dict[str, Value],
         *,
         normalize: bool = True,
-        num_retry: int = 3,
+        num_retry: int = 5,
     ) -> None:
         """Write the same register on multiple motors.
 
@@ -1236,7 +1234,7 @@ class MotorsBus(abc.ABC):
             values (Value | dict[str, Value]): Either a single value (applied to every motor) or a mapping
                 *motor name → value*.
             normalize (bool, optional): If `True` (default) convert values from the user range to raw units.
-            num_retry (int, optional): Retry attempts.  Defaults to `3`.
+            num_retry (int, optional): Retry attempts.  Defaults to `5`.
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(
@@ -1252,8 +1250,7 @@ class MotorsBus(abc.ABC):
         addr, length = get_address(self.model_ctrl_table, model, data_name)
 
         if normalize and data_name in self.normalized_data:
-            ids_values = self._unnormalize(ids_values)
-
+            ids_values = self._unnormalize(ids_values,)
         ids_values = self._encode_sign(data_name, ids_values)
 
         err_msg = f"Failed to sync write '{data_name}' with {ids_values=} after {num_retry + 1} tries."

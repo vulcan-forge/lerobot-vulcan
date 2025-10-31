@@ -8,10 +8,10 @@ logger = logging.getLogger(__name__)
 
 # Pi 5 Hardware PWM Configuration
 PI5_HARDWARE_PWM_PINS = {
-    "pwm0": [12, 18],  # PWM0 channels
-    "pwm1": [13, 19],  # PWM1 channels
-    "pwm2": [14, 20],  # PWM2 channels
-    "pwm3": [15, 21],  # PWM3 channels
+    "pwm0": [12],  # PWM0 channels
+    "pwm1": [13],  # PWM1 channels
+    "pwm2": [18],  # PWM2 channels
+    "pwm3": [19],  # PWM3 channels
 }
 
 # Pi 5 All Available GPIO Pins (40-pin header)
@@ -20,48 +20,45 @@ PI5_ALL_GPIO_PINS = [
     22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41
 ]
 
-# Pi 5 Digital Output Pins (excluding hardware PWM pins)
-PI5_DIGITAL_OUTPUT_PINS = [
-    2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41
-]
-
-# Pi 5 Optimal Settings
-PI5_OPTIMAL_FREQUENCY = 25000  # 25kHz - optimal for most DC motors
-PI5_MAX_FREQUENCY = 50000      # 50kHz - Pi 5 can handle higher frequencies
+# Pi 5 Optimal Settings for DRV8874PWPR
+PI5_OPTIMAL_FREQUENCY = 25000  # 25kHz - more compatible with gpiozero
+PI5_MAX_FREQUENCY = 25000      # 25kHz - Pi 5 can handle higher frequencies
 PI5_RESOLUTION = 12            # 12-bit resolution
+
+class PWMDCMotorsController(BaseDCMotorsController):
+    """PWM-based DC motor controller optimized for DRV8874PWPR H-bridge drivers."""
+
+    def __init__(self, config: dict | None = None, motors: dict[str, DCMotor] | None = None, protocol: str = "pwm"):
+        super().__init__(config, motors, protocol)
+
+    def _create_protocol_handler(self) -> ProtocolHandler:
+        return PWMProtocolHandler(self.config, self.motors)
 
 
 class PWMProtocolHandler(ProtocolHandler):
     """
-    PWM protocol handler optimized for Raspberry Pi 5.
+    PWM protocol handler optimized for DRV8874PWPR H-bridge motor drivers.
 
-    Pi 5 Features:
-    - 4 hardware PWM channels (PWM0-PWM3)
-    - 40 GPIO pins total (24+ available for motor control)
-    - Higher PWM frequencies (up to 50kHz)
-    - Better real-time performance
-    - Lower latency
+    DRV8874PWPR Features:
+    - IN1: PWM speed control (hardware PWM recommended)
+    - IN2: Direction control (regular GPIO)
+    - Built-in current limiting and thermal protection
+    - 25kHz PWM frequency optimal
 
-    For 5+ motors:
-    - First 4 motors use hardware PWM (optimal performance)
-    - Additional motors use software PWM (acceptable performance)
-    - All motors can have direction, enable, and brake pins
-
-    Configuration options:
-    - pwm_pins: List of PWM pin numbers (use hardware PWM pins: 12,13,14,15,18,19,20,21)
-    - direction_pins: List of direction pin numbers (any GPIO pin 2-41, excluding PWM pins)
-    - enable_pins: List of enable pin numbers (optional, for motor drivers with enable)
-    - brake_pins: List of brake pin numbers (optional, for motor drivers with brake)
-    - pwm_frequency: PWM frequency in Hz (default: 25000 for Pi 5)
-    - invert_direction: Whether to invert direction logic (default: False)
-    - invert_enable: Whether to invert enable logic (default: False)
-    - invert_brake: Whether to invert brake logic (default: False)
+    Configuration:
+    - in1_pins: IN1 pins (PWM speed control)
+    - in2_pins: IN2 pins (direction control)
+    - pwm_frequency: 25000Hz (optimal for DRV8874PWPR)
     """
 
-    def __init__(self, config: Dict):
+    ##############################################################################################################################
+    # Configuration
+    ##############################################################################################################################
+
+    def __init__(self, config: Dict, motors: Dict[str, DCMotor]):
         self.config = config
-        self.pwm_pins = config.get("pwm_pins", [])
-        self.direction_pins = config.get("direction_pins", [])
+        self.in1_pins = config.get("in1_pins", [])
+        self.in2_pins = config.get("in2_pins", [])
         self.enable_pins = config.get("enable_pins", [])
         self.brake_pins = config.get("brake_pins", [])
         self.pwm_frequency = config.get("pwm_frequency", PI5_OPTIMAL_FREQUENCY)
@@ -69,19 +66,19 @@ class PWMProtocolHandler(ProtocolHandler):
         self.invert_enable = config.get("invert_enable", False)
         self.invert_brake = config.get("invert_brake", False)
 
-        # Motor state tracking
-        self.motors: Dict[int, Dict] = config.get("motors", {})
-        self.pwm_channels = {}
-        self.direction_channels = {}
+        # Motor configuration and state tracking
+        self.motors: Dict[str, DCMotor] = motors
+        self.motor_states: Dict[int, Dict] = {}
+        self.in1_channels = {}
+        self.in2_channels = {}
         self.enable_channels = {}
         self.brake_channels = {}
-        self.software_pwm_channels = {}  # For motors beyond hardware PWM
 
         # Validate Pi 5 pins
         self._validate_pi5_pins()
 
-        # Import RPi.GPIO for Pi 5
-        self._import_rpi_gpio()
+        # Import gpiozero
+        self._import_gpiozero()
 
     def _validate_pi5_pins(self):
         """Validate that pins are valid GPIO pins on Pi 5."""
@@ -89,150 +86,114 @@ class PWMProtocolHandler(ProtocolHandler):
         for pwm_pins in PI5_HARDWARE_PWM_PINS.values():
             all_hardware_pwm.extend(pwm_pins)
 
-        # Validate PWM pins
-        invalid_pwm_pins = [pin for pin in self.pwm_pins if pin not in all_hardware_pwm]
-        if invalid_pwm_pins:
-            logger.warning(
-                f"PWM pins {invalid_pwm_pins} are not hardware PWM pins on Pi 5. "
-                f"Hardware PWM pins: {all_hardware_pwm}"
-            )
+        # Validate IN1 pins (should be hardware PWM for best performance)
+        invalid_in1_pins = [pin for pin in self.in1_pins if pin not in all_hardware_pwm]
+        if invalid_in1_pins:
+            # logger.warning(
+            #     f"IN1 pins {invalid_in1_pins} are not hardware PWM pins on Pi 5. "
+            #     f"Hardware PWM pins: {all_hardware_pwm}"
+            # )
+            pass
 
-        # Validate direction pins
-        invalid_dir_pins = [pin for pin in self.direction_pins if pin not in PI5_ALL_GPIO_PINS]
-        if invalid_dir_pins:
+        # Validate IN2 pins (can be any GPIO)
+        invalid_in2_pins = [pin for pin in self.in2_pins if pin not in PI5_ALL_GPIO_PINS]
+        if invalid_in2_pins:
             logger.warning(
-                f"Direction pins {invalid_dir_pins} are not valid GPIO pins on Pi 5. "
-                f"Valid GPIO pins: {PI5_ALL_GPIO_PINS}"
-            )
-
-        # Validate enable pins
-        invalid_enable_pins = [pin for pin in self.enable_pins if pin not in PI5_ALL_GPIO_PINS]
-        if invalid_enable_pins:
-            logger.warning(
-                f"Enable pins {invalid_enable_pins} are not valid GPIO pins on Pi 5. "
-                f"Valid GPIO pins: {PI5_ALL_GPIO_PINS}"
-            )
-
-        # Validate brake pins
-        invalid_brake_pins = [pin for pin in self.brake_pins if pin not in PI5_ALL_GPIO_PINS]
-        if invalid_brake_pins:
-            logger.warning(
-                f"Brake pins {invalid_brake_pins} are not valid GPIO pins on Pi 5. "
+                f"IN2 pins {invalid_in2_pins} are not valid GPIO pins on Pi 5. "
                 f"Valid GPIO pins: {PI5_ALL_GPIO_PINS}"
             )
 
         # Check for pin conflicts
-        all_used_pins = set(self.pwm_pins + self.direction_pins + self.enable_pins + self.brake_pins)
-        if len(all_used_pins) != len(self.pwm_pins + self.direction_pins + self.enable_pins + self.brake_pins):
+        all_used_pins = set(self.in1_pins + self.in2_pins + self.enable_pins + self.brake_pins)
+        if len(all_used_pins) != len(self.in1_pins + self.in2_pins + self.enable_pins + self.brake_pins):
             logger.warning("Duplicate pins detected in configuration")
 
-        # Validate motor count vs available pins
-        motor_count = len(self.pwm_pins)
-        if motor_count > 4:
-            logger.info(f"Configuring {motor_count} motors: {min(4, motor_count)} hardware PWM + {max(0, motor_count - 4)} software PWM")
+        # Validate motor count
+        motor_count = len(self.in1_pins)
+        logger.info(f"Configuring {motor_count} DRV8874PWPR motors with gpiozero")
 
-    def _import_rpi_gpio(self):
-        """Import RPi.GPIO with Pi 5 support."""
+    def _import_gpiozero(self):
+        """Import gpiozero."""
         try:
-            import RPi.GPIO as GPIO # type: ignore
-            self.GPIO = GPIO
-
-            # Check RPi.GPIO version for Pi 5 support
-            if hasattr(self.GPIO, 'VERSION'):
-                version = self.GPIO.VERSION
-                logger.info(f"RPi.GPIO version: {version}")
-
-                if version < "0.7.1":
-                    logger.warning(
-                        "RPi.GPIO version < 0.7.1 detected. "
-                        "Pi 5 support requires version 0.7.1 or later. "
-                        "Consider upgrading: uv pip install -e '.[sourccey]'"
-                    )
-
-            logger.info("Using RPi.GPIO for Pi 5 PWM control")
+            import gpiozero
+            self.gpiozero = gpiozero
+            logger.info("Using gpiozero for DRV8874PWPR motor control")
 
         except ImportError:
             raise ImportError(
-                "RPi.GPIO not available. Install with: pip install RPi.GPIO>=0.7.1"
+                "gpiozero not available. Install with: uv pip install gpiozero>=2.0"
             )
 
+    def _setup_pwmled(self, pin: int, label: str) -> 'gpiozero.PWMLED': # type: ignore
+        """Safely set up a PWMLED on the given pin, with fallback to default frequency."""
+        try:
+            return self.gpiozero.PWMLED(pin, frequency=self.pwm_frequency)
+        except Exception as e:
+            logger.warning(f"{label}: Failed with frequency {self.pwm_frequency}, retrying with default. ({e})")
+            try:
+                return self.gpiozero.PWMLED(pin)
+            except Exception as e2:
+                logger.error(f"{label}: Failed to setup PWMLED on pin {pin}: {e2}")
+                raise
+
+    def _safe_close(self, channel: 'gpiozero.PWMLED', label: str) -> None: # type: ignore
+        """Safely close a PWMLED channel."""
+        try:
+            channel.close()
+        except Exception as e:
+            logger.warning(f"Error closing {label}: {e}")
+
+    ##############################################################################################################################
+    # Connection
+    ##############################################################################################################################
+
     def connect(self) -> None:
-        """Initialize GPIO and PWM channels for Pi 5."""
-        self.GPIO.setmode(self.GPIO.BCM)
-        self.GPIO.setwarnings(False)
+        """Initialize gpiozero for DRV8874PWPR motor drivers with symmetric PWM on IN1 and IN2."""
+        try:
+            for motor_id, (in1_pin, in2_pin) in enumerate(zip(self.in1_pins, self.in2_pins), start=1):
+                self.motor_states[motor_id] = {
+                    "position": 0.0,
+                    "velocity": 0.0,
+                    "pwm": 0.0,
+                    "enabled": False,
+                    "brake_active": False,
+                    "direction": 1
+                }
 
-        # Initialize PWM pins
-        for i, pin in enumerate(self.pwm_pins):
-            motor_id = i + 1
-            self.GPIO.setup(pin, self.GPIO.OUT)
+                in1 = self._setup_pwmled(in1_pin, f"Motor {motor_id} IN1")
+                in1.off()
+                self.in1_channels[motor_id] = in1
+                logger.debug(f"Motor {motor_id} IN1 setup on pin {in1_pin}")
 
-            # Use hardware PWM for first 4 motors, software PWM for rest
-            if i < 4:
-                # Hardware PWM
-                pwm_channel = self.GPIO.PWM(pin, self.pwm_frequency)
-                pwm_channel.start(0)  # Start with 0% duty cycle
-                self.pwm_channels[motor_id] = pwm_channel
-                logger.debug(f"Motor {motor_id} using hardware PWM on pin {pin}")
-            else:
-                # Software PWM
-                pwm_channel = self.GPIO.PWM(pin, self.pwm_frequency)
-                pwm_channel.start(0)  # Start with 0% duty cycle
-                self.software_pwm_channels[motor_id] = pwm_channel
-                logger.debug(f"Motor {motor_id} using software PWM on pin {pin}")
+                in2 = self._setup_pwmled(in2_pin, f"Motor {motor_id} IN2")
+                in2.off()
+                self.in2_channels[motor_id] = in2
+                logger.debug(f"Motor {motor_id} IN2 setup on pin {in2_pin}")
 
-            # Initialize direction pin if available
-            if i < len(self.direction_pins):
-                dir_pin = self.direction_pins[i]
-                self.GPIO.setup(dir_pin, self.GPIO.OUT)
-                self.direction_channels[motor_id] = dir_pin
-
-            # Initialize enable pin if available
-            if i < len(self.enable_pins):
-                enable_pin = self.enable_pins[i]
-                self.GPIO.setup(enable_pin, self.GPIO.OUT)
-                self.enable_channels[motor_id] = enable_pin
-
-            # Initialize brake pin if available
-            if i < len(self.brake_pins):
-                brake_pin = self.brake_pins[i]
-                self.GPIO.setup(brake_pin, self.GPIO.OUT)
-                self.brake_channels[motor_id] = brake_pin
-
-            # Initialize motor state
-            self.motors[motor_id] = {
-                "position": 0.0,
-                "velocity": 0.0,
-                "pwm": 0.0,
-                "enabled": False,
-                "brake_active": False
-            }
-
-        total_pins = len(self.pwm_pins) + len(self.direction_pins) + len(self.enable_pins) + len(self.brake_pins)
-        hw_pwm_count = min(4, len(self.pwm_pins))
-        sw_pwm_count = max(0, len(self.pwm_pins) - 4)
-        logger.info(f"Pi 5 PWM protocol handler connected with {len(self.pwm_pins)} motors using {total_pins} GPIO pins")
-        logger.info(f"Hardware PWM: {hw_pwm_count} motors, Software PWM: {sw_pwm_count} motors at {self.pwm_frequency}Hz")
+            total_pins = len(self.in1_pins) + len(self.in2_pins)
+            logger.info(f"DRV8874PWPR setup complete: {len(self.in1_pins)} motors, {total_pins} GPIOs used")
+            logger.info(f"PWM frequency: {self.pwm_frequency} Hz")
+        except Exception as e:
+            logger.error(f"Motor driver setup failed: {e}")
+            raise RuntimeError("gpiozero hardware not available")
 
     def disconnect(self) -> None:
-        """Clean up GPIO and PWM channels."""
-        # Stop all PWM channels
-        for pwm_channel in self.pwm_channels.values():
-            pwm_channel.stop()
+        """Clean up gpiozero PWMLED channels for IN1 and IN2."""
+        for motor_id, channel in self.in1_channels.items():
+            self._safe_close(channel, f"IN1 (motor {motor_id})")
 
-        for pwm_channel in self.software_pwm_channels.values():
-            pwm_channel.stop()
+        for motor_id, channel in self.in2_channels.items():
+            self._safe_close(channel, f"IN2 (motor {motor_id})")
 
-        # Clean up GPIO
-        self.GPIO.cleanup()
+        logger.info("DRV8874PWPR motor driver disconnected")
 
-        logger.info("Pi 5 PWM protocol handler disconnected")
-
+    ##############################################################################################################################
     # Position Functions
+    ##############################################################################################################################
+
     def get_position(self, motor_id: int) -> Optional[float]:
         """Get current motor position if encoder available."""
-        # For PWM-only control, we can only estimate position
-        # In a real implementation, you'd read from an encoder
-        return self.motors.get(motor_id, {}).get("position", 0.0)
+        return self.motor_states.get(motor_id, {}).get("position", 0.0)
 
     def set_position(self, motor_id: int, position: float) -> None:
         """
@@ -240,143 +201,237 @@ class PWMProtocolHandler(ProtocolHandler):
         Note: This is a simplified implementation. For precise position control,
         you'd need encoders and PID control.
         """
-        # For PWM-only control, position is limited
         if position < 0:
             position = 0
         elif position > 1:
             position = 1
 
-        self.motors[motor_id]["position"] = position
+        self.motor_states[motor_id]["position"] = position
 
         # Convert position to PWM (simple linear mapping)
         pwm_duty = position
         self.set_pwm(motor_id, pwm_duty)
 
+    ##############################################################################################################################
     # Velocity Functions
+    ##############################################################################################################################
+
     def get_velocity(self, motor_id: int) -> float:
         """Get current motor velocity."""
-        return self.motors.get(motor_id, {}).get("velocity", 0.0)
+        return self.motor_states.get(motor_id, {}).get("velocity", 0.0)
 
-    def set_velocity(self, motor_id: int, velocity: float) -> None:
+    def set_velocity(self, motor_id: int, target_velocity: float, instant: bool = True) -> None:
         """
-        Set motor velocity (normalized -1 to 1).
-        Negative values = reverse, Positive values = forward.
+        Set the target velocity for the motor (-1.0 to 1.0).
+        Actual velocity will be slewed toward this value in update_velocity().
         """
-        # Clamp velocity to [-1, 1]
-        velocity = max(-1.0, min(1.0, velocity))
+        target_velocity = max(-1.0, min(1.0, target_velocity))  # clamp
+        self.motor_states[motor_id]["target_velocity"] = target_velocity
 
-        self.motors[motor_id]["velocity"] = velocity
+        if instant:
+            self.update_velocity(motor_id, 1.0)
 
-        # Convert velocity to PWM and direction
-        abs_velocity = abs(velocity)
-        direction = velocity >= 0
+    def update_velocity(self, motor_id: int, max_step: float = 1.0) -> None:
+        """
+        Gradually update the motor velocity toward its target using a slew-rate limiter.
+        Call this periodically (e.g., every 10–20 ms).
+        """
+        state = self.motor_states[motor_id]
+        current = state.get("velocity", 0.0)
+        target = state.get("target_velocity", 0.0)
 
-        # Set direction if direction pin is available
-        if motor_id in self.direction_channels:
-            self._set_direction(motor_id, direction)
+        # Apply slew-rate limit
+        if target > current:
+            new_velocity = min(current + max_step, target)
+        elif target < current:
+            new_velocity = max(current - max_step, target)
+        else:
+            new_velocity = target
 
-        # Set PWM duty cycle
-        self.set_pwm(motor_id, abs_velocity)
+        # Save new velocity
+        state["velocity"] = new_velocity
 
-    # PWM Functions
+        # Convert to PWM duty cycle
+        pwm_duty = self._velocity_to_pwm(new_velocity)
+        state["pwm"] = pwm_duty
+        state["brake_active"] = False
+
+        in1 = self.in1_channels.get(motor_id)
+        in2 = self.in2_channels.get(motor_id)
+
+        if new_velocity > 0:
+            if in1: in1.value = pwm_duty
+            if in2: in2.off()
+            state["direction"] = 1
+
+        elif new_velocity < 0:
+            if in1: in1.off()
+            if in2: in2.value = pwm_duty
+            state["direction"] = -1
+
+        else:
+            if in1: in1.off()
+            if in2: in2.off()
+            state["direction"] = 0
+
+    ##############################################################################################################################
+    # PWM Functsions
+    ##############################################################################################################################
+
     def get_pwm(self, motor_id: int) -> float:
         """Get current PWM duty cycle."""
-        return self.motors.get(motor_id, {}).get("pwm", 0.0)
+        return self.motor_states.get(motor_id, {}).get("pwm", 0.0)
 
     def set_pwm(self, motor_id: int, duty_cycle: float) -> None:
         """
-        Set PWM duty cycle (0 to 1).
+        Set PWM duty cycle (0..0.98) respecting current direction.
+        Uses symmetric PWM: IN1 for forward, IN2 for reverse.
         """
-        # Clamp duty cycle to [0, 1]
-        duty_cycle = max(0.0, min(1.0, duty_cycle))
 
-        self.motors[motor_id]["pwm"] = duty_cycle
+        # Cap your duty to 0.98 (to avoid DRV8871's fixed off-time weirdness at 100%)
+        duty_cycle = max(0.0, min(0.98, duty_cycle))
+        self.motor_states[motor_id]["pwm"] = duty_cycle
 
-        # Use appropriate PWM channel (hardware or software)
-        if motor_id in self.pwm_channels:
-            # Hardware PWM
-            self.pwm_channels[motor_id].ChangeDutyCycle(duty_cycle * 100)
-        elif motor_id in self.software_pwm_channels:
-            # Software PWM
-            self.software_pwm_channels[motor_id].ChangeDutyCycle(duty_cycle * 100)
-        else:
-            logger.warning(f"Motor {motor_id} not found in PWM channels")
+        direction = self.motor_states[motor_id].get("direction", 1)
+        in1 = self.in1_channels.get(motor_id)
+        in2 = self.in2_channels.get(motor_id)
 
-        logger.debug(f"Motor {motor_id} PWM set to {duty_cycle:.3f}")
+        if not in1 or not in2:
+            logger.warning(f"Motor {motor_id} missing IN1/IN2 channel(s)")
+            return
 
+        try:
+            if direction > 0:   # forward
+                in1.value = duty_cycle
+                in2.off()
+            elif direction < 0:   # reverse
+                in1.off()
+                in2.value = duty_cycle
+            else:
+                in1.off()
+                in2.off()
+            logger.debug(f"Motor {motor_id} PWM={duty_cycle:.3f} dir={'FWD' if direction>0 else 'REV' if direction<0 else 'STOP'}")
+        except Exception as e:
+            logger.warning(f"Error setting PWM for motor {motor_id}: {e}")
+
+    ##############################################################################################################################
     # Enable/Disable Functions
+    ##############################################################################################################################
+
     def enable_motor(self, motor_id: int) -> None:
         """Enable motor."""
-        self.motors[motor_id]["enabled"] = True
-        self._set_enable(motor_id, True)
+        self.motor_states[motor_id]["enabled"] = True
         logger.debug(f"Motor {motor_id} enabled")
 
     def disable_motor(self, motor_id: int) -> None:
-        """Disable motor by setting PWM to 0 and disabling enable pin."""
+        """Disable motor by setting PWM to 0."""
         self.set_pwm(motor_id, 0.0)
-        self.motors[motor_id]["enabled"] = False
-        self._set_enable(motor_id, False)
+        self.motor_states[motor_id]["enabled"] = False
         logger.debug(f"Motor {motor_id} disabled")
 
-    # Helper methods for PWM-specific functionality
+    ##############################################################################################################################
+    # Helper methods for DRV8874PWPR-specific functionality
+    ##############################################################################################################################
+
     def _get_direction(self, motor_id: int) -> bool:
         """Get motor direction."""
-        if motor_id not in self.direction_channels:
+        if motor_id not in self.in2_channels:
             return False
-        return self.GPIO.input(self.direction_channels[motor_id]) == self.GPIO.HIGH
+        return self.in2_channels[motor_id].value == 1
 
     def _set_direction(self, motor_id: int, forward: bool) -> None:
-        """Set motor direction."""
-        if motor_id not in self.direction_channels:
+        """
+        Set motor direction for DRV8874PWPR.
+        This method updates the direction state and applies appropriate PWM.
+        """
+        if motor_id not in self.in2_channels:
             return
 
         # Apply direction inversion if configured
         if self.invert_direction:
             forward = not forward
 
-        self.GPIO.output(self.direction_channels[motor_id], self.GPIO.HIGH if forward else self.GPIO.LOW)
+        # Update direction state
+        self.motor_states[motor_id]["direction"] = 1 if forward else -1
 
-    # Enable/Disable Functions
-    def _set_enable(self, motor_id: int, enabled: bool) -> None:
-        """Set motor enable state."""
-        if motor_id not in self.enable_channels:
-            return
+        try:
+            # Set IN2 for direction control
+            self.in2_channels[motor_id].on() if not forward else self.in2_channels[motor_id].off()
 
-        # Apply enable inversion if configured
-        if self.invert_enable:
-            enabled = not enabled
+            # Re-apply current PWM with new direction
+            current_pwm = self.motor_states[motor_id].get("pwm", 0.0)
+            if current_pwm > 0:
+                self.set_pwm(motor_id, current_pwm)
 
-        self.GPIO.output(self.enable_channels[motor_id], self.GPIO.HIGH if enabled else self.GPIO.LOW)
+            logger.debug(f"Motor {motor_id} direction set to {'forward' if forward else 'backward'}")
+        except Exception as e:
+            logger.warning(f"Error setting direction for motor {motor_id}: {e}")
 
-    def _set_brake(self, motor_id: int, brake_active: bool) -> None:
-        """Set motor brake state."""
-        if motor_id not in self.brake_channels:
-            return
-
-        # Apply brake inversion if configured
-        if self.invert_brake:
-            brake_active = not brake_active
-
-        self.GPIO.output(self.brake_channels[motor_id], self.GPIO.HIGH if brake_active else self.GPIO.LOW)
-        self.motors[motor_id]["brake_active"] = brake_active
-
-    # PWM-specific convenience methods (not part of base ProtocolHandler)
+    # DRV8874PWPR-specific convenience methods
     def activate_brake(self, motor_id: int) -> None:
-        """Activate motor brake."""
-        self._set_brake(motor_id, True)
-        logger.debug(f"Motor {motor_id} brake activated")
+        """
+        Activate motor brake for DRV8874PWPR.
+        Brake mode: IN1 = HIGH, IN2 = HIGH
+        """
+        in1 = self.in1_channels.get(motor_id)
+        in2 = self.in2_channels.get(motor_id)
+
+        if not in1 or not in2:
+            logger.warning(f"Cannot activate brake: IN1 or IN2 not found for motor {motor_id}")
+            return
+
+        try:
+            in1.on()
+            in2.on()
+            self.motor_states[motor_id]["brake_active"] = True
+            logger.debug(f"Motor {motor_id} brake activated (IN1=1, IN2=1)")
+        except Exception as e:
+            logger.warning(f"Error activating brake for motor {motor_id}: {e}")
 
     def release_brake(self, motor_id: int) -> None:
-        """Release motor brake."""
-        self._set_brake(motor_id, False)
-        logger.debug(f"Motor {motor_id} brake released")
+        """
+        Release motor brake for DRV8874PWPR.
+        Coast mode: IN1 = LOW, IN2 = LOW
+        """
+        in1 = self.in1_channels.get(motor_id)
+        in2 = self.in2_channels.get(motor_id)
 
+        if not in1 or not in2:
+            logger.warning(f"Cannot release brake: IN1 or IN2 not found for motor {motor_id}")
+            return
 
-class PWMDCMotorsController(BaseDCMotorsController):
-    """PWM-based DC motor controller optimized for Raspberry Pi 5."""
+        try:
+            in1.off()
+            in2.off()
+            self.motor_states[motor_id]["brake_active"] = False
+            logger.debug(f"Motor {motor_id} brake released (IN1=0, IN2=0)")
+        except Exception as e:
+            logger.warning(f"Error releasing brake for motor {motor_id}: {e}")
 
-    def __init__(self, motors: dict[str, DCMotor], config: dict):
-        super().__init__(motors, config)
+    ##############################################################################################################################
+    # Helper methods for DRV8874PWPR-specific functionality
+    ##############################################################################################################################
 
-    def _create_protocol_handler(self) -> ProtocolHandler:
-        return PWMProtocolHandler(self.config)
+    def _velocity_to_pwm(self, velocity: float) -> float:
+        """
+        Convert normalized velocity (-1 to 1) into PWM duty cycle (0.0 to 1.0).
+        Tuned so that velocity=0.5 gives about 0.25 duty (half speed in real world).
+        """
+
+        # This code works for the 30RPM 10kg.cm torque motor.
+        v = abs(velocity)
+
+        # Special case: stop = true 0 duty
+        if v == 0:
+            return 0.0
+
+        # Deadzone threshold (motor won’t spin below this duty)
+        deadzone = 0.1
+
+        # Exponent > 1 pushes mid values lower
+        exponent = 2.0   # quadratic curve, makes 0.5 input ≈ 0.25 duty
+
+        # Map velocity into [deadzone, 1.0]
+        pwm = deadzone + (1 - deadzone) * (v ** exponent)
+
+        return pwm
