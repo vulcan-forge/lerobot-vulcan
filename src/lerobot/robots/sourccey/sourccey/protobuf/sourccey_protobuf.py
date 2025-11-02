@@ -47,6 +47,18 @@ class SourcceyProtobuf:
             base_action.theta_vel = float(action.get("theta.vel", 0.0))
             base_action.z_vel = float(action.get("z.vel", 0.0))
             robot_action.base_target_velocity.CopyFrom(base_action)
+            
+            # Per-arm flags
+            if "untorque_left" in action:
+                try:
+                    robot_action.untorque_left = bool(action.get("untorque_left", False))
+                except AttributeError:
+                    pass
+            if "untorque_right" in action:
+                try:
+                    robot_action.untorque_right = bool(action.get("untorque_right", False))
+                except AttributeError:
+                    pass
 
             return robot_action
 
@@ -143,6 +155,10 @@ class SourcceyProtobuf:
                 "theta.vel": base_vel.theta_vel,
                 "z.vel": base_vel.z_vel,
             })
+
+            # Per-arm flags from protobuf
+            action["untorque_left"] = bool(getattr(action_msg, "untorque_left", False))
+            action["untorque_right"] = bool(getattr(action_msg, "untorque_right", False))
 
             return action
 

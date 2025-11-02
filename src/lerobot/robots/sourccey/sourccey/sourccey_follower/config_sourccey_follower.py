@@ -17,8 +17,19 @@ from dataclasses import dataclass, field
 
 from lerobot.cameras.configs import CameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+from lerobot.motors.motors_bus import Motor
 from lerobot.robots.config import RobotConfig
 
+
+def sourccey_motor_models() -> dict[str, str]:
+    return {
+        "shoulder_pan": "sts3215",
+        "shoulder_lift": "sts3250",
+        "elbow_flex": "sts3215",
+        "wrist_flex": "sts3215",
+        "wrist_roll": "sts3215",
+        "gripper": "sts3215",
+    }
 
 def sourccey_cameras_config() -> dict[str, CameraConfig]:
     return {
@@ -33,6 +44,9 @@ class SourcceyFollowerConfig(RobotConfig):
     # Port to connect to the arm
     port: str
     orientation: str = "left"
+
+    # The models of the motors to use for the follower arms.
+    motor_models: dict[str, str] = field(default_factory=sourccey_motor_models)
 
     disable_torque_on_disconnect: bool = True
 

@@ -49,6 +49,7 @@ class Sourccey(Robot):
         left_arm_config = SourcceyFollowerConfig(
             id=f"{config.id}_left" if config.id else None,
             calibration_dir=config.calibration_dir,
+            motor_models=config.left_arm_motor_models,
             port=config.left_arm_port,
             disable_torque_on_disconnect=config.left_arm_disable_torque_on_disconnect,
             max_relative_target=config.left_arm_max_relative_target,
@@ -58,6 +59,7 @@ class Sourccey(Robot):
         right_arm_config = SourcceyFollowerConfig(
             id=f"{config.id}_right" if config.id else None,
             calibration_dir=config.calibration_dir,
+            motor_models=config.right_arm_motor_models,
             port=config.right_arm_port,
             orientation="right",
             disable_torque_on_disconnect=config.right_arm_disable_torque_on_disconnect,
@@ -77,6 +79,10 @@ class Sourccey(Robot):
 
         # Initialize protobuf converter
         self.protobuf_converter = SourcceyProtobuf()
+
+        # Track per-arm untorque state for edge detection
+        self.untorque_left_prev = False
+        self.untorque_right_prev = False
 
     def __del__(self):
         self.disconnect()
@@ -198,7 +204,7 @@ class Sourccey(Robot):
     ###################################################################
     # Data Management
     ###################################################################
-    
+
     def get_observation(self) -> dict[str, Any]:
         try:
             obs_dict = {}
@@ -223,6 +229,9 @@ class Sourccey(Robot):
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         try:
+            # Apply per-arm untorque flags automatically
+            action = self.apply_untorque_flags(action)
+
             left_action = {key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")}
             right_action = {key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")}
             base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
@@ -230,8 +239,15 @@ class Sourccey(Robot):
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}
 
-            sent_left = self.left_arm.send_action(left_action)
-            sent_right = self.right_arm.send_action(right_action)
+            # Only send to followers if there are keys for that arm
+            if left_action:
+                sent_left = self.left_arm.send_action(left_action)
+            else:
+                sent_left = {}
+            if right_action:
+                sent_right = self.right_arm.send_action(right_action)
+            else:
+                sent_right = {}
 
             prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
             prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
@@ -259,6 +275,39 @@ class Sourccey(Robot):
     ###################################################################
     # Control Management
     ###################################################################
+    def apply_untorque_flags(self, action: dict[str, Any]) -> dict[str, Any]:
+        """
+        Apply per-arm untorque flags: disable/enable torque and strip positions.
+        Manages internal state for edge detection.
+
+        Returns:
+            dict: modified action with positions stripped if untorqued
+        """
+        left_flag = bool(action.get("untorque_left", False))
+        right_flag = bool(action.get("untorque_right", False))
+
+        # Left arm handling
+        if left_flag:
+            if not self.untorque_left_prev:
+                self.left_arm.bus.disable_torque()
+            action = {k: v for k, v in action.items() if not k.startswith("left_")}
+        elif self.untorque_left_prev and not left_flag:
+            self.left_arm.bus.enable_torque()
+
+        # Right arm handling
+        if right_flag:
+            if not self.untorque_right_prev:
+                self.right_arm.bus.disable_torque()
+            action = {k: v for k, v in action.items() if not k.startswith("right_")}
+        elif self.untorque_right_prev and not right_flag:
+            self.right_arm.bus.enable_torque()
+
+        # Update state
+        self.untorque_left_prev = left_flag
+        self.untorque_right_prev = right_flag
+
+        return action
+
     def update(self):
         # Can be used to update the robot every cycle. Such as potentially a motor
         pass
@@ -278,12 +327,13 @@ class Sourccey(Robot):
     ) -> dict:
         velocity_vector = np.array([x, y, theta])
 
-        # Build the correct kinematic matrix for mechanum wheels
+        # Build the correct kinematic matrix for mecanum wheels
+        # Flip the sign of the lateral (y) column to correct strafing direction
         m = np.array([
-            [ 1,  1, -1], # Front-left wheel
-            [-1,  1, -1], # Front-right wheel
-            [ 1, -1, -1], # Rear-left wheel
-            [-1, -1, -1], # Rear-right wheel
+            [ 1, -1, -1], # Front-left wheel
+            [-1, -1, -1], # Front-right wheel
+            [ 1,  1, -1], # Rear-left wheel
+            [-1,  1, -1], # Rear-right wheel
         ])
 
         wheel_normalized = m.dot(velocity_vector)
@@ -310,16 +360,15 @@ class Sourccey(Robot):
             wheel_normalized["rear_right"],
         ])
 
-        # Build the kinematic matrix for mechanum wheels (same as forward kinematics)
+        # Kinematic matrix for mecanum wheels (must match forward kinematics)
         m = np.array([
-            [ 1,  1, -1], # Front-left wheel
-            [-1,  1, -1], # Front-right wheel
-            [ 1, -1, -1], # Rear-left wheel
-            [-1, -1, -1], # Rear-right wheel
+            [ 1, -1, -1], # Front-left wheel
+            [-1, -1, -1], # Front-right wheel
+            [ 1,  1, -1], # Rear-left wheel
+            [-1,  1, -1], # Rear-right wheel
         ])
 
         # Solve the inverse kinematics: body_velocity = M⁺ · wheel_linear_speeds.
-        # Use pseudo-inverse since we have 4 equations and 3 unknowns
         m_pinv = np.linalg.pinv(m)
         velocity_vector = m_pinv.dot(wheel_array)
         x, y, theta = velocity_vector

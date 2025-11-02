@@ -1,11 +1,12 @@
 -- Need to clean up all this code and organize all commands in a neat List
 -- We must double check each command to ensure they all work properly before version 0.1.0 launch
 
-
 ---List of commands to help train Sourccey V3 Beta
 
 ###
+
 Sourccey Commands
+
 ###
 
 ```bash
@@ -15,6 +16,7 @@ uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
 ```
 
 # For hard reset:
+
 ```bash
 uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
     --robot.type=sourccey \
@@ -35,8 +37,8 @@ uv run src/lerobot/scripts/sourccey/motor_config.py \
 python src/lerobot/scripts/sourccey/auto_calibrate.py \
   --teleop.type=bi_sourccey_leader \
   --teleop.id=bi_sourccey_leader \
-  --teleop.left_arm_port="COM7" \
-  --teleop.right_arm_port="COM6"
+  --teleop.left_arm_port="COM3" \
+  --teleop.right_arm_port="COM8"
 ```
 
 ```bash
@@ -79,7 +81,9 @@ cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_r
 ```
 
 ###
+
 Computer Commands
+
 ###
 
 Then on your computer run the below source command then the teleoperate command
@@ -105,6 +109,13 @@ python src/lerobot/control/sourccey/sourccey/evaluate.py
 ```
 
 ---
+
+Regenerating the Protobuf file
+
+```
+rm -rf src/lerobot/robots/sourccey/sourccey/protobuf/generated
+uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.py
+```
 
 ACT Training
 

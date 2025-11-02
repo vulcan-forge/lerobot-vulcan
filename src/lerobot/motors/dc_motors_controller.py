@@ -10,10 +10,8 @@ NameOrID: TypeAlias = str | int
 
 logger = logging.getLogger(__name__)
 
-
 class MotorNormMode(str, Enum):
     PWM_DUTY_CYCLE = "pwm_duty_cycle"  # 0 to 1 for PWM control
-
 
 @dataclass
 class DCMotor:
@@ -21,7 +19,6 @@ class DCMotor:
     model: str
     norm_mode: MotorNormMode
     protocol: str = "pwm"  # pwm, i2c, can, serial
-
 
 class ProtocolHandler(Protocol):
     """Protocol for different DC motor communication methods."""
@@ -38,12 +35,12 @@ class ProtocolHandler(Protocol):
         """Set motor position (0 to 1)."""
         ...
 
-    def set_velocity(self, motor_id: int, velocity: float) -> None:
+    def set_velocity(self, motor_id: int, velocity: float, instant: bool = True) -> None:
         """Set motor velocity (normalized -1 to 1)."""
         ...
 
-    def set_pwm(self, motor_id: int, duty_cycle: float) -> None:
-        """Set PWM duty cycle (0 to 1)."""
+    def update_velocity(self, motor_id: int, max_step: float = 1.0) -> None:
+        """Update motor velocity."""
         ...
 
     def get_position(self, motor_id: int) -> float | None:
@@ -58,6 +55,10 @@ class ProtocolHandler(Protocol):
         """Get current PWM duty cycle."""
         ...
 
+    def set_pwm(self, motor_id: int, duty_cycle: float) -> None:
+        """Set PWM duty cycle (0 to 1)."""
+        ...
+
     def enable_motor(self, motor_id: int) -> None:
         """Enable motor."""
         ...
@@ -65,8 +66,6 @@ class ProtocolHandler(Protocol):
     def disable_motor(self, motor_id: int) -> None:
         """Disable motor."""
         ...
-
-
 class BaseDCMotorsController(abc.ABC):
     """
     Abstract base class for DC motor controllers.
@@ -136,6 +135,10 @@ class BaseDCMotorsController(abc.ABC):
         """Create the appropriate protocol handler based on configuration."""
         pass
 
+    ##############################################################################################################################
+    # Connection
+    ##############################################################################################################################
+
     def connect(self) -> None:
         """Connect to the motor controller."""
         if self._is_connected:
@@ -159,7 +162,10 @@ class BaseDCMotorsController(abc.ABC):
         self._is_connected = False
         logger.info(f"{self} disconnected.")
 
+    ##############################################################################################################################
     # Position Functions
+    ##############################################################################################################################
+
     def get_position(self, motor: NameOrID) -> float | None:
         """Get current motor position if encoder available."""
         if not self._is_connected:
@@ -178,7 +184,10 @@ class BaseDCMotorsController(abc.ABC):
         motor_id = self._get_motor_id(motor)
         self.protocol_handler.set_position(motor_id, position)
 
+    ##############################################################################################################################
     # Velocity Functions
+    ##############################################################################################################################
+
     def get_velocity(self, motor: NameOrID) -> float:
         """Get current motor velocity."""
         if not self._is_connected:
@@ -196,7 +205,7 @@ class BaseDCMotorsController(abc.ABC):
 
         return {motor: self.get_velocity(motor) for motor in self.motors.keys()}
 
-    def set_velocity(self, motor: NameOrID, velocity: float, normalize: bool = True, instant: bool = False) -> None:
+    def set_velocity(self, motor: NameOrID, velocity: float, normalize: bool = True,) -> None:
         """
         Set motor velocity with ramp-up.
 
@@ -210,81 +219,16 @@ class BaseDCMotorsController(abc.ABC):
             return
 
         motor_id = self._get_motor_id(motor)
+        if normalize:
+            velocity = max(-1.0, min(1.0, velocity)) # Clamp to [-1, 1]
 
-        if instant:
-            if normalize:
-                # Clamp to [-1, 1]
-                velocity = max(-1.0, min(1.0, velocity))
-
-            self.protocol_handler.set_velocity(motor_id, velocity)
-            logger.debug(f"Set motor {motor} velocity to {velocity}")
-        else:
-            # Determine max velocity based on motor type
-            motor_name = self._id_to_name_dict.get(motor_id, "")
-            max_velocity = 1.0 if motor_name == "linear_actuator" else 1.0
-            
-            if normalize:
-                # Clamp to motor-specific max velocity
-                velocity = max(-max_velocity, min(max_velocity, velocity))
-
-            import time
-
-            if not hasattr(self, "_step_velocity_state"):
-                self._step_velocity_state = {}
-
-            now = time.time()
-            step_size = 0.45
-            step_interval = 1.0
-
-            state = self._step_velocity_state.get(motor_id, {
-                "last_call_time": 0,
-                "last_sent_velocity": 0.0,
-                "active": False,
-                "start_time": now,
-            })
-
-            if now - state["last_call_time"] > step_interval:
-                state["last_sent_velocity"] = 0.0
-                state["start_time"] = now
-            effective_velocity = velocity
-            if normalize:
-                direction = 1.0 if effective_velocity >= 0 else -1.0
-                target_velocity = abs(effective_velocity)
-                before_step = state["last_sent_velocity"]
-                new_velocity = before_step + step_size
-                # Respect the sign of the target
-                if new_velocity > target_velocity:
-                    new_velocity = target_velocity
-
-                elapsed_since_start = now - state.get("start_time", now)
-                if target_velocity >= 1.0:
-                    if elapsed_since_start < 0.5:
-                        target_velocity = 0.5
-                        if new_velocity > target_velocity:
-                            new_velocity = target_velocity
-
-                effective_velocity = new_velocity * direction
-                state["last_sent_velocity"] = abs(effective_velocity)
-                state["active"] = True
-            else:
-                state["last_sent_velocity"] = abs(velocity)
-                state["active"] = True
-
-            state["last_call_time"] = now
-            self._step_velocity_state[motor_id] = state
-
-            # Send velocity directly (already normalized to correct max)
-            if normalize:
-                send_velocity = effective_velocity
-            else:
-                send_velocity = velocity
-
-            self.protocol_handler.set_velocity(motor_id, send_velocity)
+        self.protocol_handler.set_velocity(motor_id, velocity)
+        logger.debug(f"Set motor {motor} velocity to {velocity}")
 
     def set_velocities(self, motors: dict[NameOrID, float], normalize: bool = True) -> None:
         if not self._is_connected:
             return
-        
+
         """
         Set motor velocities.
 
@@ -294,6 +238,10 @@ class BaseDCMotorsController(abc.ABC):
         """
         for motor, velocity in motors.items():
             self.set_velocity(motor, velocity, normalize)
+
+    ##############################################################################################################################
+    # Update velocity
+    ##############################################################################################################################
 
     def update_velocity(self, motor: NameOrID | None = None, max_step: float = 1.0) -> None:
         """Update motor velocity."""
@@ -308,7 +256,10 @@ class BaseDCMotorsController(abc.ABC):
             motor_id = self._get_motor_id(motor)
             self.protocol_handler.update_velocity(motor_id, max_step)
 
+    ##############################################################################################################################
     # PWM Functions
+    ##############################################################################################################################
+
     def get_pwm(self, motor: NameOrID) -> float:
         """Get current PWM duty cycle."""
         if not self._is_connected:
@@ -338,7 +289,10 @@ class BaseDCMotorsController(abc.ABC):
         self.protocol_handler.set_pwm(motor_id, duty_cycle)
         logger.debug(f"Set motor {motor} PWM to {duty_cycle}")
 
+    ##############################################################################################################################
     # Enable/Disable Functions
+    ##############################################################################################################################
+
     def enable_motor(self, motor: NameOrID | None = None) -> None:
         """Enable motor(s)."""
         if not self._is_connected:

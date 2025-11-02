@@ -25,6 +25,16 @@ PI5_OPTIMAL_FREQUENCY = 25000  # 25kHz - more compatible with gpiozero
 PI5_MAX_FREQUENCY = 25000      # 25kHz - Pi 5 can handle higher frequencies
 PI5_RESOLUTION = 12            # 12-bit resolution
 
+class PWMDCMotorsController(BaseDCMotorsController):
+    """PWM-based DC motor controller optimized for DRV8874PWPR H-bridge drivers."""
+
+    def __init__(self, config: dict | None = None, motors: dict[str, DCMotor] | None = None, protocol: str = "pwm"):
+        super().__init__(config, motors, protocol)
+
+    def _create_protocol_handler(self) -> ProtocolHandler:
+        return PWMProtocolHandler(self.config, self.motors)
+
+
 class PWMProtocolHandler(ProtocolHandler):
     """
     PWM protocol handler optimized for DRV8874PWPR H-bridge motor drivers.
@@ -40,6 +50,10 @@ class PWMProtocolHandler(ProtocolHandler):
     - in2_pins: IN2 pins (direction control)
     - pwm_frequency: 25000Hz (optimal for DRV8874PWPR)
     """
+
+    ##############################################################################################################################
+    # Configuration
+    ##############################################################################################################################
 
     def __init__(self, config: Dict, motors: Dict[str, DCMotor]):
         self.config = config
@@ -129,6 +143,10 @@ class PWMProtocolHandler(ProtocolHandler):
         except Exception as e:
             logger.warning(f"Error closing {label}: {e}")
 
+    ##############################################################################################################################
+    # Connection
+    ##############################################################################################################################
+
     def connect(self) -> None:
         """Initialize gpiozero for DRV8874PWPR motor drivers with symmetric PWM on IN1 and IN2."""
         try:
@@ -169,7 +187,10 @@ class PWMProtocolHandler(ProtocolHandler):
 
         logger.info("DRV8874PWPR motor driver disconnected")
 
+    ##############################################################################################################################
     # Position Functions
+    ##############################################################################################################################
+
     def get_position(self, motor_id: int) -> Optional[float]:
         """Get current motor position if encoder available."""
         return self.motor_states.get(motor_id, {}).get("position", 0.0)
@@ -191,7 +212,10 @@ class PWMProtocolHandler(ProtocolHandler):
         pwm_duty = position
         self.set_pwm(motor_id, pwm_duty)
 
+    ##############################################################################################################################
     # Velocity Functions
+    ##############################################################################################################################
+
     def get_velocity(self, motor_id: int) -> float:
         """Get current motor velocity."""
         return self.motor_states.get(motor_id, {}).get("velocity", 0.0)
@@ -236,17 +260,13 @@ class PWMProtocolHandler(ProtocolHandler):
         in2 = self.in2_channels.get(motor_id)
 
         if new_velocity > 0:
-            if in1: in1.value = pwm_duty   # PWM
-            # if in1: in1.on()               # held HIGH (1)
-            if in2: in2.off()               # held HIGH (1)
-            # if in2: in2.value = 1 - pwm_duty
+            if in1: in1.value = pwm_duty
+            if in2: in2.off()
             state["direction"] = 1
 
         elif new_velocity < 0:
-            # if in1: in1.value = 1 - pwm_duty
-            if in1: in1.off()               # held HIGH (1)
-            # if in2: in2.on()               # held HIGH (1)
-            if in2: in2.value = pwm_duty   # PWM
+            if in1: in1.off()
+            if in2: in2.value = pwm_duty
             state["direction"] = -1
 
         else:
@@ -254,7 +274,10 @@ class PWMProtocolHandler(ProtocolHandler):
             if in2: in2.off()
             state["direction"] = 0
 
-    # PWM Functions
+    ##############################################################################################################################
+    # PWM Functsions
+    ##############################################################################################################################
+
     def get_pwm(self, motor_id: int) -> float:
         """Get current PWM duty cycle."""
         return self.motor_states.get(motor_id, {}).get("pwm", 0.0)
@@ -279,13 +302,11 @@ class PWMProtocolHandler(ProtocolHandler):
 
         try:
             if direction > 0:   # forward
-                #in1.value = duty_cycle
-                in1.on()
+                in1.value = duty_cycle
                 in2.off()
             elif direction < 0:   # reverse
-                #in1.value = duty_cycle
                 in1.off()
-                in2.on()
+                in2.value = duty_cycle
             else:
                 in1.off()
                 in2.off()
@@ -293,7 +314,10 @@ class PWMProtocolHandler(ProtocolHandler):
         except Exception as e:
             logger.warning(f"Error setting PWM for motor {motor_id}: {e}")
 
+    ##############################################################################################################################
     # Enable/Disable Functions
+    ##############################################################################################################################
+
     def enable_motor(self, motor_id: int) -> None:
         """Enable motor."""
         self.motor_states[motor_id]["enabled"] = True
@@ -305,7 +329,10 @@ class PWMProtocolHandler(ProtocolHandler):
         self.motor_states[motor_id]["enabled"] = False
         logger.debug(f"Motor {motor_id} disabled")
 
+    ##############################################################################################################################
     # Helper methods for DRV8874PWPR-specific functionality
+    ##############################################################################################################################
+
     def _get_direction(self, motor_id: int) -> bool:
         """Get motor direction."""
         if motor_id not in self.in2_channels:
@@ -381,6 +408,10 @@ class PWMProtocolHandler(ProtocolHandler):
         except Exception as e:
             logger.warning(f"Error releasing brake for motor {motor_id}: {e}")
 
+    ##############################################################################################################################
+    # Helper methods for DRV8874PWPR-specific functionality
+    ##############################################################################################################################
+
     def _velocity_to_pwm(self, velocity: float) -> float:
         """
         Convert normalized velocity (-1 to 1) into PWM duty cycle (0.0 to 1.0).
@@ -404,12 +435,3 @@ class PWMProtocolHandler(ProtocolHandler):
         pwm = deadzone + (1 - deadzone) * (v ** exponent)
 
         return pwm
-
-class PWMDCMotorsController(BaseDCMotorsController):
-    """PWM-based DC motor controller optimized for DRV8874PWPR H-bridge drivers."""
-
-    def __init__(self, config: dict | None = None, motors: dict[str, DCMotor] | None = None, protocol: str = "pwm"):
-        super().__init__(config, motors, protocol)
-
-    def _create_protocol_handler(self) -> ProtocolHandler:
-        return PWMProtocolHandler(self.config, self.motors)

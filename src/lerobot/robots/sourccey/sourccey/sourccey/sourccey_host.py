@@ -44,6 +44,7 @@ class SourcceyHost:
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
 
+
 def main():
     logging.info("Configuring Sourccey")
     robot_config = SourcceyConfig(id="sourccey")
@@ -56,10 +57,11 @@ def main():
     host_config = SourcceyHostConfig()
     host = SourcceyHost(host_config)
 
+    print("Waiting for commands...")
+
     last_cmd_time = time.time()
     watchdog_active = False
 
-    print("Waiting for commands...")
     try:
         # Business logic
         start = time.perf_counter()
@@ -76,10 +78,14 @@ def main():
                 # Convert protobuf to action dictionary using existing method
                 robot_action = sourccey_pb2.SourcceyRobotAction()
                 robot_action.ParseFromString(msg_bytes)
-                data = robot.protobuf_converter.protobuf_to_action(robot_action)
 
+                data = robot.protobuf_converter.protobuf_to_action(robot_action)
+                
                 # Send action to robot
                 _action_sent = robot.send_action(data)
+
+                # Update the robot
+                robot.update()
 
                 last_cmd_time = time.time()
                 watchdog_active = False
