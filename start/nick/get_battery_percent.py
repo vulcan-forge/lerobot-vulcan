@@ -8,8 +8,6 @@ VREF = 3.3
 VOLTAGE_DIVIDER_RATIO = 0.2  # R2/(R1+R2) = 750/(3000+750) = 0.2
 
 # Battery voltage range (adjust these based on your battery pack)
-# For 3S Li-ion: 11.1V nominal (9.0V empty to 12.6V full)
-# For 2S Li-ion: 7.4V nominal (6.0V empty to 8.4V full)
 BATTERY_VOLTAGE_MIN = 11.0  # Empty battery voltage
 BATTERY_VOLTAGE_MAX = 14.6  # Full battery voltage
 
@@ -90,10 +88,15 @@ def get_battery_data() -> BatteryData:
 
 
 if __name__ == "__main__":
-    # When run as a script, output just the percentage (for Rust integration)
+    # When run as a script, output JSON (for Rust integration)
+    import json
     try:
-        percent = get_battery_percent()
-        print(percent)
+        battery_data = get_battery_data()
+        result = {
+            "voltage": battery_data.voltage,
+            "percent": battery_data.percent
+        }
+        print(json.dumps(result))
     except Exception as e:
-        # Output -1 on error so Rust knows battery reading failed
-        print(-1)
+        # Output error JSON so Rust knows battery reading failed
+        print(json.dumps({"voltage": -1.0, "percent": -1}))
