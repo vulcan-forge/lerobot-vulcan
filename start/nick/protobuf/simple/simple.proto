@@ -1,6 +1,0 @@
-syntax = "proto3";
-
-message SimpleMessage {
-    string key = 1;
-    float value = 2;
-}
