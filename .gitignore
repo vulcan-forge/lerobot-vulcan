@@ -172,9 +172,6 @@ outputs/
 *.mo
 *.pot
 
-# Dev folders
-.cache/*
-
 # Cython debug symbols
 cython_debug/
 CLAUDE.md
@@ -218,6 +215,9 @@ CLAUDE.md
 *.pptx
 *.xlsx
 
+
+# Dev folders
+.cache/*
 *.urdf
 *.xml
 *.part

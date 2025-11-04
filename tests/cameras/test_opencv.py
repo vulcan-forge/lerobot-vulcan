@@ -41,20 +41,20 @@ def _check_opencv_backends_available():
     try:
         if not DEFAULT_PNG_FILE_PATH.exists():
             return False
-            
+
         # Check if FFmpeg backend works
         cap = cv2.VideoCapture(str(DEFAULT_PNG_FILE_PATH), cv2.CAP_FFMPEG)
         ffmpeg_works = cap.isOpened()
         cap.release()
-        
+
         if ffmpeg_works:
             return True
-            
+
         # Try DirectShow backend (Windows)
         cap = cv2.VideoCapture(str(DEFAULT_PNG_FILE_PATH), cv2.CAP_DSHOW)
         dshow_works = cap.isOpened()
         cap.release()
-        
+
         return dshow_works
     except Exception:
         return False

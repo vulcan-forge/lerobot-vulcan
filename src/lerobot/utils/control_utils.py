@@ -21,7 +21,7 @@ import logging
 import traceback
 from contextlib import nullcontext
 from copy import copy
-from functools import cache, lru_cache
+from functools import cache
 from typing import Any
 
 import numpy as np

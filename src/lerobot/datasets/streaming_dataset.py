@@ -35,8 +35,7 @@ from lerobot.datasets.utils import (
 )
 from lerobot.datasets.video_utils import (
     VideoDecoderCache,
-    decode_video_frames,
-    get_safe_default_codec,
+    decode_video_frames_torchcodec,
 )
 from lerobot.utils.constants import HF_LEROBOT_HOME, LOOKAHEAD_BACKTRACKTABLE, LOOKBACK_BACKTRACKTABLE
 
@@ -95,7 +94,6 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         seed: int = 42,
         rng: np.random.Generator | None = None,
         shuffle: bool = True,
-        video_backend: str | None = None,
     ):
         """Initialize a StreamingLeRobotDataset.
 
@@ -114,7 +112,6 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
             seed (int, optional): Reproducibility random seed.
             rng (np.random.Generator | None, optional): Random number generator.
             shuffle (bool, optional): Whether to shuffle the dataset across exhaustions. Defaults to True.
-            video_backend (str | None, optional): Backend to use for video decoding. Defaults to automatic detection.
         """
         super().__init__()
         self.repo_id = repo_id
@@ -134,9 +131,6 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
 
         # We cache the video decoders to avoid re-initializing them at each frame (avoiding a ~10x slowdown)
         self.video_decoder_cache = None
-        
-        # Set video backend with automatic fallback
-        self.video_backend = video_backend if video_backend is not None else get_safe_default_codec()
 
         self.root.mkdir(exist_ok=True, parents=True)
 
@@ -395,8 +389,8 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         for video_key, query_ts in query_timestamps.items():
             root = self.meta.url_root if self.streaming and not self.streaming_from_local else self.root
             video_path = f"{root}/{self.meta.get_video_file_path(ep_idx, video_key)}"
-            frames = decode_video_frames(
-                video_path, query_ts, self.tolerance_s, backend=self.video_backend
+            frames = decode_video_frames_torchcodec(
+                video_path, query_ts, self.tolerance_s, decoder_cache=self.video_decoder_cache
             )
 
             item[video_key] = frames.squeeze(0) if len(query_ts) == 1 else frames

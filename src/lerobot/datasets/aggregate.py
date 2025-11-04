@@ -202,7 +202,6 @@ def aggregate_datasets(
             LeRobotDatasetMetadata(repo_id, root=root) for repo_id, root in zip(repo_ids, roots, strict=False)
         ]
     )
-
     fps, robot_type, features = validate_all_metadata(all_metadata)
     video_keys = [key for key in features if features[key]["dtype"] == "video"]
 
@@ -320,7 +319,6 @@ def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chu
                 )
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(str(src_path), str(dst_path))
-
                 # Reset offset for next file
                 current_offset = src_duration
             else:

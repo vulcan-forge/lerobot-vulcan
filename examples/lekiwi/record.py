@@ -70,11 +70,6 @@ keyboard.connect()
 
 # Initialize the keyboard listener and rerun visualization
 listener, events = init_keyboard_listener()
-init_rerun(session_name="lekiwi_record")
-
-_init_rerun(session_name="lekiwi_record")
-
-listener, events = init_keyboard_listener()
 
 if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
     raise ValueError("Robot or teleop is not connected!")
