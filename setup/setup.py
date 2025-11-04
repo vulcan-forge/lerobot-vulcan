@@ -236,17 +236,10 @@ class SetupScript:
                 self.print_success("LeRobot dependencies installed with uv")
 
             else:
-                self.print_warning("uv not available, using pip...")
-
-                # Create virtual environment with venv
-                venv_path = self.project_root / ".venv"
-                subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True)
-                self.print_success("Virtual environment created with venv")
-
-                # Install dependencies
-                pip_path = venv_path / ("Scripts" if platform.system() == "Windows" else "bin") / "pip"
-                subprocess.run([str(pip_path), "install", "-e", ".[feetech,smolvla,sourccey]"], check=True)
-                self.print_success("LeRobot dependencies installed with pip")
+                self.print_error("uv not available")
+                self.print_error("Please install uv from https://docs.astral.sh/uv/getting-started/installation/")
+                self.print_error("Then run this script again.")
+                return False
 
             return True
 
