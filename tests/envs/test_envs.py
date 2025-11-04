@@ -113,8 +113,6 @@ def test_factory_custom_gym_id():
     finally:
         if gym_id in gym_registry:
             del gym_registry[gym_id]
-<<<<<<< HEAD
-=======
 
 
 # Hub environment loading tests
@@ -268,4 +266,3 @@ def test_make_env_from_hub_async():
 
     # clean up
     env.close()
->>>>>>> vulcan-forge/main
