@@ -13,5 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+<<<<<<<< HEAD:src/lerobot/teleoperators/sourccey/sourccey/sourccey_leader/__init__.py
 from .config_sourccey_leader import SourcceyLeaderConfig
 from .sourccey_leader import SourcceyLeader
+========
+from .configuration_reachy2 import Reachy2RobotConfig
+from .robot_reachy2 import (
+    REACHY2_ANTENNAS_JOINTS,
+    REACHY2_L_ARM_JOINTS,
+    REACHY2_NECK_JOINTS,
+    REACHY2_R_ARM_JOINTS,
+    REACHY2_VEL,
+    Reachy2Robot,
+)
+>>>>>>>> vulcan-forge/main:src/lerobot/robots/reachy2/__init__.py
