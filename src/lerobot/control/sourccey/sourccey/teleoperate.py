@@ -1,7 +1,7 @@
 import time
 from dataclasses import dataclass
 
-from lerobot.robots.sourccey.sourccey.sourccey import Sourccey, SourcceyClientConfig, SourcceyClient
+from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourccey_leader import BiSourcceyLeaderConfig
