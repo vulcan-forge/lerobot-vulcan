@@ -155,14 +155,14 @@ class SourcceyFollower(Robot):
                 self.bus.write("Protection_Current", motor, 400)  # 50% of max current to avoid burnout
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
             elif motor == "shoulder_lift":
-                self.bus.write("P_Coefficient", motor, 16)
+                self.bus.write("P_Coefficient", motor, 12)
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 48)  # Optimal damping (64 was too high)
                 self.bus.write("Max_Torque_Limit", motor, 2000)
                 self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
             elif motor == "elbow_flex":
-                self.bus.write("P_Coefficient", motor, 16)
+                self.bus.write("P_Coefficient", motor, 12)
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 48)  # Optimal damping (64 was too high)
                 self.bus.write("Max_Torque_Limit", motor, 2000)
