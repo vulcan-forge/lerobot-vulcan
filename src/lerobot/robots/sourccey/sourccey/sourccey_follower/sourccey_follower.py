@@ -159,7 +159,14 @@ class SourcceyFollower(Robot):
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 32)
                 self.bus.write("Max_Torque_Limit", motor, 2000)
-                self.bus.write("Protection_Current", motor, 2500)
+                self.bus.write("Protection_Current", motor,3500)
+                self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
+            elif motor == "elbow_flex":
+                self.bus.write("P_Coefficient", motor, 16)
+                self.bus.write("I_Coefficient", motor, 0)
+                self.bus.write("D_Coefficient", motor, 32)
+                self.bus.write("Max_Torque_Limit", motor, 2000)
+                self.bus.write("Protection_Current", motor, 3500)  # Match shoulder_lift for STS3095
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
             else:
                 self.bus.write("P_Coefficient", motor, 16)

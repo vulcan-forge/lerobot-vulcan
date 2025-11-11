@@ -14,8 +14,8 @@ from lerobot.configs import parser
 class SourcceyTeleoperateConfig:
     id: str = "sourccey"
     remote_ip: str = "192.168.1.243"
-    left_arm_port: str = "COM3"
-    right_arm_port: str = "COM8"
+    left_arm_port: str = "COM4"
+    right_arm_port: str = "COM3"
     keyboard_port: str = "keyboard"
     fps: int = 30
 
