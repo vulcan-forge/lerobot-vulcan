@@ -14,10 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import logging
 import time
+from pathlib import Path
 from functools import cached_property
-from typing import Any, Optional
+from typing import Any, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -83,8 +85,71 @@ except ImportError as e:
 
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.teleoperators.teleoperator import Teleoperator
+from lerobot.motors.feetech.tables import MODEL_RESOLUTION
 
 from .config_phone_teleoperator_sourccey import PhoneTeleoperatorSourcceyConfig
+
+try:
+    from lerobot.teleoperators.occulus.normalization import (  # type: ignore[import]
+        extract_joint_limits_deg_from_urdf,
+        normalize_values_to_0_100,
+    )
+except ImportError:  # pragma: no cover - fallback when module not available
+    def _get_joint_limit_rad(urdf, joint_name: str) -> Tuple[float | None, float | None]:
+        lower = None
+        upper = None
+        try:
+            jm = getattr(urdf, "joint_map", None)
+            if jm and joint_name in jm:
+                limit = getattr(jm[joint_name], "limit", None)
+                lower = getattr(limit, "lower", None)
+                upper = getattr(limit, "upper", None)
+            if (lower is None or upper is None) and hasattr(urdf, "joints"):
+                for j in getattr(urdf, "joints", []):
+                    if getattr(j, "name", None) == joint_name:
+                        limit = getattr(j, "limit", None)
+                        lower = getattr(limit, "lower", None)
+                        upper = getattr(limit, "upper", None)
+                        break
+        except Exception:
+            lower, upper = None, None
+        return lower, upper
+
+    def extract_joint_limits_deg_from_urdf(
+        urdf,
+        joint_names_in_order: Sequence[str],
+        *,
+        default_limits_deg: Tuple[float, float] = (-180.0, 180.0),
+    ) -> list[Tuple[float, float]]:
+        limits: list[Tuple[float, float]] = []
+        for name in joint_names_in_order:
+            lo_rad, hi_rad = _get_joint_limit_rad(urdf, name)
+            if lo_rad is None or hi_rad is None:
+                limits.append(default_limits_deg)
+                continue
+            lo_deg = np.degrees(float(lo_rad))
+            hi_deg = np.degrees(float(hi_rad))
+            if hi_deg < lo_deg:
+                lo_deg, hi_deg = hi_deg, lo_deg
+            limits.append((lo_deg, hi_deg))
+        return limits
+
+    def normalize_values_to_0_100(
+        values_deg: Sequence[float],
+        limits_deg: Sequence[Tuple[float, float]],
+    ) -> list[float]:
+        out: list[float] = []
+        for val, (mn, mx) in zip(values_deg, limits_deg):
+            if mx <= mn:
+                out.append(50.0)
+                continue
+            norm = 100.0 * (float(val) - float(mn)) / (float(mx) - float(mn))
+            if norm < 0.0:
+                norm = 0.0
+            elif norm > 100.0:
+                norm = 100.0
+            out.append(norm)
+        return out
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +219,18 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         self.initial_phone_quat = None
         self.initial_phone_pos = None
         self.last_precision_mode = False
+
+        self._joint_names = [
+            "shoulder_pan",
+            "shoulder_lift",
+            "elbow_flex",
+            "wrist_flex",
+            "wrist_roll",
+        ]
+        self._joint_limits_deg: list[tuple[float, float]] | None = None
+        self._observation_uses_degrees = bool(getattr(self.config, "observation_uses_degrees", False))
+        self._motor_models = dict(getattr(self.config, "motor_models", {}))
+        self._calibration_helpers: dict[str, dict[str, float]] | None = self._load_joint_calibration()
         
         # Mapping parameters
         self.quat_RP = None
@@ -310,6 +387,14 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             else:
                 self.urdf = yourdfpy.URDF.load(urdf_path)
             self.robot = pk.Robot.from_urdf(self.urdf)
+            try:
+                self._joint_limits_deg = extract_joint_limits_deg_from_urdf(
+                    self.urdf,
+                    self._joint_names,
+                    default_limits_deg=(-180.0, 180.0),
+                )
+            except Exception:
+                self._joint_limits_deg = [(-180.0, 180.0)] * len(self._joint_names)
             # Compute elbow soft stop from URDF limits if available
             frac = float(self.tune["elbow_soft_stop"]["fraction_from_lower"]) if self.tune["elbow_soft_stop"]["enabled"] else 0.25
             self._compute_elbow_soft_stop(frac)
@@ -361,6 +446,63 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 self._elbow_soft_stop = None
         except Exception:
             self._elbow_soft_stop = None
+
+    def _resolve_asset_path(self, path_str: str | None) -> Path | None:
+        if not path_str:
+            return None
+        candidate = Path(path_str)
+        if candidate.is_file():
+            return candidate
+        if not candidate.is_absolute():
+            try:
+                import lerobot
+
+                lerobot_root = Path(lerobot.__file__).parent.parent
+                candidate = lerobot_root / path_str
+                if candidate.is_file():
+                    return candidate
+            except Exception:
+                return None
+        return candidate if candidate.is_file() else None
+
+    def _load_joint_calibration(self) -> dict[str, dict[str, float]] | None:
+        path_attr = "calibration_path_left" if self.arm_side == "left" else "calibration_path_right"
+        cal_path = self._resolve_asset_path(getattr(self.config, path_attr, None))
+        if cal_path is None:
+            return None
+
+        try:
+            calibration_dict = json.loads(cal_path.read_text())
+        except Exception:
+            return None
+
+        helpers: dict[str, dict[str, float]] = {}
+        for joint in self._joint_names:
+            entry = calibration_dict.get(joint)
+            if not entry:
+                continue
+            model = self._motor_models.get(joint)
+            if not model:
+                continue
+            max_res = float(MODEL_RESOLUTION.get(model, 4096)) - 1.0
+            try:
+                range_min = float(entry["range_min"])
+                range_max = float(entry["range_max"])
+            except Exception:
+                continue
+            if range_max <= range_min:
+                continue
+            mid = (range_min + range_max) / 2.0
+            drive_mode = int(entry.get("drive_mode", 0))
+            helpers[joint] = {
+                "range_min": range_min,
+                "range_max": range_max,
+                "mid": mid,
+                "drive_mode": drive_mode,
+                "max_res": max_res,
+            }
+
+        return helpers or None
 
     def calibrate(self) -> None:
         """Phone teleoperator doesn't require calibration."""
@@ -520,7 +662,11 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 
                 # If we found all required joint keys, extract the values
                 if len(found_keys) == len(joint_base_names):
-                    current_left_arm_pos_deg = [observation[key] for key in found_keys]
+                    raw_joint_values = [observation[key] for key in found_keys]
+                    if self._observation_uses_degrees:
+                        current_left_arm_pos_deg = raw_joint_values
+                    else:
+                        current_left_arm_pos_deg = self._denormalize_observation_values(raw_joint_values)
                     logger.debug(f"Found joint keys: {found_keys}")
                 else:
                     logger.debug(f"Could not find all required joint keys. Available keys: {list(observation.keys())}")
@@ -604,7 +750,11 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                         rest_pose_deg = list(np.rad2deg(self.config.rest_pose))
                         if len(rest_pose_deg) > 1:
                             rest_pose_deg[1] = -rest_pose_deg[1]  # Flip shoulder_lift for left arm hardware
-                    return self._format_action_dict(rest_pose_deg)
+                    formatted_rest = self._format_action_dict(
+                        rest_pose_deg,
+                        gripper_percent=self._extract_gripper_percent(rest_pose_deg),
+                    )
+                    return formatted_rest
                 
                 # Get the last known data (may be stale) for continued operation
                 data = self.pose_service.get_latest_pose(block=False)
@@ -634,9 +784,16 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 self.motor_positions_read = False
                 base = data.get("base") if data is not None else None
                 if getattr(self.config, "base_allow_when_inactive", True):
-                    return self._merge_base_with_action(self._format_action_dict(rest_pose_deg), base=base)
+                    formatted_rest = self._format_action_dict(
+                        rest_pose_deg,
+                        gripper_percent=self._extract_gripper_percent(rest_pose_deg),
+                    )
+                    return self._merge_base_with_action(formatted_rest, base=base)
                 else:
-                    return self._format_action_dict(rest_pose_deg)
+                    return self._format_action_dict(
+                        rest_pose_deg,
+                        gripper_percent=self._extract_gripper_percent(rest_pose_deg),
+                    )
             
             # Start timer when teleop becomes active
             if self.teleop_start_time is None:
@@ -669,17 +826,25 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 # Return the captured hold position instead of current drifting position
                 if self.reset_hold_position is not None:
                     logger.debug(f"Reset active - returning hold position: {self.reset_hold_position}")
+                    formatted_hold = self._format_action_dict(
+                        self.reset_hold_position,
+                        gripper_percent=self._extract_gripper_percent(self.reset_hold_position),
+                    )
                     if getattr(self.config, "base_allow_when_resetting", True):
                         base = data.get("base") if data is not None else None
-                        return self._merge_base_with_action(self._format_action_dict(self.reset_hold_position), base=base)
-                    return self._format_action_dict(self.reset_hold_position)
+                        return self._merge_base_with_action(formatted_hold, base=base)
+                    return formatted_hold
                 else:
                     # Fallback if no hold position captured yet
                     logger.warning("Reset active but no hold position captured - using current position")
+                    formatted_current = self._format_action_dict(
+                        current_left_arm_pos_deg,
+                        gripper_percent=self._extract_gripper_percent(current_left_arm_pos_deg),
+                    )
                     if getattr(self.config, "base_allow_when_resetting", True):
                         base = data.get("base") if data is not None else None
-                        return self._merge_base_with_action(self._format_action_dict(current_left_arm_pos_deg), base=base)
-                    return self._format_action_dict(current_left_arm_pos_deg)
+                        return self._merge_base_with_action(formatted_current, base=base)
+                    return formatted_current
 
             # Check for reset transition (prev=True, current=False) - reset just ended
             if self.prev_is_resetting == True and current_is_resetting == False:
@@ -696,8 +861,12 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             # Ensure we have valid data before processing pose
             if data is None:
                 # If no data available, return current positions to maintain stability
+                formatted_current = self._format_action_dict(
+                    current_left_arm_pos_deg,
+                    gripper_percent=self._extract_gripper_percent(current_left_arm_pos_deg),
+                )
                 return self._merge_base_with_action(
-                    self._format_action_dict(current_left_arm_pos_deg),
+                    formatted_current,
                     base=data.get("base") if data else None
                 )
 
@@ -732,7 +901,10 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     self.current_q_R[3] = -self.current_q_R[3]  # Flip Z component
                     
                     logger.info("Applied comprehensive right arm initial position and orientation mirroring for teleop (bypass mode)")
-                action_ctrl = self._format_action_dict(solution_final)
+                action_ctrl = self._format_action_dict(
+                    solution_final,
+                    gripper_percent=float(gripper_value),
+                )
                 if self.arm_side == "right":
                     action_ctrl = {k.replace("left_", "right_"): v for k, v in action_ctrl.items()}
                 if not getattr(self.config, "emit_both_arms", True):
@@ -899,7 +1071,10 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 logger.info("Applied comprehensive right arm initial position and orientation mirroring for teleop")
 
             # Format action for selected arm
-            action_ctrl = self._format_action_dict(solution_final)
+            action_ctrl = self._format_action_dict(
+                solution_final,
+                gripper_percent=float(gripper_value),
+            )
             if self.arm_side == "right":
                 # Mirror left->right if not at rest or resetting handled below
                 action_ctrl = {k.replace("left_", "right_"): v for k, v in action_ctrl.items()}
@@ -914,7 +1089,11 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         except Exception as e:
             logger.error(f"Error getting action from {self}: {e}")
             # Return current positions on error (safer than rest pose)
-            return self._merge_base_with_action(self._format_action_dict(current_left_arm_pos_deg), base=data.get("base") if 'data' in locals() else None)
+            formatted_current = self._format_action_dict(
+                current_left_arm_pos_deg,
+                gripper_percent=self._extract_gripper_percent(current_left_arm_pos_deg),
+            )
+            return self._merge_base_with_action(formatted_current, base=data.get("base") if 'data' in locals() else None)
 
     def _solve_ik(self, target_position: np.ndarray, target_wxyz: np.ndarray) -> list[float]:
         """Solve inverse kinematics for target pose. Returns solution in radians."""
@@ -935,21 +1114,115 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             # Return rest pose in radians
             return list(self.config.rest_pose)
 
-    def _format_action_dict(self, joint_positions: list[float]) -> dict[str, Any]:
-        """Format joint positions into action dictionary."""
-        action_keys = list(self.action_features.keys())
-        if len(joint_positions) != len(action_keys):
-            logger.warning(
-                f"Joint positions length ({len(joint_positions)}) doesn't match "
-                f"action features length ({len(action_keys)})"
+    def _ensure_joint_limits_loaded(self) -> None:
+        if self._joint_limits_deg is not None:
+            return
+        if self.urdf is None:
+            self._joint_limits_deg = [(-180.0, 180.0)] * len(self._joint_names)
+            return
+        try:
+            self._joint_limits_deg = extract_joint_limits_deg_from_urdf(
+                self.urdf,
+                self._joint_names,
+                default_limits_deg=(-180.0, 180.0),
             )
-            # Pad or truncate as needed
-            joint_positions = joint_positions[:len(action_keys)]
-            while len(joint_positions) < len(action_keys):
-                joint_positions.append(0.0)
-        
-        # Convert all values to Python floats for JSON serialization
-        return {key: float(pos) for key, pos in zip(action_keys, joint_positions)}
+        except Exception:
+            self._joint_limits_deg = [(-180.0, 180.0)] * len(self._joint_names)
+
+    def _normalize_joint_degrees_to_m100(self, joint_positions_deg: Sequence[float]) -> list[float]:
+        if self._calibration_helpers:
+            return self._normalize_with_calibration(joint_positions_deg)
+        self._ensure_joint_limits_loaded()
+        limits = self._joint_limits_deg or [(-180.0, 180.0)] * len(joint_positions_deg)
+        norm0_100 = normalize_values_to_0_100(joint_positions_deg, limits)
+        return [(float(val) * 2.0) - 100.0 for val in norm0_100]
+
+    def _normalize_with_calibration(self, joint_positions_deg: Sequence[float]) -> list[float]:
+        norms: list[float] = []
+        for deg, joint in zip(joint_positions_deg, self._joint_names):
+            helper = self._calibration_helpers.get(joint) if self._calibration_helpers else None
+            if not helper:
+                norms.append(0.0)
+                continue
+            raw = (float(deg) * helper["max_res"] / 360.0) + helper["mid"]
+            raw = float(np.clip(raw, helper["range_min"], helper["range_max"]))
+            norm = ((raw - helper["range_min"]) / (helper["range_max"] - helper["range_min"])) * 200.0 - 100.0
+            if helper["drive_mode"]:
+                norm = -norm
+            norms.append(float(np.clip(norm, -100.0, 100.0)))
+        return norms
+
+    def _extract_gripper_percent(self, joint_positions: Sequence[float]) -> float:
+        if not joint_positions:
+            return 0.0
+        return float(np.clip(joint_positions[-1], 0.0, 100.0))
+
+    def _denormalize_observation_values(self, raw_joint_values: Sequence[float]) -> list[float]:
+        if self._calibration_helpers:
+            return self._denormalize_with_calibration(raw_joint_values)
+        self._ensure_joint_limits_loaded()
+        limits = self._joint_limits_deg or [(-180.0, 180.0)] * len(self._joint_names)
+        joint_count = len(self._joint_names)
+        degs: list[float] = []
+        for norm_m100, (mn, mx) in zip(raw_joint_values[:joint_count], limits):
+            norm_clamped = float(np.clip(norm_m100, -100.0, 100.0))
+            norm_fraction = (norm_clamped + 100.0) / 200.0
+            degs.append(mn + norm_fraction * (mx - mn))
+        if len(raw_joint_values) > joint_count:
+            gripper_percent = float(np.clip(raw_joint_values[joint_count], 0.0, 100.0))
+            degs.append(gripper_percent)
+        else:
+            degs.append(0.0)
+        return degs
+
+    def _denormalize_with_calibration(self, raw_joint_values: Sequence[float]) -> list[float]:
+        joint_count = len(self._joint_names)
+        degs: list[float] = []
+        for norm_m100, joint in zip(raw_joint_values[:joint_count], self._joint_names):
+            helper = self._calibration_helpers.get(joint) if self._calibration_helpers else None
+            if not helper:
+                degs.append(0.0)
+                continue
+            norm = float(np.clip(norm_m100, -100.0, 100.0))
+            if helper["drive_mode"]:
+                norm = -norm
+            raw = ((norm + 100.0) / 200.0) * (helper["range_max"] - helper["range_min"]) + helper["range_min"]
+            raw = float(np.clip(raw, helper["range_min"], helper["range_max"]))
+            deg = (raw - helper["mid"]) * 360.0 / helper["max_res"]
+            degs.append(float(deg))
+
+        if len(raw_joint_values) > joint_count:
+            gripper_percent = float(np.clip(raw_joint_values[joint_count], 0.0, 100.0))
+            degs.append(gripper_percent)
+        else:
+            degs.append(0.0)
+        return degs
+
+    def _format_action_dict(
+        self,
+        joint_positions_deg: list[float],
+        *,
+        gripper_percent: float | None = None,
+    ) -> dict[str, Any]:
+        """Format joint positions (degrees) into normalization-aware action dictionary."""
+        joint_subset = list(joint_positions_deg[:len(self._joint_names)])
+        norm_m100 = self._normalize_joint_degrees_to_m100(joint_subset)
+        prefix = "left_" if self.arm_side == "left" else "right_"
+
+        action = {
+            f"{prefix}{name}.pos": float(np.clip(value, -100.0, 100.0))
+            for name, value in zip(self._joint_names, norm_m100)
+        }
+
+        if gripper_percent is None:
+            if len(joint_positions_deg) > len(self._joint_names):
+                gripper_percent = joint_positions_deg[len(self._joint_names)]
+            else:
+                gripper_percent = 0.0
+
+        gripper_percent_clamped = float(np.clip(gripper_percent, 0.0, 100.0))
+        action[f"{prefix}gripper.pos"] = gripper_percent_clamped
+        return action
 
     def _merge_base_with_action(self, action: dict[str, Any], base: Optional[dict] = None) -> dict[str, Any]:
         """Merge base velocities from phone data into action if enabled.

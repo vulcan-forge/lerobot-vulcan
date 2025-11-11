@@ -174,6 +174,7 @@ def main():
         viser_port=8080,
         gripper_min_pos=0.0,
         gripper_max_pos=50.0,
+        observation_uses_degrees=False,
     )
 
     # Initialize teleoperator, threaded keyboard handler, and Q key handler

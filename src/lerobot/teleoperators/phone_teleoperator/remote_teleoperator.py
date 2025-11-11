@@ -84,7 +84,7 @@ except ImportError as e:
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.teleoperators.teleoperator import Teleoperator
 
-from .config_phone_teleoperator import PhoneTeleoperatorConfig
+from .config_remote_teleoperator import PhoneTeleoperatorConfig
 
 logger = logging.getLogger(__name__)
 

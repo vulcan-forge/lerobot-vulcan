@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from lerobot.teleoperators.config import TeleoperatorConfig
+from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import sourccey_motor_models
 
 
 @TeleoperatorConfig.register_subclass("sourccey_teleop")
@@ -35,6 +36,9 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     # Robot model paths - same as SO100
     urdf_path: str = "lerobot/robots/sourccey/sourccey_v2beta/model/Arm.urdf"
     mesh_path: str | None = "lerobot/robots/sourccey/sourccey_v2beta/model/meshes"
+    calibration_path_left: str = "lerobot/robots/sourccey/sourccey/sourccey/left_arm_default_calibration.json"
+    calibration_path_right: str = "lerobot/robots/sourccey/sourccey/sourccey/right_arm_default_calibration.json"
+    motor_models: dict[str, str] = field(default_factory=sourccey_motor_models)
     
     # IK solver settings - same as SO100
     target_link_name: str = "Feetech-Servo-Motor-v1-5"
@@ -88,6 +92,8 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     # Output controls
     # If True, the teleop will emit both arms' keys. The non-controlled arm will be set to rest.
     emit_both_arms: bool = True
+    # Whether incoming observations from the host are already in degrees (True) or normalized [-100,100] (False).
+    observation_uses_degrees: bool = False
     
     # Visualization settings
     enable_visualization: bool = True
