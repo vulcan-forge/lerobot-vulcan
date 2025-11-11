@@ -149,28 +149,28 @@ class SourcceyFollower(Robot):
 
             if motor == "gripper":
                 self.bus.write("P_Coefficient", motor, 170)
-                self.bus.write("I_Coefficient", motor, 0)
+                self.bus.write("I_Coefficient", motor, 2)
                 self.bus.write("D_Coefficient", motor, 55)
                 self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
                 self.bus.write("Protection_Current", motor, 400)  # 50% of max current to avoid burnout
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
             elif motor == "shoulder_lift":
-                self.bus.write("P_Coefficient", motor, 16)
-                self.bus.write("I_Coefficient", motor, 0)
-                self.bus.write("D_Coefficient", motor, 32)
+                self.bus.write("P_Coefficient", motor, 24)
+                self.bus.write("I_Coefficient", motor, 2)
+                self.bus.write("D_Coefficient", motor, 16)
                 self.bus.write("Max_Torque_Limit", motor, 2000)
-                self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3095
+                self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
             elif motor == "elbow_flex":
-                self.bus.write("P_Coefficient", motor, 16)
-                self.bus.write("I_Coefficient", motor, 0)
-                self.bus.write("D_Coefficient", motor, 32)
+                self.bus.write("P_Coefficient", motor, 24)
+                self.bus.write("I_Coefficient", motor, 2)
+                self.bus.write("D_Coefficient", motor, 16)
                 self.bus.write("Max_Torque_Limit", motor, 2000)
-                self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3095
+                self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
             else:
                 self.bus.write("P_Coefficient", motor, 16)
-                self.bus.write("I_Coefficient", motor, 0)
+                self.bus.write("I_Coefficient", motor, 2)
                 self.bus.write("D_Coefficient", motor, 32)
                 self.bus.write("Max_Torque_Limit", motor, 1500)  # 80% of max torque
                 self.bus.write("Protection_Current", motor, 1500)  # 80% of max current
