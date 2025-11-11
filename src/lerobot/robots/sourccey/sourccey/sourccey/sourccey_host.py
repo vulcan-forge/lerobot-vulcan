@@ -80,7 +80,7 @@ def main():
                 robot_action.ParseFromString(msg_bytes)
 
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
-                
+
                 # Send action to robot
                 _action_sent = robot.send_action(data)
 
