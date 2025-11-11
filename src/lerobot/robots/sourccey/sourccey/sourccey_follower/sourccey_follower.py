@@ -157,14 +157,14 @@ class SourcceyFollower(Robot):
             elif motor == "shoulder_lift":
                 self.bus.write("P_Coefficient", motor, 16)
                 self.bus.write("I_Coefficient", motor, 0)
-                self.bus.write("D_Coefficient", motor, 48)  # Higher D for more damping
+                self.bus.write("D_Coefficient", motor, 64)  # Increased damping
                 self.bus.write("Max_Torque_Limit", motor, 2000)
                 self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
             elif motor == "elbow_flex":
                 self.bus.write("P_Coefficient", motor, 16)
                 self.bus.write("I_Coefficient", motor, 0)
-                self.bus.write("D_Coefficient", motor, 48)  # Higher D for more damping
+                self.bus.write("D_Coefficient", motor, 64)  # Increased damping
                 self.bus.write("Max_Torque_Limit", motor, 2000)
                 self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
