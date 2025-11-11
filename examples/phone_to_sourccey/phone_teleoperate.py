@@ -23,9 +23,14 @@ import os
 from pathlib import Path
 
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
-from lerobot.teleoperators.phone_teleoperator import PhoneTeleoperatorSourccey, PhoneTeleoperatorSourcceyConfig
+from lerobot.teleoperators.phone_teleoperator.config_remote_teleoperator_sourccey import (
+    PhoneTeleoperatorSourcceyConfig,
+)
+from lerobot.teleoperators.phone_teleoperator.remote_teleoperator_sourccey import (
+    PhoneTeleoperatorSourccey,
+)
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
-from lerobot.utils.visualization_utils import _init_rerun, log_rerun_data
+from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 try:
     from pynput import keyboard
@@ -147,7 +152,7 @@ def main():
     parser = argparse.ArgumentParser(description='Phone teleoperation for Sourccey robot')
     parser.add_argument('arm_side', nargs='?', default='left', choices=['left', 'right'],
                        help='Which arm to control (default: left)')
-    parser.add_argument('remote_ip', nargs='?', default='192.168.1.237',
+    parser.add_argument('remote_ip', nargs='?', default='192.168.1.228',
                        help='Remote host IP address (default: 192.168.1.237)')
     args = parser.parse_args()
 
@@ -209,7 +214,7 @@ def main():
 
         # Initialize rerun viewer for visualization
         print("Initializing rerun viewer...")
-        _init_rerun(session_name=f"phone_sourccey_{args.arm_side}_teleop")
+        init_rerun(session_name=f"phone_sourccey_{args.arm_side}_teleop")
 
         if not phone_teleop.is_connected:
             raise ValueError("Phone teleoperator is not connected!")

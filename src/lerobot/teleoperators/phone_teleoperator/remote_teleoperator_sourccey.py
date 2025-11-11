@@ -87,7 +87,10 @@ from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnected
 from lerobot.teleoperators.teleoperator import Teleoperator
 from lerobot.motors.feetech.tables import MODEL_RESOLUTION
 
-from .config_phone_teleoperator_sourccey import PhoneTeleoperatorSourcceyConfig
+try:
+    from .config_remote_teleoperator_sourccey import PhoneTeleoperatorSourcceyConfig
+except ImportError:  # pragma: no cover - legacy name fallback
+    from .config_phone_teleoperator_sourccey import PhoneTeleoperatorSourcceyConfig  # type: ignore[import]
 
 try:
     from lerobot.teleoperators.occulus.normalization import (  # type: ignore[import]
