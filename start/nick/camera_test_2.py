@@ -9,6 +9,7 @@ This script tests:
 
 import logging
 import sys
+import traceback
 from pathlib import Path
 
 # Add src to path
@@ -16,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from lerobot.robots import make_robot_from_config
 from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import SourcceyConfig
+from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.utils.utils import init_logging
 
 init_logging()
@@ -28,34 +30,34 @@ def test_camera_connection_failure():
     logger.info("Test 1: Camera connection failure handling")
     logger.info("=" * 60)
 
-    # Create config similar to auto_calibrate
+    # Create config similar to auto_calibrate - need to use OpenCVCameraConfig objects
     config = SourcceyConfig(
         id="sourccey",
         cameras={
-            "front_left": {
-                "index_or_path": "/dev/cameraFrontLeft",
-                "width": 320,
-                "height": 240,
-                "fps": 30,
-            },
-            "front_right": {
-                "index_or_path": "/dev/cameraFrontRight",
-                "width": 320,
-                "height": 240,
-                "fps": 30,
-            },
-            "wrist_left": {
-                "index_or_path": "/dev/cameraWristLeft",
-                "width": 320,
-                "height": 240,
-                "fps": 30,
-            },
-            "wrist_right": {
-                "index_or_path": "/dev/cameraWristRight",
-                "width": 320,
-                "height": 240,
-                "fps": 30,
-            },
+            "front_left": OpenCVCameraConfig(
+                index_or_path="/dev/cameraFrontLeft",
+                width=320,
+                height=240,
+                fps=30,
+            ),
+            "front_right": OpenCVCameraConfig(
+                index_or_path="/dev/cameraFrontRight",
+                width=320,
+                height=240,
+                fps=30,
+            ),
+            "wrist_left": OpenCVCameraConfig(
+                index_or_path="/dev/cameraWristLeft",
+                width=320,
+                height=240,
+                fps=30,
+            ),
+            "wrist_right": OpenCVCameraConfig(
+                index_or_path="/dev/cameraWristRight",
+                width=320,
+                height=240,
+                fps=30,
+            ),
         },
     )
 
@@ -67,6 +69,8 @@ def test_camera_connection_failure():
         logger.info("✓ Connection successful")
     except Exception as e:
         logger.error(f"✗ Connection failed: {e}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        logger.error(f"Traceback:\n{traceback.format_exc()}")
         logger.info("Testing graceful disconnection after connection failure...")
     finally:
         try:
@@ -75,6 +79,8 @@ def test_camera_connection_failure():
             logger.info("✓ Disconnection successful (no errors raised)")
         except Exception as e:
             logger.error(f"✗ Disconnection failed: {e}")
+            logger.error(f"Exception type: {type(e).__name__}")
+            logger.error(f"Traceback:\n{traceback.format_exc()}")
             logger.error("This indicates the disconnect() method needs to be more robust")
             raise
 
@@ -95,6 +101,8 @@ def test_partial_connection():
         logger.info("✓ Disconnection handled gracefully (no error raised)")
     except Exception as e:
         logger.warning(f"Disconnect raised error (may be expected): {e}")
+        logger.warning(f"Exception type: {type(e).__name__}")
+        logger.warning(f"Traceback:\n{traceback.format_exc()}")
 
 
 if __name__ == "__main__":
@@ -111,4 +119,5 @@ if __name__ == "__main__":
         print("=" * 60)
     except Exception as e:
         logger.exception("Test suite failed with exception:")
+        print(f"\nFULL TRACEBACK:\n{traceback.format_exc()}")
         sys.exit(1)
