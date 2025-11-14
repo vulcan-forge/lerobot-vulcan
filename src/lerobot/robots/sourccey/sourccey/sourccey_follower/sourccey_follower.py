@@ -161,10 +161,10 @@ class SourcceyFollower(Robot):
                 self.bus.write("Max_Torque_Limit", motor, 2000)
                 self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
-                self.bus.write("Punch", motor, 10)
+                self.bus.write("Minimum_Startup_Force", motor, 10)
                 self.bus.write("CW_Dead_Band", motor, 2)
                 self.bus.write("CCW_Dead_Band", motor, 2)
-                self.bus.write("Goal_Acceleration", motor, 180)
+                self.bus.write("Acceleration", motor, 180)
             elif motor == "elbow_flex":
                 self.bus.write("P_Coefficient", motor, 12)
                 self.bus.write("I_Coefficient", motor, 0)
@@ -172,10 +172,10 @@ class SourcceyFollower(Robot):
                 self.bus.write("Max_Torque_Limit", motor, 2000)
                 self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
-                self.bus.write("Punch", motor, 10)
+                self.bus.write("Minimum_Startup_Force", motor, 10)
                 self.bus.write("CW_Dead_Band", motor, 2)
                 self.bus.write("CCW_Dead_Band", motor, 2)
-                self.bus.write("Goal_Acceleration", motor, 180)
+                self.bus.write("Acceleration", motor, 180)
             else:
                 self.bus.write("P_Coefficient", motor, 16)
                 self.bus.write("I_Coefficient", motor, 2)
