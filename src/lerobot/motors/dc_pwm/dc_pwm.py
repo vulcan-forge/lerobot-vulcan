@@ -228,8 +228,8 @@ class PWMProtocolHandler(ProtocolHandler):
         target_velocity = max(-1.0, min(1.0, target_velocity))  # clamp
         self.motor_states[motor_id]["target_velocity"] = target_velocity
 
-        if instant:
-            self.update_velocity(motor_id, 1.0)
+        # if instant:
+        #     self.update_velocity(motor_id, 1.0)
 
     def update_velocity(self, motor_id: int, max_step: float = 1.0) -> None:
         """
