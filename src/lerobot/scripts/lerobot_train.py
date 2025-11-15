@@ -47,7 +47,6 @@ from lerobot.utils.train_utils import (
 )
 from lerobot.utils.utils import (
     format_big_number,
-    get_safe_torch_device,
     has_method,
     init_logging,
 )
