@@ -65,7 +65,7 @@ class SourcceyClient(Robot):
             {"x": 0.75, "y": 0.75, "z": 0.75, "theta": 0.75},  # fast
             {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # max
         ]
-        self.speed_index = 3  # Start at max
+        self.speed_index = 1  # Start at half speed
 
         self._is_connected = False
         self.logs = {}
@@ -271,7 +271,7 @@ class SourcceyClient(Robot):
         self.last_remote_state = new_state
 
         return new_frames, new_state
-    
+
     ###################################################################
     # Private Message and Parsing Functions
     ###################################################################
@@ -441,4 +441,3 @@ class SourcceyClient(Robot):
             "theta.vel": float(theta_in * theta_speed),
         }
 
-    
