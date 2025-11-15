@@ -60,12 +60,11 @@ class SourcceyClient(Robot):
 
         # Define three speed levels and a current index
         self.speed_levels = [
-            {"x": 0.25, "y": 0.25, "z": 0.25, "theta": 0.25},  # slow
-            {"x": 0.5,  "y": 0.5,  "z": 0.5, "theta": 0.5},   # medium
-            {"x": 0.75, "y": 0.75, "z": 0.75, "theta": 0.75},  # fast
-            {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # max
+            {"x": 0.6,  "y": 0.6,  "z": 0.6, "theta": 0.6},   # slow
+            {"x": 0.8, "y": 0.8, "z": 0.8, "theta": 0.8},  # medium
+            {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # fast
         ]
-        self.speed_index = 3  # Start at max
+        self.speed_index = 1  # Start at half speed
 
         self._is_connected = False
         self.logs = {}
@@ -271,7 +270,7 @@ class SourcceyClient(Robot):
         self.last_remote_state = new_state
 
         return new_frames, new_state
-    
+
     ###################################################################
     # Private Message and Parsing Functions
     ###################################################################
@@ -441,4 +440,3 @@ class SourcceyClient(Robot):
             "theta.vel": float(theta_in * theta_speed),
         }
 
-    

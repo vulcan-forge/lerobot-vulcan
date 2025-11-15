@@ -415,9 +415,8 @@ class PWMProtocolHandler(ProtocolHandler):
     def _velocity_to_pwm(self, velocity: float) -> float:
         """
         Convert normalized velocity (-1 to 1) into PWM duty cycle (0.0 to 1.0).
-        Tuned so that velocity=0.5 gives about 0.25 duty (half speed in real world).
+        Linear mapping: velocity maps directly to PWM duty cycle.
         """
-
         # This code works for the 30RPM 10kg.cm torque motor.
         v = abs(velocity)
 
@@ -425,13 +424,7 @@ class PWMProtocolHandler(ProtocolHandler):
         if v == 0:
             return 0.0
 
-        # Deadzone threshold (motor won’t spin below this duty)
-        deadzone = 0.1
-
-        # Exponent > 1 pushes mid values lower
-        exponent = 2.0   # quadratic curve, makes 0.5 input ≈ 0.25 duty
-
-        # Map velocity into [deadzone, 1.0]
-        pwm = deadzone + (1 - deadzone) * (v ** exponent)
+        # Linear mapping: velocity maps directly to PWM duty cycle
+        pwm = v
 
         return pwm
