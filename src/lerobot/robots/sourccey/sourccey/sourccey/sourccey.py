@@ -310,6 +310,7 @@ class Sourccey(Robot):
 
     def update(self):
         # Can be used to update the robot every cycle. Such as potentially a motor
+        # self.dc_motors_controller.update_velocity(max_step=0.1)
         pass
 
     # Base Functions

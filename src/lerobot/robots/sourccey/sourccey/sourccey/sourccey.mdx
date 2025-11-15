@@ -39,22 +39,32 @@ uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
 
 ### Teleoperator Calibration
 
-Calibrate the bi-manual teleoperator (leader arms):
+Find the ports for your robot
+
+```
+uv run src/lerobot/scripts/lerobot_find_port.py
+```
+
+Then Calibrate the bi-manual teleoperator (leader arms):
 
 ```
 uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
  --teleop.type=bi_sourccey_leader \
  --teleop.id=bi_sourccey_leader \
- --teleop.left_arm_port="COM4" \
- --teleop.right_arm_port="COM3"For single-arm teleoperator:
+ --teleop.left_arm_port="COM11" \
+ --teleop.right_arm_port="COM10"
 ```
+
+For single-arm teleoperator:
 
 ```
 python -m lerobot.calibrate \
  --teleop.type=sourccey_leader \
  --teleop.port=COM28 \
- --teleop.id=sourccey_leader### Viewing/Editing Calibration Files
+ --teleop.id=sourccey_leader
 ```
+
+### Viewing/Editing Calibration Files
 
 View calibration files:
 
@@ -83,16 +93,23 @@ uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 On your computer, activate the virtual environment and start teleoperation:
 
 ```
-source .venv/bin/activate # On Linux/Mac
-.venv\Scripts\activate # On WindowsThen run:
+
+# On Linux/Mac
+.venv/bin/activate
+
+
+# On Windows
+source .venv/Scripts/activate
 ```
+
+# On Windows Then run:
 
 ```
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.225" \
- --left_arm_port="COM3" \
- --right_arm_port="COM8" \
+ --remote_ip="192.168.1.230" \
+ --left_arm_port="COM11" \
+ --right_arm_port="COM10" \
  --keyboard_port="keyboard" \
  --fps=30
 ```
@@ -167,8 +184,10 @@ torchrun --nproc_per_node=2 src/lerobot/scripts/train.py \
  --save_freq=20000 \
  --batch_size=64 \
  --distributed_training=true \
- --num_gpus=2### Training on Pretrained Models
+ --num_gpus=2
 ```
+
+### Training on Pretrained Models
 
 ## Evaluation
 
@@ -222,10 +241,10 @@ python src/lerobot/scripts/sourccey/combine_datasets.py \
 "sourccey-003/dataset-2",
 "sourccey-003/dataset-3"
 ]' \
- --output_path="sourccey-003/combined_dataset"**⚠️ Important:** Do not include trailing commas in the `--dataset_paths` array, as this will cause errors.
+ --output_path="sourccey-003/combined_dataset"
 ```
 
----
+## **⚠️ Important:** Do not include trailing commas in the `--dataset_paths` array, as this will cause errors.
 
 ## Workflow Summary
 
