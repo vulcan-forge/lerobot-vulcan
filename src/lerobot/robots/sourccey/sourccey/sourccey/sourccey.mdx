@@ -164,7 +164,6 @@ python src/lerobot/scripts/lerobot_train.py \
  --job_name=act__sourccey-004__coffee__001-005 \
  --policy.device=cuda \
  --wandb.enable=false \
- --policy.push_to_hub=false \
  --steps=100000 \
  --save_freq=20000 \
  --policy.push_to_hub=false
@@ -181,9 +180,10 @@ accelerate launch \
   --policy.type=act \
   --output_dir=outputs/train/act__sourccey-004__coffee__001-005 \
   --job_name=act_multi_gpu \
-  --steps=60000 \
+  --steps=100000 \
   --save_freq=20000 \
-  --batch_size=256 \
+  --batch_size=128 \
+  --wandb.enable=false \
   --policy.push_to_hub=false
 ```
 
