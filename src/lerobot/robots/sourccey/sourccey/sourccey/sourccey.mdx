@@ -157,34 +157,65 @@ Train an ACT policy on your recorded dataset:
 ### Single GPU Training
 
 ```
-python src/lerobot/scripts/train.py \
- --dataset.repo_id=local/my_dataset \
+python src/lerobot/scripts/lerobot_train.py \
+ --dataset.repo_id=sourccey-004/sourccey-004__coffee__001-005 \
  --policy.type=act \
- --output_dir=outputs/train/act**my_dataset \
- --job_name=act**my_dataset \
+ --output_dir=outputs/train/act__sourccey-004__coffee__001-005 \
+ --job_name=act__sourccey-004__coffee__001-005 \
  --policy.device=cuda \
  --wandb.enable=false \
- --policy.push_to_hub=false \
  --steps=100000 \
- --save_freq=20000
+ --save_freq=20000 \
+ --policy.push_to_hub=false
 ```
 
 ### Multi-GPU Training
 
 ```
-torchrun --nproc_per_node=2 src/lerobot/scripts/train.py \
- --dataset.repo_id=local/my_dataset \
- --policy.type=act \
- --output_dir=outputs/train/act**my_dataset \
- --job_name=act**my_dataset \
- --policy.device=cuda \
- --wandb.enable=false \
- --policy.push_to_hub=false \
- --steps=300000 \
- --save_freq=20000 \
- --batch_size=64 \
- --distributed_training=true \
- --num_gpus=2
+accelerate launch \
+  --multi_gpu \
+  --num_processes=2 \
+  $(which lerobot-train) \
+  --dataset.repo_id=sourccey-004/sourccey-004__coffee__001-005 \
+  --policy.type=act \
+  --output_dir=outputs/train/act__sourccey-004__coffee__001-005 \
+  --job_name=act_multi_gpu \
+  --steps=100000 \
+  --save_freq=20000 \
+  --batch_size=128 \
+  --wandb.enable=false \
+  --policy.push_to_hub=false
+```
+
+# torchrun method deprecated as of 11/15/2025
+
+#```
+#torchrun --nproc_per_node=2 src/lerobot/scripts/train.py \
+
+# --dataset.repo_id=local/my_dataset \
+
+# --policy.type=act \
+
+# --output_dir=outputs/train/act\*\*my_dataset \
+
+# --job_name=act\*\*my_dataset \
+
+# --policy.device=cuda \
+
+# --wandb.enable=false \
+
+# --policy.push_to_hub=false \
+
+# --steps=300000 \
+
+# --save_freq=20000 \
+
+# --batch_size=64 \
+
+# --distributed_training=true \
+
+# --num_gpus=2
+
 ```
 
 ### Training on Pretrained Models
@@ -194,6 +225,7 @@ torchrun --nproc_per_node=2 src/lerobot/scripts/train.py \
 Evaluate a trained model on the robot:
 
 ```
+
 python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.243" \
@@ -204,6 +236,7 @@ python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --dataset.reset_time_s=5 \
  --dataset.task="Fold the towel" \
  --dataset.fps=30
+
 ```
 
 ## Utilities
@@ -213,12 +246,14 @@ python src/lerobot/control/sourccey/sourccey/evaluate.py \
 Replay previously recorded episodes:
 
 ```
+
 python src/lerobot/control/sourccey/sourccey/replay.py \
  --robot.type=sourccey \
  --robot.port=COM4 \
  --robot.id=sourccey \
  --dataset.repo_id=local/my_dataset \
  --dataset.episode=0
+
 ```
 
 ### Regenerating Protobuf Files
@@ -226,8 +261,10 @@ python src/lerobot/control/sourccey/sourccey/replay.py \
 If you modify the protobuf definitions, regenerate the Python files:
 
 ```
+
 rm -rf src/lerobot/robots/sourccey/sourccey/protobuf/generated
 uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.py
+
 ```
 
 ### Combining Datasets
@@ -235,6 +272,7 @@ uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.py
 Combine multiple datasets into one:
 
 ```
+
 python src/lerobot/scripts/sourccey/combine_datasets.py \
  --dataset_paths='[
 "sourccey-007/sourccey-007__shirt_fold-a__set000__nickm",
@@ -268,7 +306,7 @@ python src/lerobot/scripts/sourccey/combine_datasets.py \
 "sourccey-007/sourccey-007__shirt_fold-a__set028__nickm",
 "sourccey-007/sourccey-007__shirt_fold-a__set029__nickm"
 ]' \
- --output_path="sourccey-007__shirt_fold-a__set000-combined__nickm"
+ --output_path="sourccey-007/sourccey-007__shirt_fold-a__set000-combined__nickm"
 ```
 
 ## **⚠️ Important:** Do not include trailing commas in the `--dataset_paths` array, as this will cause errors.
@@ -302,3 +340,4 @@ python src/lerobot/scripts/sourccey/combine_datasets.py \
 
 -   If calibration fails, try a hard reset with `--full_reset=True`
 -   Manually edit calibration files if needed (see [Viewing/Editing Calibration Files](#viewingediting-calibration-files))
+```

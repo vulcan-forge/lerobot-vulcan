@@ -47,7 +47,6 @@ from lerobot.utils.train_utils import (
 )
 from lerobot.utils.utils import (
     format_big_number,
-    get_safe_torch_device,
     has_method,
     init_logging,
 )
@@ -150,7 +149,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if accelerator is None:
         from accelerate.utils import DistributedDataParallelKwargs
 
-        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=cfg.ddp_find_unused_parameters)
         accelerator = Accelerator(step_scheduler_with_optimizer=False, kwargs_handlers=[ddp_kwargs])
 
     init_logging(accelerator=accelerator)
