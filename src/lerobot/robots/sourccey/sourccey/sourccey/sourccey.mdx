@@ -4,15 +4,51 @@ This guide walks you through setting up and using the Sourccey robot, from initi
 
 ## Table of Contents
 
-1. [Calibration](#calibration)
-2. [Hosting the Robot](#hosting-the-robot)
-3. [Teleoperation](#teleoperation)
-4. [Recording Data](#recording-data)
-5. [Training Models](#training-models)
-6. [Evaluation](#evaluation)
-7. [Utilities](#utilities)
+1. [Setup](#setup)
+2. [Calibration](#calibration)
+3. [Hosting the Robot](#hosting-the-robot)
+4. [Teleoperation](#teleoperation)
+5. [Recording Data](#recording-data)
+6. [Training Models](#training-models)
+7. [Evaluation](#evaluation)
+8. [Utilities](#utilities)
 
 ---
+
+## Setup
+
+Before using the Sourccey robot, you need to set up the development environment. This includes installing dependencies and compiling protobuf files.
+
+### Prerequisites
+
+-   Python 3.10 or higher
+-   [uv](https://docs.astral.sh/uv/getting-started/installation/) (Python package manager)
+-   Git
+
+### Installing uv
+
+If you don't have `uv` installed, install it:
+
+**On Linux/Mac:**
+curl -LsSf https://astral.sh/uv/install.sh | sh**On Windows:**
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"**On Debian-based systems (like Raspberry Pi OS):**sh
+sudo apt install python3-full python3-pip pipx
+pipx install uv### Setting Up the Environment
+
+1. **Create a virtual environment:**h
+   uv venv
+2. **Install LeRobot with Sourccey dependencies:**
+   uv pip install -e ".[feetech,smolvla,sourccey]"This installs the project in editable mode with all required extras for the Sourccey robot.
+
+3. **Compile Sourccey protobuf files:**sh
+   uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.pyAlternatively, you can use the function import method:h
+   uv run python -c "from lerobot.robots.sourccey.sourccey.protobuf.compile import compile_sourccey_protobuf; compile_sourccey_protobuf()"### Activating the Virtual Environment
+
+After setup, activate the virtual environment:
+
+**On Linux/Mac:**
+source .venv/bin/activate**On Windows:**sh
+source .venv/Scripts/activate---
 
 ## Calibration
 
@@ -308,4 +344,7 @@ python src/lerobot/scripts/sourccey/combine_datasets.py \
 
 -   If calibration fails, try a hard reset with `--full_reset=True`
 -   Manually edit calibration files if needed (see [Viewing/Editing Calibration Files](#viewingediting-calibration-files))
+
+```
+
 ```
