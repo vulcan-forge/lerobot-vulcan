@@ -87,8 +87,8 @@ Then Calibrate the bi-manual teleoperator (leader arms):
 python src/lerobot/scripts/sourccey/auto_calibrate.py \
  --teleop.type=bi_sourccey_leader \
  --teleop.id=bi_sourccey_leader \
- --teleop.left_arm_port="/dev/ttyACM1" \
- --teleop.right_arm_port="/dev/ttyACM0"
+ --teleop.left_arm_port="COM11" \
+ --teleop.right_arm_port="COM10"
 ```
 
 For single-arm teleoperator:
@@ -144,8 +144,8 @@ source .venv/Scripts/activate
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.230" \
- --left_arm_port="/dev/ttyACM1" \
- --right_arm_port="/dev/ttyACM0" \
+ --left_arm_port="COM11" \
+ --right_arm_port="COM10" \
  --keyboard_port="keyboard" \
  --fps=30
 ```
@@ -165,13 +165,13 @@ Record demonstration data for training:
 python src/lerobot/control/sourccey/sourccey/record.py \
  --id="sourccey" \
  --remote_ip="192.168.1.230" \
- --left_arm_port="/dev/ttyACM1" \
- --right_arm_port="/dev/ttyACM0" \
- --dataset.repo_id="sourccey-007/sourccey-007__shirt_fold-a__set010__nickm" \
+ --left_arm_port="COM11" \
+ --right_arm_port="COM10" \
+ --dataset.repo_id="sourccey-008/sourccey-008__counter-a__set000__name" \
  --dataset.num_episodes=1 \
- --dataset.episode_time_s=60 \
+ --dataset.episode_time_s=120 \
  --dataset.reset_time_s=5 \
- --dataset.task="Fold the towel" \
+ --dataset.task="Take the item out of the printer" \
  --dataset.fps=30 \
  --dataset.push_to_hub=false
 ```
@@ -194,10 +194,10 @@ Train an ACT policy on your recorded dataset:
 
 ```
 python src/lerobot/scripts/lerobot_train.py \
- --dataset.repo_id=sourccey-004/sourccey-004__coffee__001-005 \
+ --dataset.repo_id=sourccey-008/sourccey-008__counter-a__set000__name \
  --policy.type=act \
- --output_dir=outputs/train/act__sourccey-004__coffee__001-005 \
- --job_name=act__sourccey-004__coffee__001-005 \
+ --output_dir=outputs/train/act__sourccey-008__counter-a__set000__name \
+ --job_name=act__sourccey-008__counter-a__set000__name \
  --policy.device=cuda \
  --wandb.enable=false \
  --steps=100000 \
@@ -212,9 +212,9 @@ accelerate launch \
   --multi_gpu \
   --num_processes=2 \
   $(which lerobot-train) \
-  --dataset.repo_id=sourccey-007/sourccey-007__shirt_fold-a__set000-combined__nickm \
+  --dataset.repo_id=sourccey-008/sourccey-008__counter-a__set000__name \
   --policy.type=act \
-  --output_dir=outputs/train/act__sourccey-007__shirt_fold-a__set000-combined__nickm \
+  --output_dir=outputs/train/act__sourccey-008__counter-a__set000__name \
   --job_name=act_multi_gpu \
   --steps=100000 \
   --save_freq=10000 \
@@ -233,8 +233,8 @@ Evaluate a trained model on the robot:
 python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.230" \
- --model_path="outputs/train/act__sourccey-007__shirt_fold-a__set000-combined__nickm/checkpoints/020000/pretrained_model" \
- --dataset.repo_id="sourccey-007/eval__sourccey-007__shirt_fold-a__set000-combined__nickm" \
+ --model_path="outputs/train/act__sourccey-008__counter-a__set000__name/checkpoints/020000/pretrained_model" \
+ --dataset.repo_id="sourccey-008/eval_sourccey-008__counter-a__set000__name" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=60 \
  --dataset.reset_time_s=5 \
@@ -250,14 +250,12 @@ python src/lerobot/control/sourccey/sourccey/evaluate.py \
 Replay previously recorded episodes:
 
 ```
-
 python src/lerobot/control/sourccey/sourccey/replay.py \
- --robot.type=sourccey \
- --robot.port=COM4 \
- --robot.id=sourccey \
- --dataset.repo_id=local/my_dataset \
+ --id="sourccey" \
+ --remote_ip="192.168.1.230" \
+ --dataset.dataset="sourccey-008/sourccey-008__counter-a__set000__name" \
  --dataset.episode=0
-
+ --dataset.fps=30
 ```
 
 ### Regenerating Protobuf Files
@@ -279,38 +277,10 @@ Combine multiple datasets into one:
 
 python src/lerobot/scripts/sourccey/combine_datasets.py \
  --dataset_paths='[
-"sourccey-007/sourccey-007__shirt_fold-a__set000__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set001__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set002__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set003__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set004__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set005__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set006__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set007__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set008__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set009__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set010__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set011__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set012__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set013__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set014__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set015__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set016__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set017__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set018__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set019__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set020__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set021__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set022__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set023__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set024__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set025__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set026__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set027__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set028__nickm",
-"sourccey-007/sourccey-007__shirt_fold-a__set029__nickm"
+"sourccey-008/sourccey-008__counter-a__set000__name",
+"sourccey-008/sourccey-008__counter-a__set001__name",
 ]' \
- --output_path="sourccey-007/sourccey-007__shirt_fold-a__set000-combined__nickm"
+ --output_path="sourccey-008/sourccey-008__counter-a__set000-combined__name"
 ```
 
 ## **⚠️ Important:** Do not include trailing commas in the `--dataset_paths` array, as this will cause errors.
