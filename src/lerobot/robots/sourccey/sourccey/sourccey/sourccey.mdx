@@ -176,46 +176,15 @@ accelerate launch \
   --multi_gpu \
   --num_processes=2 \
   $(which lerobot-train) \
-  --dataset.repo_id=sourccey-004/sourccey-004__coffee__001-005 \
+  --dataset.repo_id=sourccey-007/sourccey-007__shirt_fold-a__set000-combined__nickm \
   --policy.type=act \
-  --output_dir=outputs/train/act__sourccey-004__coffee__001-005 \
+  --output_dir=outputs/train/act__sourccey-007__shirt_fold-a__set000-combined__nickm \
   --job_name=act_multi_gpu \
   --steps=100000 \
-  --save_freq=20000 \
+  --save_freq=10000 \
   --batch_size=128 \
   --wandb.enable=false \
   --policy.push_to_hub=false
-```
-
-# torchrun method deprecated as of 11/15/2025
-
-#```
-#torchrun --nproc_per_node=2 src/lerobot/scripts/train.py \
-
-# --dataset.repo_id=local/my_dataset \
-
-# --policy.type=act \
-
-# --output_dir=outputs/train/act\*\*my_dataset \
-
-# --job_name=act\*\*my_dataset \
-
-# --policy.device=cuda \
-
-# --wandb.enable=false \
-
-# --policy.push_to_hub=false \
-
-# --steps=300000 \
-
-# --save_freq=20000 \
-
-# --batch_size=64 \
-
-# --distributed_training=true \
-
-# --num_gpus=2
-
 ```
 
 ### Training on Pretrained Models
@@ -225,14 +194,13 @@ accelerate launch \
 Evaluate a trained model on the robot:
 
 ```
-
 python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.243" \
- --model_path="outputs/train/act\_\_my_dataset/checkpoints/100000/pretrained_model" \
- --dataset.repo_id="local/eval_dataset" \
- --dataset.num_episodes=5 \
- --dataset.episode_time_s=30 \
+ --remote_ip="192.168.1.230" \
+ --model_path="outputs/train/act__sourccey-007__shirt_fold-a__set000-combined__nickm/checkpoints/020000/pretrained_model" \
+ --dataset.repo_id="sourccey-007/eval__sourccey-007__shirt_fold-a__set000-combined__nickm" \
+ --dataset.num_episodes=1 \
+ --dataset.episode_time_s=60 \
  --dataset.reset_time_s=5 \
  --dataset.task="Fold the towel" \
  --dataset.fps=30
