@@ -235,34 +235,33 @@ class SourcceyFollower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
-
-        # Check for NaN values and skip sending actions if any are found
-        present_pos = self.bus.sync_read("Present_Position")
-        if any(np.isnan(v) for v in goal_pos.values()) or any(np.isnan(v) for v in present_pos.values()):
-            logger.warning("NaN values detected in goal positions. Skipping action execution.")
-            return {f"{motor}.pos": val for motor, val in present_pos.items()}
-
-        # Cap goal position when too far away from present position.
-        # /!\ Slower fps expected due to reading from the follower.
-        if self.config.max_relative_target is not None:
-            goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
-            goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
-
-        # Send goal position to the arm with error handling
         try:
+            goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
+
+            # Check for NaN values and skip sending actions if any are found
+            present_pos = self.bus.sync_read("Present_Position")
+            if any(np.isnan(v) for v in goal_pos.values()) or any(np.isnan(v) for v in present_pos.values()):
+                logger.warning("NaN values detected in goal positions. Skipping action execution.")
+                return {f"{motor}.pos": val for motor, val in present_pos.items()}
+
+            # Cap goal position when too far away from present position.
+            # /!\ Slower fps expected due to reading from the follower.
+            if self.config.max_relative_target is not None:
+                goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
+                goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
+
+            # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)
+            return {f"{motor}.pos": val for motor, val in goal_pos.items()}
+
         except ConnectionError as e:
             current_time = time.time()
             # Only log warning if enough time has passed since last warning
             if current_time - self._last_write_warning_time >= self._write_warning_throttle_interval:
-                logger.warning(f"Status packet error during sync_write in {self}: {e}. Returning present position.")
+                logger.warning(f"Status packet error during sync_read / sync_write in {self}: {e}. Returning present position.")
                 self._last_write_warning_time = current_time
             # Return present position instead of goal position when write fails
             return {f"{motor}.pos": val for motor, val in present_pos.items()}
-
-        # Check safety after sending goals
-        return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
     ###################################################################
     # Safety Functions (Must be used after extremely extensive testing
