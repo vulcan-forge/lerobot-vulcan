@@ -14,6 +14,9 @@
 # limitations under the License.
 
 import logging
+import json
+import time
+from pathlib import Path
 
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
@@ -60,6 +63,29 @@ class SourcceyLeader(Teleoperator):
 
         # Initialize calibrator for automatic calibration
         self.calibrator = SourcceyLeaderCalibrator(self)
+
+        # Load default action file
+        self._default_action = self._load_default_action()
+
+        # Track last warning time for throttling
+        self._last_warning_time = 0.0
+        self._warning_throttle_interval = 60.0  # seconds
+
+    def _load_default_action(self) -> dict[str, float]:
+        """Load default action from JSON file."""
+        current_dir = Path(__file__).parent
+        if self.config.orientation == "right":
+            action_file = current_dir / "right_arm_default_action.json"
+        else:
+            action_file = current_dir / "left_arm_default_action.json"
+
+        if action_file.exists():
+            with open(action_file, "r") as f:
+                return json.load(f)
+        else:
+            logger.warning(f"Default action file not found: {action_file}. Using zero positions.")
+            # Fallback to zero positions if file doesn't exist
+            return {f"{motor}.pos": 0.0 for motor in self.bus.motors}
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -155,9 +181,17 @@ class SourcceyLeader(Teleoperator):
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
     def get_action(self) -> dict[str, float]:
-        action = self.bus.sync_read("Present_Position")
-        action = {f"{motor}.pos": val for motor, val in action.items()}
-        return action
+        try:
+            action = self.bus.sync_read("Present_Position")
+            action = {f"{motor}.pos": val for motor, val in action.items()}
+            return action
+        except ConnectionError as e:
+            current_time = time.time()
+            # Only log warning if enough time has passed since last warning
+            if current_time - self._last_warning_time >= self._warning_throttle_interval:
+                logger.warning(f"Status packet error in {self}: {e}. Returning default action.")
+                self._last_warning_time = current_time
+            return self._default_action
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
         raise NotImplementedError

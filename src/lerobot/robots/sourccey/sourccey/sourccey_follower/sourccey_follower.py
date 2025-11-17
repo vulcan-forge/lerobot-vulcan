@@ -16,7 +16,7 @@
 from functools import cached_property
 import time
 from typing import Any
-from venv import logger
+import logging
 
 import numpy as np
 from lerobot.cameras.utils import make_cameras_from_configs
@@ -27,6 +27,8 @@ from lerobot.robots.robot import Robot
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import SourcceyFollowerCalibrator
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.utils import ensure_safe_goal_position
+
+logger = logging.getLogger(__name__)
 
 class SourcceyFollower(Robot):
     config_class = SourcceyFollowerConfig
@@ -59,6 +61,10 @@ class SourcceyFollower(Robot):
         self.calibrator = SourcceyFollowerCalibrator(
             robot=self
         )
+
+        # Track last warning time for throttling
+        self._last_write_warning_time = 0.0
+        self._write_warning_throttle_interval = 60.0  # seconds
 
     def __del__(self):
         if (self.is_connected):
@@ -243,8 +249,17 @@ class SourcceyFollower(Robot):
             goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
-        # Send goal position to the arm
-        self.bus.sync_write("Goal_Position", goal_pos)
+        # Send goal position to the arm with error handling
+        try:
+            self.bus.sync_write("Goal_Position", goal_pos)
+        except ConnectionError as e:
+            current_time = time.time()
+            # Only log warning if enough time has passed since last warning
+            if current_time - self._last_write_warning_time >= self._write_warning_throttle_interval:
+                logger.warning(f"Status packet error during sync_write in {self}: {e}. Returning present position.")
+                self._last_write_warning_time = current_time
+            # Return present position instead of goal position when write fails
+            return {f"{motor}.pos": val for motor, val in present_pos.items()}
 
         # Check safety after sending goals
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
