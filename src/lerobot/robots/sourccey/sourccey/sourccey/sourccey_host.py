@@ -61,6 +61,7 @@ def main():
 
     last_cmd_time = time.time()
     watchdog_active = False
+    last_print_time = time.time()  # Add this line to track last print time
 
     try:
         # Business logic
@@ -75,20 +76,26 @@ def main():
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
 
-                # Convert protobuf to action dictionary using existing method
-                robot_action = sourccey_pb2.SourcceyRobotAction()
-                robot_action.ParseFromString(msg_bytes)
+                if msg_bytes is not None:
+                    current_time = time.time()
+                    if current_time - last_print_time >= 3.0:  # Check if 3 seconds have passed
+                        print(msg_bytes)
+                        last_print_time = current_time  # Update last print time
 
-                data = robot.protobuf_converter.protobuf_to_action(robot_action)
+                # # Convert protobuf to action dictionary using existing method
+                # robot_action = sourccey_pb2.SourcceyRobotAction()
+                # robot_action.ParseFromString(msg_bytes)
 
-                # Send action to robot
-                _action_sent = robot.send_action(data)
+                # data = robot.protobuf_converter.protobuf_to_action(robot_action)
 
-                # Update the robot
-                robot.update()
+                # # Send action to robot
+                # _action_sent = robot.send_action(data)
 
-                last_cmd_time = time.time()
-                watchdog_active = False
+                # # Update the robot
+                # robot.update()
+
+                # last_cmd_time = time.time()
+                # watchdog_active = False
             except zmq.Again:
                 if not watchdog_active:
                     # logging.warning("No command available")
