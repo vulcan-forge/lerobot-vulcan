@@ -76,11 +76,7 @@ def main():
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
 
-                if msg_bytes is not None:
-                    current_time = time.time()
-                    if current_time - last_print_time >= 3.0:  # Check if 3 seconds have passed
-                        print(msg_bytes)
-                        last_print_time = current_time  # Update last print time
+                print(msg_bytes)
 
                 # # Convert protobuf to action dictionary using existing method
                 # robot_action = sourccey_pb2.SourcceyRobotAction()
