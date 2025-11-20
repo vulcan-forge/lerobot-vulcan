@@ -123,8 +123,6 @@ class BiSourcceyLeader(Teleoperator):
         right_action = self.right_arm.get_action()
         action_dict.update({f"right_{key}": value for key, value in right_action.items()})
 
-        print(f"Action: {action_dict}")
-
         return action_dict
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
