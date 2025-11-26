@@ -12,14 +12,18 @@ VREF = 3.30  # Pi 3.3V rail (adjust to your measured value)
 VOLTAGE_DIVIDER_RATIO = 0.2  # V_adc = V_batt * 0.2
 
 # Sampling configuration
-AVERAGE_SAMPLES = 10  # Number of samples to average for stability
+AVERAGE_SAMPLES = 25  # Number of samples to average for stability
 
 # Battery voltage range for clamping
 BATTERY_VOLTAGE_MIN = 11.0  # "Empty" (under load) – adjust based on your pack/BMS cutoff
 BATTERY_VOLTAGE_MAX_OCV = 13.6  # "Full" resting open-circuit voltage
 BATTERY_VOLTAGE_MAX_CHARGE = 14.6  # Charging voltage – treat as 100%
-FILTER_ALPHA = 0.1  # 0..1, lower = more smoothing
+FILTER_ALPHA = 0.05  # 0..1, lower = more smoothing (lower = smoother)
 _filtered_voltage: Optional[float] = None
+
+# Smoothed percentage filter state
+_last_percent: Optional[float] = None
+PERCENT_ALPHA = 0.2  # 0..1, higher = more responsive, lower = smoother
 
 # Approximate voltage vs SoC curve for a 4S LiFePO4 pack (resting voltage)
 # (voltage, percent)
@@ -109,21 +113,33 @@ def _voltage_to_percent_curve(voltage: float) -> int:
 
 def get_battery_percent() -> int:
     """
-    Get battery percentage based on voltage and the LiFePO4 curve.
+    Get a smoothed battery percentage based on voltage and the LiFePO4 curve.
 
     Returns:
         Battery percentage (0-100)
     """
+    global _last_percent
+
     voltage = get_battery_voltage()
 
     # If we're clearly in "charging" range, just say 100%
     if voltage >= BATTERY_VOLTAGE_MAX_CHARGE:
-        return 100
+        raw_percent = 100
+    else:
+        raw_percent = _voltage_to_percent_curve(voltage)
 
-    percent = _voltage_to_percent_curve(voltage)
+    # First sample: initialize the filter directly
+    if _last_percent is None:
+        _last_percent = float(raw_percent)
+    else:
+        # Exponential smoothing on the percentage itself
+        _last_percent = (
+            PERCENT_ALPHA * float(raw_percent)
+            + (1.0 - PERCENT_ALPHA) * _last_percent
+        )
 
     # Final clamp
-    return max(0, min(100, percent))
+    return max(0, min(100, int(round(_last_percent))))
 
 
 def get_battery_data() -> BatteryData:
