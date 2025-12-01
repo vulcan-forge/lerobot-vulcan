@@ -64,7 +64,7 @@ from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_lead
 from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.sourccey_leader import SourcceyLeader
 from lerobot.utils.constants import ACTION
 from lerobot.utils.import_utils import register_third_party_devices
-from lerobot.utils.robot_utils import busy_wait
+from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import (
     init_logging,
     log_say,
@@ -123,7 +123,7 @@ def replay(cfg: ReplayConfig):
         _ = robot.send_action(processed_action)
 
         dt_s = time.perf_counter() - start_episode_t
-        busy_wait(1 / dataset.fps - dt_s)
+        precise_sleep(1 / dataset.fps - dt_s)
 
     robot.disconnect()
 
