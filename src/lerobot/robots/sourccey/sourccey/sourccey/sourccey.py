@@ -264,7 +264,7 @@ class Sourccey(Robot):
                 base_goal_pos.get("z.pos", 0.0)
             )
 
-            dc_motors_action = {**wheel_action, **linear_actuator_action}
+            dc_motors_action = {**wheel_action }
             self.dc_motors_controller.set_velocities(dc_motors_action)
 
             sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_pos, **base_goal_vel}
