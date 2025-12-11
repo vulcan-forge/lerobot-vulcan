@@ -95,9 +95,9 @@ class Sourccey(Robot):
         return {
             f"{motor}.pos": float for motor in self.left_arm.bus.motors} | {
             f"{motor}.pos": float for motor in self.right_arm.bus.motors} | {
+                "z.pos": float,
                 "x.vel": float,
                 "y.vel": float,
-                "z.vel": float,
                 "theta.vel": float,
             }
 
@@ -235,6 +235,7 @@ class Sourccey(Robot):
             left_action = {key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")}
             right_action = {key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")}
             base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
+            base_goal_pos = {k: v for k, v in action.items() if k.endswith(".pos")}
 
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}
@@ -260,13 +261,13 @@ class Sourccey(Robot):
             )
 
             linear_actuator_action = self._body_to_linear_actuator_normalized(
-                base_goal_vel.get("z.vel", 0.0)
+                base_goal_pos.get("z.pos", 0.0)
             )
 
             dc_motors_action = {**wheel_action, **linear_actuator_action}
             self.dc_motors_controller.set_velocities(dc_motors_action)
 
-            sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_vel}
+            sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_pos, **base_goal_vel}
             return sent_action
         except Exception as e:
             print(f"Error sending action: {e}")
@@ -382,10 +383,10 @@ class Sourccey(Robot):
 
     def _body_to_linear_actuator_normalized(
         self,
-        z: float,
+        z_pos: float,
     ) -> dict:
         return {
-            "linear_actuator": self.clean_value(z),
+            "linear_actuator": 100.0, # self.clean_value(z_pos),
         }
 
     def _linear_actuator_normalized_to_body(
@@ -393,7 +394,7 @@ class Sourccey(Robot):
         linear_actuator_normalized: dict[str, Any],
     ) -> dict[str, Any]:
         return {
-            "z.vel": self.clean_value(linear_actuator_normalized["linear_actuator"]),
+            "z.pos": 100.0, # self.clean_value(linear_actuator_normalized["linear_actuator"]),
         }
 
     # Round to prevent floating-point precision issues and handle -0.0
