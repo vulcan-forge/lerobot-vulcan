@@ -39,6 +39,7 @@ from lerobot.policies.sac.configuration_sac import SACConfig
 from lerobot.policies.sac.reward_model.configuration_classifier import RewardClassifierConfig
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.policies.tdmpc.configuration_tdmpc import TDMPCConfig
+from lerobot.policies.vulcan0.configuration_vulcan0 import Vulcan0Config
 from lerobot.policies.utils import validate_visual_features_consistency
 from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
 from lerobot.policies.xvla.configuration_xvla import XVLAConfig
@@ -113,6 +114,9 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from lerobot.policies.xvla.modeling_xvla import XVLAPolicy
 
         return XVLAPolicy
+    elif name == "vulcan0":
+        from lerobot.policies.vulcan0.modeling_vulcan0 import Vulcan0Policy
+        return Vulcan0Policy
     else:
         try:
             return _get_policy_cls_from_policy_name(name=name)
@@ -161,6 +165,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return GrootConfig(**kwargs)
     elif policy_type == "xvla":
         return XVLAConfig(**kwargs)
+    elif policy_type == "vulcan0":
+        return Vulcan0Config(**kwargs)
     else:
         try:
             config_cls = PreTrainedConfig.get_choice_class(policy_type)

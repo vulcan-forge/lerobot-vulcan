@@ -52,7 +52,21 @@ from lerobot.utils.utils import (
     init_logging,
 )
 
+# Logging Code
+import warnings
 
+# Silence torchvision video deprecation spam
+warnings.filterwarnings(
+    "ignore",
+    message=(
+        "The video decoding and encoding capabilities of torchvision "
+        "are deprecated from version 0.22 and will be removed in version 0.24."
+    ),
+    category=UserWarning,
+)
+
+
+# Training Code
 def update_policy(
     train_metrics: MetricsTracker,
     policy: PreTrainedPolicy,

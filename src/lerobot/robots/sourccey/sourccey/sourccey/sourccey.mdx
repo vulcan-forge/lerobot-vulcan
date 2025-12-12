@@ -215,8 +215,23 @@ python src/lerobot/scripts/lerobot_train.py \
  --job_name=vulcan0__sourccey-010__shirtfold-1-a__000__colinm \
  --policy.device=cuda \
  --wandb.enable=false \
- --steps=100000 \
- --save_freq=20000 \
+ --steps=10000 \
+ --save_freq=10000 \
+ --policy.push_to_hub=false
+```
+
+# Performance Comparison
+
+```
+python src/lerobot/scripts/lerobot_train.py \
+ --dataset.repo_id=sourccey-010/sourccey-010__shirtfold-1-a__000__colinm \
+ --policy.type=act \
+ --output_dir=outputs/train/act__sourccey-010__shirtfold-1-a__000__colinm \
+ --job_name=act__sourccey-010__shirtfold-1-a__000__colinm \
+ --policy.device=cuda \
+ --wandb.enable=false \
+ --steps=10000 \
+ --save_freq=10000 \
  --policy.push_to_hub=false
 ```
 
