@@ -5,7 +5,7 @@ from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, Sour
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourccey_leader import BiSourcceyLeaderConfig
-from lerobot.utils.robot_utils import busy_wait
+from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 from lerobot.configs import parser
 
@@ -56,7 +56,7 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
 
         robot.send_action(action)
 
-        busy_wait(max(1.0 / cfg.fps - (time.perf_counter() - t0), 0.0))
+        precise_sleep(max(1.0 / cfg.fps - (time.perf_counter() - t0), 0.0))
 
 def main():
     teleoperate()

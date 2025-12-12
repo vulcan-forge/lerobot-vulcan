@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
-from lerobot.utils.robot_utils import busy_wait
+from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import log_say
 from lerobot.configs import parser
 import logging
@@ -56,7 +56,7 @@ def replay(cfg: SourcceyReplayConfig):
 
         robot.send_action(action)
 
-        busy_wait(max(1.0 / dataset.fps - (time.perf_counter() - t0), 0.0))
+        precise_sleep(max(1.0 / dataset.fps - (time.perf_counter() - t0), 0.0))
 
     robot.disconnect()
 
