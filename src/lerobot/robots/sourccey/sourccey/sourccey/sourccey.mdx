@@ -211,12 +211,14 @@ python src/lerobot/scripts/lerobot_train.py \
 python src/lerobot/scripts/lerobot_train.py \
  --dataset.repo_id=sourccey-010/sourccey-010__shirtfold-1-a__000__colinm \
  --policy.type=vulcan0 \
- --output_dir=outputs/train/vulcan0__sourccey-010__shirtfold-1-a__000__colinm \
- --job_name=vulcan0__sourccey-010__shirtfold-1-a__000__colinm \
+ --output_dir=outputs/train/vulcan0__sourccey-010__shirtfold-1-a__000__colinm- \
+ --job_name=vulcan0__sourccey-010__shirtfold-1-a__000__colinm-2 \
  --policy.device=cuda \
  --wandb.enable=false \
  --steps=10000 \
  --save_freq=10000 \
+ --num_workers=4 \
+ --batch_size=8 \
  --policy.push_to_hub=false
 ```
 
