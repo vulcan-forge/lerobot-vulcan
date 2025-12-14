@@ -1009,7 +1009,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         item: dict[str, torch.Tensor] = {}
 
         # Multiple cameras -> small thread pool is enough; cap at number of keys.
-        max_workers = min(1, len(query_timestamps))
+        max_workers = min(4, len(query_timestamps))
         if max_workers <= 1:
             for vid_key, query_ts in query_timestamps.items():
                 k, v = decode_one(vid_key, query_ts)
