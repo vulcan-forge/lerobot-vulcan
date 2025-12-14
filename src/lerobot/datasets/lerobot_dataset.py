@@ -995,17 +995,30 @@ class LeRobotDataset(torch.utils.data.Dataset):
         the main process and a subprocess fails to access it.
         """
         ep = self.meta.episodes[ep_idx]
-        item = {}
-        for vid_key, query_ts in query_timestamps.items():
-            # Episodes are stored sequentially on a single mp4 to reduce the number of files.
-            # Thus we load the start timestamp of the episode on this mp4 and,
-            # shift the query timestamp accordingly.
+
+        # --- NEW: parallelize decoding across camera/video keys ---
+        from concurrent.futures import ThreadPoolExecutor
+
+        def decode_one(vid_key: str, query_ts: list[float]) -> tuple[str, torch.Tensor]:
             from_timestamp = ep[f"videos/{vid_key}/from_timestamp"]
             shifted_query_ts = [from_timestamp + ts for ts in query_ts]
-
             video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)
             frames = decode_video_frames(video_path, shifted_query_ts, self.tolerance_s, self.video_backend)
-            item[vid_key] = frames.squeeze(0)
+            return vid_key, frames.squeeze(0)
+
+        item: dict[str, torch.Tensor] = {}
+
+        # Multiple cameras -> small thread pool is enough; cap at number of keys.
+        max_workers = min(1, len(query_timestamps))
+        if max_workers <= 1:
+            for vid_key, query_ts in query_timestamps.items():
+                k, v = decode_one(vid_key, query_ts)
+                item[k] = v
+            return item
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            for k, v in ex.map(lambda kv: decode_one(kv[0], kv[1]), query_timestamps.items()):
+                item[k] = v
 
         return item
 
