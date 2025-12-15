@@ -371,7 +371,6 @@ def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chu
                 # Update duration of this destination file
                 dst_file_durations[dst_key] = current_dst_duration + src_duration
 
-            videos_idx[key]["episode_offset"] = current_offset
             videos_idx[key]["episode_duration"] += src_duration
 
         videos_idx[key]["chunk"] = chunk_idx

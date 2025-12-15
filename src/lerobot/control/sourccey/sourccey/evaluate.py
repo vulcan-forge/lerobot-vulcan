@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
-from lerobot.policies.act.modeling_act import ACTPolicy
+from lerobot.policies.xvla.modeling_xvla import XVLAPolicy
 from lerobot.policies.factory import make_pre_post_processors
 from lerobot.processor import make_default_processors
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
@@ -25,7 +25,7 @@ class DatasetEvaluateConfig:
 @dataclass
 class SourcceyEvaluateConfig:
     id: str = "sourccey"
-    remote_ip: str = "192.168.1.243"
+    remote_ip: str = "192.168.1.210"
     model_path: str = "outputs/train/act__sourccey-003__myles__large-towel-fold-a-001-010/checkpoints/200000/pretrained_model"
     dataset: DatasetEvaluateConfig = field(default_factory=DatasetEvaluateConfig)
 
@@ -37,7 +37,7 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     robot = SourcceyClient(robot_config)
 
     # Create policy
-    policy = ACTPolicy.from_pretrained(cfg.model_path)
+    policy = XVLAPolicy.from_pretrained(cfg.model_path)
 
     # Configure the dataset features
     action_features = hw_to_dataset_features(robot.action_features, "action")
