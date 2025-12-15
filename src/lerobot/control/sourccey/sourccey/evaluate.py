@@ -3,6 +3,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.factory import make_pre_post_processors
+from lerobot.policies.vulcan0.modeling_vulcan0 import Vulcan0Policy
 from lerobot.processor import make_default_processors
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
 from lerobot.utils.control_utils import init_keyboard_listener
@@ -37,7 +38,7 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     robot = SourcceyClient(robot_config)
 
     # Create policy
-    policy = ACTPolicy.from_pretrained(cfg.model_path)
+    policy = Vulcan0Policy.from_pretrained(cfg.model_path) #ACTPolicy.from_pretrained(cfg.model_path)
 
     # Configure the dataset features
     action_features = hw_to_dataset_features(robot.action_features, "action")

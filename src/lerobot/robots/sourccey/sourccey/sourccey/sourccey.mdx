@@ -272,7 +272,19 @@ python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --dataset.reset_time_s=5 \
  --dataset.task="Fold the towel" \
  --dataset.fps=30
+```
 
+```
+python src/lerobot/control/sourccey/sourccey/evaluate.py \
+ --id="sourccey" \
+ --remote_ip="192.168.1.210" \
+ --model_path="outputs/train/vulcan0__sourccey-010__shirtfold-1-a__000__colinm/checkpoints/010000/pretrained_model" \
+ --dataset.repo_id="sourccey-010/eval_vulcan0__sourccey-010__shirtfold-1-a__000__colinm" \
+ --dataset.num_episodes=1 \
+ --dataset.episode_time_s=60 \
+ --dataset.reset_time_s=5 \
+ --dataset.task="Fold the towel" \
+ --dataset.fps=30
 ```
 
 ## Utilities
