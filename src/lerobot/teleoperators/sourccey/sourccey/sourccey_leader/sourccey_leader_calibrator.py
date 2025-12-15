@@ -163,8 +163,8 @@ class SourcceyLeaderCalibrator:
                     "id": 11,
                     "drive_mode": 0,
                     "homing_offset": -516,
-                    "range_min": 0,
-                    "range_max": 4095
+                    "range_min": 768,
+                    "range_max": 3328
                 },
                 "gripper": {
                     "id": 12,
