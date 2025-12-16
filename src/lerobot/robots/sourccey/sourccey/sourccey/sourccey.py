@@ -95,6 +95,9 @@ class Sourccey(Robot):
         return {
             f"{motor}.pos": float for motor in self.left_arm.bus.motors} | {
             f"{motor}.pos": float for motor in self.right_arm.bus.motors} | {
+                # It is suggeted by chatGPT to add the velocity features which we can do to improve the stability and
+                # performance of the robot - 12/16/2025. We should add this in the next few weeks for better performance.
+                # If this comment is seen later and velocity has not been added, we should consider adding it.
                 "z.pos": float,
                 "x.vel": float,
                 "y.vel": float,
