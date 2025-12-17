@@ -39,7 +39,8 @@ class Vulcan0Encoder(nn.Module):
 
         self.layer_norm1 = nn.LayerNorm(model_dimension)
         self.layer_norm2 = nn.LayerNorm(model_dimension)
-        self.dropout = nn.Dropout(dropout)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         '''
@@ -50,11 +51,11 @@ class Vulcan0Encoder(nn.Module):
         x_norm1 = self.layer_norm1(x)
         attention_output = self.multi_head_self_attention(x_norm1, x_norm1, x_norm1)
         attention_output = attention_output[0] # Selects just the output, not the attention weights
-        x = x + self.dropout(attention_output)
+        x = x + self.dropout1(attention_output)
 
         x_norm2 = self.layer_norm2(x)
         mlp_output = self.multi_layer_perceptron(x_norm2)
-        x = x + self.dropout(mlp_output)
+        x = x + self.dropout2(mlp_output)
 
         return x
 
@@ -68,6 +69,9 @@ class Vulcan0Decoder(nn.Module):
         dropout = 0.1
 
         self.multi_head_self_attention = nn.MultiheadAttention(embed_dim=model_dimension, num_heads=num_heads, dropout=dropout)
+
+        # Cross attention used by the decoder to query key / value memory from the encoder
+        self.cross_attention = nn.MultiheadAttention(embed_dim=model_dimension, num_heads=num_heads, dropout=dropout)
         self.multi_layer_perceptron = nn.Sequential(
             nn.Linear(model_dimension, dim_feedforward),
             nn.GELU(),
@@ -77,21 +81,30 @@ class Vulcan0Decoder(nn.Module):
 
         self.layer_norm1 = nn.LayerNorm(model_dimension)
         self.layer_norm2 = nn.LayerNorm(model_dimension)
-        self.dropout = nn.Dropout(dropout)
+        self.layer_norm3 = nn.LayerNorm(model_dimension)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        self.dropout3 = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, encoder_out: torch.Tensor) -> torch.Tensor:
         '''
         Input: (S, B, D) S: sequence length, B: batch size, D: input dimension
+        Input: (S, B, D) S: sequence length, B: batch size, D: encoder output dimension
         Output: (S, B, D) S: sequence length, B: batch size, D: output dimension
         '''
 
         x_norm1 = self.layer_norm1(x)
-        attention_output = self.multi_head_self_attention(x_norm1, x_norm1, x_norm1)
+        attention_output = self.multi_head_self_attention(x_norm1, x_norm1, x_norm1) # q, k, v: all the same
         attention_output = attention_output[0] # Selects just the output, not the attention weights
-        x = x + self.dropout(attention_output)
+        x = x + self.dropout1(attention_output)
 
         x_norm2 = self.layer_norm2(x)
-        mlp_output = self.multi_layer_perceptron(x_norm2)
-        x = x + self.dropout(mlp_output)
+        cross_attention_output = self.cross_attention(x_norm2, encoder_out, encoder_out) # q, k, v: queries from decoder, keys and values from encoder
+        cross_attention_output = cross_attention_output[0] # Selects just the output, not the attention weights
+        x = x + self.dropout2(cross_attention_output)
+
+        x_norm3 = self.layer_norm3(x)
+        mlp_output = self.multi_layer_perceptron(x_norm3)
+        x = x + self.dropout3(mlp_output)
 
         return x
