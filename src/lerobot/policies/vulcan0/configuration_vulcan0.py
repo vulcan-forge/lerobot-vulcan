@@ -11,3 +11,6 @@ class Vulcan0Config(PreTrainedConfig):
     num_heads: int = 8
     feedforward_dim: int = 3200
     dropout: float = 0.1
+
+    num_encoder_layers: int = 4
+    num_decoder_layers: int = 1
