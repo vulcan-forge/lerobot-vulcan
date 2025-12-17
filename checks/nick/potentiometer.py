@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Optional
+
+from gpiozero import MCP3008
+
+# IMPORTANT:
+# gpiozero MCP3008 channels are 0..7 (0-based).
+# If you want "ADC Channel 1" on the chip, set this to 1.
+ADC_CHANNEL = 1
+
+# Measure your Pi 3.3V rail if you want better accuracy
+VREF = 3.30
+
+# Sampling / smoothing (copied style from your battery.py)
+AVERAGE_SAMPLES = 25
+FILTER_ALPHA = 0.10  # 0..1, lower = smoother
+_filtered_value: Optional[float] = None
+
+
+@dataclass
+class PotentiometerData:
+    raw: int          # 0..1023
+    volts: float      # 0..VREF
+    normalized: float # 0..1
+    percent: int      # 0..100
+
+
+_adc: Optional[MCP3008] = None
+
+
+def _get_adc() -> MCP3008:
+    global _adc
+    if _adc is None:
+        _adc = MCP3008(channel=ADC_CHANNEL)
+    return _adc
+
+
+def get_pot_raw_filtered() -> float:
+    """Returns filtered raw reading as float (0..1023)."""
+    global _filtered_value
+    adc = _get_adc()
+
+    total = 0.0
+    for _ in range(AVERAGE_SAMPLES):
+        total += float(adc.raw_value)
+
+    instant = total / AVERAGE_SAMPLES
+
+    if _filtered_value is None:
+        _filtered_value = instant
+    else:
+        _filtered_value = FILTER_ALPHA * instant + (1.0 - FILTER_ALPHA) * _filtered_value
+
+    return _filtered_value
+
+
+def get_pot_data() -> PotentiometerData:
+    raw_f = get_pot_raw_filtered()
+    raw = int(round(max(0.0, min(1023.0, raw_f))))
+    volts = (raw / 1023.0) * VREF
+    normalized = raw / 1023.0
+    percent = int(round(normalized * 100.0))
+    return PotentiometerData(raw=raw, volts=volts, normalized=normalized, percent=percent)
+
+
+if __name__ == "__main__":
+    try:
+        d = get_pot_data()
+        print(
+            json.dumps(
+                {
+                    "raw": d.raw,
+                    "volts": round(d.volts, 3),
+                    "normalized": round(d.normalized, 4),
+                    "percent": d.percent,
+                    "adc_channel": ADC_CHANNEL,
+                }
+            )
+        )
+    except Exception:
+        print(json.dumps({"raw": -1, "volts": -1.0, "normalized": -1.0, "percent": -1, "adc_channel": ADC_CHANNEL}))
