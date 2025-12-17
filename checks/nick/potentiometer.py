@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import time
 from typing import Optional
 
 from gpiozero import MCP3008
@@ -68,17 +69,21 @@ def get_pot_data() -> PotentiometerData:
 
 if __name__ == "__main__":
     try:
-        d = get_pot_data()
-        print(
-            json.dumps(
-                {
-                    "raw": d.raw,
-                    "volts": round(d.volts, 3),
-                    "normalized": round(d.normalized, 4),
-                    "percent": d.percent,
-                    "adc_channel": ADC_CHANNEL,
-                }
+        while True:
+            d = get_pot_data()
+            print(
+                json.dumps(
+                    {
+                        "raw": d.raw,
+                        "volts": round(d.volts, 3),
+                        "normalized": round(d.normalized, 4),
+                        "percent": d.percent,
+                        "adc_channel": ADC_CHANNEL,
+                    }
+                )
             )
-        )
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        pass
     except Exception:
         print(json.dumps({"raw": -1, "volts": -1.0, "normalized": -1.0, "percent": -1, "adc_channel": ADC_CHANNEL}))
