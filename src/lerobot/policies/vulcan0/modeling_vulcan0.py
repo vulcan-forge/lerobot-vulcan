@@ -1,12 +1,8 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from torch import Tensor
-from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.vulcan0.configuration_vulcan0 import Vulcan0Config
-from lerobot.utils.constants import ACTION, OBS_STATE
-
+from lerobot.policies.pretrained import PreTrainedPolicy
 
 class Vulcan0Policy(PreTrainedPolicy):
     config_class = Vulcan0Config
@@ -15,78 +11,87 @@ class Vulcan0Policy(PreTrainedPolicy):
     def __init__(self, config: Vulcan0Config):
         super().__init__(config)
         self.config = config
-
         self.model = Vulcan0Model(config)
-
-        # No internal recurrent state for now, but keep reset for API.
-        self.reset()
-
-    # ---- Required PreTrainedPolicy API ----
-    def get_optim_params(self) -> dict:
-        # Simple case: single param group, use config’s optimizer settings.
-        return [{"params": [p for p in self.parameters() if p.requires_grad]}]
-
-    def reset(self):
-        # No stateful caches yet; this is a no-op placeholder.
-        pass
-
-    @torch.no_grad()
-    def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
-        """
-        For compatibility with chunk-based policies, we return a
-        (batch, 1, action_dim) tensor: a "chunk" of length 1.
-        """
-        self.eval()
-        actions, _ = self.model(batch)  # (B, action_dim)
-        return actions.unsqueeze(1)     # (B, 1, action_dim)
-
-    @torch.no_grad()
-    def select_action(self, batch: dict[str, Tensor]) -> Tensor:
-        """
-        Select a single action for env rollout.
-        """
-        self.eval()
-        actions, _ = self.model(batch)  # (B, action_dim)
-        return actions
-
-    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
-        # Predicted actions from the model: (B, action_dim)
-        actions_hat, _ = self.model(batch)
-
-        # Ground-truth actions from dataset: (B, 1, action_dim) -> (B, action_dim)
-        target = batch[ACTION]
-        if target.ndim == 3 and target.shape[1] == 1:
-            target = target.squeeze(1)
-
-        # Scalar loss
-        loss = F.mse_loss(actions_hat, target)
-
-        loss_dict = {"mse_loss": loss.item()}
-        return loss, loss_dict
-
 
 class Vulcan0Model(nn.Module):
     def __init__(self, config: Vulcan0Config):
         super().__init__()
-        self.config = config
 
-        # Input Layers
-        if self.config.robot_state_feature:
-            self.layer_state = nn.Linear(
-                self.config.robot_state_feature.shape[0],
-                self.config.model_dimension,
-            )
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x
 
-        # Output Layers
-        self.layer_output = nn.Linear(
-            self.config.model_dimension,
-            self.config.action_feature.shape[0],
+class Vulcan0Encoder(nn.Module):
+    def __init__(self, config: Vulcan0Config):
+        super().__init__()
+
+        model_dimension = 512
+        num_heads = 8
+        dim_feedforward = 3200
+        dropout = 0.1
+
+        self.multi_head_self_attention = nn.MultiheadAttention(embed_dim=model_dimension, num_heads=num_heads, dropout=dropout)
+        self.multi_layer_perceptron = nn.Sequential(
+            nn.Linear(model_dimension, dim_feedforward),
+            nn.GELU(),
+            nn.Linear(dim_feedforward, model_dimension),
+            nn.Dropout(dropout),
         )
 
-    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
-        x = self.layer_state(batch[OBS_STATE])
-        x = F.relu(x)
-        x = self.layer_output(x)
+        self.layer_norm1 = nn.LayerNorm(model_dimension)
+        self.layer_norm2 = nn.LayerNorm(model_dimension)
+        self.dropout = nn.Dropout(dropout)
 
-        action = x  # (B, action_dim)
-        return action, {}
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        '''
+        Input: (S, B, D) S: sequence length, B: batch size, D: input dimension
+        Output: (S, B, D) S: sequence length, B: batch size, D: output dimension
+        '''
+
+        x_norm1 = self.layer_norm1(x)
+        attention_output = self.multi_head_self_attention(x_norm1, x_norm1, x_norm1)
+        attention_output = attention_output[0] # Selects just the output, not the attention weights
+        x = x + self.dropout(attention_output)
+
+        x_norm2 = self.layer_norm2(x)
+        mlp_output = self.multi_layer_perceptron(x_norm2)
+        x = x + self.dropout(mlp_output)
+
+        return x
+
+class Vulcan0Decoder(nn.Module):
+    def __init__(self, config: Vulcan0Config):
+        super().__init__()
+
+        model_dimension = 512
+        num_heads = 8
+        dim_feedforward = 3200
+        dropout = 0.1
+
+        self.multi_head_self_attention = nn.MultiheadAttention(embed_dim=model_dimension, num_heads=num_heads, dropout=dropout)
+        self.multi_layer_perceptron = nn.Sequential(
+            nn.Linear(model_dimension, dim_feedforward),
+            nn.GELU(),
+            nn.Linear(dim_feedforward, model_dimension),
+            nn.Dropout(dropout),
+        )
+
+        self.layer_norm1 = nn.LayerNorm(model_dimension)
+        self.layer_norm2 = nn.LayerNorm(model_dimension)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        '''
+        Input: (S, B, D) S: sequence length, B: batch size, D: input dimension
+        Output: (S, B, D) S: sequence length, B: batch size, D: output dimension
+        '''
+
+        x_norm1 = self.layer_norm1(x)
+        attention_output = self.multi_head_self_attention(x_norm1, x_norm1, x_norm1)
+        attention_output = attention_output[0] # Selects just the output, not the attention weights
+        x = x + self.dropout(attention_output)
+
+        x_norm2 = self.layer_norm2(x)
+        mlp_output = self.multi_layer_perceptron(x_norm2)
+        x = x + self.dropout(mlp_output)
+
+        return x
