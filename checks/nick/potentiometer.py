@@ -10,7 +10,7 @@ from gpiozero import MCP3008
 # IMPORTANT:
 # gpiozero MCP3008 channels are 0..7 (0-based).
 # If you want "ADC Channel 1" on the chip, set this to 1.
-ADC_CHANNEL = 0
+ADC_CHANNEL = 1
 
 # Measure your Pi 3.3V rail if you want better accuracy
 VREF = 3.30
