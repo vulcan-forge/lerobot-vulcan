@@ -16,8 +16,8 @@ ADC_CHANNEL = 1
 VREF = 3.30
 
 # Sampling / smoothing (copied style from your battery.py)
-AVERAGE_SAMPLES = 25
-FILTER_ALPHA = 0.10  # 0..1, lower = smoother
+AVERAGE_SAMPLES = 1
+FILTER_ALPHA = 1.0  # 0..1, lower = smoother
 _filtered_value: Optional[float] = None
 
 
@@ -81,7 +81,7 @@ if __name__ == "__main__":
                     }
                 )
             )
-            time.sleep(1.0)
+            time.sleep(0.02)
     except KeyboardInterrupt:
         pass
     except Exception:
