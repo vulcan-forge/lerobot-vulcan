@@ -29,8 +29,7 @@ class PotentiometerData:
     percent: int      # 0..100
 
 
-_adc: Optional[MCP3008] = None
-
+_adc = MCP3008(channel=ADC_CHANNEL, port=0, device=0)  # CE0 -> /dev/spidev0.0
 
 def _get_adc() -> MCP3008:
     global _adc
