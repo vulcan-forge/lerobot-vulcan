@@ -17,7 +17,7 @@ VREF = 3.30
 
 # Sampling / smoothing (copied style from your battery.py)
 AVERAGE_SAMPLES = 8
-FILTER_ALPHA = 0.3  # 0..1, lower = smoother
+FILTER_ALPHA = 0.4  # 0..1, lower = smoother
 _filtered_value: Optional[float] = None
 
 
