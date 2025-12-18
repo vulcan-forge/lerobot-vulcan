@@ -74,7 +74,7 @@ def normalize_between(raw: int, raw_min: int, raw_max: int) -> float:
     if raw_max < raw_min:
         x = 1.0 - x
 
-    return x
+    return x * 200.0 - 100.0
 
 def get_pot_data() -> PotentiometerData:
     raw_f = get_pot_raw_filtered()
