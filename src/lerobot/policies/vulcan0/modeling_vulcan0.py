@@ -309,7 +309,7 @@ class Vulcan0EncoderLayer(nn.Module):
         self.dropout1 = nn.Dropout(config.dropout)
         self.dropout2 = nn.Dropout(config.dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, pos_embed: torch.Tensor | None = None) -> torch.Tensor:
         '''
         Input: (S, B, D) -> S: Sequence length, B: Batch size, D: Feature dimension
         Output: (S, B, D) -> S: Sequence length, B: Batch size, D: Feature dimension
@@ -317,7 +317,16 @@ class Vulcan0EncoderLayer(nn.Module):
 
         # 1. Multi-head Self-Attention
         x_norm1 = self.layer_norm1(x)
-        attention_output, _ = self.multi_head_self_attention(x_norm1, x_norm1, x_norm1, need_weights=False)
+        if pos_embed is not None:
+            q = x_norm1 + pos_embed
+            k = x_norm1 + pos_embed
+            v = x_norm1
+        else:
+            q = x_norm1
+            k = x_norm1
+            v = x_norm1
+
+        attention_output, _ = self.multi_head_self_attention(q, k, v, need_weights=False)
         x = x + nn.Dropout(attention_output)
 
         # 2. Feed-Forward Layer
@@ -359,21 +368,47 @@ class Vulcan0DecoderLayer(nn.Module):
         self.dropout2 = nn.Dropout(config.dropout)
         self.dropout3 = nn.Dropout(config.dropout)
 
-    def forward(self, x: torch.Tensor, encoder_out: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        encoder_out: torch.Tensor,
+        encoder_pos_embed: torch.Tensor | None = None,
+        decoder_pos_embed: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         '''
         Input: (S, B, D) -> S: Sequence length, B: Batch size, D: Feature dimension
         Encoder Output: (S, B, D) -> S: Sequence length, B: Batch size, D: Feature dimension
+        Encoder Pos Embed: (S, 1, D) -> S: Sequence length, 1: Batch size, D: Feature dimension
+        Decoder Pos Embed: (S, 1, D) -> S: Sequence length, 1: Batch size, D: Feature dimension
         Output: (S, B, D) -> S: Sequence length, B: Batch size, D: Action dimension
         '''
 
         # 1. Multi-head Self-Attention
         x_norm1 = self.layer_norm1(x)
-        attention_output, _ = self.multi_head_self_attention(x_norm1, x_norm1, x_norm1, need_weights=False)
+        if decoder_pos_embed is not None:
+            q_self = x_norm1 + decoder_pos_embed
+            k_self = x_norm1 + decoder_pos_embed
+            v_self = x_norm1
+        else:
+            q_self = x_norm1
+            k_self = x_norm1
+            v_self = x_norm1
+
+        attention_output, _ = self.multi_head_self_attention(q_self, k_self, v_self, need_weights=False)
         x = x + nn.Dropout(attention_output)
 
         # 2. Cross-Attention
         x_norm2 = self.layer_norm2(x)
-        cross_attention_output, _ = self.cross_attention(x_norm2, encoder_out, encoder_out, need_weights=False)
+        if encoder_pos_embed is not None:
+            q_cross = x_norm2 + decoder_pos_embed
+            k_cross = encoder_out + decoder_pos_embed
+            v_cross = encoder_out
+        else:
+            q_cross = x_norm2
+            k_cross = encoder_out + decoder_pos_embed
+            v_cross = encoder_out
+
+        cross_attention_output, _ = self.cross_attention(q_cross, k_cross, v_cross, need_weights=False)
         x = x + nn.Dropout(cross_attention_output)
 
         # 3. Feed-Forward Layer
