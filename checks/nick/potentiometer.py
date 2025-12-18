@@ -15,6 +15,10 @@ ADC_CHANNEL = 1
 # Measure your Pi 3.3V rail if you want better accuracy
 VREF = 3.30
 
+# Mechanical min and max values for the potentiometer
+POT_MECHANICAL_MIN = 105
+POT_MECHANICAL_MAX = 596
+
 # Sampling / smoothing (copied style from your battery.py)
 AVERAGE_SAMPLES = 8
 FILTER_ALPHA = 0.45  # 0..1, lower = smoother
@@ -56,12 +60,27 @@ def get_pot_raw_filtered() -> float:
 
     return _filtered_value
 
+def normalize_between(raw: int, raw_min: int, raw_max: int) -> float:
+    # Handles reversed wiring too (raw decreases as you turn "forward")
+    if raw_min == raw_max:
+        return 0.0
+
+    lo, hi = (raw_min, raw_max) if raw_min < raw_max else (raw_max, raw_min)
+
+    x = (raw - lo) / (hi - lo)  # 0..1 (unclamped)
+    x = max(0.0, min(1.0, x))   # clamp
+
+    # If user-defined "max" is numerically less than "min", invert
+    if raw_max < raw_min:
+        x = 1.0 - x
+
+    return x
 
 def get_pot_data() -> PotentiometerData:
     raw_f = get_pot_raw_filtered()
     raw = int(round(max(0.0, min(1023.0, raw_f))))
     volts = (raw / 1023.0) * VREF
-    normalized = raw / 1023.0
+    normalized = normalize_between(raw, POT_MECHANICAL_MIN, POT_MECHANICAL_MAX)
     percent = int(round(normalized * 100.0))
     return PotentiometerData(raw=raw, volts=volts, normalized=normalized, percent=percent)
 
