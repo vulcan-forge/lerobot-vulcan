@@ -16,8 +16,8 @@ ADC_CHANNEL = 1
 VREF = 3.30
 
 # Mechanical min and max values for the potentiometer
-POT_MECHANICAL_MIN = 515
-POT_MECHANICAL_MAX = 33
+POT_MECHANICAL_MIN = 563
+POT_MECHANICAL_MAX = 77
 
 # Sampling / smoothing (copied style from your battery.py)
 AVERAGE_SAMPLES = 8
