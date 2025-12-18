@@ -80,7 +80,7 @@ def get_pot_data() -> PotentiometerData:
     raw_f = get_pot_raw_filtered()
     raw = int(round(max(0.0, min(1023.0, raw_f))))
     volts = (raw / 1023.0) * VREF
-    normalized = normalize_between(raw, POT_MECHANICAL_MIN, POT_MECHANICAL_MAX)
+    normalized = 1 - (normalize_between(raw, POT_MECHANICAL_MIN, POT_MECHANICAL_MAX))
     percent = int(round(normalized * 100.0))
     return PotentiometerData(raw=raw, volts=volts, normalized=normalized, percent=percent)
 
