@@ -22,7 +22,7 @@ POT_MECHANICAL_MAX = 77
 # Sampling / smoothing (copied style from your battery.py)
 AVERAGE_SAMPLES = 8
 FILTER_ALPHA = 0.4  # 0..1, lower = smoother
-RAW_DEADBAND = 10
+RAW_DEADBAND = 3
 _filtered_value: Optional[float] = None
 
 
