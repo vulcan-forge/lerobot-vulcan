@@ -22,6 +22,7 @@ POT_MECHANICAL_MAX = 77
 # Sampling / smoothing (copied style from your battery.py)
 AVERAGE_SAMPLES = 8
 FILTER_ALPHA = 0.4  # 0..1, lower = smoother
+RAW_DEADBAND = 3
 _filtered_value: Optional[float] = None
 
 
@@ -53,6 +54,11 @@ def get_pot_raw_filtered() -> float:
 
     instant = total / AVERAGE_SAMPLES
 
+    # Deadband: if the new reading is very close to the current filtered value,
+    # treat it as noise and don't move the filter.
+    if _filtered_value is not None and abs(instant - _filtered_value) <= RAW_DEADBAND:
+        instant = _filtered_value
+
     if _filtered_value is None:
         _filtered_value = instant
     else:
@@ -81,7 +87,7 @@ def get_pot_data() -> PotentiometerData:
     raw = int(round(max(0.0, min(1023.0, raw_f))))
     volts = (raw / 1023.0) * VREF
     normalized = normalize_between(raw, POT_MECHANICAL_MIN, POT_MECHANICAL_MAX)
-    percent = int(round(normalized * 100.0))
+    percent = int(round(normalized))
     return PotentiometerData(raw=raw, volts=volts, normalized=normalized, percent=percent)
 
 
