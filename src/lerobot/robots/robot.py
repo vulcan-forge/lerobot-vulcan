@@ -127,30 +127,39 @@ class Robot(abc.ABC):
         pass
 
     def _load_calibration(self, fpath: Path | None = None) -> None:
+        """
+        Load calibration from disk.
+
+        Supports:
+        - New format: {"schema_version": 2, "motors": {...}, "extras": {...}}
+        - Old format: {"shoulder_pan": {...MotorCalibration...}, ...}
+
+        This implementation is defensive against partial/invalid files so that
+        robot construction never fails with an UnboundLocalError.
+        """
         fpath = self.calibration_fpath if fpath is None else fpath
         with open(fpath) as f:
             raw = json.load(f)
 
         # New format: {"schema_version": 2, "motors": {...}, "extras": {...}}
         if isinstance(raw, dict) and "motors" in raw:
-            motors_raw = raw.get("motors", {})
-            extras_raw = raw.get("extras", {})
+            motors_raw = raw.get("motors", {}) or {}
+            extras_raw = raw.get("extras", {}) or {}
             with draccus.config_type("json"):
                 self.calibration = draccus.load(
                     dict[str, MotorCalibration],
                     io.StringIO(json.dumps(motors_raw)),
                 )
-        self.calibration_extras = extras_raw if isinstance(extras_raw, dict) else {}
-        return
+            self.calibration_extras = extras_raw if isinstance(extras_raw, dict) else {}
+            return
 
-    # Old format: {"shoulder_pan": {...MotorCalibration...}, ...}
+        # Old format: {"shoulder_pan": {...MotorCalibration...}, ...}
         with draccus.config_type("json"):
             self.calibration = draccus.load(
                 dict[str, MotorCalibration],
                 io.StringIO(json.dumps(raw)),
             )
         self.calibration_extras = {}
-
 
     def _save_calibration(self, fpath: Path | None = None) -> None:
         fpath = self.calibration_fpath if fpath is None else fpath

@@ -67,8 +67,31 @@ class SourcceyFollower(Robot):
         self._write_warning_throttle_interval = 60.0  # seconds
 
     def __del__(self):
-        if (self.is_connected):
-            self.disconnect()
+        """
+        Best-effort cleanup. Guard against partially constructed instances
+        (e.g. if base __init__ failed before `bus` was created) and avoid
+        raising during interpreter shutdown.
+        """
+        try:
+            has_bus = hasattr(self, "bus")
+            has_cams = hasattr(self, "cameras")
+            if not has_bus:
+                return
+
+            # Only attempt a real disconnect if we have a bus and at least some
+            # notion of connection state.
+            is_connected = False
+            try:
+                is_connected = bool(self.is_connected)
+            except Exception:
+                # If connection check itself fails, skip disconnect.
+                is_connected = False
+
+            if is_connected:
+                self.disconnect()
+        except Exception:
+            # Swallow all errors in __del__ to prevent noisy shutdown.
+            pass
 
     ###################################################################
     # Properties and Attributes
