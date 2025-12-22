@@ -90,7 +90,14 @@ class Sourccey(Robot):
         self.untorque_right_prev = False
 
     def __del__(self):
-        self.disconnect()
+        # Best-effort cleanup; avoid raising during interpreter shutdown.
+        try:
+            if self.is_connected:
+                self.disconnect()
+        except Exception:
+            # __del__ exceptions are ignored by Python but still printed;
+            # swallow anything here to keep shutdown noise-free.
+            pass
 
     ###################################################################
     # Properties and Attributes
@@ -141,15 +148,23 @@ class Sourccey(Robot):
 
     def disconnect(self):
         print("Disconnecting Sourccey")
-        self.left_arm.disconnect()
-        self.right_arm.disconnect()
+
+        # Make per-subsystem disconnects idempotent to support multiple calls.
+        if getattr(self.left_arm, "is_connected", False):
+            self.left_arm.disconnect()
+        if getattr(self.right_arm, "is_connected", False):
+            self.right_arm.disconnect()
 
         self.stop_base()
-        self.dc_motors_controller.disconnect()
 
-        # Disconnect only those we connected
-        for cam_key in self.cameras.keys():
-            self.cameras[cam_key].disconnect()
+        # PWMDCMotorsController may already be disconnected; guard if attribute exists.
+        if getattr(self.dc_motors_controller, "is_connected", True):
+            self.dc_motors_controller.disconnect()
+
+        # Disconnect only those cameras that are still connected.
+        for cam_key, cam in self.cameras.items():
+            if getattr(cam, "is_connected", False):
+                cam.disconnect()
 
     ###################################################################
     # Calibration and Configuration Management
