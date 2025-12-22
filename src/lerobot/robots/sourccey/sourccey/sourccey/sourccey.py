@@ -31,6 +31,11 @@ from .config_sourccey import SourcceyConfig
 
 logger = logging.getLogger(__name__)
 
+try:
+    from gpiozero import MCP3008
+except ImportError:
+    MCP3008 = None
+
 class Sourccey(Robot):
     """
     The robot includes a four mecanum wheel mobile base, 1 DC actuator, and 2 remote follower arms.
@@ -159,18 +164,23 @@ class Sourccey(Robot):
 
     def auto_calibrate(self, full_reset: bool = False, arm: str | None = None) -> None:
         """
-        Auto-calibrate arms. If arm is None, calibrate both in parallel.
-        arm can be "left" or "right" to calibrate only that side.
+        Auto-calibrate arms and (optionally) the linear actuator.
+
+        - If ``arm`` is None, calibrate both arms in parallel.
+        - If ``arm`` is "left" or "right", only that side is calibrated.
+        - If ``full_reset`` is True, also run the linear actuator limit-finding
+          routine and store its calibration in ``calibration_extras``.
         """
+        # --- Arm calibration ---
         if arm is None:
             # Create threads for each arm
             left_thread = threading.Thread(
                 target=self.left_arm.auto_calibrate,
-                kwargs={"reversed": False, "full_reset": full_reset}
+                kwargs={"reversed": False, "full_reset": full_reset},
             )
             right_thread = threading.Thread(
                 target=self.right_arm.auto_calibrate,
-                kwargs={"reversed": True, "full_reset": full_reset}
+                kwargs={"reversed": True, "full_reset": full_reset},
             )
 
             # Start left arm immediately
@@ -183,15 +193,40 @@ class Sourccey(Robot):
             # Wait for both threads to complete
             left_thread.join()
             right_thread.join()
-            return
-
-        if arm not in ("left", "right"):
-            raise ValueError("arm must be one of: None, 'left', 'right'")
-
-        if arm == "left":
-            self.left_arm.auto_calibrate(reversed=False, full_reset=full_reset)
         else:
-            self.right_arm.auto_calibrate(reversed=True, full_reset=full_reset)
+            if arm not in ("left", "right"):
+                raise ValueError("arm must be one of: None, 'left', 'right'")
+
+            if arm == "left":
+                self.left_arm.auto_calibrate(reversed=False, full_reset=full_reset)
+            else:
+                self.right_arm.auto_calibrate(reversed=True, full_reset=full_reset)
+
+        # --- Linear actuator calibration (only on full reset) ---
+        if full_reset:
+            try:
+                limits = self.auto_calibrate_linear_actuator()
+                mech_min_raw = limits["raw_at_mech_min"]
+                mech_max_raw = limits["raw_at_mech_max"]
+                direction_sign = limits.get("direction_sign", 1.0)
+
+                self.calibration_extras["potentiometer"] = {
+                    "adc_channel": 1,
+                    "spi_port": 0,
+                    "spi_device": 0,
+                    "raw_at_mech_min": mech_min_raw,
+                    "raw_at_mech_max": mech_max_raw,
+                    "output_range": [-100.0, 100.0],
+                    "direction_sign": direction_sign,
+                }
+                self._save_calibration()
+                logger.info(
+                    "Linear actuator calibrated. raw_at_mech_min=%s, raw_at_mech_max=%s",
+                    mech_min_raw,
+                    mech_max_raw,
+                )
+            except Exception as e:
+                logger.error("Linear actuator auto-calibration failed: %s", e)
 
     def configure(self) -> None:
         self.left_arm.configure()
@@ -218,6 +253,15 @@ class Sourccey(Robot):
             base_wheel_vel = self.dc_motors_controller.get_velocities()
             base_vel = self._wheel_normalized_to_body(base_wheel_vel)
             obs_dict.update(base_vel)
+
+            # Linear actuator position from calibrated potentiometer
+            try:
+                raw = self._read_actuator_raw()
+                obs_dict["z.pos"] = self._raw_to_z(raw)
+            except Exception as e:
+                logger.warning(f"Failed to read linear actuator position: {e}")
+                # Fall back to 0.0 if ADC is not available
+                obs_dict.setdefault("z.pos", 0.0)
 
             for cam_key in self.cameras.keys():
                 obs_dict[cam_key] = self.cameras[cam_key].async_read()
@@ -264,7 +308,7 @@ class Sourccey(Robot):
                 base_goal_pos.get("z.pos", 0.0)
             )
 
-            dc_motors_action = {**wheel_action }
+            dc_motors_action = {**wheel_action, **linear_actuator_action }
             self.dc_motors_controller.set_velocities(dc_motors_action)
 
             sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_pos, **base_goal_vel}
@@ -316,7 +360,7 @@ class Sourccey(Robot):
 
     # Base Functions
     def stop_base(self):
-        self.dc_motors_controller.set_velocities({"front_left": 0, "front_right": 0, "rear_left": 0, "rear_right": 0})
+        self.dc_motors_controller.set_velocities({"front_left": 0, "front_right": 0, "rear_left": 0, "rear_right": 0, "linear_actuator": 0})
 
     ##################################################################################
     # Private Kinematic Functions
@@ -385,16 +429,52 @@ class Sourccey(Robot):
         self,
         z_pos: float,
     ) -> dict:
-        return {
-            "linear_actuator": 100.0, # self.clean_value(z_pos),
-        }
+        """
+        Map desired actuator position ``z_pos`` (calibrated units) to a normalized
+        velocity command for the DC motor driving the linear actuator.
+
+        If potentiometer calibration is available, we:
+        - Read the current actuator position from the ADC
+        - Compare it with the desired ``z_pos``
+        - Drive the actuator at a fixed speed toward the target until it reaches
+          a small deadband around the goal.
+
+        If calibration/ADC is not available, we fall back to interpreting
+        ``z_pos`` as a direct (clamped) velocity command in approximately
+        the same units as ``output_range`` (default [-100, 100]).
+        """
+        # Fallback: if ADC or calibration is not usable, treat z_pos as velocity
+        try:
+            current_raw = self._read_actuator_raw()
+            current_z = self._raw_to_z(current_raw)
+            _, _, _, _, direction_sign = self._get_pot_calibration()
+        except Exception:
+            # Interpret z_pos as a direct velocity-like command
+            # Scale from roughly [-100, 100] to [-1, 1]
+            speed = max(-1.0, min(1.0, z_pos / 100.0))
+            return {"linear_actuator": self.clean_value(speed)}
+
+        # Simple bang-bang position control toward target
+        Z_DEADBAND = 2.0   # units of calibrated z (e.g. within 2 out of 200 range)
+        BASE_SPEED = 0.4   # normalized motor speed (0..1)
+
+        error = z_pos - current_z
+        if abs(error) <= Z_DEADBAND:
+            speed = 0.0
+        else:
+            # direction_sign encodes which DC motor sign increases the ADC reading
+            direction = 1.0 if error > 0 else -1.0
+            speed = direction * direction_sign * BASE_SPEED
+
+        speed = max(-1.0, min(1.0, speed))
+        return {"linear_actuator": self.clean_value(speed)}
 
     def _linear_actuator_normalized_to_body(
         self,
         linear_actuator_normalized: dict[str, Any],
     ) -> dict[str, Any]:
         return {
-            "z.pos": 100.0, # self.clean_value(linear_actuator_normalized["linear_actuator"]),
+            "z.pos": 100.0, # Deprecated placeholder; we now read z.pos from the potentiometer directly.
         }
 
     # Round to prevent floating-point precision issues and handle -0.0
@@ -410,3 +490,132 @@ class Sourccey(Robot):
     def set_baud_rate(self, baud_rate: int) -> None:
         self.left_arm.bus.set_baudrate(baud_rate)
         self.right_arm.bus.set_baudrate(baud_rate)
+
+    # ------------------------------------------------------------------
+    # Linear actuator + potentiometer helpers
+    # ------------------------------------------------------------------
+    def _get_actuator_adc(self):
+        if MCP3008 is None:
+            raise RuntimeError("gpiozero is not available; cannot read MCP3008 for actuator calibration.")
+        if not hasattr(self, "_actuator_adc"):
+            # You can move these into config later
+            self._actuator_adc = MCP3008(channel=1, port=0, device=0)
+        return self._actuator_adc
+
+    def _read_actuator_raw(self, samples: int = 8) -> int:
+        adc = self._get_actuator_adc()
+        total = 0.0
+        for _ in range(samples):
+            total += float(adc.raw_value)  # 0..1023
+        return int(round(total / samples))
+
+    def _get_pot_calibration(self) -> tuple[float, float, float, float, float]:
+        """
+        Retrieve potentiometer calibration:
+        (raw_min, raw_max, out_min, out_max, direction_sign)
+
+        direction_sign encodes which sign of DC motor command increases the ADC reading.
+        """
+        extras = self.calibration_extras.get("potentiometer", {}) or {}
+        raw_min = float(extras.get("raw_at_mech_min", 0.0))
+        raw_max = float(extras.get("raw_at_mech_max", 1023.0))
+
+        output_range = extras.get("output_range", [-100.0, 100.0])
+        if not isinstance(output_range, (list, tuple)) or len(output_range) != 2:
+            output_range = [-100.0, 100.0]
+        out_min, out_max = float(output_range[0]), float(output_range[1])
+
+        direction_sign = float(extras.get("direction_sign", 1.0))
+
+        # Guard against degenerate calibration
+        if raw_max == raw_min:
+            raw_min, raw_max = 0.0, 1.0
+
+        return raw_min, raw_max, out_min, out_max, direction_sign
+
+    def _raw_to_z(self, raw: int) -> float:
+        """Map raw ADC reading to calibrated z position."""
+        raw_min, raw_max, out_min, out_max, _ = self._get_pot_calibration()
+        # Normalize 0..1 within calibrated range
+        t = (float(raw) - raw_min) / (raw_max - raw_min)
+        t = max(0.0, min(1.0, t))
+        z = out_min + t * (out_max - out_min)
+        return self.clean_value(z)
+
+    def _set_linear_actuator_speed(self, speed: float) -> None:
+        # IMPORTANT: speed units depend on PWMDCMotorsController.
+        # If it expects [-1..1], use 0.2/ -0.2 etc.
+        # If it expects [-100..100], use 20/-20 etc.
+        self.dc_motors_controller.set_velocities({"linear_actuator": speed})
+
+    def _drive_until_stall_by_pot(
+        self,
+        speed: float,
+        timeout_s: float = 8.0,
+        sample_dt: float = 0.05,
+        stable_eps_counts: int = 2,
+        stable_time_s: float = 0.25,
+    ) -> int:
+        """
+        Drive actuator and declare 'limit reached' when pot raw stops changing.
+        Returns the raw ADC reading at the detected limit.
+        """
+        start_t = time.monotonic()
+        last = self._read_actuator_raw()
+        stable_start = None
+
+        self._set_linear_actuator_speed(speed)
+        try:
+            while True:
+                time.sleep(sample_dt)
+                raw = self._read_actuator_raw()
+
+                # If we're not moving (within eps), start/continue stability timer
+                if abs(raw - last) <= stable_eps_counts:
+                    if stable_start is None:
+                        stable_start = time.monotonic()
+                    elif (time.monotonic() - stable_start) >= stable_time_s:
+                        return raw
+                else:
+                    stable_start = None
+
+                last = raw
+
+                if (time.monotonic() - start_t) >= timeout_s:
+                    raise TimeoutError("Actuator limit detection timed out (pot never stabilized).")
+        finally:
+            self._set_linear_actuator_speed(0.0)
+
+    def auto_calibrate_linear_actuator(self) -> dict[str, int]:
+        """
+        Fully-automatic endpoint detection for the linear actuator using the potentiometer.
+        Returns {"raw_at_mech_min": ..., "raw_at_mech_max": ..., "direction_sign": ...}
+        """
+        # Use gentle speed during calibration to reduce stall current / brownout risk
+        CAL_SPEED = -0.2
+
+        # Find one end
+        raw_a = self._drive_until_stall_by_pot(speed=CAL_SPEED)
+
+        time.sleep(0.3)
+
+        # Find the other end
+        raw_b = self._drive_until_stall_by_pot(speed=-CAL_SPEED)
+
+        # Normalize ordering and record DC direction that increases the ADC reading.
+        mech_min_raw = min(raw_a, raw_b)
+        mech_max_raw = max(raw_a, raw_b)
+
+        # Second move used +|CAL_SPEED|; see whether that increased or decreased raw.
+        if raw_b > raw_a:
+            direction_sign = 1.0  # positive speed -> increasing ADC
+        elif raw_b < raw_a:
+            direction_sign = -1.0  # positive speed -> decreasing ADC
+        else:
+            direction_sign = 1.0
+
+        return {
+            "raw_at_mech_min": mech_min_raw,
+            "raw_at_mech_max": mech_max_raw,
+            "direction_sign": direction_sign,
+        }

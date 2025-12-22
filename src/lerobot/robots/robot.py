@@ -19,6 +19,9 @@ from typing import Any
 
 import draccus
 
+import io
+import json
+
 from lerobot.motors import MotorCalibration
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 
@@ -52,6 +55,7 @@ class Robot(abc.ABC):
         self.calibration_dir.mkdir(parents=True, exist_ok=True)
         self.calibration_fpath = self.calibration_dir / f"{self.id}.json"
         self.calibration: dict[str, MotorCalibration] = {}
+        self.calibration_extras: dict[str, Any] = {}
         if self.calibration_fpath.is_file():
             self._load_calibration()
 
@@ -123,26 +127,42 @@ class Robot(abc.ABC):
         pass
 
     def _load_calibration(self, fpath: Path | None = None) -> None:
-        """
-        Helper to load calibration data from the specified file.
-
-        Args:
-            fpath (Path | None): Optional path to the calibration file. Defaults to `self.calibration_fpath`.
-        """
         fpath = self.calibration_fpath if fpath is None else fpath
-        with open(fpath) as f, draccus.config_type("json"):
-            self.calibration = draccus.load(dict[str, MotorCalibration], f)
+        with open(fpath) as f:
+            raw = json.load(f)
+
+        # New format: {"schema_version": 2, "motors": {...}, "extras": {...}}
+        if isinstance(raw, dict) and "motors" in raw:
+            motors_raw = raw.get("motors", {})
+            extras_raw = raw.get("extras", {})
+            with draccus.config_type("json"):
+                self.calibration = draccus.load(
+                    dict[str, MotorCalibration],
+                    io.StringIO(json.dumps(motors_raw)),
+                )
+        self.calibration_extras = extras_raw if isinstance(extras_raw, dict) else {}
+        return
+
+    # Old format: {"shoulder_pan": {...MotorCalibration...}, ...}
+        with draccus.config_type("json"):
+            self.calibration = draccus.load(
+                dict[str, MotorCalibration],
+                io.StringIO(json.dumps(raw)),
+            )
+        self.calibration_extras = {}
+
 
     def _save_calibration(self, fpath: Path | None = None) -> None:
-        """
-        Helper to save calibration data to the specified file.
-
-        Args:
-            fpath (Path | None): Optional path to save the calibration file. Defaults to `self.calibration_fpath`.
-        """
         fpath = self.calibration_fpath if fpath is None else fpath
+        payload = {
+            "schema_version": 2,
+            "motors": dict(self.calibration),
+            "extras": self.calibration_extras,
+        }
         with open(fpath, "w") as f, draccus.config_type("json"):
-            draccus.dump(self.calibration, f, indent=4)
+            draccus.dump(payload, f, indent=4)
+        return
+
 
     def auto_calibrate(self, reversed: bool = False, full_reset: bool = False) -> None:
         """
