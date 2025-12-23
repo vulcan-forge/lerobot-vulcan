@@ -1,7 +1,11 @@
 import logging
-from typing import Dict, Optional, List
+import threading
+from typing import Callable, Dict, Optional, List
 
 from lerobot.motors.dc_motors_controller import BaseDCMotorsController, DCMotor, ProtocolHandler
+from lerobot.motors.dc_motors_controller import SetPositionCmd, SetPositionResult
+from lerobot.motors.dc_motors_controller import NameOrID
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -68,11 +72,21 @@ class PWMProtocolHandler(ProtocolHandler):
 
         # Motor configuration and state tracking
         self.motors: Dict[str, DCMotor] = motors
+        self._id_to_name: dict[int, str] = {m.id: name for name, m in motors.items()}
         self.motor_states: Dict[int, Dict] = {}
         self.in1_channels = {}
         self.in2_channels = {}
         self.enable_channels = {}
         self.brake_channels = {}
+
+        # Background "set position" workers (one thread per motor_id).
+        # Re-calling set_position() for the same motor updates the command that the worker reads next cycle.
+        self.move_lock = threading.RLock()
+        self.move_cv = threading.Condition(self.move_lock)
+        self.move_stop_all = False
+        self.move_threads: dict[int, threading.Thread] = {}
+        self.move_cmds: dict[int, SetPositionCmd] = {}
+        self.move_last_result: dict[int, SetPositionResult] = {}
 
         # Validate Pi 5 pins
         self._validate_pi5_pins()
@@ -115,7 +129,7 @@ class PWMProtocolHandler(ProtocolHandler):
     def _import_gpiozero(self):
         """Import gpiozero."""
         try:
-            import gpiozero
+            import gpiozero  # pyright: ignore[reportMissingImports]
             self.gpiozero = gpiozero
             logger.info("Using gpiozero for DRV8874PWPR motor control")
 
@@ -178,7 +192,24 @@ class PWMProtocolHandler(ProtocolHandler):
             raise RuntimeError("gpiozero hardware not available")
 
     def disconnect(self) -> None:
-        """Clean up gpiozero PWMLED channels for IN1 and IN2."""
+        """Stop background workers and clean up gpiozero PWMLED channels for IN1 and IN2."""
+        # Stop any background position workers first.
+        with self.move_cv:
+            self.move_stop_all = True
+            for cmd in self.move_cmds.values():
+                cmd.done = True
+                cmd.success = False
+                cmd.done_event.set()
+            self.move_cv.notify_all()
+
+        for t in list(self.move_threads.values()):
+            t.join(timeout=1.0)
+
+        with self.move_cv:
+            self.move_threads.clear()
+            self.move_cmds.clear()
+            self.move_stop_all = False
+
         for motor_id, channel in self.in1_channels.items():
             self._safe_close(channel, f"IN1 (motor {motor_id})")
 
@@ -190,32 +221,198 @@ class PWMProtocolHandler(ProtocolHandler):
     ##############################################################################################################################
     # Position Functions
     ##############################################################################################################################
-
     def get_position(self, motor_id: int) -> Optional[float]:
         """Get current motor position if encoder available."""
         return self.motor_states.get(motor_id, {}).get("position", 0.0)
 
-    def set_position(self, motor_id: int, position: float) -> None:
+    
+    def set_position(
+        self,
+        motor_id: int,
+        target_position: float,
+        get_position: Callable[[NameOrID], float],
+        *,
+        kp: float = 2.0,
+        tolerance: float = 0.01,
+        dt: float = 0.02,
+        timeout_s: float = 5.0,
+        max_velocity: float = 1.0,
+        min_velocity: float = 0.08,
+        settle_steps: int = 5,
+        blocking: bool = False,
+    ) -> bool:
         """
-        Set motor position (0 to 1).
-        Note: This is a simplified implementation. For precise position control,
-        you'd need encoders and PID control.
+        Closed-loop move for DC motors using an external position sensor.
+
+        - Non-blocking by default (starts/updates a background worker thread for the motor).
+        - Calling again for the same motor updates the existing worker command (no new thread).
+
+        Returns:
+            If blocking=False: True if scheduled, False if not connected.
+            If blocking=True: True on success, False on timeout/cancel.
         """
-        if position < 0:
-            position = 0
-        elif position > 1:
-            position = 1
+        if not self._is_connected:
+            logger.info(f"{self} is not connected.")
+            return False
 
-        self.motor_states[motor_id]["position"] = position
+        with self.move_cv:
+            prev = self.move_cmds.get(motor_id)
+            generation = 1 if prev is None else prev.generation + 1
 
-        # Convert position to PWM (simple linear mapping)
-        pwm_duty = position
-        self.set_pwm(motor_id, pwm_duty)
+            # If there's an active command, mark it as cancelled so any blockers are released.
+            if prev is not None and not prev.done:
+                prev.done = True
+                prev.success = False
+                prev.done_event.set()
+                self.move_last_result[motor_id] = SetPositionResult(
+                    generation=prev.generation,
+                    success=False,
+                    finished_t=time.monotonic(),
+                )
+
+            cmd = SetPositionCmd(
+                target_position=float(target_position),
+                get_position=get_position,
+                kp=float(kp),
+                tolerance=float(tolerance),
+                dt=float(dt),
+                timeout_s=float(timeout_s),
+                max_velocity=float(max_velocity),
+                min_velocity=float(min_velocity),
+                settle_steps=int(settle_steps),
+                generation=generation,
+                start_t=time.monotonic(),
+            )
+            self.move_cmds[motor_id] = cmd
+            self._ensure_move_worker(motor_id)
+            self.move_cv.notify_all()
+
+        if not blocking:
+            return True
+
+        # Wait for completion of *this* generation
+        cmd.done_event.wait(timeout=timeout_s + 0.5)
+        with self.move_lock:
+            last = self.move_last_result.get(motor_id)
+            if last and last.generation == generation:
+                return bool(last.success)
+            return False
+
+    def _ensure_move_worker(self, motor_id: int) -> None:
+        with self.move_lock:
+            t = self.move_threads.get(motor_id)
+            if t and t.is_alive():
+                return
+            t = threading.Thread(target=self._move_worker, args=(motor_id,), daemon=True)
+            self.move_threads[motor_id] = t
+            t.start()
+
+    def _move_worker(self, motor_id: int) -> None:
+        def _stop() -> None:
+            self.set_velocity(motor_id, 0.0, instant=True)
+
+        while True:
+            with self.move_cv:
+                while not self.move_stop_all and motor_id not in self.move_cmds:
+                    self.move_cv.wait()
+                if self.move_stop_all:
+                    _stop()
+                    return
+                cmd = self.move_cmds[motor_id]
+
+            # Snapshot fields for this cycle
+            gen = cmd.generation
+            target = cmd.target_position
+            get_pos = cmd.get_position
+            kp = cmd.kp
+            tol = cmd.tolerance
+            dt = cmd.dt
+            timeout_s = cmd.timeout_s
+            vmax = cmd.max_velocity
+            vmin = cmd.min_velocity
+            settle_steps = cmd.settle_steps
+            start_t = cmd.start_t
+
+            if not self._is_connected:
+                _stop()
+                return
+
+            if time.monotonic() - start_t > timeout_s:
+                _stop()
+                with self.move_lock:
+                    cur = self.move_cmds.get(motor_id)
+                    if cur and cur.generation == gen:
+                        cur.done = True
+                        cur.success = False
+                        cur.done_event.set()
+                        self.move_last_result[motor_id] = SetPositionResult(
+                            generation=gen,
+                            success=False,
+                            finished_t=time.monotonic(),
+                        )
+                        self.move_cmds.pop(motor_id, None)
+                time.sleep(dt)
+                continue
+
+            sensor_key: NameOrID = self._id_to_name.get(motor_id, motor_id)
+            try:
+                current = float(get_pos(sensor_key))
+            except Exception:
+                _stop()
+                with self.move_lock:
+                    cur = self.move_cmds.get(motor_id)
+                    if cur and cur.generation == gen:
+                        cur.done = True
+                        cur.success = False
+                        cur.done_event.set()
+                        self.move_last_result[motor_id] = SetPositionResult(
+                            generation=gen,
+                            success=False,
+                            finished_t=time.monotonic(),
+                        )
+                        self.move_cmds.pop(motor_id, None)
+                time.sleep(dt)
+                continue
+
+            err = target - current
+
+            if abs(err) <= tol:
+                with self.move_lock:
+                    cur = self.move_cmds.get(motor_id)
+                    if not cur or cur.generation != gen:
+                        time.sleep(dt)
+                        continue
+                    cur.in_tol_count += 1
+                    if cur.in_tol_count >= settle_steps:
+                        _stop()
+                        cur.done = True
+                        cur.success = True
+                        cur.done_event.set()
+                        self.move_last_result[motor_id] = SetPositionResult(
+                            generation=gen,
+                            success=True,
+                            finished_t=time.monotonic(),
+                        )
+                        self.move_cmds.pop(motor_id, None)
+                time.sleep(dt)
+                continue
+            else:
+                with self.move_lock:
+                    cur = self.move_cmds.get(motor_id)
+                    if cur and cur.generation == gen:
+                        cur.in_tol_count = 0
+
+            v = kp * err
+            v = max(-vmax, min(vmax, v))
+            if 0.0 < abs(v) < vmin:
+                v = vmin if v > 0 else -vmin
+
+            self.set_velocity(motor_id, v, instant=True)
+            time.sleep(dt)
 
     ##############################################################################################################################
     # Velocity Functions
     ##############################################################################################################################
-
     def get_velocity(self, motor_id: int) -> float:
         """Get current motor velocity."""
         return self.motor_states.get(motor_id, {}).get("velocity", 0.0)

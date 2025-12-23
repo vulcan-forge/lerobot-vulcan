@@ -234,8 +234,8 @@ class Sourccey(Robot):
 
             left_action = {key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")}
             right_action = {key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")}
-            base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
             base_goal_pos = {k: v for k, v in action.items() if k.endswith(".pos")}
+            base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
 
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}

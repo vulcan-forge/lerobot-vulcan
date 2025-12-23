@@ -18,7 +18,7 @@ import sys
 from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
-import pytest
+import pytest  # pyright: ignore[reportMissingImports]
 
 from lerobot.motors.dc_motors_controller import DCMotor, MotorNormMode
 from lerobot.motors.dc_pwm.dc_pwm import (
