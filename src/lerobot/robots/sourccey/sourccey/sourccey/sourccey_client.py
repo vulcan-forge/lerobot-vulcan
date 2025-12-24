@@ -60,8 +60,8 @@ class SourcceyClient(Robot):
 
         # Define three speed levels and a current index
         self.speed_levels = [
-            {"x": 0.6,  "y": 0.6,  "z": 0.6, "theta": 0.6},   # slow
-            {"x": 0.8, "y": 0.8, "z": 0.8, "theta": 0.8},  # medium
+            {"x": 0.8,  "y": 0.8,  "z": 0.8, "theta": 0.8},   # slow
+            {"x": 0.9, "y": 0.9, "z": 0.9, "theta": 0.9},  # medium
             {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # fast
         ]
         self.speed_index = 2  # Start at half speed
@@ -357,7 +357,7 @@ class SourcceyClient(Robot):
     def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray, reversed: bool = False):
         # Speed control
         if self.teleop_keys["speed_up"] in pressed_keys:
-            self.speed_index = min(self.speed_index + 1, 3)
+            self.speed_index = min(self.speed_index + 1, 2)
         if self.teleop_keys["speed_down"] in pressed_keys:
             self.speed_index = max(self.speed_index - 1, 0)
         speed_setting = self.speed_levels[self.speed_index]
