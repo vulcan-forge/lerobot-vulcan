@@ -354,7 +354,7 @@ class SourcceyClient(Robot):
     ###################################################################
     # Private Control Functions
     ###################################################################
-    def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray):
+    def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray, reversed: bool = False):
         # Speed control
         if self.teleop_keys["speed_up"] in pressed_keys:
             self.speed_index = min(self.speed_index + 1, 3)
@@ -372,26 +372,51 @@ class SourcceyClient(Robot):
         theta_cmd = 0.0
 
         if self.teleop_keys["forward"] in pressed_keys:
-            x_cmd += x_speed
+            if reversed:
+                x_cmd += x_speed
+            else:
+                x_cmd -= x_speed
         if self.teleop_keys["backward"] in pressed_keys:
-            x_cmd -= x_speed
+            if reversed:
+                x_cmd += x_speed
+            else:
+                x_cmd -= x_speed
         if self.teleop_keys["left"] in pressed_keys:
-            y_cmd += y_speed
+            if reversed:
+                y_cmd += y_speed
+            else:
+                y_cmd -= y_speed
         if self.teleop_keys["right"] in pressed_keys:
-            y_cmd -= y_speed
+            if reversed:
+                y_cmd += y_speed
+            else:
+                y_cmd -= y_speed
         if self.teleop_keys["up"] in pressed_keys:
-            z_cmd += z_speed
+            if reversed:
+                z_cmd += z_speed
+            else:
+                z_cmd -= z_speed
         if self.teleop_keys["down"] in pressed_keys:
-            z_cmd -= z_speed
+            if reversed:
+                z_cmd += z_speed
+            else:
+                z_cmd -= z_speed
         if self.teleop_keys["rotate_left"] in pressed_keys:
-            theta_cmd += theta_speed
+            if reversed:
+                theta_cmd -= theta_speed
+            else:
+                theta_cmd += theta_speed
         if self.teleop_keys["rotate_right"] in pressed_keys:
-            theta_cmd -= theta_speed
+            if reversed:
+                theta_cmd += theta_speed
+            else:
+                theta_cmd -= theta_speed
 
         action = {
+            #"z.pos": z_cmd, Add this back in when the linear actuator is working
             "x.vel": x_cmd,
             "y.vel": y_cmd,
-            "z.vel": z_cmd,
+            "z.vel": z_cmd, # Remove this when the linear actuator is working
             "theta.vel": theta_cmd,
         }
 

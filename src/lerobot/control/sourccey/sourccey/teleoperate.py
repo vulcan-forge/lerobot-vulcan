@@ -18,6 +18,7 @@ class SourcceyTeleoperateConfig:
     right_arm_port: str = "COM3"
     keyboard_port: str = "keyboard"
     fps: int = 30
+    reversed: bool = False
 
 @parser.wrap()
 def teleoperate(cfg: SourcceyTeleoperateConfig):

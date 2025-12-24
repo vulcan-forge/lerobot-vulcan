@@ -87,8 +87,8 @@ Then Calibrate the bi-manual teleoperator (leader arms):
 python src/lerobot/scripts/sourccey/auto_calibrate.py \
  --teleop.type=bi_sourccey_leader \
  --teleop.id=bi_sourccey_leader \
- --teleop.left_arm_port="COM3" \
- --teleop.right_arm_port="COM4"
+ --teleop.left_arm_port="COM4" \
+ --teleop.right_arm_port="COM3"
 ```
 
 For single-arm teleoperator:
@@ -143,9 +143,9 @@ source .venv/Scripts/activate
 ```
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.230" \
- --left_arm_port="COM11" \
- --right_arm_port="COM10" \
+ --remote_ip="192.168.1.166" \
+ --left_arm_port="COM4" \
+ --right_arm_port="COM3" \
  --keyboard_port="keyboard" \
  --fps=30
 ```
