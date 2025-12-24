@@ -71,6 +71,8 @@ class Sourccey(Robot):
         self.left_arm = SourcceyFollower(left_arm_config)
         self.right_arm = SourcceyFollower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
+        # Cameras are treated as best-effort: startup should not fail if a camera fails to connect/read.
+        self._connected_cameras: set[str] = set()
 
         self.dc_motors_controller = PWMDCMotorsController(
             motors=self.config.dc_motors,
@@ -118,7 +120,8 @@ class Sourccey(Robot):
     @property
     def is_connected(self) -> bool:
         arms_connected = self.left_arm.is_connected and self.right_arm.is_connected
-        cams_connected = all(self.cameras[k].is_connected for k in self.cameras.keys())
+        # Only require cameras that successfully connected (failed cameras are ignored).
+        cams_connected = all(self.cameras[k].is_connected for k in self._connected_cameras)
         return arms_connected and cams_connected
 
     ###################################################################
@@ -131,8 +134,13 @@ class Sourccey(Robot):
         self.dc_motors_controller.connect()
 
         # Connect only target cameras
+        self._connected_cameras.clear()
         for cam_key in self.cameras.keys():
-            self.cameras[cam_key].connect()
+            try:
+                self.cameras[cam_key].connect()
+                self._connected_cameras.add(cam_key)
+            except Exception as e:
+                logger.warning(f"Camera '{cam_key}' failed to connect: {e}. Continuing without it.")
 
     def disconnect(self):
         print("Disconnecting Sourccey")
@@ -143,8 +151,12 @@ class Sourccey(Robot):
         self.dc_motors_controller.disconnect()
 
         # Disconnect only those we connected
-        for cam_key in self.cameras.keys():
-            self.cameras[cam_key].disconnect()
+        for cam_key in list(self._connected_cameras):
+            try:
+                self.cameras[cam_key].disconnect()
+            except Exception:
+                pass
+        self._connected_cameras.clear()
 
     ###################################################################
     # Calibration and Configuration Management
@@ -220,7 +232,14 @@ class Sourccey(Robot):
             obs_dict.update(base_vel)
 
             for cam_key in self.cameras.keys():
-                obs_dict[cam_key] = self.cameras[cam_key].async_read()
+                try:
+                    obs_dict[cam_key] = self.cameras[cam_key].async_read()
+                except Exception as e:
+                    # Keep the observation schema stable even if a camera is down.
+                    h = int(self.config.cameras[cam_key].height)
+                    w = int(self.config.cameras[cam_key].width)
+                    obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)
+                    logger.warning(f"Camera '{cam_key}' read failed: {e}. Using black frame.")
 
             return obs_dict
         except Exception as e:
