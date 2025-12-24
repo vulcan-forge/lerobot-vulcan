@@ -373,9 +373,9 @@ class SourcceyClient(Robot):
 
         if self.teleop_keys["forward"] in pressed_keys:
             if reversed:
-                x_cmd += x_speed
-            else:
                 x_cmd -= x_speed
+            else:
+                x_cmd += x_speed
         if self.teleop_keys["backward"] in pressed_keys:
             if reversed:
                 x_cmd += x_speed
@@ -383,9 +383,9 @@ class SourcceyClient(Robot):
                 x_cmd -= x_speed
         if self.teleop_keys["left"] in pressed_keys:
             if reversed:
-                y_cmd += y_speed
-            else:
                 y_cmd -= y_speed
+            else:
+                y_cmd += y_speed
         if self.teleop_keys["right"] in pressed_keys:
             if reversed:
                 y_cmd += y_speed
@@ -393,9 +393,9 @@ class SourcceyClient(Robot):
                 y_cmd -= y_speed
         if self.teleop_keys["up"] in pressed_keys:
             if reversed:
-                z_cmd += z_speed
-            else:
                 z_cmd -= z_speed
+            else:
+                z_cmd += z_speed
         if self.teleop_keys["down"] in pressed_keys:
             if reversed:
                 z_cmd += z_speed
@@ -413,10 +413,9 @@ class SourcceyClient(Robot):
                 theta_cmd -= theta_speed
 
         action = {
-            #"z.pos": z_cmd, Add this back in when the linear actuator is working
             "x.vel": x_cmd,
             "y.vel": y_cmd,
-            "z.vel": z_cmd, # Remove this when the linear actuator is working
+            "z.vel": z_cmd,
             "theta.vel": theta_cmd,
         }
 
