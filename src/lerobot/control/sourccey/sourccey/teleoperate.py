@@ -9,6 +9,8 @@ from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 from lerobot.configs import parser
 
+from pynput import keyboard
+
 
 @dataclass
 class SourcceyTeleoperateConfig:
@@ -35,6 +37,8 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
     leader_arm.connect()
     keyboard.connect()
 
+    start_speed_listener(robot)
+
     init_rerun(session_name="sourccey_teleop")
 
     if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
@@ -58,6 +62,17 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
         robot.send_action(action)
 
         precise_sleep(max(1.0 / cfg.fps - (time.perf_counter() - t0), 0.0))
+
+def start_speed_listener(robot: SourcceyClient):
+    def on_press(key):
+        # Only normal keys have .char
+        if hasattr(key, "char") and key.char:
+            robot.on_key_down(key.char)
+
+    listener = keyboard.Listener(on_press=on_press)
+    listener.daemon = True
+    listener.start()
+    return listener
 
 def main():
     teleoperate()

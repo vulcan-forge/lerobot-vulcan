@@ -129,6 +129,17 @@ class SourcceyClient(Robot):
         pass
 
     ###################################################################
+    # Event Management
+    ###################################################################
+    def on_key_down(self, key_char: str) -> None:
+        if key_char == self.teleop_keys["speed_up"]:
+            self.speed_index = min(self.speed_index + 1, len(self.speed_levels) - 1)
+            print(f"Speed index: {self.speed_index}")
+        elif key_char == self.teleop_keys["speed_down"]:
+            self.speed_index = max(self.speed_index - 1, 0)
+            print(f"Speed index: {self.speed_index}")
+
+    ###################################################################
     # Connection Management
     ###################################################################
     def connect(self) -> None:
@@ -355,11 +366,7 @@ class SourcceyClient(Robot):
     # Private Control Functions
     ###################################################################
     def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray, reversed: bool = False):
-        # Speed control
-        if self.teleop_keys["speed_up"] in pressed_keys:
-            self.speed_index = min(self.speed_index + 1, 2)
-        if self.teleop_keys["speed_down"] in pressed_keys:
-            self.speed_index = max(self.speed_index - 1, 0)
+        
         speed_setting = self.speed_levels[self.speed_index]
         x_speed = speed_setting["x"]
         y_speed = speed_setting["y"]
