@@ -349,13 +349,13 @@ class Sourccey(Robot):
         velocity_vector = np.array([x, y, theta])
 
         # Build the correct kinematic matrix for mecanum wheels
-        # NOTE: In this project, the y (strafe) and theta (turn) columns are swapped versus the prior mapping.
-        # This aligns keyboard strafe (y) and rotate (theta) with the observed wheel directions.
+        # Columns correspond to [x, y (strafe), theta (turn)].
+        # This mapping makes A/D (y.vel) strafe and Z/X (theta.vel) rotate.
         m = np.array([
             [ 1, -1, -1], # Front-left wheel
             [-1, -1, -1], # Front-right wheel
-            [ 1, -1,  1], # Rear-left wheel
-            [-1, -1,  1], # Rear-right wheel
+            [ 1,  1, -1], # Rear-left wheel
+            [-1,  1, -1], # Rear-right wheel
         ])
 
         wheel_normalized = m.dot(velocity_vector)
@@ -386,8 +386,8 @@ class Sourccey(Robot):
         m = np.array([
             [ 1, -1, -1], # Front-left wheel
             [-1, -1, -1], # Front-right wheel
-            [ 1, -1,  1], # Rear-left wheel
-            [-1, -1,  1], # Rear-right wheel
+            [ 1,  1, -1], # Rear-left wheel
+            [-1,  1, -1], # Rear-right wheel
         ])
 
         # Solve the inverse kinematics: body_velocity = M⁺ · wheel_linear_speeds.
