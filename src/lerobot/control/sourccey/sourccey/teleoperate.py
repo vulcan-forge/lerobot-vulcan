@@ -25,7 +25,7 @@ class SourcceyTeleoperateConfig:
 @parser.wrap()
 def teleoperate(cfg: SourcceyTeleoperateConfig):
     # Create the robot and teleoperator configurations
-    robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
+    robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id, reversed=cfg.reversed)
     teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port=cfg.left_arm_port, right_arm_port=cfg.right_arm_port, id=cfg.id)
     keyboard_config = KeyboardTeleopConfig(id=cfg.keyboard_port)
 
@@ -53,7 +53,7 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
         arm_action = leader_arm.get_action()
 
         keyboard_keys = keyboard.get_action()
-        base_action = robot._from_keyboard_to_base_action(keyboard_keys, reversed=cfg.reversed)
+        base_action = robot._from_keyboard_to_base_action(keyboard_keys)
 
         log_rerun_data(observation, {**arm_action, **base_action})
 

@@ -65,6 +65,7 @@ class SourcceyClient(Robot):
             {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # fast
         ]
         self.speed_index = 2  # Start at half speed
+        self.reversed = config.reversed
 
         self._is_connected = False
         self.logs = {}
@@ -365,8 +366,8 @@ class SourcceyClient(Robot):
     ###################################################################
     # Private Control Functions
     ###################################################################
-    def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray, reversed: bool = False):
-        
+    def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray):
+        reversed = self.reversed
         speed_setting = self.speed_levels[self.speed_index]
         x_speed = speed_setting["x"]
         y_speed = speed_setting["y"]

@@ -170,14 +170,15 @@ Record demonstration data for training:
 ```
 python src/lerobot/control/sourccey/sourccey/record.py \
  --id="sourccey" \
- --remote_ip="192.168.1.230" \
- --left_arm_port="COM11" \
- --right_arm_port="COM10" \
- --dataset.repo_id="sourccey-008/sourccey-008__counter-a__set000__name" \
+ --remote_ip="192.168.1.166" \
+ --left_arm_port="COM4" \
+ --right_arm_port="COM3" \
+ --reversed=True \
+ --dataset.repo_id="sourccey-011/sourccey-011__set_table-a__set000__name" \
  --dataset.num_episodes=1 \
- --dataset.episode_time_s=120 \
- --dataset.reset_time_s=5 \
- --dataset.task="Take the item out of the printer" \
+ --dataset.episode_time_s=300 \
+ --dataset.reset_time_s=10 \
+ --dataset.task="Set the table" \
  --dataset.fps=30 \
  --dataset.push_to_hub=false
 ```
@@ -258,8 +259,8 @@ Replay previously recorded episodes:
 ```
 python src/lerobot/control/sourccey/sourccey/replay.py \
  --id="sourccey" \
- --remote_ip="192.168.1.230" \
- --dataset.dataset="sourccey-008/sourccey-008__counter-a__set000__name" \
+ --remote_ip="192.168.1.166" \
+ --dataset.dataset="sourccey-011/sourccey-011__set_table-a__set000__name" \
  --dataset.episode=0
  --dataset.fps=30
 ```
