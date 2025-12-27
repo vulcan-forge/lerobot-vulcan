@@ -65,7 +65,7 @@ class SourcceyClient(Robot):
             {"x": 0.9, "y": 0.9, "z": 0.9, "theta": 0.9},  # medium
             {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # fast
         ]
-        self.speed_index = 2  # Start at half speed
+        self.speed_index = 1  # Start at half speed
         self.reversed = config.reversed
 
         self._is_connected = False
@@ -78,6 +78,12 @@ class SourcceyClient(Robot):
         self.untorque_left_active = False
         self.untorque_right_active = False
         self._prev_keys: set[str] = set()
+
+        # X direction-change hold (debounce) for forward<->back only
+        self._x_dir_change_delay_s = 0.25
+        self._x_dir_applied = 0          # -1 back, 0 stop, +1 forward (in "driver" frame, before reversed)
+        self._x_dir_pending = 0
+        self._x_dir_pending_since = None  # monotonic time
 
     ###################################################################
     # Properties and Attributes
@@ -375,7 +381,6 @@ class SourcceyClient(Robot):
         z_speed = speed_setting["z"]
         theta_speed = speed_setting["theta"]
 
-        # NEW: make a set once (also reused by untorque toggle logic)
         pressed = set(pressed_keys)
 
         x_cmd = 0.0
@@ -383,42 +388,40 @@ class SourcceyClient(Robot):
         z_cmd = 0.0
         theta_cmd = 0.0
 
-        # NEW: x forward/backward with 1s ramp (prevents W/S spam tipping)
         forward = self.teleop_keys["forward"] in pressed
         backward = self.teleop_keys["backward"] in pressed
-        x_dir = (1.0 if forward else 0.0) - (1.0 if backward else 0.0)  # -1, 0, +1
+        desired_dir = (1 if forward else 0) - (1 if backward else 0)
+        now = time.monotonic()
+
+        if desired_dir == 0:
+            # stop is immediate
+            self._x_dir_applied = 0
+            self._x_dir_pending = 0
+            self._x_dir_pending_since = None
+        else:
+            if self._x_dir_applied == 0:
+                # starting from stop is immediate
+                self._x_dir_applied = desired_dir
+                self._x_dir_pending = 0
+                self._x_dir_pending_since = None
+            elif desired_dir == self._x_dir_applied:
+                # continuing same direction
+                self._x_dir_pending = 0
+                self._x_dir_pending_since = None
+            else:
+                # reversing direction: must hold for delay
+                if self._x_dir_pending != desired_dir:
+                    self._x_dir_pending = desired_dir
+                    self._x_dir_pending_since = now
+                elif self._x_dir_pending_since is not None and (now - self._x_dir_pending_since) >= self._x_dir_change_delay_s:
+                    self._x_dir_applied = desired_dir
+                    self._x_dir_pending = 0
+                    self._x_dir_pending_since = None
 
         reverse_factor = -1.0 if reversed else 1.0
-        x_cmd_target = reverse_factor * x_speed * x_dir
+        x_cmd = float(reverse_factor * x_speed * self._x_dir_applied)
 
-        now = time.monotonic()
-        dt = now - getattr(self, "_x_cmd_last_t", now)
-        self._x_cmd_last_t = now
-        dt = max(0.0, min(dt, 0.1))  # cap to avoid huge jumps after pauses
 
-        # max change in x.vel per tick so 0->full takes ~self._x_slew_time_s
-        max_delta = (abs(x_speed) / self._x_slew_time_s) * dt
-
-        delta = x_cmd_target - self._x_cmd_filtered
-        if delta > max_delta:
-            self._x_cmd_filtered += max_delta
-        elif delta < -max_delta:
-            self._x_cmd_filtered -= max_delta
-        else:
-            self._x_cmd_filtered = x_cmd_target
-
-        x_cmd = float(self._x_cmd_filtered)
-
-        if self.teleop_keys["forward"] in pressed:
-            if reversed:
-                x_cmd -= x_speed
-            else:
-                x_cmd += x_speed
-        if self.teleop_keys["backward"] in pressed:
-            if reversed:
-                x_cmd += x_speed
-            else:
-                x_cmd -= x_speed
         if self.teleop_keys["left"] in pressed:
             if reversed:
                 y_cmd -= y_speed
@@ -457,12 +460,6 @@ class SourcceyClient(Robot):
             "theta.vel": theta_cmd,
         }
 
-        # NEW: forward/back ramping (slew-rate limiting)
-        # Time (seconds) to go from 0 -> full x_speed
-        self._x_slew_time_s = 2.0
-        self._x_cmd_filtered = 0.0
-        self._x_cmd_last_t = time.monotonic()
-
         # Integrated keyboard controls: toggle per-arm untorque on key press (edge-triggered)
         try:
             left_key = self.teleop_keys.get("untorque_left")
@@ -478,7 +475,6 @@ class SourcceyClient(Robot):
             action["untorque_right"] = self.untorque_right_active
 
             self._prev_keys = pressed
-
         except Exception:
             pass
 
