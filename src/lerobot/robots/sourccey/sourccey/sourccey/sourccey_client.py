@@ -65,7 +65,7 @@ class SourcceyClient(Robot):
             {"x": 0.9, "y": 0.9, "z": 0.9, "theta": 0.9},  # medium
             {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # fast
         ]
-        self.speed_index = 1  # Start at half speed
+        self.speed_index = 1  # Start at medium speed (0.9)
         self.reversed = config.reversed
 
         self._is_connected = False
