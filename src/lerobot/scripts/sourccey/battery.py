@@ -244,5 +244,6 @@ if __name__ == "__main__":
             print(json.dumps(result))
             time.sleep(1)
     except Exception as e:
+        print(f"Error: {e}")
         # Output error JSON so Rust knows battery reading failed
         print(json.dumps({"voltage": -1.0, "percent": -1, "charging": False}))
