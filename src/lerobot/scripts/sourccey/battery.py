@@ -234,13 +234,15 @@ if __name__ == "__main__":
     # When run as a script, output JSON (for Rust integration)
     import json
     try:
-        battery_data = get_battery_data()
-        result = {
-            "voltage": round(battery_data.voltage, 2),
-            "percent": battery_data.percent,
-            "charging": battery_data.charging,
-        }
-        print(json.dumps(result))
+        for i in range(100):
+            battery_data = get_battery_data()
+            result = {
+                "voltage": round(battery_data.voltage, 2),
+                "percent": battery_data.percent,
+                "charging": battery_data.charging,
+            }
+            print(json.dumps(result))
+            time.sleep(1)
     except Exception as e:
         # Output error JSON so Rust knows battery reading failed
         print(json.dumps({"voltage": -1.0, "percent": -1, "charging": False}))
