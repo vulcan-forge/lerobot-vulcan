@@ -205,7 +205,7 @@ class BaseDCMotorsController(abc.ABC):
 
         return {motor: self.get_velocity(motor) for motor in self.motors.keys()}
 
-    def set_velocity(self, motor: NameOrID, velocity: float, normalize: bool = True,) -> None:
+    def set_velocity(self, motor: NameOrID, velocity: float, normalize: bool = True, instant: bool = True) -> None:
         """
         Set motor velocity with ramp-up.
 
@@ -213,6 +213,7 @@ class BaseDCMotorsController(abc.ABC):
             motor: Motor name or ID
             velocity: Target velocity (-1 to 1 if normalized, otherwise in RPM)
             normalize: Whether to normalize the velocity
+            instant: Whether to set the velocity instantly
         """
         if not self._is_connected:
             logger.info(f"{self} is not connected.")
@@ -222,7 +223,7 @@ class BaseDCMotorsController(abc.ABC):
         if normalize:
             velocity = max(-1.0, min(1.0, velocity)) # Clamp to [-1, 1]
 
-        self.protocol_handler.set_velocity(motor_id, velocity)
+        self.protocol_handler.set_velocity(motor_id, velocity, instant)
         logger.debug(f"Set motor {motor} velocity to {velocity}")
 
     def set_velocities(self, motors: dict[NameOrID, float], normalize: bool = True) -> None:

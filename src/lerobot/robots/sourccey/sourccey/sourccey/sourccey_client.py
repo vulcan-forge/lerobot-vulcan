@@ -17,6 +17,7 @@ import base64
 import json
 import logging
 from functools import cached_property
+import time
 from typing import Any, Dict, Optional, Tuple
 
 import cv2
@@ -374,47 +375,76 @@ class SourcceyClient(Robot):
         z_speed = speed_setting["z"]
         theta_speed = speed_setting["theta"]
 
+        # NEW: make a set once (also reused by untorque toggle logic)
+        pressed = set(pressed_keys)
+
         x_cmd = 0.0
         y_cmd = 0.0
         z_cmd = 0.0
         theta_cmd = 0.0
 
-        if self.teleop_keys["forward"] in pressed_keys:
+        # NEW: x forward/backward with 1s ramp (prevents W/S spam tipping)
+        forward = self.teleop_keys["forward"] in pressed
+        backward = self.teleop_keys["backward"] in pressed
+        x_dir = (1.0 if forward else 0.0) - (1.0 if backward else 0.0)  # -1, 0, +1
+
+        reverse_factor = -1.0 if reversed else 1.0
+        x_cmd_target = reverse_factor * x_speed * x_dir
+
+        now = time.monotonic()
+        dt = now - getattr(self, "_x_cmd_last_t", now)
+        self._x_cmd_last_t = now
+        dt = max(0.0, min(dt, 0.1))  # cap to avoid huge jumps after pauses
+
+        # max change in x.vel per tick so 0->full takes ~self._x_slew_time_s
+        max_delta = (abs(x_speed) / self._x_slew_time_s) * dt
+
+        delta = x_cmd_target - self._x_cmd_filtered
+        if delta > max_delta:
+            self._x_cmd_filtered += max_delta
+        elif delta < -max_delta:
+            self._x_cmd_filtered -= max_delta
+        else:
+            self._x_cmd_filtered = x_cmd_target
+
+        x_cmd = float(self._x_cmd_filtered)
+
+        if self.teleop_keys["forward"] in pressed:
             if reversed:
                 x_cmd -= x_speed
             else:
                 x_cmd += x_speed
-        if self.teleop_keys["backward"] in pressed_keys:
+        if self.teleop_keys["backward"] in pressed:
             if reversed:
                 x_cmd += x_speed
             else:
                 x_cmd -= x_speed
-        if self.teleop_keys["left"] in pressed_keys:
+        if self.teleop_keys["left"] in pressed:
             if reversed:
                 y_cmd -= y_speed
             else:
                 y_cmd += y_speed
-        if self.teleop_keys["right"] in pressed_keys:
+        if self.teleop_keys["right"] in pressed:
             if reversed:
                 y_cmd += y_speed
             else:
                 y_cmd -= y_speed
-        if self.teleop_keys["up"] in pressed_keys:
+        if self.teleop_keys["up"] in pressed:
             if reversed:
                 z_cmd -= z_speed
             else:
                 z_cmd += z_speed
-        if self.teleop_keys["down"] in pressed_keys:
+        if self.teleop_keys["down"] in pressed:
             if reversed:
                 z_cmd += z_speed
             else:
                 z_cmd -= z_speed
-        if self.teleop_keys["rotate_left"] in pressed_keys:
+        if self.teleop_keys["rotate_left"] in pressed:
             if reversed:
                 theta_cmd -= theta_speed
             else:
                 theta_cmd += theta_speed
-        if self.teleop_keys["rotate_right"] in pressed_keys:
+        if self.teleop_keys["rotate_right"] in pressed:
             if reversed:
                 theta_cmd += theta_speed
             else:
@@ -427,9 +457,14 @@ class SourcceyClient(Robot):
             "theta.vel": theta_cmd,
         }
 
+        # NEW: forward/back ramping (slew-rate limiting)
+        # Time (seconds) to go from 0 -> full x_speed
+        self._x_slew_time_s = 2.0
+        self._x_cmd_filtered = 0.0
+        self._x_cmd_last_t = time.monotonic()
+
         # Integrated keyboard controls: toggle per-arm untorque on key press (edge-triggered)
         try:
-            pressed = set(pressed_keys)
             left_key = self.teleop_keys.get("untorque_left")
             right_key = self.teleop_keys.get("untorque_right")
 
@@ -443,6 +478,7 @@ class SourcceyClient(Robot):
             action["untorque_right"] = self.untorque_right_active
 
             self._prev_keys = pressed
+
         except Exception:
             pass
 
