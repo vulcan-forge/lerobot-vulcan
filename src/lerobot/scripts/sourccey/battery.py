@@ -39,11 +39,18 @@ PERCENT_ALPHA = 0.2  # 0..1, higher = more responsive, lower = smoother
 #   use a charger-present signal and/or charge current sensing.
 # - This is a "just works" baseline: it samples voltage once per loop and estimates slope over
 #   a rolling window to reduce noise.
-CHARGING_WINDOW_S = 60.0            # how much history to use for slope
-CHARGING_MIN_POINTS = 6             # minimum samples required before using slope
-CHARGING_SLOPE_THRESHOLD = 0.0001   # V/s (tune for your system)
-CHARGING_VOLTAGE_THRESHOLD = 13.8   # V (tune; optional "definitely charging" threshold)
-LOOP_PERIOD_S = 10.0                # seconds between samples when run as a script
+# Note: the script’s bounded-sampling mode uses `_slope_v_per_s(samples)` directly, but these
+# thresholds are also used for the final decision and for any codepaths that rely on the
+# rolling window helper.
+CHARGING_WINDOW_S = 2.5             # seconds of history to use for slope
+CHARGING_MIN_POINTS = 4             # minimum samples required before using slope
+CHARGING_SLOPE_THRESHOLD = 0.00005  # V/s (tune for your system; filtered voltage slopes are small)
+CHARGING_VOLTAGE_THRESHOLD = 13.6   # V (tune; should reflect your charger/pack behavior)
+# Script execution (when run as __main__)
+# Use bounded sampling so the script returns quickly with a slope-based decision.
+SCRIPT_WINDOW_S = 2.5               # total sampling time
+SCRIPT_SAMPLE_PERIOD_S = 0.25       # time between samples
+SCRIPT_INCLUDE_SLOPE = True         # include slope in JSON for validation/testing
 
 _samples: "deque[tuple[float, float]]" = deque()  # (t, filtered_voltage)
 
@@ -209,12 +216,6 @@ def is_battery_charging_from_voltage(voltage: float, now: float) -> tuple[bool, 
         len(_samples) >= CHARGING_MIN_POINTS and slope >= CHARGING_SLOPE_THRESHOLD
     )
 
-    # Print what we're testing each cycle (simple / no env flags).
-    print(
-        f"[battery] n={len(_samples)} V={voltage:.3f}V slope={slope:.6f}V/s "
-        f"(thr={CHARGING_SLOPE_THRESHOLD}, min_points={CHARGING_MIN_POINTS}) charging={charging}"
-    )
-
     return charging, slope
 
 
@@ -237,15 +238,31 @@ if __name__ == "__main__":
     # When run as a script, output JSON (for Rust integration)
     import json
     try:
-        while True:
-            battery_data = get_battery_data()
-            result = {
-                "voltage": round(battery_data.voltage, 2),
-                "percent": battery_data.percent,
-                "charging": battery_data.charging,
-            }
-            print(json.dumps(result))
-            time.sleep(LOOP_PERIOD_S)
+        end_t = time.monotonic() + SCRIPT_WINDOW_S
+        samples: list[tuple[float, float]] = []
+
+        while time.monotonic() < end_t:
+            t = time.monotonic()
+            v = get_battery_voltage()
+            samples.append((t, v))
+            time.sleep(SCRIPT_SAMPLE_PERIOD_S)
+
+        slope = _slope_v_per_s(samples)
+        voltage = samples[-1][1] if samples else -1.0
+        charging = (voltage >= CHARGING_VOLTAGE_THRESHOLD) or (
+            len(samples) >= CHARGING_MIN_POINTS and slope >= CHARGING_SLOPE_THRESHOLD
+        )
+
+        result = {
+            "voltage": round(voltage, 2),
+            "percent": get_battery_percent_from_voltage(voltage),
+            "charging": charging,
+        }
+        if SCRIPT_INCLUDE_SLOPE:
+            result["slope_v_per_s"] = slope
+            result["samples"] = len(samples)
+
+        print(json.dumps(result))
     except Exception as e:
         # Output error JSON so Rust knows battery reading failed
         print(json.dumps({"voltage": -1.0, "percent": -1, "charging": False, "error": str(e)}))
