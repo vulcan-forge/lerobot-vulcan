@@ -82,6 +82,7 @@ class SourcceyClient(Robot):
         # Time of last command
         self._last_cmd_t = time.monotonic()
         self._slew_time_s = 0.25
+        self._x_deadbane = 0.02
 
         # max change in x.vel per second (tune this)
         self._x_accel = 10.0   # units: (x.vel units) / s
@@ -438,15 +439,20 @@ class SourcceyClient(Robot):
         self._last_cmd_t = now
         dt = max(0.0, min(dt, self._slew_time_s))  # cap big jumps if the loop stalls
 
-        self._x_cmd_smoothed = self._slew(
-            current=self._x_cmd_smoothed,
-            target=x_cmd_target,
-            dt=dt,
-            up_rate=self._x_accel,
-            down_rate=self._x_decel,
-        )
-        x_cmd = float(self._x_cmd_smoothed)
+        if abs(self._x_cmd_smoothed) >= self._x_deadbane:
+            # already moving -> smooth changes
+            self._x_cmd_smoothed = self._slew(
+                current=self._x_cmd_smoothed,
+                target=x_cmd_target,
+                dt=dt,
+                up_rate=self._x_accel,
+                down_rate=self._x_decel,
+            )
+        else:
+            # basically stopped -> jump immediately
+            self._x_cmd_smoothed = x_cmd_target
 
+        x_cmd = float(self._x_cmd_smoothed)
         action = {
             "x.vel": x_cmd,
             "y.vel": y_cmd,
