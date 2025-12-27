@@ -41,7 +41,7 @@ PERCENT_ALPHA = 0.2  # 0..1, higher = more responsive, lower = smoother
 #   a rolling window to reduce noise.
 CHARGING_WINDOW_S = 60.0            # how much history to use for slope
 CHARGING_MIN_POINTS = 6             # minimum samples required before using slope
-CHARGING_SLOPE_THRESHOLD = 0.0005   # V/s (tune for your system)
+CHARGING_SLOPE_THRESHOLD = 0.0001   # V/s (tune for your system)
 CHARGING_VOLTAGE_THRESHOLD = 13.8   # V (tune; optional "definitely charging" threshold)
 LOOP_PERIOD_S = 10.0                # seconds between samples when run as a script
 
