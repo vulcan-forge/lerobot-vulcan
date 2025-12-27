@@ -79,11 +79,14 @@ class SourcceyClient(Robot):
         self.untorque_right_active = False
         self._prev_keys: set[str] = set()
 
-        # X direction-change hold (debounce) for forward<->back only
-        self._x_dir_change_delay_s = 1.0
-        self._x_dir_applied = 0          # -1 back, 0 stop, +1 forward (in "driver" frame, before reversed)
-        self._x_dir_pending = 0
-        self._x_dir_pending_since = None  # monotonic time
+        # Time of last command
+        self._last_cmd_t = time.monotonic()
+        self._slew_time_s = 0.25
+
+        # max change in x.vel per second (tune this)
+        self._x_accel = 10.0   # units: (x.vel units) / s
+        self._x_decel = 10.0   # allow faster slowing down than speeding up (optional)
+        self._x_cmd_smoothed = 0.0
 
     ###################################################################
     # Properties and Attributes
@@ -387,50 +390,18 @@ class SourcceyClient(Robot):
         y_cmd = 0.0
         z_cmd = 0.0
         theta_cmd = 0.0
+        x_cmd_target = 0.0
 
-        forward = self.teleop_keys["forward"] in pressed
-        backward = self.teleop_keys["backward"] in pressed
-        desired_dir = (1 if forward else 0) - (1 if backward else 0)
-        now = time.monotonic()
-
-        if desired_dir == 0:
-            if forward and backward:
-                # both pressed => stop, but don't reset reversal state/timer
-                self._x_dir_applied = 0
-                # keep self._x_dir_pending and self._x_dir_pending_since unchanged
+        if self.teleop_keys["forward"] in pressed:
+            if reversed:
+                x_cmd_target -= x_speed
             else:
-                # neither pressed => true stop, reset everything
-                self._x_dir_applied = 0
-                self._x_dir_pending = 0
-                self._x_dir_pending_since = None
-        else:
-            if self._x_dir_applied == 0:
-                # starting from stop is immediate
-                self._x_dir_applied = desired_dir
-                self._x_dir_pending = 0
-                self._x_dir_pending_since = None
-            elif desired_dir == self._x_dir_applied:
-                # continuing same direction
-                self._x_dir_pending = 0
-                self._x_dir_pending_since = None
+                x_cmd_target += x_speed
+        if self.teleop_keys["backward"] in pressed:
+            if reversed:
+                x_cmd_target += x_speed
             else:
-                # reversing direction: STOP during the hold window, then switch
-                if self._x_dir_pending != desired_dir:
-                    self._x_dir_pending = desired_dir
-                    self._x_dir_pending_since = now
-                elif (
-                    self._x_dir_pending_since is not None
-                    and (now - self._x_dir_pending_since) >= self._x_dir_change_delay_s
-                ):
-                    self._x_dir_applied = desired_dir
-                    self._x_dir_pending = 0
-                    self._x_dir_pending_since = None
-
-        reverse_factor = -1.0 if reversed else 1.0
-        # If we're mid reversal, command 0 x-velocity for the entire delay period.
-        x_dir_out = 0 if self._x_dir_pending != 0 else self._x_dir_applied
-        x_cmd = float(reverse_factor * x_speed * x_dir_out)
-
+                x_cmd_target -= x_speed
         if self.teleop_keys["left"] in pressed:
             if reversed:
                 y_cmd -= y_speed
@@ -461,6 +432,20 @@ class SourcceyClient(Robot):
                 theta_cmd += theta_speed
             else:
                 theta_cmd -= theta_speed
+
+        now = time.monotonic()
+        dt = now - self._last_cmd_t
+        self._last_cmd_t = now
+        dt = max(0.0, min(dt, self._slew_time_s))  # cap big jumps if the loop stalls
+
+        self._x_cmd_smoothed = self._slew(
+            current=self._x_cmd_smoothed,
+            target=x_cmd_target,
+            dt=dt,
+            up_rate=self._x_accel,
+            down_rate=self._x_decel,
+        )
+        x_cmd = float(self._x_cmd_smoothed)
 
         action = {
             "x.vel": x_cmd,
@@ -512,4 +497,15 @@ class SourcceyClient(Robot):
             "z.vel": float(z_in * z_speed),
             "theta.vel": float(theta_in * theta_speed),
         }
+
+    def _slew(self, current: float, target: float, dt: float, up_rate: float, down_rate: float) -> float:
+        delta = target - current
+        # If delta would reduce |current| (i.e., braking toward 0), use down_rate, else up_rate.
+        rate = down_rate if (current != 0.0 and (current * delta) < 0.0) else up_rate
+        max_step = rate * dt
+        if delta > max_step:
+            return current + max_step
+        if delta < -max_step:
+            return current - max_step
+        return target
 
