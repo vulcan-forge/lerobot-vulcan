@@ -211,8 +211,8 @@ def is_battery_charging_from_voltage(voltage: float, now: float) -> tuple[bool, 
 
     # Print what we're testing each cycle (simple / no env flags).
     print(
-        f"[battery] V={voltage:.3f}V slope={slope:.6f}V/s "
-        f"(thr={CHARGING_SLOPE_THRESHOLD}) charging={charging}"
+        f"[battery] n={len(_samples)} V={voltage:.3f}V slope={slope:.6f}V/s "
+        f"(thr={CHARGING_SLOPE_THRESHOLD}, min_points={CHARGING_MIN_POINTS}) charging={charging}"
     )
 
     return charging, slope
