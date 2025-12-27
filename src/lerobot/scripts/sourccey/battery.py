@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
 import time
-from collections import deque
 
 # gpiozero is only available on target hardware (e.g., Raspberry Pi).
 # Make it optional so this module can be imported on dev machines.
@@ -32,27 +31,6 @@ _filtered_voltage: Optional[float] = None
 # Smoothed percentage filter state
 _last_percent: Optional[float] = None
 PERCENT_ALPHA = 0.2  # 0..1, higher = more responsive, lower = smoother
-
-# Charging detection (voltage-only heuristic; windowed slope)
-# Notes:
-# - With only voltage, this will never be perfect under load. For production-grade detection,
-#   use a charger-present signal and/or charge current sensing.
-# - This is a "just works" baseline: it samples voltage once per loop and estimates slope over
-#   a rolling window to reduce noise.
-# Note: the script’s bounded-sampling mode uses `_slope_v_per_s(samples)` directly, but these
-# thresholds are also used for the final decision and for any codepaths that rely on the
-# rolling window helper.
-CHARGING_WINDOW_S = 5             # seconds of history to use for slope
-CHARGING_MIN_POINTS = 4             # minimum samples required before using slope
-CHARGING_SLOPE_THRESHOLD = 0.00005  # V/s (tune for your system; filtered voltage slopes are small)
-CHARGING_VOLTAGE_THRESHOLD = 13.8   # V (tune; should reflect your charger/pack behavior)
-# Script execution (when run as __main__)
-# Use bounded sampling so the script returns quickly with a slope-based decision.
-SCRIPT_WINDOW_S = 5               # total sampling time
-SCRIPT_SAMPLE_PERIOD_S = 0.25       # time between samples
-SCRIPT_INCLUDE_SLOPE = True         # include slope in JSON for validation/testing
-
-_samples: "deque[tuple[float, float]]" = deque()  # (t, filtered_voltage)
 
 # Approximate voltage vs SoC curve for a 4S LiFePO4 pack (resting voltage)
 # (voltage, percent)
@@ -91,6 +69,7 @@ def _get_adc() -> "MCP3008":
 
 
 def get_battery_voltage() -> float:
+    """Return filtered battery voltage (fast; no slope computation)."""
     global _filtered_voltage
     adc = _get_adc()
     total = 0.0
@@ -180,57 +159,16 @@ def get_battery_percent_from_voltage(voltage: float) -> int:
     return max(0, min(100, int(round(_last_percent))))
 
 
-def _slope_v_per_s(samples: list[tuple[float, float]]) -> float:
-    """Least-squares slope of voltage vs time over samples. Returns V/s."""
-    n = len(samples)
-    if n < 2:
-        return 0.0
-
-    t0 = samples[0][0]
-    ts = [t - t0 for t, _ in samples]
-    vs = [v for _, v in samples]
-
-    t_mean = sum(ts) / n
-    v_mean = sum(vs) / n
-    num = sum((t - t_mean) * (v - v_mean) for t, v in zip(ts, vs))
-    den = sum((t - t_mean) ** 2 for t in ts)
-    return (num / den) if den > 0 else 0.0
-
-
-def is_battery_charging_from_voltage(voltage: float, now: float) -> tuple[bool, float]:
-    """
-    Voltage-only charging detection using a rolling-window slope.
-
-    Returns:
-        (charging, slope_v_per_s)
-    """
-    _samples.append((now, voltage))
-
-    cutoff = now - CHARGING_WINDOW_S
-    while _samples and _samples[0][0] < cutoff:
-        _samples.popleft()
-
-    slope = _slope_v_per_s(list(_samples)) if len(_samples) >= 2 else 0.0
-
-    charging = (voltage >= CHARGING_VOLTAGE_THRESHOLD) or (
-        len(_samples) >= CHARGING_MIN_POINTS and slope >= CHARGING_SLOPE_THRESHOLD
-    )
-
-    return charging, slope
-
-
 def get_battery_data() -> BatteryData:
     """
-    Get both battery voltage and percentage.
+    Get battery voltage and percentage.
 
     Returns:
-        BatteryData containing voltage and percent
+        BatteryData containing voltage, percent, and charging
     """
-    # Read voltage ONCE for consistency (percent + charging slope use the same reading)
-    now = time.monotonic()
     voltage = get_battery_voltage()
     percent = get_battery_percent_from_voltage(voltage)
-    charging, _slope = is_battery_charging_from_voltage(voltage, now)
+    charging = False  # TODO: implement GPIO-based charging detection
     return BatteryData(voltage=voltage, percent=percent, charging=charging)
 
 
@@ -238,30 +176,12 @@ if __name__ == "__main__":
     # When run as a script, output JSON (for Rust integration)
     import json
     try:
-        end_t = time.monotonic() + SCRIPT_WINDOW_S
-        samples: list[tuple[float, float]] = []
-
-        while time.monotonic() < end_t:
-            t = time.monotonic()
-            v = get_battery_voltage()
-            samples.append((t, v))
-            time.sleep(SCRIPT_SAMPLE_PERIOD_S)
-
-        slope = _slope_v_per_s(samples)
-        voltage = samples[-1][1] if samples else -1.0
-        charging = (voltage >= CHARGING_VOLTAGE_THRESHOLD) or (
-            len(samples) >= CHARGING_MIN_POINTS and slope >= CHARGING_SLOPE_THRESHOLD
-        )
-
+        battery_data = get_battery_data()
         result = {
-            "voltage": round(voltage, 2),
-            "percent": get_battery_percent_from_voltage(voltage),
-            "charging": charging,
+            "voltage": round(battery_data.voltage, 2),
+            "percent": battery_data.percent,
+            "charging": battery_data.charging,
         }
-        if SCRIPT_INCLUDE_SLOPE:
-            result["slope_v_per_s"] = slope
-            result["samples"] = len(samples)
-
         print(json.dumps(result))
     except Exception as e:
         # Output error JSON so Rust knows battery reading failed
