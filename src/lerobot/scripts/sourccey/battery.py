@@ -42,13 +42,13 @@ PERCENT_ALPHA = 0.2  # 0..1, higher = more responsive, lower = smoother
 # Note: the script’s bounded-sampling mode uses `_slope_v_per_s(samples)` directly, but these
 # thresholds are also used for the final decision and for any codepaths that rely on the
 # rolling window helper.
-CHARGING_WINDOW_S = 2.5             # seconds of history to use for slope
+CHARGING_WINDOW_S = 5             # seconds of history to use for slope
 CHARGING_MIN_POINTS = 4             # minimum samples required before using slope
 CHARGING_SLOPE_THRESHOLD = 0.00005  # V/s (tune for your system; filtered voltage slopes are small)
-CHARGING_VOLTAGE_THRESHOLD = 13.6   # V (tune; should reflect your charger/pack behavior)
+CHARGING_VOLTAGE_THRESHOLD = 13.8   # V (tune; should reflect your charger/pack behavior)
 # Script execution (when run as __main__)
 # Use bounded sampling so the script returns quickly with a slope-based decision.
-SCRIPT_WINDOW_S = 2.5               # total sampling time
+SCRIPT_WINDOW_S = 5               # total sampling time
 SCRIPT_SAMPLE_PERIOD_S = 0.25       # time between samples
 SCRIPT_INCLUDE_SLOPE = True         # include slope in JSON for validation/testing
 
