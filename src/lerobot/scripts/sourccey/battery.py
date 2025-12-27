@@ -1,6 +1,13 @@
-from gpiozero import MCP3008
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
+import time
+
+# gpiozero is only available on target hardware (e.g., Raspberry Pi).
+# Make it optional so this module can be imported on dev machines.
+try:
+    from gpiozero import MCP3008  # type: ignore
+except Exception:  # pragma: no cover
+    MCP3008 = None  # type: ignore
 
 # ADC Configuration
 ADC_CHANNEL = 0
@@ -25,6 +32,20 @@ _filtered_voltage: Optional[float] = None
 _last_percent: Optional[float] = None
 PERCENT_ALPHA = 0.2  # 0..1, higher = more responsive, lower = smoother
 
+# Charging detection (voltage-only heuristic)
+# Notes:
+# - This is best-effort with only voltage sensing. For a definitive signal, measure charge current
+#   or a charger-present GPIO.
+# - Tune thresholds based on your pack chemistry and charger behavior.
+CHARGING_VOLTAGE_THRESHOLD = 13.9   # V; above this is very likely charging for a 4S LiFePO4 system
+CHARGING_DVDT_THRESHOLD = 0.015     # V/s; sustained voltage rise suggests charging
+CHARGING_DEBOUNCE_S = 2.0           # require charging-like condition for this long
+
+_last_charge_eval_t: Optional[float] = None
+_last_charge_eval_v: Optional[float] = None
+_charging_since: Optional[float] = None
+_is_charging: bool = False
+
 # Approximate voltage vs SoC curve for a 4S LiFePO4 pack (resting voltage)
 # (voltage, percent)
 LIFEPO4_CURVE: List[Tuple[float, int]] = [
@@ -45,14 +66,17 @@ class BatteryData:
     """Battery data container"""
     voltage: float
     percent: int
+    charging: bool
 
 # Global ADC instance (initialized on first use)
-_adc: Optional[MCP3008] = None
+_adc: Optional["MCP3008"] = None
 
 
-def _get_adc() -> MCP3008:
+def _get_adc() -> "MCP3008":
     """Get or initialize the ADC instance"""
     global _adc
+    if MCP3008 is None:
+        raise RuntimeError("gpiozero is not installed; battery ADC is unavailable on this machine.")
     if _adc is None:
         _adc = MCP3008(channel=ADC_CHANNEL)
     return _adc
@@ -142,6 +166,46 @@ def get_battery_percent() -> int:
     return max(0, min(100, int(round(_last_percent))))
 
 
+def is_battery_charging() -> bool:
+    """
+    Best-effort charging detection based on filtered voltage trend.
+
+    Returns:
+        True if battery likely charging, else False.
+    """
+    global _last_charge_eval_t, _last_charge_eval_v, _charging_since, _is_charging
+
+    v = get_battery_voltage()
+    now = time.monotonic()
+
+    # Initialize trend state on first call
+    if _last_charge_eval_t is None or _last_charge_eval_v is None:
+        _last_charge_eval_t = now
+        _last_charge_eval_v = v
+        _charging_since = None
+        _is_charging = False
+        return _is_charging
+
+    dt = max(1e-3, now - _last_charge_eval_t)
+    dvdt = (v - _last_charge_eval_v) / dt
+
+    _last_charge_eval_t = now
+    _last_charge_eval_v = v
+
+    looks_like_charging = (v >= CHARGING_VOLTAGE_THRESHOLD) or (dvdt >= CHARGING_DVDT_THRESHOLD)
+
+    if looks_like_charging:
+        if _charging_since is None:
+            _charging_since = now
+        if (now - _charging_since) >= CHARGING_DEBOUNCE_S:
+            _is_charging = True
+    else:
+        _charging_since = None
+        _is_charging = False
+
+    return _is_charging
+
+
 def get_battery_data() -> BatteryData:
     """
     Get both battery voltage and percentage.
@@ -151,7 +215,8 @@ def get_battery_data() -> BatteryData:
     """
     voltage = get_battery_voltage()
     percent = get_battery_percent()
-    return BatteryData(voltage=voltage, percent=percent)
+    charging = is_battery_charging()
+    return BatteryData(voltage=voltage, percent=percent, charging=charging)
 
 
 if __name__ == "__main__":
@@ -161,9 +226,10 @@ if __name__ == "__main__":
         battery_data = get_battery_data()
         result = {
             "voltage": round(battery_data.voltage, 2),
-            "percent": battery_data.percent
+            "percent": battery_data.percent,
+            "charging": battery_data.charging,
         }
         print(json.dumps(result))
     except Exception as e:
         # Output error JSON so Rust knows battery reading failed
-        print(json.dumps({"voltage": -1.0, "percent": -1}))
+        print(json.dumps({"voltage": -1.0, "percent": -1, "charging": False}))
