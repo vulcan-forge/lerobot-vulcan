@@ -174,18 +174,24 @@ def is_battery_charging() -> bool:
     Returns:
         True if battery likely charging, else False.
     """
+    print("Charging detection")
     global _last_charge_eval_t, _last_charge_eval_v, _charging_since, _is_charging
 
     v = get_battery_voltage()
+    print("here 1")
     now = time.monotonic()
-
+    print("here 2")
+    print(f"last_charge_eval_t: {_last_charge_eval_t}")
+    print(f"last_charge_eval_v: {_last_charge_eval_v}")
     # Initialize trend state on first call
     if _last_charge_eval_t is None or _last_charge_eval_v is None:
         _last_charge_eval_t = now
         _last_charge_eval_v = v
         _charging_since = None
         _is_charging = False
+        print("here 3")
         return _is_charging
+    print("here 4")
 
     dt = max(1e-3, now - _last_charge_eval_t)
     dvdt = (v - _last_charge_eval_v) / dt
