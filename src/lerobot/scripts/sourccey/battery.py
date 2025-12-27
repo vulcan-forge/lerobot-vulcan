@@ -19,7 +19,7 @@ VREF = 3.30  # Pi 3.3V rail (adjust to your measured value)
 VOLTAGE_DIVIDER_RATIO = 0.2  # V_adc = V_batt * 0.2
 
 # Sampling configuration
-AVERAGE_SAMPLES = 25  # Number of samples to average for stability
+AVERAGE_SAMPLES = 50  # Number of samples to average for stability
 
 # Battery voltage range for clamping
 BATTERY_VOLTAGE_MIN = 11.0  # "Empty" (under load) – adjust based on your pack/BMS cutoff
