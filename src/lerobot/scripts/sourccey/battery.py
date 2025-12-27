@@ -25,7 +25,7 @@ AVERAGE_SAMPLES = 50  # Number of samples to average for stability
 BATTERY_VOLTAGE_MIN = 11.0  # "Empty" (under load) – adjust based on your pack/BMS cutoff
 BATTERY_VOLTAGE_MAX_OCV = 13.6  # "Full" resting open-circuit voltage
 BATTERY_VOLTAGE_MAX_CHARGE = 14.6  # Charging voltage – treat as 100%
-FILTER_ALPHA = 0.05  # 0..1, lower = more smoothing (lower = smoother)
+FILTER_ALPHA = 0.02  # 0..1, lower = more smoothing (lower = smoother)
 _filtered_voltage: Optional[float] = None
 
 # Smoothed percentage filter state
