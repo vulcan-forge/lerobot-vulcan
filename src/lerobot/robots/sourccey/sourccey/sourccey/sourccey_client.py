@@ -394,10 +394,15 @@ class SourcceyClient(Robot):
         now = time.monotonic()
 
         if desired_dir == 0:
-            # stop is immediate
-            self._x_dir_applied = 0
-            self._x_dir_pending = 0
-            self._x_dir_pending_since = None
+            if forward and backward:
+                # both pressed => stop, but don't reset reversal state/timer
+                self._x_dir_applied = 0
+                # keep self._x_dir_pending and self._x_dir_pending_since unchanged
+            else:
+                # neither pressed => true stop, reset everything
+                self._x_dir_applied = 0
+                self._x_dir_pending = 0
+                self._x_dir_pending_since = None
         else:
             if self._x_dir_applied == 0:
                 # starting from stop is immediate
