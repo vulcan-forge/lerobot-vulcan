@@ -80,7 +80,7 @@ class SourcceyClient(Robot):
         self._prev_keys: set[str] = set()
 
         # X direction-change hold (debounce) for forward<->back only
-        self._x_dir_change_delay_s = 0.25
+        self._x_dir_change_delay_s = 1.0
         self._x_dir_applied = 0          # -1 back, 0 stop, +1 forward (in "driver" frame, before reversed)
         self._x_dir_pending = 0
         self._x_dir_pending_since = None  # monotonic time
@@ -409,18 +409,22 @@ class SourcceyClient(Robot):
                 self._x_dir_pending = 0
                 self._x_dir_pending_since = None
             else:
-                # reversing direction: must hold for delay
+                # reversing direction: STOP during the hold window, then switch
                 if self._x_dir_pending != desired_dir:
                     self._x_dir_pending = desired_dir
                     self._x_dir_pending_since = now
-                elif self._x_dir_pending_since is not None and (now - self._x_dir_pending_since) >= self._x_dir_change_delay_s:
+                elif (
+                    self._x_dir_pending_since is not None
+                    and (now - self._x_dir_pending_since) >= self._x_dir_change_delay_s
+                ):
                     self._x_dir_applied = desired_dir
                     self._x_dir_pending = 0
                     self._x_dir_pending_since = None
 
         reverse_factor = -1.0 if reversed else 1.0
-        x_cmd = float(reverse_factor * x_speed * self._x_dir_applied)
-
+        # If we're mid reversal, command 0 x-velocity for the entire delay period.
+        x_dir_out = 0 if self._x_dir_pending != 0 else self._x_dir_applied
+        x_cmd = float(reverse_factor * x_speed * x_dir_out)
 
         if self.teleop_keys["left"] in pressed:
             if reversed:
