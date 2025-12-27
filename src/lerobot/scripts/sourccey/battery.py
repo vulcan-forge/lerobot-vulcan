@@ -41,7 +41,6 @@ PERCENT_ALPHA = 0.2  # 0..1, higher = more responsive, lower = smoother
 CHARGING_VOLTAGE_THRESHOLD = 13.9   # V; above this is very likely charging for a 4S LiFePO4 system
 CHARGING_DVDT_THRESHOLD = 0.015     # V/s; sustained voltage rise suggests charging
 CHARGING_DEBOUNCE_S = 2.0           # require charging-like condition for this long
-CHARGING_DEBUG = True
 
 _last_charge_eval_t: Optional[float] = None
 _last_charge_eval_v: Optional[float] = None
@@ -195,8 +194,7 @@ def is_battery_charging() -> bool:
     _last_charge_eval_v = v
 
     looks_like_charging = (v >= CHARGING_VOLTAGE_THRESHOLD) or (dvdt >= CHARGING_DVDT_THRESHOLD)
-    if CHARGING_DEBUG:
-        print(
+    print(
             f"[battery] V={v:.3f}V dt={dt:.3f}s dvdt={dvdt:.5f}V/s "
             f"looks_like_charging={looks_like_charging} charging={_is_charging}"
         )
