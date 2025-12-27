@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
 import time
-import os
+from collections import deque
 
 # gpiozero is only available on target hardware (e.g., Raspberry Pi).
 # Make it optional so this module can be imported on dev machines.
@@ -33,19 +33,19 @@ _filtered_voltage: Optional[float] = None
 _last_percent: Optional[float] = None
 PERCENT_ALPHA = 0.2  # 0..1, higher = more responsive, lower = smoother
 
-# Charging detection (voltage-only heuristic)
+# Charging detection (voltage-only heuristic; windowed slope)
 # Notes:
-# - This is best-effort with only voltage sensing. For a definitive signal, measure charge current
-#   or a charger-present GPIO.
-# - Tune thresholds based on your pack chemistry and charger behavior.
-CHARGING_VOLTAGE_THRESHOLD = 13.9   # V; above this is very likely charging for a 4S LiFePO4 system
-CHARGING_DVDT_THRESHOLD = 0.015     # V/s; sustained voltage rise suggests charging
-CHARGING_DEBOUNCE_S = 2.0           # require charging-like condition for this long
+# - With only voltage, this will never be perfect under load. For production-grade detection,
+#   use a charger-present signal and/or charge current sensing.
+# - This is a "just works" baseline: it samples voltage once per loop and estimates slope over
+#   a rolling window to reduce noise.
+CHARGING_WINDOW_S = 60.0            # how much history to use for slope
+CHARGING_MIN_POINTS = 6             # minimum samples required before using slope
+CHARGING_SLOPE_THRESHOLD = 0.0005   # V/s (tune for your system)
+CHARGING_VOLTAGE_THRESHOLD = 13.8   # V (tune; optional "definitely charging" threshold)
+LOOP_PERIOD_S = 10.0                # seconds between samples when run as a script
 
-_last_charge_eval_t: Optional[float] = None
-_last_charge_eval_v: Optional[float] = None
-_charging_since: Optional[float] = None
-_is_charging: bool = False
+_samples: "deque[tuple[float, float]]" = deque()  # (t, filtered_voltage)
 
 # Approximate voltage vs SoC curve for a 4S LiFePO4 pack (resting voltage)
 # (voltage, percent)
@@ -146,6 +146,12 @@ def get_battery_percent() -> int:
     global _last_percent
 
     voltage = get_battery_voltage()
+    return get_battery_percent_from_voltage(voltage)
+
+
+def get_battery_percent_from_voltage(voltage: float) -> int:
+    """Compute smoothed battery percentage from a provided voltage reading."""
+    global _last_percent
 
     # If we're clearly in "charging" range, just say 100%
     if voltage >= BATTERY_VOLTAGE_MAX_CHARGE:
@@ -167,54 +173,49 @@ def get_battery_percent() -> int:
     return max(0, min(100, int(round(_last_percent))))
 
 
-def is_battery_charging() -> bool:
+def _slope_v_per_s(samples: list[tuple[float, float]]) -> float:
+    """Least-squares slope of voltage vs time over samples. Returns V/s."""
+    n = len(samples)
+    if n < 2:
+        return 0.0
+
+    t0 = samples[0][0]
+    ts = [t - t0 for t, _ in samples]
+    vs = [v for _, v in samples]
+
+    t_mean = sum(ts) / n
+    v_mean = sum(vs) / n
+    num = sum((t - t_mean) * (v - v_mean) for t, v in zip(ts, vs))
+    den = sum((t - t_mean) ** 2 for t in ts)
+    return (num / den) if den > 0 else 0.0
+
+
+def is_battery_charging_from_voltage(voltage: float, now: float) -> tuple[bool, float]:
     """
-    Best-effort charging detection based on filtered voltage trend.
+    Voltage-only charging detection using a rolling-window slope.
 
     Returns:
-        True if battery likely charging, else False.
+        (charging, slope_v_per_s)
     """
-    print("Charging detection")
-    global _last_charge_eval_t, _last_charge_eval_v, _charging_since, _is_charging
+    _samples.append((now, voltage))
 
-    v = get_battery_voltage()
-    print("here 1")
-    now = time.monotonic()
-    print("here 2")
-    print(f"last_charge_eval_t: {_last_charge_eval_t}")
-    print(f"last_charge_eval_v: {_last_charge_eval_v}")
-    # Initialize trend state on first call
-    if _last_charge_eval_t is None or _last_charge_eval_v is None:
-        _last_charge_eval_t = now
-        _last_charge_eval_v = v
-        _charging_since = None
-        _is_charging = False
-        print("here 3")
-        return _is_charging
-    print("here 4")
+    cutoff = now - CHARGING_WINDOW_S
+    while _samples and _samples[0][0] < cutoff:
+        _samples.popleft()
 
-    dt = max(1e-3, now - _last_charge_eval_t)
-    dvdt = (v - _last_charge_eval_v) / dt
+    slope = _slope_v_per_s(list(_samples)) if len(_samples) >= 2 else 0.0
 
-    _last_charge_eval_t = now
-    _last_charge_eval_v = v
+    charging = (voltage >= CHARGING_VOLTAGE_THRESHOLD) or (
+        len(_samples) >= CHARGING_MIN_POINTS and slope >= CHARGING_SLOPE_THRESHOLD
+    )
 
-    looks_like_charging = (v >= CHARGING_VOLTAGE_THRESHOLD) or (dvdt >= CHARGING_DVDT_THRESHOLD)
+    # Print what we're testing each cycle (simple / no env flags).
     print(
-            f"[battery] V={v:.3f}V dt={dt:.3f}s dvdt={dvdt:.5f}V/s "
-            f"looks_like_charging={looks_like_charging} charging={_is_charging}"
-        )
+        f"[battery] V={voltage:.3f}V slope={slope:.6f}V/s "
+        f"(thr={CHARGING_SLOPE_THRESHOLD}) charging={charging}"
+    )
 
-    if looks_like_charging:
-        if _charging_since is None:
-            _charging_since = now
-        if (now - _charging_since) >= CHARGING_DEBOUNCE_S:
-            _is_charging = True
-    else:
-        _charging_since = None
-        _is_charging = False
-
-    return _is_charging
+    return charging, slope
 
 
 def get_battery_data() -> BatteryData:
@@ -224,9 +225,11 @@ def get_battery_data() -> BatteryData:
     Returns:
         BatteryData containing voltage and percent
     """
+    # Read voltage ONCE for consistency (percent + charging slope use the same reading)
+    now = time.monotonic()
     voltage = get_battery_voltage()
-    percent = get_battery_percent()
-    charging = is_battery_charging()
+    percent = get_battery_percent_from_voltage(voltage)
+    charging, _slope = is_battery_charging_from_voltage(voltage, now)
     return BatteryData(voltage=voltage, percent=percent, charging=charging)
 
 
@@ -234,7 +237,7 @@ if __name__ == "__main__":
     # When run as a script, output JSON (for Rust integration)
     import json
     try:
-        for i in range(100):
+        while True:
             battery_data = get_battery_data()
             result = {
                 "voltage": round(battery_data.voltage, 2),
@@ -242,8 +245,7 @@ if __name__ == "__main__":
                 "charging": battery_data.charging,
             }
             print(json.dumps(result))
-            time.sleep(10)
+            time.sleep(LOOP_PERIOD_S)
     except Exception as e:
-        print(f"Error: {e}")
         # Output error JSON so Rust knows battery reading failed
-        print(json.dumps({"voltage": -1.0, "percent": -1, "charging": False}))
+        print(json.dumps({"voltage": -1.0, "percent": -1, "charging": False, "error": str(e)}))
