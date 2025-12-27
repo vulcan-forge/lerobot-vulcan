@@ -247,6 +247,54 @@ class SetupScript:
             self.print_error(f"Failed to setup Python environment: {e}")
             return False
 
+    def install_linux_system_dependencies(self) -> bool:
+        """Install required Linux system dependencies"""
+        if platform.system() != "Linux":
+            return True  # No-op on non-Linux systems
+
+        self.print_status("Checking Linux system dependencies...")
+
+        required_packages = [
+            "portaudio19-dev",
+        ]
+
+        missing = []
+
+        for pkg in required_packages:
+            result = subprocess.run(
+                ["dpkg", "-s", pkg],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            if result.returncode != 0:
+                missing.append(pkg)
+
+        if not missing:
+            self.print_success("All required system dependencies are installed")
+            return True
+
+        self.print_warning("Missing system dependencies detected:")
+        for pkg in missing:
+            self.print_warning(f"  • {pkg}")
+
+        self.print_status("Installing missing system dependencies (requires sudo)...")
+
+        try:
+            subprocess.run(
+                ["sudo", "apt", "update"],
+                check=True
+            )
+            subprocess.run(
+                ["sudo", "apt", "install", "-y", *missing],
+                check=True
+            )
+            self.print_success("System dependencies installed successfully")
+            return True
+
+        except subprocess.CalledProcessError as e:
+            self.print_error(f"Failed to install system dependencies: {e}")
+            return False
+    
     def fix_final_ownership(self) -> bool:
         """Restore project directory ownership to the normal user after setup."""
         if platform.system() == "Windows":
@@ -385,6 +433,7 @@ class SetupScript:
             self.check_python_version(),
             self.check_git(),
             self.check_project_structure(),
+            self.install_linux_system_dependencies(),
         ]
 
         # Check uv (optional)
