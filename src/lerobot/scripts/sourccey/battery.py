@@ -191,7 +191,7 @@ if __name__ == "__main__":
     try:
         battery_data = get_battery_data()
         result = {
-            "voltage": round(battery_data.voltage, 2),
+            "voltage": round(battery_data.voltage, 3),
             "percent": battery_data.percent,
             "charging": battery_data.charging,
         }
