@@ -61,6 +61,9 @@ class SourcceyLeader(Teleoperator):
             calibration=self.calibration,
         )
 
+        # Connection
+        self.leader_connected = False
+
         # Initialize calibrator for automatic calibration
         self.calibrator = SourcceyLeaderCalibrator(self)
 
@@ -97,7 +100,7 @@ class SourcceyLeader(Teleoperator):
 
     @property
     def is_connected(self) -> bool:
-        return self.bus.is_connected
+        return self.bus.is_connected and self.leader_connected
 
     def connect(self, calibrate: bool = True) -> None:
         if self.is_connected:
@@ -108,6 +111,8 @@ class SourcceyLeader(Teleoperator):
             self.calibrate()
 
         self.configure()
+
+        self.leader_connected = True
         logger.info(f"{self} connected.")
 
     def disconnect(self) -> None:
@@ -181,6 +186,9 @@ class SourcceyLeader(Teleoperator):
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
     def get_action(self) -> dict[str, float]:
+        if not self.is_connected:
+            return self._default_action
+
         try:
             action = self.bus.sync_read("Present_Position")
             action = {f"{motor}.pos": val for motor, val in action.items()}
