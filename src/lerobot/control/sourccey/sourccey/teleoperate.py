@@ -33,9 +33,23 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
     leader_arm = BiSourcceyLeader(teleop_arm_config)
     keyboard = KeyboardTeleop(keyboard_config)
 
-    robot.connect()
-    leader_arm.connect()
-    keyboard.connect()
+    try:
+        robot.connect()
+    except Exception as e:
+        print(f"Teleoperating without robot")
+        pass
+
+    try:
+        leader_arm.connect()
+    except Exception as e:
+        print(f"Teleoperating without leader arm")
+        pass
+
+    try:
+        keyboard.connect()
+    except Exception as e:
+        print(f"Teleoperating without keyboard")
+        pass
 
     start_speed_listener(robot)
 
@@ -49,16 +63,14 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
         t0 = time.perf_counter()
 
         observation = robot.get_observation()
-
         arm_action = leader_arm.get_action()
-
         keyboard_keys = keyboard.get_action()
+
         base_action = robot._from_keyboard_to_base_action(keyboard_keys)
 
         log_rerun_data(observation, {**arm_action, **base_action})
 
         action = {**arm_action, **base_action}
-
         robot.send_action(action)
 
         precise_sleep(max(1.0 / cfg.fps - (time.perf_counter() - t0), 0.0))
