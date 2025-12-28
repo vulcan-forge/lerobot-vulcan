@@ -33,11 +33,7 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
     leader_arm = BiSourcceyLeader(teleop_arm_config)
     keyboard = KeyboardTeleop(keyboard_config)
 
-    try:
-        robot.connect()
-    except Exception as e:
-        print(f"Teleoperating without robot")
-        pass
+    robot.connect()
 
     try:
         leader_arm.connect()
@@ -52,11 +48,7 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
         pass
 
     start_speed_listener(robot)
-
     init_rerun(session_name="sourccey_teleop")
-
-    if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
-        raise ValueError("Robot, leader arm of keyboard is not connected!")
 
     print("Teleoperating Sourccey")
     while True:

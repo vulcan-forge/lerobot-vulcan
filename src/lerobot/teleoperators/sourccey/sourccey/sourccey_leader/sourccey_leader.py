@@ -181,6 +181,9 @@ class SourcceyLeader(Teleoperator):
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
     def get_action(self) -> dict[str, float]:
+        if not self.is_connected:
+            return self._default_action
+
         try:
             action = self.bus.sync_read("Present_Position")
             action = {f"{motor}.pos": val for motor, val in action.items()}
