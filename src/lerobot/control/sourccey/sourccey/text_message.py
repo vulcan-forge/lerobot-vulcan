@@ -7,7 +7,7 @@ via the ZMQ text communication pipeline.
 
 Usage:
     python text_message.py --remote_ip <IP_ADDRESS>
-    python text_message.py --remote_ip 192.168.1.243
+    python text_message.py --remote_ip 192.168.1.166
 """
 
 import argparse
@@ -20,7 +20,7 @@ from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, Sour
 
 @dataclass
 class TextMessageConfig:
-    remote_ip: str = "192.168.1.243"
+    remote_ip: str = "192.168.1.166"
     id: str = "sourccey"
 
 
@@ -111,15 +111,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python text_message.py --remote_ip 192.168.1.243
-  python text_message.py --remote_ip 192.168.1.228 --id my_robot
+  python text_message.py --remote_ip 192.168.1.166
+  python text_message.py --remote_ip 192.168.1.166 --id my_robot
         """
     )
     parser.add_argument(
         '--remote_ip',
         type=str,
-        default='192.168.1.243',
-        help='IP address of the Sourccey host (default: 192.168.1.243)'
+        default='192.168.1.166',
+        help='IP address of the Sourccey host (default: 192.168.1.166)'
     )
     parser.add_argument(
         '--id',
