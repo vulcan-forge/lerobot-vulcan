@@ -35,11 +35,66 @@ class SourcceyHost:
         self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
         self.zmq_observation_socket.bind(f"tcp://*:{config.port_zmq_observations}")
 
+        # Text communication sockets
+        self.zmq_text_in_socket = self.zmq_context.socket(zmq.PULL)
+        self.zmq_text_in_socket.setsockopt(zmq.CONFLATE, 1)
+        self.zmq_text_in_socket.bind(f"tcp://*:{config.port_zmq_text_in}")
+
+        self.zmq_text_out_socket = self.zmq_context.socket(zmq.PUSH)
+        self.zmq_text_out_socket.setsockopt(zmq.CONFLATE, 1)
+        self.zmq_text_out_socket.bind(f"tcp://*:{config.port_zmq_text_out}")
+
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
         self.max_loop_freq_hz = config.max_loop_freq_hz
 
+        # Text message callback (can be set externally)
+        self.text_message_callback = None
+
+    def set_text_message_callback(self, callback):
+        """Set a callback function to handle incoming text messages.
+        
+        Args:
+            callback: Function that takes a string message as argument
+        """
+        self.text_message_callback = callback
+
+    def send_text(self, message: str) -> bool:
+        """Send a text message to the client.
+        
+        Args:
+            message: Text string to send
+            
+        Returns:
+            True if sent successfully, False otherwise
+        """
+        try:
+            self.zmq_text_out_socket.send_string(message, flags=zmq.NOBLOCK)
+            return True
+        except zmq.Again:
+            logging.debug("No client connected for text message")
+            return False
+        except Exception as e:
+            logging.error(f"Failed to send text message: {e}")
+            return False
+
+    def _poll_text_messages(self):
+        """Poll for incoming text messages and call the callback if set."""
+        try:
+            msg = self.zmq_text_in_socket.recv_string(zmq.NOBLOCK)
+            # Always print received text messages
+            print(f"[TEXT MESSAGE] {msg}")
+            logging.info(f"Received text message: {msg}")
+            if self.text_message_callback:
+                self.text_message_callback(msg)
+        except zmq.Again:
+            pass  # No message available
+        except Exception as e:
+            logging.error(f"Error receiving text message: {e}")
+
     def disconnect(self):
+        self.zmq_text_out_socket.close()
+        self.zmq_text_in_socket.close()
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
@@ -125,6 +180,9 @@ def main():
                 logging.info("Dropping observation, no client connected")
             except Exception as e:
                 logging.error(f"Failed to send observation: {e}")
+
+            # Poll for text messages (non-blocking)
+            host._poll_text_messages()
 
             # Ensure a short sleep to avoid overloading the CPU.
             elapsed = time.time() - loop_start_time

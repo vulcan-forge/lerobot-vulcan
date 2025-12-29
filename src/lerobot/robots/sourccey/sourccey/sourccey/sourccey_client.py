@@ -45,6 +45,8 @@ class SourcceyClient(Robot):
         self.remote_ip = config.remote_ip
         self.port_zmq_cmd = config.port_zmq_cmd
         self.port_zmq_observations = config.port_zmq_observations
+        self.port_zmq_text_in = config.port_zmq_text_in
+        self.port_zmq_text_out = config.port_zmq_text_out
 
         self.teleop_keys = config.teleop_keys
 
@@ -54,9 +56,14 @@ class SourcceyClient(Robot):
         self.zmq_context = None
         self.zmq_cmd_socket = None
         self.zmq_observation_socket = None
+        self.zmq_text_in_socket = None
+        self.zmq_text_out_socket = None
 
         self.last_frames = {}
         self.last_remote_state = {}
+
+        # Text message callback (can be set externally)
+        self.text_message_callback = None
 
         # Define three speed levels and a current index
         self.speed_levels = [
@@ -151,6 +158,17 @@ class SourcceyClient(Robot):
         self.zmq_observation_socket.connect(zmq_observations_locator)
         self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
 
+        # Text communication sockets
+        self.zmq_text_out_socket = self.zmq_context.socket(zmq.PUSH)
+        zmq_text_out_locator = f"tcp://{self.remote_ip}:{self.port_zmq_text_out}"
+        self.zmq_text_out_socket.connect(zmq_text_out_locator)
+        self.zmq_text_out_socket.setsockopt(zmq.CONFLATE, 1)
+
+        self.zmq_text_in_socket = self.zmq_context.socket(zmq.PULL)
+        zmq_text_in_locator = f"tcp://{self.remote_ip}:{self.port_zmq_text_in}"
+        self.zmq_text_in_socket.connect(zmq_text_in_locator)
+        self.zmq_text_in_socket.setsockopt(zmq.CONFLATE, 1)
+
         poller = zmq.Poller()
         poller.register(self.zmq_observation_socket, zmq.POLLIN)
         socks = dict(poller.poll(self.connect_timeout_s * 1000))
@@ -172,6 +190,10 @@ class SourcceyClient(Robot):
             raise DeviceNotConnectedError(
                 "SourcceyClient is not connected. You need to run `robot.connect()` before disconnecting."
             )
+        if self.zmq_text_in_socket:
+            self.zmq_text_in_socket.close()
+        if self.zmq_text_out_socket:
+            self.zmq_text_out_socket.close()
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
@@ -440,5 +462,58 @@ class SourcceyClient(Robot):
             "z.vel": float(z_in * z_speed),
             "theta.vel": float(theta_in * theta_speed),
         }
+
+    ###################################################################
+    # Text Communication
+    ###################################################################
+    def set_text_message_callback(self, callback):
+        """Set a callback function to handle incoming text messages.
+        
+        Args:
+            callback: Function that takes a string message as argument
+        """
+        self.text_message_callback = callback
+
+    def send_text(self, message: str) -> bool:
+        """Send a text message to the host.
+        
+        Args:
+            message: Text string to send
+            
+        Returns:
+            True if sent successfully, False otherwise
+        """
+        if not self._is_connected:
+            raise DeviceNotConnectedError("SourcceyClient is not connected. You need to run `robot.connect()`.")
+        
+        try:
+            self.zmq_text_out_socket.send_string(message, flags=zmq.NOBLOCK)
+            return True
+        except zmq.Again:
+            logging.debug("Failed to send text message (socket busy)")
+            return False
+        except Exception as e:
+            logging.error(f"Failed to send text message: {e}")
+            return False
+
+    def poll_text_message(self) -> Optional[str]:
+        """Poll for incoming text messages (non-blocking).
+        
+        Returns:
+            Text message string if available, None otherwise
+        """
+        if not self._is_connected:
+            return None
+        
+        try:
+            msg = self.zmq_text_in_socket.recv_string(zmq.NOBLOCK)
+            if self.text_message_callback:
+                self.text_message_callback(msg)
+            return msg
+        except zmq.Again:
+            return None  # No message available
+        except Exception as e:
+            logging.error(f"Error receiving text message: {e}")
+            return None
 
     

@@ -93,6 +93,8 @@ class SourcceyHostConfig:
     # Network Configuration
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
+    port_zmq_text_in: int = 5557  # Port for receiving text from client
+    port_zmq_text_out: int = 5558  # Port for sending text to client
 
     # Duration of the application
     connection_time_s: int = 86400
@@ -111,6 +113,8 @@ class SourcceyClientConfig(RobotConfig):
     remote_ip: str
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
+    port_zmq_text_in: int = 5558  # Port for receiving text from host
+    port_zmq_text_out: int = 5557  # Port for sending text to host
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {
