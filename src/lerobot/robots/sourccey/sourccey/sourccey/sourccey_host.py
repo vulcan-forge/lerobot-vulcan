@@ -15,6 +15,8 @@
 
 import logging
 import time
+import subprocess
+import shutil
 
 import zmq
 
@@ -51,6 +53,9 @@ class SourcceyHost:
         # Text message callback (can be set externally)
         self.text_message_callback = None
 
+        # Track a running TTS process so we can avoid stacking audio
+        self._tts_process = None
+
     def set_text_message_callback(self, callback):
         """Set a callback function to handle incoming text messages.
         
@@ -58,6 +63,36 @@ class SourcceyHost:
             callback: Function that takes a string message as argument
         """
         self.text_message_callback = callback
+
+    def speak_text(self, message: str) -> bool:
+        """Speak text on the host device (best-effort, non-blocking)."""
+        msg = (message or "").strip()
+        if not msg:
+            return False
+
+        # Try to locate a TTS command on the robot (prefer espeak-ng).
+        tts_cmd = shutil.which("espeak-ng") or shutil.which("espeak")
+        if not tts_cmd:
+            logging.warning("No TTS engine found (expected `espeak-ng` or `espeak`).")
+            return False
+
+        try:
+            # Stop any previous speech to prevent overlaps.
+            if self._tts_process and self._tts_process.poll() is None:
+                try:
+                    self._tts_process.terminate()
+                except Exception:
+                    pass
+
+            self._tts_process = subprocess.Popen(
+                [tts_cmd, "-v", "en-us", msg],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception as e:
+            logging.error(f"Failed to speak text: {e}")
+            return False
 
     def send_text(self, message: str) -> bool:
         """Send a text message to the client.
@@ -85,6 +120,10 @@ class SourcceyHost:
             # Always print received text messages
             print(f"[TEXT MESSAGE] {msg}")
             logging.info(f"Received text message: {msg}")
+
+            # Default behavior: speak incoming text
+            self.speak_text(msg)
+
             if self.text_message_callback:
                 self.text_message_callback(msg)
         except zmq.Again:
