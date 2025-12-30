@@ -91,8 +91,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--audio-threshold",
         type=float,
-        default=500.0,
-        help="Minimum audio level (RMS) to process. Lower = more sensitive, Higher = less sensitive to background noise. Default: 500.0",
+        default=200.0,
+        help="Minimum audio level (RMS) to process. Lower = more sensitive, Higher = less sensitive to background noise. Default: 200.0",
+    )
+    parser.add_argument(
+        "--debug-audio-levels",
+        action="store_true",
+        help="Print audio levels for debugging (to find the right threshold)",
     )
     args = parser.parse_args(argv)
 
@@ -142,6 +147,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                 # Calculate audio level (RMS) to filter out background noise
                 audio_array = np.frombuffer(data, dtype=np.int16)
                 rms_level = np.sqrt(np.mean(audio_array.astype(np.float32) ** 2))
+                
+                # Debug output to help tune threshold
+                if args.debug_audio_levels:
+                    status = "✓" if rms_level >= args.audio_threshold else "✗"
+                    print(f"[audio] RMS: {rms_level:.1f} (threshold: {args.audio_threshold:.1f}) {status}", file=sys.stderr)
                 
                 # Skip processing if audio level is below threshold (background noise)
                 if rms_level < args.audio_threshold:
