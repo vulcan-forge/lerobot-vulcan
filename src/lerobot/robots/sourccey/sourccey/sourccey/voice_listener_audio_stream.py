@@ -63,6 +63,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--channels", type=int, default=1)
     parser.add_argument("--device", type=int, default=None, help="sounddevice input device index (optional)")
     parser.add_argument(
+        "--blocksize",
+        type=int,
+        default=3200,
+        help="Audio frames per chunk. Increase if you see input overflow. Default: 3200 (~0.2s at 16kHz).",
+    )
+    parser.add_argument(
         "--audio-port",
         type=int,
         default=SourcceyHostConfig().port_zmq_audio,
@@ -95,13 +101,22 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     publisher = AudioStreamPublisher(args.audio_port)
     # Use a bounded queue to prevent memory issues from overflow
-    audio_q: "queue.Queue[bytes]" = queue.Queue(maxsize=10)
+    audio_q: "queue.Queue[bytes]" = queue.Queue(maxsize=50)
+    last_overflow_log_ts = 0.0
 
     def audio_callback(indata, frames, time_info, status):  # noqa: ANN001
+        nonlocal last_overflow_log_ts
         if status:
             # Only print overflow warnings, ignore other status messages
             if status.input_overflow:
-                print(f"[voice_listener] Audio status: input overflow (queue full, dropping frames)", file=sys.stderr)
+                now = time.time()
+                # Throttle logs; printing too often can itself cause more overflows.
+                if (now - last_overflow_log_ts) >= 1.0:
+                    last_overflow_log_ts = now
+                    print(
+                        "[voice_listener] Audio status: input overflow (device buffer overflow)",
+                        file=sys.stderr,
+                    )
         # Non-blocking put - drop frame if queue is full
         try:
             audio_q.put_nowait(bytes(indata))
@@ -113,10 +128,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     print("[voice_listener] Listening...")
 
     try:
-        blocksize = 1600  # 0.1s at 16kHz
+        blocksize = int(args.blocksize)
         bytes_per_frame = 2  # int16
+        block_s = float(blocksize) / float(args.sample_rate)
         bytes_per_chunk = blocksize * args.channels * bytes_per_frame
-        preroll_chunks = max(0, int(round(args.preroll_s / 0.1)))
+        preroll_chunks = max(0, int(round(args.preroll_s / max(1e-6, block_s))))
         preroll_buf: "collections.deque[bytes]" = collections.deque(maxlen=max(1, preroll_chunks))
 
         stream_all = args.audio_threshold <= 0.0
@@ -125,7 +141,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         with sd.RawInputStream(
             samplerate=args.sample_rate,
-            blocksize=blocksize,  # Smaller blocksize (0.1s at 16kHz) for lower latency and less overflow
+            blocksize=blocksize,
             dtype="int16",
             channels=args.channels,
             callback=audio_callback,
@@ -138,9 +154,14 @@ def main(argv: Optional[list[str]] = None) -> int:
                 except queue.Empty:
                     continue
 
-                # Calculate audio level (RMS) to filter out background noise
+                # Fast path: if streaming everything and not debugging, avoid numpy work entirely
+                if stream_all and (not args.debug_audio_levels):
+                    publisher.send_audio(data)
+                    continue
+
+                # Calculate audio level (RMS) to filter out background noise / debugging
                 audio_array = np.frombuffer(data, dtype=np.int16)
-                rms_level = np.sqrt(np.mean(audio_array.astype(np.float32) ** 2))
+                rms_level = float(np.sqrt(np.mean(audio_array.astype(np.float32) ** 2)))
 
                 # Debug output
                 if args.debug_audio_levels:
