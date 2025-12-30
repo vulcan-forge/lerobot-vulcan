@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import zmq
 
 try:
@@ -87,6 +88,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=0.7,
         help="Minimum seconds between sends (debounce) to reduce spam.",
     )
+    parser.add_argument(
+        "--audio-threshold",
+        type=float,
+        default=500.0,
+        help="Minimum audio level (RMS) to process. Lower = more sensitive, Higher = less sensitive to background noise. Default: 500.0",
+    )
     args = parser.parse_args(argv)
 
     model_path = Path(args.model_path).expanduser()
@@ -131,6 +138,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         ):
             while True:
                 data = audio_q.get()
+                
+                # Calculate audio level (RMS) to filter out background noise
+                audio_array = np.frombuffer(data, dtype=np.int16)
+                rms_level = np.sqrt(np.mean(audio_array.astype(np.float32) ** 2))
+                
+                # Skip processing if audio level is below threshold (background noise)
+                if rms_level < args.audio_threshold:
+                    continue
                 
                 # Check for final results
                 if recognizer.AcceptWaveform(data):
