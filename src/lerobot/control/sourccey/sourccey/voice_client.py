@@ -61,7 +61,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--audio-port",
         type=int,
         default=5559,
-        help="ZMQ port for receiving audio from robot",
+        help="ZMQ port for subscribing to audio from robot",
     )
     parser.add_argument(
         "--sample-rate",
@@ -107,11 +107,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"ERROR: Failed to connect to robot: {e}", file=sys.stderr)
         return 1
 
-    # Set up ZMQ socket to receive audio from robot
+    # Set up ZMQ socket to subscribe to audio from robot
     ctx = zmq.Context()
-    audio_socket = ctx.socket(zmq.PULL)
-    audio_socket.bind(f"tcp://*:{args.audio_port}")
-    print(f"Listening for audio on port {args.audio_port}...")
+    audio_socket = ctx.socket(zmq.SUB)
+    audio_socket.connect(f"tcp://{args.robot_ip}:{args.audio_port}")
+    audio_socket.setsockopt(zmq.SUBSCRIBE, b"")  # Subscribe to all messages
+    print(f"Subscribed to audio stream from {args.robot_ip}:{args.audio_port}...")
 
     last_sent = ""
     last_sent_ts = 0.0

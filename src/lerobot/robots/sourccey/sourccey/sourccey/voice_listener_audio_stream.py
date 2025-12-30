@@ -1,12 +1,14 @@
 """
 Voice listener that streams raw audio to client for remote speech recognition.
 
-This version runs on the robot and sends raw audio chunks over ZMQ to a client
-that runs Vosk locally (with a large model). The client then sends recognized
+This version runs on the robot and publishes raw audio chunks over ZMQ (PUB socket).
+Clients can subscribe to receive the audio, process it with Vosk, and send recognized
 text back to the host.
 
 Run (on robot):
-  uv run python -m lerobot.robots.sourccey.sourccey.sourccey.voice_listener_audio_stream --client-ip <CLIENT_IP>
+  uv run python -m lerobot.robots.sourccey.sourccey.sourccey.voice_listener_audio_stream
+
+The robot will wait for a client to connect before streaming audio.
 """
 
 from __future__ import annotations
@@ -29,19 +31,21 @@ except Exception as e:  # pragma: no cover
 from .config_sourccey import SourcceyHostConfig
 
 
-class AudioStreamSender:
-    def __init__(self, client_ip: str, port: int):
+class AudioStreamPublisher:
+    def __init__(self, port: int):
         self._ctx = zmq.Context()
-        self._sock = self._ctx.socket(zmq.PUSH)
+        self._sock = self._ctx.socket(zmq.PUB)
         self._sock.setsockopt(zmq.CONFLATE, 1)  # Only keep latest audio chunk
-        self._sock.connect(f"tcp://{client_ip}:{port}")
+        self._sock.bind(f"tcp://*:{port}")
+        # Give subscribers time to connect
+        time.sleep(0.5)
 
     def send_audio(self, audio_data: bytes) -> bool:
         try:
             self._sock.send(audio_data, flags=zmq.NOBLOCK)
             return True
         except zmq.Again:
-            return False  # Client not ready, drop audio
+            return False  # Shouldn't happen with PUB, but handle it
 
     def close(self):
         try:
@@ -58,16 +62,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--channels", type=int, default=1)
     parser.add_argument("--device", type=int, default=None, help="sounddevice input device index (optional)")
     parser.add_argument(
-        "--client-ip",
-        type=str,
-        required=True,
-        help="IP address of the client that will process the audio",
-    )
-    parser.add_argument(
         "--audio-port",
         type=int,
         default=SourcceyHostConfig().port_zmq_audio,
-        help="ZMQ port for audio streaming (default from SourcceyHostConfig)",
+        help="ZMQ port for publishing audio (default from SourcceyHostConfig)",
     )
     parser.add_argument(
         "--audio-threshold",
@@ -82,7 +80,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    sender = AudioStreamSender(args.client_ip, args.audio_port)
+    publisher = AudioStreamPublisher(args.audio_port)
     audio_q: "queue.Queue[bytes]" = queue.Queue()
 
     def audio_callback(indata, frames, time_info, status):  # noqa: ANN001
@@ -90,7 +88,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"[voice_listener] Audio status: {status}", file=sys.stderr)
         audio_q.put(bytes(indata))
 
-    print(f"[voice_listener] Streaming audio to {args.client_ip}:{args.audio_port}")
+    print(f"[voice_listener] Publishing audio on port {args.audio_port}")
+    print("[voice_listener] Waiting for client to connect...")
     print("[voice_listener] Listening...")
 
     try:
@@ -116,13 +115,13 @@ def main(argv: Optional[list[str]] = None) -> int:
 
                 # Only stream audio above threshold
                 if rms_level >= args.audio_threshold:
-                    sender.send_audio(data)
+                    publisher.send_audio(data)
 
     except KeyboardInterrupt:
         print("[voice_listener] Stopping...")
         return 0
     finally:
-        sender.close()
+        publisher.close()
 
 
 if __name__ == "__main__":
