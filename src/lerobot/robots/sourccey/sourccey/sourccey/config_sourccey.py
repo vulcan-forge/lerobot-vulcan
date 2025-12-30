@@ -95,6 +95,7 @@ class SourcceyHostConfig:
     port_zmq_observations: int = 5556
     port_zmq_text_in: int = 5557  # Port for receiving text from client
     port_zmq_text_out: int = 5558  # Port for sending text to client
+    port_zmq_audio: int = 5559  # Port for receiving audio from robot (for client-side speech recognition)
 
     # Duration of the application
     connection_time_s: int = 86400

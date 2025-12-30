@@ -83,6 +83,37 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument("--model-path", type=str, default=str(_default_model_path()))
     parser.add_argument(
+        "--grammar",
+        type=str,
+        default="",
+        help=(
+            "Optional Vosk grammar (JSON array string) to constrain recognition, e.g. "
+            '\'["start","stop","hello sourccey","come here"]\'. Constraining grammar massively improves accuracy in noise.'
+        ),
+    )
+    parser.add_argument(
+        "--min-confidence",
+        type=float,
+        default=0.55,
+        help="Minimum average per-word confidence required to send text (requires --words). Default: 0.55",
+    )
+    parser.add_argument(
+        "--words",
+        action="store_true",
+        help="Enable word-level info/confidences (enables confidence filtering).",
+    )
+    parser.add_argument(
+        "--max-alternatives",
+        type=int,
+        default=0,
+        help="Ask Vosk for N alternative transcripts (0 disables).",
+    )
+    parser.add_argument(
+        "--debug-alternatives",
+        action="store_true",
+        help="Print Vosk alternatives/confidences (requires --words, useful for tuning).",
+    )
+    parser.add_argument(
         "--min-interval-s",
         type=float,
         default=0.7,
@@ -118,7 +149,20 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     print(f"[voice_listener] Loading Vosk model: {model_path}")
     model = Model(str(model_path))
-    recognizer = KaldiRecognizer(model, args.sample_rate)
+    if args.grammar:
+        recognizer = KaldiRecognizer(model, args.sample_rate, args.grammar)
+    else:
+        recognizer = KaldiRecognizer(model, args.sample_rate)
+
+    # Optional quality knobs
+    try:
+        if args.words:
+            recognizer.SetWords(True)
+        if args.max_alternatives and args.max_alternatives > 0:
+            recognizer.SetMaxAlternatives(int(args.max_alternatives))
+    except Exception:
+        # Some older vosk builds may not support these; ignore.
+        pass
 
     print(f"[voice_listener] Sending text to tcp://{args.host_ip}:{args.host_text_in_port}")
     print("[voice_listener] Listening...")
@@ -161,6 +205,37 @@ def main(argv: Optional[list[str]] = None) -> int:
                 if recognizer.AcceptWaveform(data):
                     result = json.loads(recognizer.Result())
                     text = (result.get("text", "") or "").strip()
+
+                    # If alternatives exist, choose best by average confidence
+                    # (only available when --words and --max-alternatives are enabled)
+                    if args.words and isinstance(result.get("alternatives"), list) and result["alternatives"]:
+                        best_text = ""
+                        best_conf = -1.0
+                        for alt in result["alternatives"]:
+                            alt_text = (alt.get("text", "") or "").strip()
+                            words = alt.get("result") or []
+                            confs = [w.get("conf") for w in words if isinstance(w, dict) and w.get("conf") is not None]
+                            avg_conf = float(sum(confs) / len(confs)) if confs else 0.0
+                            if args.debug_alternatives:
+                                print(f"[vosk] alt='{alt_text}' avg_conf={avg_conf:.3f}", file=sys.stderr)
+                            if avg_conf > best_conf:
+                                best_conf = avg_conf
+                                best_text = alt_text
+                        if best_text:
+                            text = best_text
+
+                    # Confidence gating (skip low-confidence hallucinations in noise)
+                    if args.words:
+                        words = result.get("result") or []
+                        confs = [w.get("conf") for w in words if isinstance(w, dict) and w.get("conf") is not None]
+                        if confs:
+                            avg_conf = float(sum(confs) / len(confs))
+                            if args.debug_alternatives:
+                                print(f"[vosk] final='{text}' avg_conf={avg_conf:.3f}", file=sys.stderr)
+                            if avg_conf < float(args.min_confidence):
+                                # Treat as silence/noise
+                                recognizer.Reset()
+                                continue
                     
                     if not text:
                         silence_count += 1
