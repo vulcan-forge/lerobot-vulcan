@@ -33,10 +33,18 @@ from .config_sourccey import SourcceyHostConfig
 
 
 class AudioStreamPublisher:
-    def __init__(self, port: int):
+    def __init__(self, port: int, *, conflate: bool, sndhwm: int):
         self._ctx = zmq.Context()
         self._sock = self._ctx.socket(zmq.PUB)
-        self._sock.setsockopt(zmq.CONFLATE, 1)  # Only keep latest audio chunk
+        # IMPORTANT: Do NOT conflate audio by default.
+        # Conflation keeps only the newest message and drops intermediate chunks, which can
+        # destroy speech recognition (missing phonemes, choppy audio). Keep it optional.
+        if conflate:
+            self._sock.setsockopt(zmq.CONFLATE, 1)
+        try:
+            self._sock.setsockopt(zmq.SNDHWM, int(sndhwm))
+        except Exception:
+            pass
         self._sock.bind(f"tcp://*:{port}")
         # Give subscribers time to connect
         time.sleep(0.5)
@@ -75,6 +83,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="ZMQ port for publishing audio (default from SourcceyHostConfig)",
     )
     parser.add_argument(
+        "--zmq-conflate",
+        action="store_true",
+        help="Enable ZMQ CONFLATE (keep only latest audio chunk). Not recommended for STT.",
+    )
+    parser.add_argument(
+        "--zmq-sndhwm",
+        type=int,
+        default=100,
+        help="ZMQ send high-water mark for audio PUB socket.",
+    )
+    parser.add_argument(
         "--audio-threshold",
         type=float,
         default=0.0,
@@ -99,7 +118,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    publisher = AudioStreamPublisher(args.audio_port)
+    publisher = AudioStreamPublisher(args.audio_port, conflate=args.zmq_conflate, sndhwm=args.zmq_sndhwm)
     # Use a bounded queue to prevent memory issues from overflow
     audio_q: "queue.Queue[bytes]" = queue.Queue(maxsize=50)
     last_overflow_log_ts = 0.0
