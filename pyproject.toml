@@ -114,8 +114,9 @@ sourccey = [
     "lgpio>=0.2.2 ; sys_platform == 'linux'",
     "grpcio-tools==1.73.1",
     "protobuf==6.31.0",
-    "vosk>=0.3.45",
-    "sounddevice>=0.4.6"
+    "sounddevice>=0.4.6",
+    "numpy>=1.26.4",
+    "faster-whisper>=1.1.1"
 ]
 kinematics = ["lerobot[placo-dep]"]
 intelrealsense = [

@@ -221,7 +221,3 @@ CLAUDE.md
 *.urdf
 *.xml
 *.part
-
-# Vosk speech recognition models (large files, should not be committed)
-vosk-model-*/
-src/lerobot/model/vosk-model-*/
