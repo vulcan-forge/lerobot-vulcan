@@ -14,6 +14,7 @@ The robot will wait for a client to connect before streaming audio.
 from __future__ import annotations
 
 import argparse
+import collections
 import queue
 import sys
 import time
@@ -70,8 +71,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--audio-threshold",
         type=float,
-        default=200.0,
-        help="Minimum audio level (RMS) to stream. Lower = more sensitive, Higher = less background noise. Default: 200.0",
+        default=0.0,
+        help="Minimum audio level (RMS) to stream. 0 = stream everything (recommended for best accuracy).",
+    )
+    parser.add_argument(
+        "--preroll-s",
+        type=float,
+        default=0.3,
+        help="Seconds of audio to buffer and send before speech starts (prevents clipped words).",
+    )
+    parser.add_argument(
+        "--hangover-s",
+        type=float,
+        default=0.5,
+        help="Seconds to keep streaming after audio falls below threshold (prevents chopped endings).",
     )
     parser.add_argument(
         "--debug-audio-levels",
@@ -100,9 +113,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     print("[voice_listener] Listening...")
 
     try:
+        blocksize = 1600  # 0.1s at 16kHz
+        bytes_per_frame = 2  # int16
+        bytes_per_chunk = blocksize * args.channels * bytes_per_frame
+        preroll_chunks = max(0, int(round(args.preroll_s / 0.1)))
+        preroll_buf: "collections.deque[bytes]" = collections.deque(maxlen=max(1, preroll_chunks))
+
+        stream_all = args.audio_threshold <= 0.0
+        streaming_active = False
+        last_above_ts = 0.0
+
         with sd.RawInputStream(
             samplerate=args.sample_rate,
-            blocksize=1600,  # Smaller blocksize (0.1s at 16kHz) for lower latency and less overflow
+            blocksize=blocksize,  # Smaller blocksize (0.1s at 16kHz) for lower latency and less overflow
             dtype="int16",
             channels=args.channels,
             callback=audio_callback,
@@ -121,12 +144,38 @@ def main(argv: Optional[list[str]] = None) -> int:
 
                 # Debug output
                 if args.debug_audio_levels:
-                    status = "✓" if rms_level >= args.audio_threshold else "✗"
-                    print(f"[audio] RMS: {rms_level:.1f} (threshold: {args.audio_threshold:.1f}) {status}", file=sys.stderr)
+                    status = "✓" if (stream_all or rms_level >= args.audio_threshold) else "✗"
+                    print(
+                        f"[audio] RMS: {rms_level:.1f} (threshold: {args.audio_threshold:.1f}) {status}",
+                        file=sys.stderr,
+                    )
 
-                # Only stream audio above threshold
-                if rms_level >= args.audio_threshold:
+                # Normalize chunk size (defensive; should already be fixed-size)
+                if len(data) != bytes_per_chunk:
+                    # If device gives variable chunks, don't buffer/preroll; just forward best-effort
+                    if stream_all or rms_level >= args.audio_threshold:
+                        publisher.send_audio(data)
+                    continue
+
+                # Always keep a small preroll buffer (so we don't clip word starts)
+                preroll_buf.append(data)
+
+                now = time.time()
+                above = stream_all or (rms_level >= args.audio_threshold)
+                if above:
+                    last_above_ts = now
+                    if not streaming_active:
+                        streaming_active = True
+                        # Send buffered audio first
+                        for chunk in list(preroll_buf):
+                            publisher.send_audio(chunk)
                     publisher.send_audio(data)
+                else:
+                    # If we were streaming, keep going for hangover_s then stop
+                    if streaming_active and (now - last_above_ts) <= max(0.0, args.hangover_s):
+                        publisher.send_audio(data)
+                    elif streaming_active:
+                        streaming_active = False
 
     except KeyboardInterrupt:
         print("[voice_listener] Stopping...")

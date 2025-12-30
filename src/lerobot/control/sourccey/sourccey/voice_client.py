@@ -84,6 +84,29 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Path to Vosk model directory (default: auto-detect from project or ~/.cache/vosk)",
     )
     parser.add_argument(
+        "--grammar",
+        type=str,
+        default=None,
+        help='Optional JSON list of phrases/words to constrain recognition (e.g. \'["hello sourccey","stop"]\')',
+    )
+    parser.add_argument(
+        "--min-avg-conf",
+        type=float,
+        default=0.55,
+        help="Minimum average word confidence required to send text to robot (0.0-1.0).",
+    )
+    parser.add_argument(
+        "--max-alternatives",
+        type=int,
+        default=3,
+        help="Ask Vosk for N alternatives (for debugging / better decisions).",
+    )
+    parser.add_argument(
+        "--debug-alternatives",
+        action="store_true",
+        help="Print Vosk alternatives/confidence info to stderr.",
+    )
+    parser.add_argument(
         "--min-interval-s",
         type=float,
         default=0.7,
@@ -106,7 +129,28 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     print(f"Loading Vosk model: {model_path}")
     model = Model(str(model_path))
-    recognizer = KaldiRecognizer(model, args.sample_rate)
+    if args.grammar:
+        try:
+            grammar_list = json.loads(args.grammar)
+            if not isinstance(grammar_list, list):
+                raise ValueError("grammar must be a JSON list")
+            recognizer = KaldiRecognizer(model, args.sample_rate, json.dumps(grammar_list))
+            print(f"Using grammar: {grammar_list}")
+        except Exception as e:
+            print(f"WARNING: invalid --grammar, falling back to free-form STT: {e}", file=sys.stderr)
+            recognizer = KaldiRecognizer(model, args.sample_rate)
+    else:
+        recognizer = KaldiRecognizer(model, args.sample_rate)
+
+    # Ask Vosk to include per-word confidences where possible
+    try:
+        recognizer.SetWords(True)
+    except Exception:
+        pass
+    try:
+        recognizer.SetMaxAlternatives(int(args.max_alternatives))
+    except Exception:
+        pass
     print("Model loaded!")
 
     # Connect to robot for sending text back
@@ -130,6 +174,30 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     last_sent = ""
     last_sent_ts = 0.0
+    IDENTICAL_TEXT_COOLDOWN = 5.0  # Ignore identical text for 5 seconds
+    silence_count = 0
+    SILENCE_THRESHOLD = 50  # Reset recognizer after this many empty results
+
+    def is_similar_text(text1: str, text2: str) -> bool:
+        """Check if two texts are similar (simple word overlap check)"""
+        if not text1 or not text2:
+            return False
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        if not words1 or not words2:
+            return False
+        # If more than 50% of words overlap, consider them similar
+        overlap = len(words1 & words2)
+        return overlap >= min(len(words1), len(words2)) * 0.5
+
+    def avg_confidence(result_obj: dict) -> Optional[float]:
+        words = result_obj.get("result")
+        if not isinstance(words, list) or not words:
+            return None
+        confs = [w.get("conf") for w in words if isinstance(w, dict) and isinstance(w.get("conf"), (int, float))]
+        if not confs:
+            return None
+        return float(sum(confs) / len(confs))
 
     try:
         while True:
@@ -143,18 +211,41 @@ def main(argv: Optional[list[str]] = None) -> int:
                     text = (result.get("text", "") or "").strip()
 
                     if not text:
+                        silence_count += 1
+                        # Reset recognizer after prolonged silence
+                        if silence_count >= SILENCE_THRESHOLD:
+                            recognizer.Reset()
+                            silence_count = 0
                         continue
 
+                    silence_count = 0  # Reset silence counter on valid text
                     now = time.time()
                     time_since_last = now - last_sent_ts
 
-                    # Debounce: ignore if same text sent recently
-                    if text == last_sent and time_since_last < 3.0:
+                    conf = avg_confidence(result)
+                    if conf is not None and conf < max(0.0, float(args.min_avg_conf)):
+                        if args.debug_alternatives:
+                            print(f"[DROP] Low confidence {conf:.2f}: {text}", file=sys.stderr)
+                            if "alternatives" in result:
+                                print(f"[DEBUG] alternatives={result.get('alternatives')}", file=sys.stderr)
                         recognizer.Reset()
                         continue
 
-                    # General debounce
+                    # Strong debounce: ignore if same text sent recently
+                    if text == last_sent and time_since_last < IDENTICAL_TEXT_COOLDOWN:
+                        print(f"[DROP] Duplicate text (cooldown): {text}", file=sys.stderr)
+                        recognizer.Reset()
+                        continue
+
+                    # Check for similar text (fuzzy matching)
+                    if is_similar_text(text, last_sent) and time_since_last < IDENTICAL_TEXT_COOLDOWN:
+                        print(f"[DROP] Similar text (cooldown): {text}", file=sys.stderr)
+                        recognizer.Reset()
+                        continue
+
+                    # General debounce: minimum interval between any sends
                     if time_since_last < args.min_interval_s:
+                        print(f"[DROP] Too soon (min interval): {text}", file=sys.stderr)
                         recognizer.Reset()
                         continue
 
@@ -164,11 +255,17 @@ def main(argv: Optional[list[str]] = None) -> int:
                         print(f"[RECOGNIZED] {text}")
                         last_sent = text
                         last_sent_ts = now
+                        # Reset recognizer after sending to prevent echo
                         recognizer.Reset()
+                    else:
+                        print(f"[DROP] Failed to send: {text}", file=sys.stderr)
                 else:
                     # Check partial results to keep recognizer active
-                    partial = json.loads(recognizer.PartialResult())
-                    # partial_text = partial.get("partial", "")
+                    if args.debug_alternatives:
+                        partial = json.loads(recognizer.PartialResult())
+                        partial_text = (partial.get("partial", "") or "").strip()
+                        if partial_text:
+                            print(f"[PARTIAL] {partial_text}", file=sys.stderr)
 
             except zmq.Again:
                 # No audio available, poll robot for any incoming messages
