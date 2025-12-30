@@ -115,6 +115,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     last_sent_ts = 0.0
     silence_count = 0
     SILENCE_THRESHOLD = 50  # Reset recognizer after this many empty results
+    IDENTICAL_TEXT_COOLDOWN = 3.0  # Ignore identical text for this many seconds
 
     try:
         with sd.RawInputStream(
@@ -145,11 +146,25 @@ def main(argv: Optional[list[str]] = None) -> int:
                     silence_count = 0
                     
                     now = time.time()
-                    # Debounce: ignore if same text sent recently, or any text sent very recently
                     time_since_last = now - last_sent_ts
-                    if time_since_last < args.min_interval_s:
-                        if text == last_sent or time_since_last < 0.3:
+                    
+                    # Strong debounce for identical text - ignore for longer period
+                    if text == last_sent:
+                        if time_since_last < IDENTICAL_TEXT_COOLDOWN:
+                            # Reset recognizer immediately to stop processing same audio
+                            recognizer.Reset()
+                            # Drain a few audio chunks to clear buffer
+                            for _ in range(3):
+                                try:
+                                    audio_q.get_nowait()
+                                except queue.Empty:
+                                    break
                             continue
+                    
+                    # General debounce: ignore any text sent very recently
+                    if time_since_last < 0.3:
+                        recognizer.Reset()
+                        continue
                     
                     ok = sender.send(text)
                     if ok:
@@ -158,6 +173,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                         last_sent_ts = now
                         # Reset recognizer after sending to prevent repeated recognition
                         recognizer.Reset()
+                        # Drain audio queue to clear any buffered audio
+                        while True:
+                            try:
+                                audio_q.get_nowait()
+                            except queue.Empty:
+                                break
                     else:
                         print(f"[voice_listener] DROP (socket busy): {text}", file=sys.stderr)
                 else:
