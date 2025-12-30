@@ -116,6 +116,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     silence_count = 0
     SILENCE_THRESHOLD = 50  # Reset recognizer after this many empty results
     IDENTICAL_TEXT_COOLDOWN = 3.0  # Ignore identical text for this many seconds
+    recent_words = []  # Track recent words to detect partial recognition bursts
+    RECENT_WORDS_WINDOW = 1.5  # Seconds to track recent words
+    MAX_RECENT_WORDS = 3  # If we see this many different words in the window, it's likely partial recognition
 
     try:
         with sd.RawInputStream(
@@ -148,6 +151,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                     now = time.time()
                     time_since_last = now - last_sent_ts
                     
+                    # Clean up old entries from recent_words
+                    recent_words = [(word, ts) for word, ts in recent_words if (now - ts) < RECENT_WORDS_WINDOW]
+                    
                     # Strong debounce for identical text - ignore for longer period
                     if text == last_sent:
                         if time_since_last < IDENTICAL_TEXT_COOLDOWN:
@@ -161,8 +167,16 @@ def main(argv: Optional[list[str]] = None) -> int:
                                     break
                             continue
                     
-                    # General debounce: ignore any text sent very recently
-                    if time_since_last < 0.3:
+                    # Detect partial recognition bursts: if we've seen many different words recently,
+                    # this is likely partial recognition and we should wait for the final result
+                    unique_recent = len(set(word for word, _ in recent_words))
+                    if unique_recent >= MAX_RECENT_WORDS and time_since_last < RECENT_WORDS_WINDOW:
+                        # Too many different words recently - likely partial recognition
+                        recognizer.Reset()
+                        continue
+                    
+                    # General debounce: ignore any text sent very recently (increased from 0.3 to 0.8)
+                    if time_since_last < 0.8:
                         recognizer.Reset()
                         continue
                     
@@ -171,6 +185,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                         print(f"[voice_listener] SENT: {text}")
                         last_sent = text
                         last_sent_ts = now
+                        # Track this word in recent words
+                        recent_words.append((text, now))
                         # Reset recognizer after sending to prevent repeated recognition
                         recognizer.Reset()
                         # Drain audio queue to clear any buffered audio
