@@ -113,6 +113,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     last_sent = ""
     last_sent_ts = 0.0
+    silence_count = 0
+    SILENCE_THRESHOLD = 50  # Reset recognizer after this many empty results
 
     try:
         with sd.RawInputStream(
@@ -125,23 +127,46 @@ def main(argv: Optional[list[str]] = None) -> int:
         ):
             while True:
                 data = audio_q.get()
+                
+                # Check for final results
                 if recognizer.AcceptWaveform(data):
                     result = json.loads(recognizer.Result())
                     text = (result.get("text", "") or "").strip()
+                    
                     if not text:
+                        silence_count += 1
+                        # Reset recognizer after prolonged silence to clear stale state
+                        if silence_count >= SILENCE_THRESHOLD:
+                            recognizer.Reset()
+                            silence_count = 0
                         continue
-
+                    
+                    # Reset silence counter on valid text
+                    silence_count = 0
+                    
                     now = time.time()
-                    if (now - last_sent_ts) < args.min_interval_s and text == last_sent:
-                        continue
-
+                    # Debounce: ignore if same text sent recently, or any text sent very recently
+                    time_since_last = now - last_sent_ts
+                    if time_since_last < args.min_interval_s:
+                        if text == last_sent or time_since_last < 0.3:
+                            continue
+                    
                     ok = sender.send(text)
                     if ok:
                         print(f"[voice_listener] SENT: {text}")
                         last_sent = text
                         last_sent_ts = now
+                        # Reset recognizer after sending to prevent repeated recognition
+                        recognizer.Reset()
                     else:
                         print(f"[voice_listener] DROP (socket busy): {text}", file=sys.stderr)
+                else:
+                    # Check partial results to clear them and avoid stale final results
+                    partial = json.loads(recognizer.PartialResult())
+                    partial_text = (partial.get("partial", "") or "").strip()
+                    # If we have a partial result, reset silence counter
+                    if partial_text:
+                        silence_count = 0
     except KeyboardInterrupt:
         print("[voice_listener] Stopping...")
         return 0
