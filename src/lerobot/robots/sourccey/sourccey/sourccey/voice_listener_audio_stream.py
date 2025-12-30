@@ -81,12 +81,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     publisher = AudioStreamPublisher(args.audio_port)
-    audio_q: "queue.Queue[bytes]" = queue.Queue()
+    # Use a bounded queue to prevent memory issues from overflow
+    audio_q: "queue.Queue[bytes]" = queue.Queue(maxsize=10)
 
     def audio_callback(indata, frames, time_info, status):  # noqa: ANN001
         if status:
-            print(f"[voice_listener] Audio status: {status}", file=sys.stderr)
-        audio_q.put(bytes(indata))
+            # Only print overflow warnings, ignore other status messages
+            if status.input_overflow:
+                print(f"[voice_listener] Audio status: input overflow (queue full, dropping frames)", file=sys.stderr)
+        # Non-blocking put - drop frame if queue is full
+        try:
+            audio_q.put_nowait(bytes(indata))
+        except queue.Full:
+            pass  # Drop frame if queue is full
 
     print(f"[voice_listener] Publishing audio on port {args.audio_port}")
     print("[voice_listener] Waiting for client to connect...")
@@ -95,14 +102,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         with sd.RawInputStream(
             samplerate=args.sample_rate,
-            blocksize=8000,
+            blocksize=1600,  # Smaller blocksize (0.1s at 16kHz) for lower latency and less overflow
             dtype="int16",
             channels=args.channels,
             callback=audio_callback,
             device=args.device,
         ):
             while True:
-                data = audio_q.get()
+                try:
+                    # Get audio with timeout to allow checking for interrupts
+                    data = audio_q.get(timeout=0.1)
+                except queue.Empty:
+                    continue
 
                 # Calculate audio level (RMS) to filter out background noise
                 audio_array = np.frombuffer(data, dtype=np.int16)

@@ -29,23 +29,31 @@ from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, Sour
 
 
 def _default_model_path() -> Path:
-    env = Path(os.environ.get("VOSK_MODEL_PATH", ""))
-    if env and env.exists():
-        return env
+    env = os.environ.get("VOSK_MODEL_PATH")
+    if env:
+        env_path = Path(env).expanduser().resolve()
+        if env_path.exists():
+            return env_path
+    
     # Default location in the project: src/lerobot/model/vosk-model-en-us-0.42-gigaspeech
     # From voice_client.py at src/lerobot/control/sourccey/sourccey/, go up to src/lerobot/
-    default_path = Path(__file__).parent.parent.parent.parent / "model" / "vosk-model-en-us-0.42-gigaspeech"
+    # Use resolve() to get absolute path
+    script_file = Path(__file__).resolve()
+    default_path = script_file.parent.parent.parent.parent / "model" / "vosk-model-en-us-0.42-gigaspeech"
     if default_path.exists():
         return default_path
+    
     # Common locations on Windows
     for base in [Path.home() / ".cache" / "vosk", Path("C:/vosk")]:
         model_path = base / "vosk-model-en-us-0.42-gigaspeech"
         if model_path.exists():
-            return model_path
+            return model_path.resolve()
+    
     # Fallback to 0.22 if 0.42 not found
-    fallback = Path(__file__).parent.parent.parent.parent / "model" / "vosk-model-en-us-0.22"
+    fallback = script_file.parent.parent.parent.parent / "model" / "vosk-model-en-us-0.22"
     if fallback.exists():
         return fallback
+    
     return Path.home() / ".cache" / "vosk" / "vosk-model-en-us-0.22"
 
 
@@ -72,8 +80,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--model-path",
         type=str,
-        default=str(_default_model_path()),
-        help="Path to Vosk model directory",
+        default=None,
+        help="Path to Vosk model directory (default: auto-detect from project or ~/.cache/vosk)",
     )
     parser.add_argument(
         "--min-interval-s",
@@ -83,10 +91,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # Use default model path if not specified
+    if args.model_path is None:
+        model_path = _default_model_path()
+    else:
+        model_path = Path(args.model_path).expanduser().resolve()
+    
     # Load Vosk model
-    model_path = Path(args.model_path).expanduser()
     if not model_path.exists():
         print(f"ERROR: Vosk model not found at {model_path}", file=sys.stderr)
+        print(f"Expected location: {Path(__file__).resolve().parent.parent.parent.parent / 'model' / 'vosk-model-en-us-0.42-gigaspeech'}", file=sys.stderr)
         print(f"Download from: https://alphacephei.com/vosk/models", file=sys.stderr)
         return 1
 
