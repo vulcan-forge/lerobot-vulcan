@@ -360,6 +360,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
                 # Decode PCM16 chunk
                 audio_i16 = np.frombuffer(audio_data, dtype=np.int16).copy()
+                # DEBUG: dump a short WAV once
+                import soundfile as sf
+                sf.write("debug_robot_audio.wav", audio_i16, args.sample_rate)
                 if audio_i16.size == 0:
                     continue
 

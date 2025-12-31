@@ -275,8 +275,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     continue
 
                 # RNNoise denoise
-                if rn is not None:
-                    mono = rn.process(mono)
+                # if rn is not None:
+                #     mono = rn.process(mono)
 
                 level = rms_i16(mono)
                 now = time.time()
