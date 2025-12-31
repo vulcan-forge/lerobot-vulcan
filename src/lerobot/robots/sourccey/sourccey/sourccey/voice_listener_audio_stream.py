@@ -1,10 +1,9 @@
 """
-Sourccey voice listener (FINAL BASELINE)
+Sourccey voice listener (FINAL BASELINE v2)
 
-- Stereo capture (USB device)
-- Single-mic selection (LEFT channel)
-- High-pass filter (removes motor / chassis noise)
-- Software gain normalization (no hardware AGC available)
+- Mono capture (PortAudio/ALSA device only allows mono here)
+- Stateful high-pass filter (removes motor / chassis noise)
+- Smooth software AGC (no hardware AGC available)
 - Clean mono int16 stream for ASR
 - Preroll + hangover gating
 """
@@ -35,35 +34,95 @@ def rms_i16(x: np.ndarray) -> float:
     return float(np.sqrt(np.mean(xf * xf)))
 
 
-def highpass_i16(x: np.ndarray, cutoff_hz: float, sr: int) -> np.ndarray:
+class HighPass1:
     """
-    Simple 1st-order high-pass filter.
-    Critical for robots (removes motor rumble).
+    1st-order high-pass filter with persistent state across blocks.
+    This is *critical* — resetting each block makes the signal "blocky" and hurts VAD/ASR.
     """
-    if x.size == 0:
-        return x
 
-    y = np.empty_like(x)
-    rc = 1.0 / (2.0 * np.pi * cutoff_hz)
-    dt = 1.0 / sr
-    alpha = rc / (rc + dt)
+    def __init__(self, cutoff_hz: float, sr: int):
+        self.cutoff_hz = float(cutoff_hz)
+        self.sr = int(sr)
 
-    y[0] = x[0]
-    for i in range(1, len(x)):
-        y[i] = alpha * (y[i - 1] + x[i] - x[i - 1])
-    return y
+        rc = 1.0 / (2.0 * np.pi * self.cutoff_hz)
+        dt = 1.0 / float(self.sr)
+        self.alpha = float(rc / (rc + dt))
+
+        self.x_prev = 0.0
+        self.y_prev = 0.0
+
+    def process_i16(self, x: np.ndarray) -> np.ndarray:
+        if x.size == 0:
+            return x
+        # y[n] = a*(y[n-1] + x[n] - x[n-1])
+        xf = x.astype(np.float32)
+        y = np.empty_like(xf)
+
+        a = self.alpha
+        x_prev = self.x_prev
+        y_prev = self.y_prev
+
+        for i in range(xf.size):
+            xn = float(xf[i])
+            yn = a * (y_prev + xn - x_prev)
+            y[i] = yn
+            x_prev = xn
+            y_prev = yn
+
+        self.x_prev = x_prev
+        self.y_prev = y_prev
+
+        return np.clip(y, -32768, 32767).astype(np.int16)
 
 
-def normalize_i16(x: np.ndarray, target_rms: float = 200.0) -> np.ndarray:
+class SmoothAGC:
     """
-    Software gain staging.
-    Prevents 'always loud' microphones from breaking VAD/ASR.
+    Gentle automatic gain control with smoothing.
+    Avoids per-block pumping (which breaks VAD and causes Whisper hallucinations).
     """
-    cur_rms = rms_i16(x) + 1e-6
-    gain = target_rms / cur_rms
-    gain = float(np.clip(gain, 0.1, 3.0))  # do NOT over-amplify noise
-    y = x.astype(np.float32) * gain
-    return np.clip(y, -32768, 32767).astype(np.int16)
+
+    def __init__(
+        self,
+        target_rms: float = 220.0,
+        min_gain: float = 0.2,
+        max_gain: float = 3.0,
+        attack_s: float = 0.05,   # faster when signal too quiet
+        release_s: float = 0.25,  # slower when signal too loud
+        sr: int = 16000,
+        blocksize: int = 3200,
+    ):
+        self.target_rms = float(target_rms)
+        self.min_gain = float(min_gain)
+        self.max_gain = float(max_gain)
+        self.attack_s = float(attack_s)
+        self.release_s = float(release_s)
+
+        self.sr = int(sr)
+        self.blocksize = int(blocksize)
+        self.block_s = self.blocksize / float(self.sr)
+
+        # Convert time constants to smoothing coefficients per block
+        # gain += (desired - gain) * k
+        self.k_attack = 1.0 - float(np.exp(-self.block_s / max(1e-6, self.attack_s)))
+        self.k_release = 1.0 - float(np.exp(-self.block_s / max(1e-6, self.release_s)))
+
+        self.gain = 1.0
+
+    def process_i16(self, x: np.ndarray) -> np.ndarray:
+        if x.size == 0:
+            return x
+
+        cur = rms_i16(x) + 1e-6
+        desired = self.target_rms / cur
+        desired = float(np.clip(desired, self.min_gain, self.max_gain))
+
+        # If we need MORE gain (signal too quiet) -> attack (faster)
+        # If we need LESS gain (signal too loud) -> release (slower)
+        k = self.k_attack if desired > self.gain else self.k_release
+        self.gain = float(self.gain + (desired - self.gain) * k)
+
+        y = x.astype(np.float32) * self.gain
+        return np.clip(y, -32768, 32767).astype(np.int16)
 
 
 # -----------------------------
@@ -96,9 +155,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--sample-rate", type=int, default=16000)
     p.add_argument("--blocksize", type=int, default=3200)
 
+    # DSP
+    p.add_argument("--hpf-hz", type=float, default=120.0)
+    p.add_argument("--agc-target-rms", type=float, default=220.0)
+    p.add_argument("--agc-min-gain", type=float, default=0.2)
+    p.add_argument("--agc-max-gain", type=float, default=3.0)
+
     # Gating
     p.add_argument("--audio-threshold", type=float, default=0.0)
-    p.add_argument("--preroll-s", type=float, default=0.3)
+    p.add_argument("--preroll-s", type=float, default=0.25)
     p.add_argument("--hangover-s", type=float, default=0.5)
 
     # Debug
@@ -109,14 +174,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     pub = AudioStreamPublisher(SourcceyHostConfig().port_zmq_audio)
     q: queue.Queue[bytes] = queue.Queue(maxsize=64)
 
+    hpf = HighPass1(args.hpf_hz, args.sample_rate)
+    agc = SmoothAGC(
+        target_rms=args.agc_target_rms,
+        min_gain=args.agc_min_gain,
+        max_gain=args.agc_max_gain,
+        sr=args.sample_rate,
+        blocksize=args.blocksize,
+    )
+
     def audio_cb(indata, frames, time_info, status):
         try:
             q.put_nowait(bytes(indata))
         except queue.Full:
             pass
 
-    block_s = args.blocksize / args.sample_rate
-    preroll_n = max(1, int(args.preroll_s / block_s))
+    block_s = args.blocksize / float(args.sample_rate)
+    preroll_n = max(1, int(args.preroll_s / max(1e-6, block_s)))
     preroll = collections.deque(maxlen=preroll_n)
 
     streaming = False
@@ -127,33 +201,32 @@ def main(argv: Optional[list[str]] = None) -> int:
             samplerate=args.sample_rate,
             blocksize=args.blocksize,
             dtype="int16",
-            channels=1,  # PortAudio only allows mono on this device
+            channels=1,  # device constraint
             device=args.device,
             callback=audio_cb,
         ):
-
-
-            print("[voice] Listening (HPF + normalize, mono output)")
+            print("[voice] Listening (stateful HPF + smooth AGC, mono output)")
 
             while True:
                 try:
-                    raw = q.get(timeout=0.1)
+                    raw = q.get(timeout=0.25)
                 except queue.Empty:
                     continue
 
                 mono = np.frombuffer(raw, dtype=np.int16)
                 if mono.size == 0:
                     continue
+
                 # ---- DSP PIPELINE ----
-                mono = highpass_i16(mono, cutoff_hz=120.0, sr=args.sample_rate)
-                mono = normalize_i16(mono, target_rms=200.0)
+                mono = hpf.process_i16(mono)
+                mono = agc.process_i16(mono)
 
                 level = rms_i16(mono)
                 now = time.time()
                 above = args.audio_threshold <= 0 or level >= args.audio_threshold
 
                 if args.debug:
-                    print(f"rms={level:6.1f}", file=sys.stderr)
+                    print(f"rms={level:6.1f} gain={agc.gain:4.2f}", file=sys.stderr)
 
                 mono_bytes = mono.tobytes()
                 preroll.append(mono_bytes)
