@@ -201,10 +201,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             samplerate=args.sample_rate,
             blocksize=args.blocksize,
             dtype="int16",
-            channels=1,  # device constraint
+            channels=2,   # MUST match ALSA device
             device=args.device,
             callback=audio_cb,
         ):
+
             print("[voice] Listening (stateful HPF + smooth AGC, mono output)")
 
             while True:
@@ -213,7 +214,21 @@ def main(argv: Optional[list[str]] = None) -> int:
                 except queue.Empty:
                     continue
 
-                mono = np.frombuffer(raw, dtype=np.int16)
+                # Decode stereo PCM16
+                stereo = np.frombuffer(raw, dtype=np.int16)
+
+                # Safety check (must be even number of samples)
+                if stereo.size % 2 != 0:
+                    continue
+
+                stereo = stereo.reshape(-1, 2)
+
+                # Pick left mic (stable, lower noise on USB mics)
+                mono = stereo[:, 0]
+
+                # Alternative (optional): average both mics
+                # mono = ((stereo[:, 0].astype(np.int32) + stereo[:, 1].astype(np.int32)) // 2).astype(np.int16)
+
                 if mono.size == 0:
                     continue
 
