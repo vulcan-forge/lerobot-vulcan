@@ -188,6 +188,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Minimum seconds between sending recognized text",
     )
     parser.add_argument(
+        "--mute-after-send-s",
+        type=float,
+        default=3.0,
+        help="After sending text to the robot (which it will speak), ignore audio for this many seconds to prevent feedback loops.",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Print debug info (VAD + transcription)",
@@ -240,6 +246,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     last_sent = ""
     last_sent_ts = 0.0
     IDENTICAL_TEXT_COOLDOWN = 5.0  # Ignore identical text for 5 seconds
+    muted_until_ts = 0.0
 
     # Adaptive energy VAD
     noise_rms = 600.0
@@ -328,6 +335,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"[RECOGNIZED] {cleaned}")
             last_sent = cleaned
             last_sent_ts = now
+            # Prevent the robot's own TTS from being re-captured and re-sent.
+            nonlocal muted_until_ts
+            muted_until_ts = max(muted_until_ts, now + float(args.mute_after_send_s))
         else:
             print(f"[DROP] failed to send: {cleaned}", file=sys.stderr)
 
@@ -338,6 +348,15 @@ def main(argv: Optional[list[str]] = None) -> int:
             try:
                 # Receive audio chunk from robot (non-blocking)
                 audio_data = audio_socket.recv(zmq.NOBLOCK)
+
+                now_ts = time.time()
+                if now_ts < muted_until_ts:
+                    # Drop everything while muted to avoid feedback loops.
+                    in_speech = False
+                    silence_s = 0.0
+                    utter_s = 0.0
+                    utter_chunks = []
+                    continue
 
                 # Decode PCM16 chunk
                 audio_i16 = np.frombuffer(audio_data, dtype=np.int16).copy()
