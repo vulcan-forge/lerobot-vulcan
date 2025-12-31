@@ -360,6 +360,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
                 # Decode PCM16 chunk
                 audio_i16 = np.frombuffer(audio_data, dtype=np.int16).copy()
+
+                # DEBUG: dump raw audio so we can listen to it
+                with open("debug_audio.raw", "ab") as f:
+                    f.write(audio_i16.tobytes())
+
                 # DEBUG: dump a short WAV once
                 import soundfile as sf
                 sf.write("debug_robot_audio.wav", audio_i16, args.sample_rate)
@@ -405,10 +410,14 @@ def main(argv: Optional[list[str]] = None) -> int:
                 if in_speech:
                     utter_chunks.append(audio_i16)
                     utter_s += chunk_s
+
                     if is_speech:
                         silence_s = 0.0
                     else:
                         silence_s += chunk_s
+                        # CRITICAL FIX:
+                        # allow noise floor to decay during silence
+                        noise_rms = (1.0 - noise_alpha) * noise_rms + noise_alpha * rms
 
                     reached_silence_end = silence_s >= (float(args.silence_ms) / 1000.0)
                     reached_max_len = utter_s >= float(args.max_utterance_s)
