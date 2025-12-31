@@ -130,6 +130,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Minimum utterance length (seconds) before transcribing.",
     )
     parser.add_argument(
+        "--max-utterance-s",
+        type=float,
+        default=3.0,
+        help="Hard cap on utterance length (seconds). Prevents buffering long audio before sending.",
+    )
+    parser.add_argument(
         "--start-ms",
         type=int,
         default=200,
@@ -382,7 +388,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                     else:
                         silence_s += chunk_s
 
-                    if silence_s >= (float(args.silence_ms) / 1000.0):
+                    reached_silence_end = silence_s >= (float(args.silence_ms) / 1000.0)
+                    reached_max_len = utter_s >= float(args.max_utterance_s)
+
+                    if reached_max_len and args.debug:
+                        print(f"[VAD] max utterance reached ({utter_s:.2f}s) -> forcing end", file=sys.stderr)
+
+                    if reached_silence_end or reached_max_len:
                         # end utterance
                         in_speech = False
                         if utter_s >= float(args.min_utterance_s):
