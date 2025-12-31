@@ -127,10 +127,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             samplerate=args.sample_rate,
             blocksize=args.blocksize,
             dtype="int16",
-            channels=2,  # stereo device
+            channels=1,  # PortAudio only allows mono on this device
             device=args.device,
             callback=audio_cb,
         ):
+
+
             print("[voice] Listening (HPF + normalize, mono output)")
 
             while True:
@@ -139,15 +141,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                 except queue.Empty:
                     continue
 
-                stereo = np.frombuffer(raw, dtype=np.int16)
-                if stereo.size % 2:
+                mono = np.frombuffer(raw, dtype=np.int16)
+                if mono.size == 0:
                     continue
-                stereo = stereo.reshape(-1, 2)
-
-                # ---- CHANNEL SELECTION ----
-                # Use LEFT mic only (most stable)
-                mono = stereo[:, 0]
-
                 # ---- DSP PIPELINE ----
                 mono = highpass_i16(mono, cutoff_hz=120.0, sr=args.sample_rate)
                 mono = normalize_i16(mono, target_rms=200.0)
