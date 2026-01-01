@@ -326,8 +326,8 @@ class SourcceyFollowerCalibrator:
                 "search_range": 1664,
                 "search_step": base_step_size,
                 "max_current": self.robot.config.max_current_calibration_threshold,
-                "search_positive": not is_left_arm,
-                "search_negative": is_left_arm
+                "search_positive": is_left_arm,
+                "search_negative": not is_left_arm
             }
         }
 
