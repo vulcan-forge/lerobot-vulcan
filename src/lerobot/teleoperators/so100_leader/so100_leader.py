@@ -43,7 +43,7 @@ class SO100Leader(Teleoperator):
         super().__init__(config)
         self.config = config
         motor_ids = [1, 2, 3, 4, 5, 6]
-        if config.reversed:
+        if config.reverse:
             motor_ids = [7, 8, 9, 10, 11, 12]
 
         self.bus = FeetechMotorsBus(
@@ -136,7 +136,7 @@ class SO100Leader(Teleoperator):
         print(f"Calibration saved to {self.calibration_fpath}")
 
     def auto_calibrate(self, full_reset: bool = False) -> None:
-        self.calibration = self.calibrator.default_calibrate(reversed=self.config.reversed)
+        self.calibration = self.calibrator.default_calibrate(reverse=self.config.reverse)
 
     def configure(self) -> None:
         self.bus.disable_torque()

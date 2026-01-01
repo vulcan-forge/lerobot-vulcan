@@ -148,12 +148,13 @@ python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --right_arm_port="COM3" \
  --keyboard_port="keyboard" \
  --fps=30 \
- --reversed=True
+ --reverse=True
 ```
 
 Add this if the wheel motors are reversed
+
 ```
---reversed=True
+--reverse=True
 ```
 
 **Parameters:**
@@ -173,7 +174,7 @@ python src/lerobot/control/sourccey/sourccey/record.py \
  --remote_ip="192.168.1.166" \
  --left_arm_port="COM4" \
  --right_arm_port="COM3" \
- --reversed=True \
+ --reverse=True \
  --dataset.repo_id="sourccey-011/sourccey-011__set_table-a__set000__name" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=300 \

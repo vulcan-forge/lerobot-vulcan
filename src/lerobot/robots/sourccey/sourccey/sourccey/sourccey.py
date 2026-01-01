@@ -178,11 +178,11 @@ class Sourccey(Robot):
             # Create threads for each arm
             left_thread = threading.Thread(
                 target=self.left_arm.auto_calibrate,
-                kwargs={"reversed": False, "full_reset": full_reset}
+                kwargs={"reverse": False, "full_reset": full_reset}
             )
             right_thread = threading.Thread(
                 target=self.right_arm.auto_calibrate,
-                kwargs={"reversed": True, "full_reset": full_reset}
+                kwargs={"reverse": True, "full_reset": full_reset}
             )
 
             # Start left arm immediately
@@ -201,9 +201,9 @@ class Sourccey(Robot):
             raise ValueError("arm must be one of: None, 'left', 'right'")
 
         if arm == "left":
-            self.left_arm.auto_calibrate(reversed=False, full_reset=full_reset)
+            self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)
         else:
-            self.right_arm.auto_calibrate(reversed=True, full_reset=full_reset)
+            self.right_arm.auto_calibrate(reverse=True, full_reset=full_reset)
 
     def configure(self) -> None:
         self.left_arm.configure()

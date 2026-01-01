@@ -91,11 +91,11 @@ class BiSourcceyLeader(Teleoperator):
         # Create threads for each arm
         left_thread = threading.Thread(
             target=self.left_arm.auto_calibrate,
-            kwargs={"reversed": False}
+            kwargs={"reverse": False}
         )
         right_thread = threading.Thread(
             target=self.right_arm.auto_calibrate,
-            kwargs={"reversed": True}
+            kwargs={"reverse": True}
         )
 
         # Start both threads

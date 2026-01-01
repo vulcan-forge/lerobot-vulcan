@@ -66,7 +66,7 @@ class SourcceyClient(Robot):
             {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # fast
         ]
         self.speed_index = 1  # Start at medium speed (0.9)
-        self.reversed = config.reversed
+        self.reverse = config.reverse
 
         self._is_connected = False
         self.logs = {}
@@ -378,7 +378,7 @@ class SourcceyClient(Robot):
     # Private Control Functions
     ###################################################################
     def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray):
-        reversed = self.reversed
+        reverse = self.reverse
         speed_setting = self.speed_levels[self.speed_index]
         x_speed = speed_setting["x"]
         y_speed = speed_setting["y"]
@@ -394,42 +394,42 @@ class SourcceyClient(Robot):
         x_cmd_target = 0.0
 
         if self.teleop_keys["forward"] in pressed:
-            if reversed:
+            if reverse:
                 x_cmd_target -= x_speed
             else:
                 x_cmd_target += x_speed
         if self.teleop_keys["backward"] in pressed:
-            if reversed:
+            if reverse:
                 x_cmd_target += x_speed
             else:
                 x_cmd_target -= x_speed
         if self.teleop_keys["left"] in pressed:
-            if reversed:
+            if reverse:
                 y_cmd -= y_speed
             else:
                 y_cmd += y_speed
         if self.teleop_keys["right"] in pressed:
-            if reversed:
+            if reverse:
                 y_cmd += y_speed
             else:
                 y_cmd -= y_speed
         if self.teleop_keys["up"] in pressed:
-            if reversed:
+            if reverse:
                 z_cmd -= z_speed
             else:
                 z_cmd += z_speed
         if self.teleop_keys["down"] in pressed:
-            if reversed:
+            if reverse:
                 z_cmd += z_speed
             else:
                 z_cmd -= z_speed
         if self.teleop_keys["rotate_left"] in pressed:
-            if reversed:
+            if reverse:
                 theta_cmd -= theta_speed
             else:
                 theta_cmd += theta_speed
         if self.teleop_keys["rotate_right"] in pressed:
-            if reversed:
+            if reverse:
                 theta_cmd += theta_speed
             else:
                 theta_cmd -= theta_speed

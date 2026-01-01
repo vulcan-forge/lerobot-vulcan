@@ -144,7 +144,7 @@ class Robot(abc.ABC):
         with open(fpath, "w") as f, draccus.config_type("json"):
             draccus.dump(self.calibration, f, indent=4)
 
-    def auto_calibrate(self, reversed: bool = False, full_reset: bool = False) -> None:
+    def auto_calibrate(self, reverse: bool = False, full_reset: bool = False) -> None:
         """
         Automatically calibrate the robot.
 

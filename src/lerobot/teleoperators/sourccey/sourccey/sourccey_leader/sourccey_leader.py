@@ -169,9 +169,9 @@ class SourcceyLeader(Teleoperator):
         self._save_calibration()
         print(f"Calibration saved to {self.calibration_fpath}")
 
-    def auto_calibrate(self, reversed: bool = False, full_reset: bool = False) -> None:
+    def auto_calibrate(self, reverse: bool = False, full_reset: bool = False) -> None:
         """Perform automatic calibration."""
-        self.calibration = self.calibrator.default_calibrate(reversed=reversed)
+        self.calibration = self.calibrator.default_calibrate(reverse=reverse)
 
     def configure(self) -> None:
         self.bus.disable_torque()

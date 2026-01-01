@@ -20,12 +20,12 @@ class SourcceyTeleoperateConfig:
     right_arm_port: str = "COM3"
     keyboard_port: str = "keyboard"
     fps: int = 30
-    reversed: bool = False
+    reverse: bool = False
 
 @parser.wrap()
 def teleoperate(cfg: SourcceyTeleoperateConfig):
     # Create the robot and teleoperator configurations
-    robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id, reversed=cfg.reversed)
+    robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id, reverse=cfg.reverse)
     teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port=cfg.left_arm_port, right_arm_port=cfg.right_arm_port, id=cfg.id)
     keyboard_config = KeyboardTeleopConfig(id=cfg.keyboard_port)
 
