@@ -17,10 +17,12 @@ import json
 import time
 from pathlib import Path
 from typing import Any, Dict
-from venv import logger
 
+import logging
 from lerobot.motors.feetech.feetech import OperatingMode
 from lerobot.motors.motors_bus import MotorCalibration
+
+logger = logging.getLogger(__name__)
 
 class SourcceyFollowerCalibrator:
     """Handles calibration operations for Sourccey robots."""
