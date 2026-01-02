@@ -122,6 +122,11 @@ sourccey = [
     "sounddevice>=0.4.6",
     "numpy>=1.24"
 ]
+sourccey-ai = [
+    "torch>=2.9.1",
+    "torchvision>=0.24.1",
+    "torchcodec>=0.9.1"
+]
 kinematics = ["lerobot[placo-dep]"]
 intelrealsense = [
     "pyrealsense2>=2.55.1.6486,<2.57.0 ; sys_platform != 'darwin'",
@@ -389,3 +394,12 @@ ignore_errors = false
 # [[tool.mypy.overrides]]
 # module = "lerobot.scripts.*"
 # ignore_errors = false
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130", marker = "platform_system != 'Darwin'" }]
+torchvision = [{ index = "pytorch-cu130", marker = "platform_system != 'Darwin'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true

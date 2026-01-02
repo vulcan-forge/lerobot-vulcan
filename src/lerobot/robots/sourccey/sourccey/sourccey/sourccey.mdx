@@ -143,9 +143,15 @@ source .venv/Scripts/activate
 ```
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
+<<<<<<< HEAD
  --remote_ip="192.168.1.210" \
  --left_arm_port="/dev/ttyACM1" \
  --right_arm_port="/dev/ttyACM0" \
+=======
+ --remote_ip="192.168.1.206" \
+ --left_arm_port="COM4" \
+ --right_arm_port="COM3" \
+>>>>>>> cf7c41af7fa12a2c1ab05cd97707fc166d5819c0
  --keyboard_port="keyboard" \
  --fps=30 \
  --reverse=True
