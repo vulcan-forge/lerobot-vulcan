@@ -87,7 +87,8 @@ class Sourccey(Robot):
         self.untorque_right_prev = False
 
     def __del__(self):
-        self.disconnect()
+        if (self.is_connected):
+            self.disconnect()
 
     ###################################################################
     # Properties and Attributes
@@ -143,7 +144,10 @@ class Sourccey(Robot):
                 logger.warning(f"Camera '{cam_key}' failed to connect: {e}. Continuing without it.")
 
     def disconnect(self):
-        print("Disconnecting Sourccey")
+        if not self.is_connected:
+            return
+
+        logger.info(f"Disconnecting Sourccey")
         self.left_arm.disconnect()
         self.right_arm.disconnect()
 
@@ -157,6 +161,8 @@ class Sourccey(Robot):
             except Exception:
                 pass
         self._connected_cameras.clear()
+
+        logger.info(f"Sourccey disconnected.")
 
     ###################################################################
     # Calibration and Configuration Management
