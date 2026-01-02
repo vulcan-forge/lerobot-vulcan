@@ -78,9 +78,9 @@ class SourcceyLeader(Teleoperator):
         """Load default action from JSON file."""
         current_dir = Path(__file__).parent
         if self.config.orientation == "right":
-            action_file = current_dir / "right_arm_default_action.json"
+            action_file = current_dir / "defaults" / "right_arm_default_action.json"
         else:
-            action_file = current_dir / "left_arm_default_action.json"
+            action_file = current_dir / "defaults" / "left_arm_default_action.json"
 
         if action_file.exists():
             with open(action_file, "r") as f:
