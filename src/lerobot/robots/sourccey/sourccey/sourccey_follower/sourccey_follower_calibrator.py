@@ -130,7 +130,7 @@ class SourcceyFollowerCalibrator:
                                 range_mins: Dict[str, Any], range_maxes: Dict[str, int] = None) -> Dict[str, MotorCalibration]:
         calibration = {}
         for motor, m in self.robot.bus.motors.items():
-            drive_mode = 1 if motor == "shoulder_lift" or (self.robot.config.orientation == "right" and motor == "gripper") else 0
+            drive_mode = 1 if (motor == "shoulder_lift" or motor == "gripper") else 0
 
             range_min = range_mins[motor]
             range_max = range_maxes[motor]
@@ -305,6 +305,8 @@ class SourcceyFollowerCalibrator:
         settle_time = 0.1
 
         # Motor-specific configuration
+        is_left_arm = (self.robot.config.orientation == "left")
+
         motor_configs = {
             "shoulder_lift": {
                 "search_range": 3800,
@@ -324,8 +326,8 @@ class SourcceyFollowerCalibrator:
                 "search_range": 1664,
                 "search_step": base_step_size,
                 "max_current": self.robot.config.max_current_calibration_threshold,
-                "search_positive": False,
-                "search_negative": True
+                "search_positive": is_left_arm,
+                "search_negative": not is_left_arm
             }
         }
 
