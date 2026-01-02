@@ -70,26 +70,35 @@ class SourcceyHost:
         if not msg:
             return False
 
-        # Try to locate a TTS command on the robot (prefer espeak-ng).
+        # Prefer espeak-ng, fall back to espeak
         tts_cmd = shutil.which("espeak-ng") or shutil.which("espeak")
         if not tts_cmd:
             logging.warning("No TTS engine found (expected `espeak-ng` or `espeak`).")
             return False
 
         try:
-            # Stop any previous speech to prevent overlaps.
+            # Stop any previous speech to prevent overlaps
             if self._tts_process and self._tts_process.poll() is None:
                 try:
                     self._tts_process.terminate()
                 except Exception:
                     pass
 
+            # High-pitched, clear, robot-y voice
             self._tts_process = subprocess.Popen(
-                [tts_cmd, "-v", "en-us", msg],
+                [
+                    tts_cmd,
+                    "-v", "en-us+f3",  # higher-pitched female variant
+                    "-p", "75",        # pitch (50 = default, 70–80 = robot sweet spot)
+                    "-s", "165",       # speed (slightly fast, responsive)
+                    "-a", "190",       # amplitude (cuts through motors)
+                    msg,
+                ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
             return True
+
         except Exception as e:
             logging.error(f"Failed to speak text: {e}")
             return False

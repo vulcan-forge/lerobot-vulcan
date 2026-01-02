@@ -2,25 +2,25 @@
 """
 Client-side voice recognition for Sourccey (Whisper).
 
-Receives raw audio from the robot (ZMQ SUB), segments it into utterances with an
-adaptive RMS VAD (with hysteresis), transcribes it locally using faster-whisper,
-and sends recognized text back to the robot host.
-
-Run (on Windows/client machine):
-  uv run python -m lerobot.control.sourccey.sourccey.voice_client --robot_ip <ROBOT_IP>
+Receives mono PCM16 audio from the robot (ZMQ SUB),
+segments speech with adaptive RMS VAD,
+transcribes using faster-whisper,
+normalizes results,
+and sends text back to the robot.
 """
 
 import argparse
 import re
 import sys
 import time
-from collections import deque
 from typing import Optional
 
 import numpy as np
 import zmq
 
-
+# -----------------------------
+# Windows CUDA DLL helper
+# -----------------------------
 def _configure_windows_cuda_dll_search() -> None:
     if not sys.platform.startswith("win"):
         return
@@ -45,319 +45,243 @@ def _configure_windows_cuda_dll_search() -> None:
         _add_nvidia_bin("nvidia.cublas")
         _add_nvidia_bin("nvidia.cuda_runtime")
     except Exception:
-        return
+        pass
 
 
 _configure_windows_cuda_dll_search()
 
-try:
-    from faster_whisper import WhisperModel
-except Exception as e:
-    raise RuntimeError("Missing faster-whisper. Install: pip install faster-whisper") from e
+from faster_whisper import WhisperModel
+from lerobot.robots.sourccey.sourccey.sourccey import (
+    SourcceyClientConfig,
+    SourcceyClient,
+)
 
-from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
+# -----------------------------
+# Text normalization
+# -----------------------------
+def normalize_robot_terms(text: str) -> str:
+    replacements = {
+        r"\b(sorcy|sorsi|orsi|doris|sourcey|sourcy|isourcing)\b": "Sourccey",
+    }
+    for pat, repl in replacements.items():
+        text = re.sub(pat, repl, text, flags=re.IGNORECASE)
+    return text
 
 
-def _rms_i16(x: np.ndarray) -> float:
-    if x.size == 0:
-        return 0.0
-    xf = x.astype(np.float32)
-    return float(np.sqrt(np.mean(xf * xf)))
+def is_similar_text(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    wa = set(a.lower().split())
+    wb = set(b.lower().split())
+    if not wa or not wb:
+        return False
+    return len(wa & wb) >= min(len(wa), len(wb)) * 0.5
 
 
+# -----------------------------
+# Main
+# -----------------------------
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Client-side voice recognition for Sourccey (Whisper)")
-    parser.add_argument("--robot_ip", type=str, required=True, help="IP address of the robot")
-    parser.add_argument("--audio-port", type=int, default=5559, help="ZMQ port for subscribing to audio from robot")
-    parser.add_argument("--sample-rate", type=int, default=16000, help="Audio sample rate (must match robot)")
+    p = argparse.ArgumentParser()
+    p.add_argument("--robot_ip", required=True)
+    p.add_argument("--audio-port", type=int, default=5559)
+    p.add_argument("--sample-rate", type=int, default=16000)
 
-    parser.add_argument("--model", type=str, default="small.en", help="Whisper model name or local path")
-    parser.add_argument("--device", type=str, default="auto", help="Whisper device: auto, cpu, cuda")
-    parser.add_argument("--compute-type", type=str, default="auto", help="Compute type: auto, int8, float16, float32")
-    parser.add_argument("--language", type=str, default="en", help="Language code (default: en)")
-    parser.add_argument("--beam-size", type=int, default=5, help="Beam size for decoding")
+    p.add_argument("--model", default="medium.en")
+    p.add_argument("--device", default="auto")
+    p.add_argument("--compute-type", default="auto")
+    p.add_argument("--language", default="en")
 
-    # VAD
-    parser.add_argument("--min-utterance-s", type=float, default=0.35)
-    parser.add_argument("--max-utterance-s", type=float, default=5.0)
-    parser.add_argument("--start-ms", type=int, default=120)
-    parser.add_argument("--silence-ms", type=int, default=700)
-    parser.add_argument("--preroll-ms", type=int, default=250)
+    p.add_argument("--beam-size", type=int, default=3)
+    p.add_argument("--min-utterance-s", type=float, default=0.5)
+    p.add_argument("--max-utterance-s", type=float, default=5.5)
+    p.add_argument("--start-ms", type=int, default=150)
+    p.add_argument("--silence-ms", type=int, default=1800)
 
-    parser.add_argument("--speech-rms-mult", type=float, default=1.6, help="Start threshold = noise_rms * mult")
-    parser.add_argument("--end-mult", type=float, default=0.65, help="End threshold = start_thr * end_mult (hysteresis)")
-    parser.add_argument("--min-speech-rms", type=float, default=120.0)
+    p.add_argument("--speech-rms-mult", type=float, default=1.15)
+    p.add_argument(
+        "--end-mult",
+        type=float,
+        default=0.6,
+        help="Multiplier for end-of-speech threshold (hysteresis)"
+    )
+    p.add_argument("--min-speech-rms", type=float, default=160.0)
 
-    # Text filtering
-    parser.add_argument("--min-text-chars", type=int, default=2)
-    parser.add_argument("--drop-repetitions", action="store_true")
-    parser.add_argument("--whisper-vad-filter", action="store_true")
+    p.add_argument("--min-text-chars", type=int, default=2)
+    p.add_argument("--min-interval-s", type=float, default=0.7)
+    p.add_argument("--mute-after-send-s", type=float, default=3.0)
 
-    # Rate limiting / echo avoidance
-    parser.add_argument("--min-interval-s", type=float, default=0.7)
-    parser.add_argument("--mute-after-send-s", type=float, default=2.0)
+    p.add_argument("--drop-repetitions", action="store_true")
+    p.add_argument("--whisper-vad-filter", action="store_true")
+    p.add_argument("--allow-cpu-fallback", action="store_true")
+    p.add_argument("--debug", action="store_true")
 
-    # Debug audio dumps (OFF by default; NEVER writes into repo implicitly)
-    parser.add_argument("--dump-raw-path", type=str, default="", help="If set, append PCM16 .raw here")
-    parser.add_argument("--dump-wav-once", type=str, default="", help="If set, write a single WAV file here (requires soundfile)")
+    args = p.parse_args(argv)
 
-    parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--allow-cpu-fallback", action="store_true")
-
-    args = parser.parse_args(argv)
-
-    def _load_model(name: str, *, device: str, compute_type: str) -> WhisperModel:
+    # -----------------------------
+    # Load Whisper
+    # -----------------------------
+    def load_model():
         try:
-            return WhisperModel(name, device=device, compute_type=compute_type)
+            return WhisperModel(
+                args.model,
+                device=args.device,
+                compute_type=args.compute_type,
+            )
         except Exception as e:
-            if device == "cuda" and args.allow_cpu_fallback:
-                print(f"WARNING: CUDA init failed ({e}). Falling back to CPU int8.", file=sys.stderr)
-                return WhisperModel(name, device="cpu", compute_type="int8")
+            if args.allow_cpu_fallback:
+                print("[WARN] CUDA failed, falling back to CPU int8", file=sys.stderr)
+                return WhisperModel(args.model, device="cpu", compute_type="int8")
             raise
 
     print(f"Loading Whisper model: {args.model}")
-    model = _load_model(args.model, device=args.device, compute_type=args.compute_type)
+    model = load_model()
     print("Model loaded!")
 
-    print(f"Connecting to robot at {args.robot_ip}...")
-    robot_config = SourcceyClientConfig(remote_ip=args.robot_ip, id="sourccey")
-    robot = SourcceyClient(robot_config)
-
-    try:
-        robot.connect()
-        print("✓ Connected to robot!")
-    except Exception as e:
-        print(f"ERROR: Failed to connect to robot: {e}", file=sys.stderr)
-        return 1
+    # -----------------------------
+    # Robot connection
+    # -----------------------------
+    robot = SourcceyClient(
+        SourcceyClientConfig(remote_ip=args.robot_ip, id="sourccey")
+    )
+    robot.connect()
+    print("✓ Connected to robot")
 
     ctx = zmq.Context()
-    audio_socket = ctx.socket(zmq.SUB)
-    audio_socket.connect(f"tcp://{args.robot_ip}:{args.audio_port}")
-    audio_socket.setsockopt(zmq.SUBSCRIBE, b"")
-    print(f"Subscribed to audio stream from {args.robot_ip}:{args.audio_port}...")
+    sock = ctx.socket(zmq.SUB)
+    sock.connect(f"tcp://{args.robot_ip}:{args.audio_port}")
+    sock.setsockopt(zmq.SUBSCRIBE, b"")
 
-    poller = zmq.Poller()
-    poller.register(audio_socket, zmq.POLLIN)
-
-    last_sent = ""
-    last_sent_ts = 0.0
-    IDENTICAL_TEXT_COOLDOWN = 5.0
-    muted_until_ts = 0.0
-
-    # Adaptive noise floor
-    noise_rms = 220.0
-    noise_alpha_idle = 0.02
-    noise_alpha_silence = 0.05
-
+    # -----------------------------
     # VAD state
+    # -----------------------------
+    noise_rms = 600.0
+    noise_alpha = 0.02
+
+    preroll = []
+    preroll_max = int(0.3 / 0.2)
+
+    utter_chunks = []
     in_speech = False
-    speech_run_s = 0.0
     silence_s = 0.0
     utter_s = 0.0
 
-    # Sample-accurate preroll buffer
-    preroll_samples = int(args.sample_rate * (args.preroll_ms / 1000.0))
-    preroll_buf: deque[np.ndarray] = deque()
-    preroll_count = 0
+    last_sent = ""
+    last_sent_ts = 0.0
+    muted_until = 0.0
 
-    utter_chunks: list[np.ndarray] = []
+    # -----------------------------
+    # Transcription helper
+    # -----------------------------
+    def transcribe(audio_i16: np.ndarray) -> str:
+        audio_f32 = audio_i16.astype(np.float32) / 32768.0
 
-    dump_raw_f = None
-    wrote_wav_once = False
-
-    if args.dump_raw_path:
-        # user explicitly asked for it — keep it out of the repo by choosing a safe path
-        dump_raw_f = open(args.dump_raw_path, "ab")
-
-    def is_similar_text(text1: str, text2: str) -> bool:
-        if not text1 or not text2:
-            return False
-        w1 = set(text1.lower().split())
-        w2 = set(text2.lower().split())
-        if not w1 or not w2:
-            return False
-        overlap = len(w1 & w2)
-        return overlap >= min(len(w1), len(w2)) * 0.5
-
-    def _transcribe(audio_i16: np.ndarray) -> str:
-        if audio_i16.size == 0:
-            return ""
-        audio_f32 = (audio_i16.astype(np.float32) / 32768.0).copy()
-        segments, _info = model.transcribe(
+        segments, info = model.transcribe(
             audio_f32,
             language=args.language,
-            beam_size=int(args.beam_size),
-            vad_filter=bool(args.whisper_vad_filter),
+            beam_size=args.beam_size,
+            vad_filter=args.whisper_vad_filter,
+            initial_prompt=(
+                "This is a conversation with a robot named Sourccey. "
+                "Common words include: Sourccey, robot, move, follow, stop, hello, task."
+            ),
         )
-        return " ".join((getattr(seg, "text", "") or "").strip() for seg in segments).strip()
 
-    def _send_text(text: str) -> None:
-        nonlocal last_sent, last_sent_ts, muted_until_ts
-        if not text:
-            return
+        return " ".join(seg.text.strip() for seg in segments).strip()
 
-        cleaned = re.sub(r"\s+", " ", text).strip()
-        if len(cleaned.replace(" ", "")) < int(args.min_text_chars):
-            if args.debug:
-                print(f"[DROP] too short: {cleaned!r}", file=sys.stderr)
-            return
-
-        if not re.search(r"[A-Za-z]", cleaned):
-            if args.debug:
-                print(f"[DROP] no letters: {cleaned!r}", file=sys.stderr)
-            return
-
-        if args.drop_repetitions:
-            toks = [t for t in re.split(r"\W+", cleaned.lower()) if t]
-            if len(toks) >= 6:
-                uniq = len(set(toks))
-                if uniq / float(len(toks)) < 0.35:
-                    if args.debug:
-                        print(f"[DROP] repetitive: {cleaned!r}", file=sys.stderr)
-                    return
-
-        now = time.time()
-        dt = now - last_sent_ts
-        if cleaned == last_sent and dt < IDENTICAL_TEXT_COOLDOWN:
-            return
-        if is_similar_text(cleaned, last_sent) and dt < IDENTICAL_TEXT_COOLDOWN:
-            return
-        if dt < float(args.min_interval_s):
-            return
-
-        if robot.send_text(cleaned):
-            print(f"[RECOGNIZED] {cleaned}")
-            last_sent = cleaned
-            last_sent_ts = now
-            muted_until_ts = max(muted_until_ts, now + float(args.mute_after_send_s))
-
+    # -----------------------------
+    # Main loop
+    # -----------------------------
     try:
         while True:
-            # Poll sockets so we don’t spam exceptions / busy loop
-            events = dict(poller.poll(timeout=50))
-            if audio_socket in events and events[audio_socket] & zmq.POLLIN:
-                audio_data = audio_socket.recv()
+            try:
+                data = sock.recv(zmq.NOBLOCK)
+                now = time.time()
 
-                now_ts = time.time()
-                if now_ts < muted_until_ts:
-                    # reset VAD while muted
-                    in_speech = False
-                    speech_run_s = 0.0
-                    silence_s = 0.0
-                    utter_s = 0.0
-                    utter_chunks = []
-                    preroll_buf.clear()
-                    preroll_count = 0
+                if now < muted_until:
                     continue
 
-                audio_i16 = np.frombuffer(audio_data, dtype=np.int16).copy()
-                if audio_i16.size == 0:
+                audio = np.frombuffer(data, dtype=np.int16)
+                if audio.size == 0:
                     continue
 
-                # Optional debug dumps (explicit flags only)
-                if dump_raw_f is not None:
-                    dump_raw_f.write(audio_i16.tobytes())
+                rms = float(np.sqrt(np.mean(audio.astype(np.float32) ** 2)))
 
-                if args.dump_wav_once and not wrote_wav_once:
-                    try:
-                        import soundfile as sf  # optional dependency
-                        sf.write(args.dump_wav_once, audio_i16, args.sample_rate)
-                        wrote_wav_once = True
-                        print(f"[debug] wrote wav: {args.dump_wav_once}", file=sys.stderr)
-                    except Exception as e:
-                        print(f"[debug] wav write failed (install soundfile): {e}", file=sys.stderr)
-                        wrote_wav_once = True  # don’t keep trying
-
-                chunk_s = float(audio_i16.size) / float(args.sample_rate)
-                rms = _rms_i16(audio_i16)
-
-                # Update noise estimate:
-                # - when NOT in speech
-                # - and also during silence while in speech (so the floor can recover)
                 if not in_speech:
-                    noise_rms = (1.0 - noise_alpha_idle) * noise_rms + noise_alpha_idle * rms
+                    noise_rms = (1 - noise_alpha) * noise_rms + noise_alpha * rms
+
+                thr = max(args.min_speech_rms, noise_rms * args.speech_rms_mult)
+                start_thr = max(args.min_speech_rms, noise_rms * args.speech_rms_mult)
+                end_thr = max(args.min_speech_rms * 0.5, noise_rms * args.end_mult)
+
+                if not in_speech:
+                    is_speech = rms >= start_thr
                 else:
-                    # if we’re “in speech” but this chunk is quiet, let noise track faster
-                    if rms < max(noise_rms * 1.2, float(args.min_speech_rms)):
-                        noise_rms = (1.0 - noise_alpha_silence) * noise_rms + noise_alpha_silence * rms
+                    is_speech = rms >= end_thr
 
-                start_thr = max(float(args.min_speech_rms), float(noise_rms) * float(args.speech_rms_mult))
-                end_thr = max(float(args.min_speech_rms), start_thr * float(args.end_mult))
+                chunk_s = audio.size / args.sample_rate
 
-                is_speech_now = rms >= (start_thr if not in_speech else end_thr)
-                start_s = float(args.start_ms) / 1000.0
-                silence_end_s = float(args.silence_ms) / 1000.0
-
-                if args.debug:
-                    print(
-                        f"[VAD] rms={rms:6.1f} noise={noise_rms:6.1f} start_thr={start_thr:6.1f} end_thr={end_thr:6.1f} in={in_speech} speech={is_speech_now}",
-                        file=sys.stderr,
-                    )
-
-                # Maintain sample-accurate preroll
-                preroll_buf.append(audio_i16)
-                preroll_count += audio_i16.size
-                while preroll_count > preroll_samples and preroll_buf:
-                    popped = preroll_buf.popleft()
-                    preroll_count -= popped.size
+                preroll.append(audio)
+                if len(preroll) > preroll_max:
+                    preroll.pop(0)
 
                 if not in_speech:
-                    if is_speech_now:
-                        speech_run_s += chunk_s
-                        if speech_run_s >= start_s:
+                    if is_speech:
+                        utter_s += chunk_s
+                        if utter_s >= args.start_ms / 1000:
                             in_speech = True
+                            utter_chunks = list(preroll)
                             silence_s = 0.0
                             utter_s = 0.0
-                            utter_chunks = list(preroll_buf)  # include preroll
-                            if args.debug:
-                                print("[VAD] start", file=sys.stderr)
                     else:
-                        speech_run_s = 0.0
-                else:
-                    utter_chunks.append(audio_i16)
+                        utter_s = 0.0
+
+                if in_speech:
+                    utter_chunks.append(audio)
                     utter_s += chunk_s
 
-                    if is_speech_now:
+                    if is_speech:
                         silence_s = 0.0
                     else:
                         silence_s += chunk_s
+                        noise_rms = (1 - noise_alpha) * noise_rms + noise_alpha * rms
 
-                    reached_silence_end = silence_s >= silence_end_s
-                    reached_max_len = utter_s >= float(args.max_utterance_s)
-
-                    if reached_silence_end or reached_max_len:
+                    if (
+                        silence_s >= args.silence_ms / 1000
+                        or utter_s >= args.max_utterance_s
+                    ):
                         in_speech = False
-                        speech_run_s = 0.0
+                        if utter_s >= args.min_utterance_s:
+                            full = np.concatenate(utter_chunks)
+                            text = transcribe(full)
+                            text = normalize_robot_terms(text)
 
-                        if utter_s >= float(args.min_utterance_s):
-                            utter_audio = np.concatenate(utter_chunks) if utter_chunks else np.array([], dtype=np.int16)
-                            if args.debug:
-                                print(f"[VAD] end len={utter_s:.2f}s silence={silence_s:.2f}s", file=sys.stderr)
-
-                            text = _transcribe(utter_audio)
-                            _send_text(text)
+                            if (
+                                text
+                                and len(text.replace(" ", "")) >= args.min_text_chars
+                                and now - last_sent_ts >= args.min_interval_s
+                                and not is_similar_text(text, last_sent)
+                            ):
+                                if robot.send_text(text):
+                                    print(f"[RECOGNIZED] {text}")
+                                    last_sent = text
+                                    last_sent_ts = now
+                                    muted_until = now + args.mute_after_send_s
 
                         utter_chunks = []
                         silence_s = 0.0
                         utter_s = 0.0
 
-            else:
-                # No audio; poll robot for incoming messages, keep CPU low
+            except zmq.Again:
                 robot.poll_text_message()
                 time.sleep(0.01)
 
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
-        if dump_raw_f is not None:
-            try:
-                dump_raw_f.close()
-            except Exception:
-                pass
-        audio_socket.close()
+        sock.close()
         ctx.term()
         robot.disconnect()
-        print("Disconnected.")
 
     return 0
 
