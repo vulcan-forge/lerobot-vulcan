@@ -103,8 +103,8 @@ def main() -> None:
         help="Directory containing calibration json files. If omitted, uses the default HF calibration location.",
     )
 
-    parser.add_argument("--left-port", type=str, default=None, help="Serial port for LEFT follower (e.g. COM5)")
-    parser.add_argument("--right-port", type=str, default=None, help="Serial port for RIGHT follower (e.g. COM6)")
+    parser.add_argument("--left-port", type=str, default='/dev/robotLeftArm', help="Serial port for LEFT follower (e.g. COM5)")
+    parser.add_argument("--right-port", type=str, default='/dev/robotRightArm', help="Serial port for RIGHT follower (e.g. COM6)")
 
     parser.add_argument("--print", action="store_true", default=True, help="Print live left/right actions read from motors")
     parser.add_argument("--write-left", action="store_true", help="Write live LEFT action to left_arm_default_action.json")
