@@ -144,8 +144,8 @@ source .venv/Scripts/activate
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.210" \
- --left_arm_port="COM4" \
- --right_arm_port="COM3" \
+ --left_arm_port="/dev/ttyACM1" \
+ --right_arm_port="/dev/ttyACM0" \
  --keyboard_port="keyboard" \
  --fps=30 \
  --reverse=True
@@ -171,15 +171,15 @@ Record demonstration data for training:
 ```
 python src/lerobot/control/sourccey/sourccey/record.py \
  --id="sourccey" \
- --remote_ip="192.168.1.166" \
- --left_arm_port="COM4" \
- --right_arm_port="COM3" \
+ --remote_ip="192.168.1.210" \
+ --left_arm_port="/dev/ttyACM1" \
+ --right_arm_port="/dev/ttyACM0" \
  --reverse=True \
- --dataset.repo_id="sourccey-011/sourccey-011__set_table-a__set000__name" \
- --dataset.num_episodes=1 \
- --dataset.episode_time_s=300 \
- --dataset.reset_time_s=10 \
- --dataset.task="Set the table" \
+ --dataset.repo_id="sourccey-009/sourccey-009__arm-left-a__set000__nick" \
+ --dataset.num_episodes=10 \
+ --dataset.episode_time_s=30 \
+ --dataset.reset_time_s=3 \
+ --dataset.task="Lift your shoulder" \
  --dataset.fps=30 \
  --dataset.push_to_hub=false
 ```
@@ -202,13 +202,13 @@ Train an ACT policy on your recorded dataset:
 
 ```
 python src/lerobot/scripts/lerobot_train.py \
- --dataset.repo_id=sourccey-008/sourccey-008__counter-a__set000__name \
+ --dataset.repo_id=sourccey-009/sourccey-009__arm-left-a__set000__nick \
  --policy.type=act \
- --output_dir=outputs/train/act__sourccey-008__counter-a__set000__name \
- --job_name=act__sourccey-008__counter-a__set000__name \
+ --output_dir=outputs/train/act__sourccey-009__arm-left-a__set000__nick \
+ --job_name=act__sourccey-009__arm-left-a__set000__nick \
  --policy.device=cuda \
  --wandb.enable=false \
- --steps=100000 \
+ --steps=20000 \
  --save_freq=20000 \
  --policy.push_to_hub=false
 ```
