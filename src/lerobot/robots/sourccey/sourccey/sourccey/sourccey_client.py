@@ -81,12 +81,12 @@ class SourcceyClient(Robot):
 
         # Time of last command
         self._last_cmd_t = time.monotonic()
-        self._slew_time_s = 0.25
+        self._slew_time_s = 0.5
         self._x_deadbane = 0.02
 
         # max change in x.vel per second (tune this)
-        self._x_accel = 10.0   # units: (x.vel units) / s
-        self._x_decel = 10.0   # allow faster slowing down than speeding up (optional)
+        self._x_accel = 4.0   # units: (x.vel units) / s
+        self._x_decel = 4.0   # allow faster slowing down than speeding up (optional)
         self._x_cmd_smoothed = 0.0
 
     ###################################################################
