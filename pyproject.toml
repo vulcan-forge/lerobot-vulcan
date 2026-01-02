@@ -394,3 +394,12 @@ ignore_errors = false
 # [[tool.mypy.overrides]]
 # module = "lerobot.scripts.*"
 # ignore_errors = false
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130", marker = "platform_system != 'Darwin'" }]
+torchvision = [{ index = "pytorch-cu130", marker = "platform_system != 'Darwin'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
