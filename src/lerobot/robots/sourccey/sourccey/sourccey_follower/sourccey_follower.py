@@ -120,9 +120,12 @@ class SourcceyFollower(Robot):
         logger.info(f"{self} connected.")
 
     def disconnect(self) -> None:
-        print(f"Disconnecting Sourccey {self.config.orientation} Follower")
+         # Make disconnect idempotent: calling it twice should be harmless.
         if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
+            logger.info(f"{self} is not connected. Skipping disconnect.")
+            return
+
+        logger.info(f"Disconnecting Sourccey {self.config.orientation} Follower")
 
         self.bus.disconnect()
         for cam in self.cameras.values():
