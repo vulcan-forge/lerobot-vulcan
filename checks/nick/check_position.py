@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -12,63 +13,151 @@ def repo_root() -> Path:
 
 
 def defaults_dir() -> Path:
-    return repo_root() / "src" / "lerobot" / "teleoperators" / "sourccey" / "sourccey" / "sourccey_leader" / "defaults"
+    return (
+        repo_root()
+        / "src"
+        / "lerobot"
+        / "teleoperators"
+        / "sourccey"
+        / "sourccey"
+        / "sourccey_leader"
+        / "defaults"
+    )
 
 
-def arm_json_path(arm: str, *, active: bool) -> Path:
+def arm_default_action_json_path(arm: str) -> Path:
     if arm not in {"left", "right"}:
         raise ValueError("arm must be 'left' or 'right'")
-    suffix = "default_active_action" if active else "default_action"
-    return defaults_dir() / f"{arm}_arm_{suffix}.json"
-
-
-def read_arm_positions(arm: str, *, active: bool = True) -> dict[str, float]:
-    p = arm_json_path(arm, active=active)
-    data = json.loads(p.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError(f"Expected JSON object in {p}, got {type(data).__name__}")
-    # Ensure float values
-    return {str(k): float(v) for k, v in data.items()}
+    return defaults_dir() / f"{arm}_arm_default_action.json"
 
 
 def write_action_json(path: Path, data: dict[str, Any], *, overwrite: bool = False) -> None:
     if path.exists() and not overwrite:
         raise FileExistsError(f"{path} already exists. Use --overwrite to replace it.")
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=4, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def copy_active_to_default(arm: str, *, overwrite: bool = False) -> Path:
-    src = arm_json_path(arm, active=True)
-    dst = arm_json_path(arm, active=False)
-    data = read_arm_positions(arm, active=True)
-    write_action_json(dst, data, overwrite=overwrite)
-    return dst
+def _ensure_src_on_path() -> None:
+    """Allow importing from repo `src/` without requiring an editable install."""
+    src_dir = repo_root() / "src"
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+
+
+def read_live_arm_action(
+    *,
+    arm: str,
+    port: str,
+    base_id: str,
+    calibration_dir: Path | None,
+) -> dict[str, float]:
+    """
+    Connect to the real Feetech motors, read Present_Position (normalized), return a dict like:
+      { "shoulder_pan.pos": ..., "gripper.pos": ..., ... }
+    """
+    if arm not in {"left", "right"}:
+        raise ValueError("arm must be 'left' or 'right'")
+
+    _ensure_src_on_path()
+    from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import (  # noqa: E402
+        SourcceyFollowerConfig,
+    )
+    from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower import (  # noqa: E402
+        SourcceyFollower,
+    )
+
+    cfg = SourcceyFollowerConfig(
+        id=f"{base_id}_{arm}",
+        calibration_dir=calibration_dir,
+        port=port,
+        orientation=arm,
+        cameras={},  # don't try to connect cameras for this check script
+    )
+    robot = SourcceyFollower(cfg)
+
+    # IMPORTANT: don't auto-calibrate here (follower.calibrate() is manual/interactive).
+    if not robot.calibration:
+        raise RuntimeError(
+            f"No calibration loaded for id='{cfg.id}'.\n"
+            f"Expected calibration file at: {robot.calibration_fpath}\n"
+            "Create/choose the correct --calibration-dir and --id, or calibrate the arm first."
+        )
+
+    robot.connect(calibrate=False)
+    try:
+        obs = robot.get_observation()
+        return {k: float(v) for k, v in obs.items() if k.endswith(".pos")}
+    finally:
+        if robot.is_connected:
+            robot.disconnect()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--print", action="store_true", help="Print left/right action positions")
-    parser.add_argument("--copy-right", action="store_true", help="Copy right_arm_default_action.json -> right_arm_default_action.json")
-    parser.add_argument("--copy-left", action="store_true", help="Copy left_arm_default_action.json -> left_arm_default_action.json")
+    parser.add_argument("--id", default="sourccey", help="Base id used to load calibration (<id>_left / <id>_right)")
+    parser.add_argument(
+        "--calibration-dir",
+        type=Path,
+        default=None,
+        help="Directory containing calibration json files. If omitted, uses the default HF calibration location.",
+    )
+
+    parser.add_argument("--left-port", type=str, default=None, help="Serial port for LEFT follower (e.g. COM5)")
+    parser.add_argument("--right-port", type=str, default=None, help="Serial port for RIGHT follower (e.g. COM6)")
+
+    parser.add_argument("--print", action="store_true", default=True, help="Print live left/right actions read from motors")
+    parser.add_argument("--write-left", action="store_true", help="Write live LEFT action to left_arm_default_action.json")
+    parser.add_argument(
+        "--write-right", action="store_true", help="Write live RIGHT action to right_arm_default_action.json"
+    )
     parser.add_argument("--overwrite", action="store_true", help="Allow overwriting destination default_action.json files")
     args = parser.parse_args()
 
-    if args.print:
-        left = read_arm_positions("left", active=True)
-        right = read_arm_positions("right", active=True)
-        print("Left arm (active):")
-        for k, v in left.items():
-            print(f"  {k}: {v}")
-        print("\nRight arm (active):")
-        for k, v in right.items():
-            print(f"  {k}: {v}")
+    need_left = args.print or args.write_left
+    need_right = args.print or args.write_right
 
-    if args.copy_right:
-        dst = copy_active_to_default("right", overwrite=args.overwrite)
+    left_action: dict[str, float] | None = None
+    right_action: dict[str, float] | None = None
+
+    if need_left:
+        if not args.left_port:
+            raise SystemExit("--left-port is required for --print and/or --write-left")
+        left_action = read_live_arm_action(
+            arm="left",
+            port=args.left_port,
+            base_id=args.id,
+            calibration_dir=args.calibration_dir,
+        )
+
+    if need_right:
+        if not args.right_port:
+            raise SystemExit("--right-port is required for --print and/or --write-right")
+        right_action = read_live_arm_action(
+            arm="right",
+            port=args.right_port,
+            base_id=args.id,
+            calibration_dir=args.calibration_dir,
+        )
+
+    if args.print:
+        if left_action is not None:
+            print("Left arm (live from motors):")
+            for k, v in left_action.items():
+                print(f"  {k}: {v}")
+        if right_action is not None:
+            print("\nRight arm (live from motors):")
+            for k, v in right_action.items():
+                print(f"  {k}: {v}")
+
+    if args.write_left and left_action is not None:
+        dst = arm_default_action_json_path("left")
+        write_action_json(dst, left_action, overwrite=args.overwrite)
         print(f"Wrote: {dst}")
 
-    if args.copy_left:
-        dst = copy_active_to_default("left", overwrite=args.overwrite)
+    if args.write_right and right_action is not None:
+        dst = arm_default_action_json_path("right")
+        write_action_json(dst, right_action, overwrite=args.overwrite)
         print(f"Wrote: {dst}")
 
 
