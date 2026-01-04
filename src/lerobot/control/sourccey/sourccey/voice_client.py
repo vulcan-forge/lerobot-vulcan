@@ -18,6 +18,24 @@ from typing import Optional
 import numpy as np
 import zmq
 
+import requests
+
+LLM_URL = "http://localhost:8080/v1/chat/completions"
+
+SYSTEM_PROMPT = (
+    "You are Sourccey, a friendly helpful robot. "
+    "You speak in short, clear sentences. "
+    "You do not ramble. "
+    "You keep responses under three sentences. "
+    "If you do not know something, say so."
+)
+
+_llm_history = [
+    {"role": "system", "content": SYSTEM_PROMPT}
+]
+
+WAKE_WORD = "sourccey"
+
 # -----------------------------
 # Windows CUDA DLL helper
 # -----------------------------
@@ -67,6 +85,66 @@ def normalize_robot_terms(text: str) -> str:
         text = re.sub(pat, repl, text, flags=re.IGNORECASE)
     return text
 
+def has_wake_word(text: str) -> bool:
+    """
+    Returns True if the wake word appears near the start of the utterance.
+    """
+    if not text:
+        return False
+
+    t = text.lower().strip()
+
+    # Allow: "sourccey", "sourccey,", "hey sourccey", "ok sourccey"
+    prefixes = (
+        WAKE_WORD,
+        f"{WAKE_WORD},",
+        f"hey {WAKE_WORD}",
+        f"ok {WAKE_WORD}",
+        f"okay {WAKE_WORD}",
+    )
+
+    return any(t.startswith(p) for p in prefixes)
+
+
+def strip_wake_word(text: str) -> str:
+    """
+    Removes the wake word and leading punctuation.
+    """
+    t = text.strip()
+
+    patterns = [
+        r"^(hey|ok|okay)?\s*sourccey[:,]?\s*",
+    ]
+
+    for pat in patterns:
+        t = re.sub(pat, "", t, flags=re.IGNORECASE)
+
+    return t.strip()
+
+def ask_llm(user_text: str) -> str:
+    """
+    Send user text to the local LLM and get a response.
+    Keeps short rolling context to avoid drift.
+    """
+    _llm_history.append({"role": "user", "content": user_text})
+
+    # Keep context small (system + last 3 turns)
+    while len(_llm_history) > 7:
+        _llm_history.pop(1)
+
+    payload = {
+        "model": "qwen",
+        "messages": _llm_history,
+        "temperature": 0.3,
+        "max_tokens": 80,
+    }
+
+    r = requests.post(LLM_URL, json=payload, timeout=15)
+    r.raise_for_status()
+
+    reply = r.json()["choices"][0]["message"]["content"].strip()
+    _llm_history.append({"role": "assistant", "content": reply})
+    return reply
 
 def is_similar_text(a: str, b: str) -> bool:
     if not a or not b:
@@ -256,18 +334,35 @@ def main(argv: Optional[list[str]] = None) -> int:
                             text = transcribe(full)
                             text = normalize_robot_terms(text)
 
+                            # Wake word gating
+                            if not has_wake_word(text):
+                                if args.debug:
+                                    print(f"[IGNORED] No wake word: {text}")
+                                continue
+
+                            text = strip_wake_word(text)
+
+                            if not text:
+                                continue
+
                             if (
                                 text
                                 and len(text.replace(" ", "")) >= args.min_text_chars
                                 and now - last_sent_ts >= args.min_interval_s
                                 and not is_similar_text(text, last_sent)
                             ):
-                                if robot.send_text(text):
-                                    print(f"[RECOGNIZED] {text}")
-                                    last_sent = text
+                                try:
+                                    reply = ask_llm(text)
+                                except Exception as e:
+                                    print(f"[LLM ERROR] {e}", file=sys.stderr)
+                                    reply = "Sorry, I had trouble thinking just now."
+
+                                if reply and robot.send_text(reply):
+                                    print(f"[USER ] {text}")
+                                    print(f"[ROBOT] {reply}")
+                                    last_sent = reply
                                     last_sent_ts = now
                                     muted_until = now + args.mute_after_send_s
-
                         utter_chunks = []
                         silence_s = 0.0
                         utter_s = 0.0
