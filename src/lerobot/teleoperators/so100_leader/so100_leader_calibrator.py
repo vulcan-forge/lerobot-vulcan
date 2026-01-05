@@ -15,14 +15,14 @@ class SO100LeaderCalibrator:
     def __init__(self, teleop):
         self.teleop = teleop
 
-    def default_calibrate(self, reversed: bool = False) -> Dict[str, MotorCalibration]:
+    def default_calibrate(self, reverse: bool = False) -> Dict[str, MotorCalibration]:
         """Perform default calibration."""
 
-        homing_offsets = self._initialize_calibration(reversed)
+        homing_offsets = self._initialize_calibration(reverse)
 
         min_ranges = {}
         max_ranges = {}
-        default_calibration = self._load_default_calibration(reversed)
+        default_calibration = self._load_default_calibration(reverse)
         for motor, m in self.teleop.bus.motors.items():
             min_ranges[motor] = default_calibration[motor]["range_min"]
             max_ranges[motor] = default_calibration[motor]["range_max"]
@@ -33,16 +33,16 @@ class SO100LeaderCalibrator:
         logger.info(f"Default calibration completed and saved to {self.teleop.calibration_fpath}")
         return self.teleop.calibration
 
-    def _initialize_calibration(self, reversed: bool = False) -> Dict[str, int]:
+    def _initialize_calibration(self, reverse: bool = False) -> Dict[str, int]:
         """Initialize the calibration of the teleop."""
 
         homing_offsets = self.teleop.bus.set_position_homings({
-            "shoulder_pan": 2047 if reversed else 2048,
-            "shoulder_lift": 3325 if reversed else 770,
-            "elbow_flex": 1000 if reversed else 3095,
-            "wrist_flex": 1335 if reversed else 2760,
-            "wrist_roll": 2020 if reversed else 2085,
-            "gripper": 1190 if reversed else 2905
+            "shoulder_pan": 2047 if reverse else 2048,
+            "shoulder_lift": 3325 if reverse else 770,
+            "elbow_flex": 1000 if reverse else 3095,
+            "wrist_flex": 1335 if reverse else 2760,
+            "wrist_roll": 2020 if reverse else 2085,
+            "gripper": 1190 if reverse else 2905
         })
         return homing_offsets
 
@@ -65,7 +65,7 @@ class SO100LeaderCalibrator:
             )
         return calibration
 
-    def _load_default_calibration(self, reversed: bool = False) -> Dict[str, Any]:
+    def _load_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
         """Load default calibration from file."""
         # Get the directory of the current file
         current_dir = Path(__file__).parent
@@ -78,7 +78,7 @@ class SO100LeaderCalibrator:
         # If the calibration file doesn't exist, create it with default values
         if not calibration_file.exists():
             logger.info(f"Calibration file {calibration_file} not found. Creating default calibration...")
-            default_calibration = self._create_default_calibration(reversed)
+            default_calibration = self._create_default_calibration(reverse)
             with open(calibration_file, "w") as f:
                 json.dump(default_calibration, f, indent=4)
             logger.info(f"Created default calibration file: {calibration_file}")
@@ -86,7 +86,7 @@ class SO100LeaderCalibrator:
         with open(calibration_file, "r") as f:
             return json.load(f)
 
-    def _create_default_calibration(self, reversed: bool = False) -> Dict[str, Any]:
+    def _create_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
         """Create default calibration data for the robot."""
 
         return {

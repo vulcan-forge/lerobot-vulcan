@@ -30,14 +30,14 @@ class SourcceyLeaderCalibrator:
     def __init__(self, teleop):
         self.teleop = teleop
 
-    def default_calibrate(self, reversed: bool = False) -> Dict[str, MotorCalibration]:
+    def default_calibrate(self, reverse: bool = False) -> Dict[str, MotorCalibration]:
         """Perform default calibration."""
 
-        homing_offsets = self._initialize_calibration(reversed)
+        homing_offsets = self._initialize_calibration(reverse)
 
         min_ranges = {}
         max_ranges = {}
-        default_calibration = self._load_default_calibration(reversed)
+        default_calibration = self._load_default_calibration(reverse)
         for motor, m in self.teleop.bus.motors.items():
             min_ranges[motor] = default_calibration[motor]["range_min"]
             max_ranges[motor] = default_calibration[motor]["range_max"]
@@ -48,17 +48,17 @@ class SourcceyLeaderCalibrator:
         logger.info(f"Default calibration completed and saved to {self.teleop.calibration_fpath}")
         return self.teleop.calibration
 
-    def _initialize_calibration(self, reversed: bool = False) -> Dict[str, int]:
+    def _initialize_calibration(self, reverse: bool = False) -> Dict[str, int]:
         """Initialize the calibration of the robot."""
 
         shoulder_pan_homing_offset = self.teleop.bus.set_position_homings(
             {
-                "shoulder_pan": 2474 if reversed else 1554,
-                "shoulder_lift": 483 if reversed else 3667,
-                "elbow_flex": 3884 if reversed else 151,
-                "wrist_flex": 6086 if reversed else 2144,
-                "wrist_roll": 2078 if reversed else 2069,
-                "gripper": 5571 if reversed else 2725
+                "shoulder_pan": 2474 if reverse else 1554,
+                "shoulder_lift": 483 if reverse else 3667,
+                "elbow_flex": 3884 if reverse else 151,
+                "wrist_flex": 6086 if reverse else 2144,
+                "wrist_roll": 2078 if reverse else 2069,
+                "gripper": 5571 if reverse else 2725
             }
         )
 
@@ -97,7 +97,7 @@ class SourcceyLeaderCalibrator:
             )
         return calibration
 
-    def _load_default_calibration(self, reversed: bool = False) -> Dict[str, Any]:
+    def _load_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
         """Load default calibration from file."""
         # Get the directory of the current file
         current_dir = Path(__file__).parent
@@ -106,7 +106,7 @@ class SourcceyLeaderCalibrator:
 
         print("Calibration directory: ", calibration_dir)
 
-        if reversed:
+        if reverse:
             calibration_file = calibration_dir / "right_arm_default_calibration.json"
         else:
             calibration_file = calibration_dir / "left_arm_default_calibration.json"
@@ -117,7 +117,7 @@ class SourcceyLeaderCalibrator:
         # If the calibration file doesn't exist, create it with default values
         if not calibration_file.exists():
             logger.info(f"Calibration file {calibration_file} not found. Creating default calibration...")
-            default_calibration = self._create_default_calibration(reversed)
+            default_calibration = self._create_default_calibration(reverse)
             with open(calibration_file, "w") as f:
                 json.dump(default_calibration, f, indent=4)
             logger.info(f"Created default calibration file: {calibration_file}")
@@ -125,10 +125,10 @@ class SourcceyLeaderCalibrator:
         with open(calibration_file, "r") as f:
             return json.load(f)
 
-    def _create_default_calibration(self, reversed: bool = False) -> Dict[str, Any]:
+    def _create_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
         """Create default calibration data for the robot."""
         print("Creating default calibration data for the robot... CURRENTLY NOT CORRECT WILL BE FIXING LATER")
-        if reversed:
+        if reverse:
             # Right arm calibration (IDs 7-12)
             return {
                 "shoulder_pan": {
@@ -163,8 +163,8 @@ class SourcceyLeaderCalibrator:
                     "id": 11,
                     "drive_mode": 0,
                     "homing_offset": -516,
-                    "range_min": 0,
-                    "range_max": 4095
+                    "range_min": 768,
+                    "range_max": 3328
                 },
                 "gripper": {
                     "id": 12,

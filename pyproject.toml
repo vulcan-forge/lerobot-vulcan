@@ -25,7 +25,7 @@ discord = "https://discord.gg/s3KuuzsPFb"
 
 [project]
 name = "lerobot"
-version = "0.4.2"
+version = "0.4.3"
 description = "🤗 LeRobot: State-of-the-art Machine Learning for Real-World Robotics in Pytorch"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -75,8 +75,8 @@ dependencies = [
     "pyserial>=3.5,<4.0",
     "wandb>=0.20.0,<0.22.0", # TODO: Bumb dependency (compatible with protobuf)
 
-    "torch>=2.2.1,<2.8.0", # TODO: Bumb dependency
-    "torchcodec>=0.2.1,<0.6.0; sys_platform != 'win32' and (sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l')) and (sys_platform != 'darwin' or platform_machine != 'x86_64')", # TODO: Bumb dependency
+    "torch>=2.2.1,<=2.9.1", # TODO: Bumb dependency
+    "torchcodec>=0.2.1,<=0.9.1; sys_platform != 'win32' and (sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l')) and (sys_platform != 'darwin' or platform_machine != 'x86_64')", # TODO: Bumb dependency
     "torchvision>=0.21.0,<0.25.0", # Allow 0.21.x through 0.24.x (including nightly)
     "draccus==0.10.0", # TODO: Remove ==
     "gymnasium>=1.1.1,<2.0.0",
@@ -106,6 +106,10 @@ dynamixel = ["dynamixel-sdk>=3.7.31,<3.9.0"]
 gamepad = ["lerobot[pygame-dep]", "hidapi>=0.14.0,<0.15.0"]
 hopejr = ["lerobot[feetech]", "lerobot[pygame-dep]"]
 lekiwi = ["lerobot[feetech]", "pyzmq>=26.2.1,<28.0.0"]
+unitree_g1 = [
+    "pyzmq>=26.2.1,<28.0.0",
+    "onnxruntime>=1.16.0"
+]
 reachy2 = ["reachy2_sdk>=1.0.14,<1.1.0"]
 sourccey = [
     "lerobot[feetech]",
@@ -139,6 +143,7 @@ groot = [
     "ninja>=1.11.1,<2.0.0",
     "flash-attn>=2.5.9,<3.0.0 ; sys_platform != 'darwin'"
 ]
+xvla = ["lerobot[transformers-dep]"]
 hilserl = ["lerobot[transformers-dep]", "gym-hil>=0.1.13,<0.2.0", "lerobot[grpcio-dep]", "lerobot[placo-dep]"]
 
 # Features
@@ -177,6 +182,7 @@ all = [
     "lerobot[pi]",
     "lerobot[smolvla]",
     # "lerobot[groot]", TODO(Steven): Gr00t requires specific installation instructions for flash-attn
+    "lerobot[xvla]",
     "lerobot[hilserl]",
     "lerobot[async]",
     "lerobot[dev]",
@@ -376,10 +382,19 @@ ignore_errors = false
 # module = "lerobot.async_inference.*"
 # ignore_errors = false
 
-# [[tool.mypy.overrides]]
-# module = "lerobot.transport.*"
-# ignore_errors = false
+[[tool.mypy.overrides]]
+module = "lerobot.transport.*"
+ignore_errors = false
 
 # [[tool.mypy.overrides]]
 # module = "lerobot.scripts.*"
 # ignore_errors = false
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130" }]
+torchvision = [{ index = "pytorch-cu130" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true

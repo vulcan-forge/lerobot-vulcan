@@ -451,6 +451,7 @@ class OpenCVCamera(Camera):
                 break
             except Exception as e:
                 logger.warning(f"Error reading frame in background thread for {self}: {e}")
+                
 
     def _start_read_thread(self) -> None:
         """Starts or restarts the background read thread if it's not running."""

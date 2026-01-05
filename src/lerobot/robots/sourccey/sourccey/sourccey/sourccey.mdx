@@ -4,15 +4,51 @@ This guide walks you through setting up and using the Sourccey robot, from initi
 
 ## Table of Contents
 
-1. [Calibration](#calibration)
-2. [Hosting the Robot](#hosting-the-robot)
-3. [Teleoperation](#teleoperation)
-4. [Recording Data](#recording-data)
-5. [Training Models](#training-models)
-6. [Evaluation](#evaluation)
-7. [Utilities](#utilities)
+1. [Setup](#setup)
+2. [Calibration](#calibration)
+3. [Hosting the Robot](#hosting-the-robot)
+4. [Teleoperation](#teleoperation)
+5. [Recording Data](#recording-data)
+6. [Training Models](#training-models)
+7. [Evaluation](#evaluation)
+8. [Utilities](#utilities)
 
 ---
+
+## Setup
+
+Before using the Sourccey robot, you need to set up the development environment. This includes installing dependencies and compiling protobuf files.
+
+### Prerequisites
+
+-   Python 3.10 or higher
+-   [uv](https://docs.astral.sh/uv/getting-started/installation/) (Python package manager)
+-   Git
+
+### Installing uv
+
+If you don't have `uv` installed, install it:
+
+**On Linux/Mac:**
+curl -LsSf https://astral.sh/uv/install.sh | sh**On Windows:**
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"**On Debian-based systems (like Raspberry Pi OS):**sh
+sudo apt install python3-full python3-pip pipx
+pipx install uv### Setting Up the Environment
+
+1. **Create a virtual environment:**h
+   uv venv
+2. **Install LeRobot with Sourccey dependencies:**
+   uv pip install -e ".[feetech,smolvla,sourccey]"This installs the project in editable mode with all required extras for the Sourccey robot.
+
+3. **Compile Sourccey protobuf files:**sh
+   uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.pyAlternatively, you can use the function import method:h
+   uv run python -c "from lerobot.robots.sourccey.sourccey.protobuf.compile import compile_sourccey_protobuf; compile_sourccey_protobuf()"### Activating the Virtual Environment
+
+After setup, activate the virtual environment:
+
+**On Linux/Mac:**
+source .venv/bin/activate**On Windows:**sh
+source .venv/Scripts/activate---
 
 ## Calibration
 
@@ -39,22 +75,32 @@ uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
 
 ### Teleoperator Calibration
 
-Calibrate the bi-manual teleoperator (leader arms):
+Find the ports for your robot
 
 ```
-uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
+python src/lerobot/scripts/lerobot_find_port.py
+```
+
+Then Calibrate the bi-manual teleoperator (leader arms):
+
+```
+python src/lerobot/scripts/sourccey/auto_calibrate.py \
  --teleop.type=bi_sourccey_leader \
  --teleop.id=bi_sourccey_leader \
  --teleop.left_arm_port="COM4" \
- --teleop.right_arm_port="COM3"For single-arm teleoperator:
+ --teleop.right_arm_port="COM3"
 ```
+
+For single-arm teleoperator:
 
 ```
 python -m lerobot.calibrate \
  --teleop.type=sourccey_leader \
  --teleop.port=COM28 \
- --teleop.id=sourccey_leader### Viewing/Editing Calibration Files
+ --teleop.id=sourccey_leader
 ```
+
+### Viewing/Editing Calibration Files
 
 View calibration files:
 
@@ -83,18 +129,38 @@ uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 On your computer, activate the virtual environment and start teleoperation:
 
 ```
-source .venv/bin/activate # On Linux/Mac
-.venv\Scripts\activate # On WindowsThen run:
+
+# On Linux/Mac
+.venv/bin/activate
+
+
+# On Windows
+source .venv/Scripts/activate
 ```
+
+# On Windows Then run:
 
 ```
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.225" \
- --left_arm_port="COM3" \
- --right_arm_port="COM8" \
+<<<<<<< HEAD
+ --remote_ip="192.168.1.210" \
+ --left_arm_port="/dev/ttyACM1" \
+ --right_arm_port="/dev/ttyACM0" \
+=======
+ --remote_ip="192.168.1.206" \
+ --left_arm_port="COM4" \
+ --right_arm_port="COM3" \
+>>>>>>> cf7c41af7fa12a2c1ab05cd97707fc166d5819c0
  --keyboard_port="keyboard" \
- --fps=30
+ --fps=30 \
+ --reverse=True
+```
+
+Add this if the wheel motors are reversed
+
+```
+--reverse=True
 ```
 
 **Parameters:**
@@ -111,14 +177,15 @@ Record demonstration data for training:
 ```
 python src/lerobot/control/sourccey/sourccey/record.py \
  --id="sourccey" \
- --remote_ip="192.168.1.225" \
- --left_arm_port="COM4" \
- --right_arm_port="COM3" \
- --dataset.repo_id="local/my_dataset" \
+ --remote_ip="192.168.1.210" \
+ --left_arm_port="/dev/ttyACM1" \
+ --right_arm_port="/dev/ttyACM0" \
+ --reverse=True \
+ --dataset.repo_id="sourccey-009/sourccey-009__arm-left-a__set000__nick" \
  --dataset.num_episodes=10 \
- --dataset.episode_time_s=60 \
- --dataset.reset_time_s=5 \
- --dataset.task="Fold the towel" \
+ --dataset.episode_time_s=30 \
+ --dataset.reset_time_s=3 \
+ --dataset.task="Lift your shoulder" \
  --dataset.fps=30 \
  --dataset.push_to_hub=false
 ```
@@ -140,35 +207,37 @@ Train an ACT policy on your recorded dataset:
 ### Single GPU Training
 
 ```
-python src/lerobot/scripts/train.py \
- --dataset.repo_id=local/my_dataset \
+python src/lerobot/scripts/lerobot_train.py \
+ --dataset.repo_id=sourccey-009/sourccey-009__arm-left-a__set000__nick \
  --policy.type=act \
- --output_dir=outputs/train/act**my_dataset \
- --job_name=act**my_dataset \
+ --output_dir=outputs/train/act__sourccey-009__arm-left-a__set000__nick \
+ --job_name=act__sourccey-009__arm-left-a__set000__nick \
  --policy.device=cuda \
  --wandb.enable=false \
- --policy.push_to_hub=false \
- --steps=100000 \
- --save_freq=20000
+ --steps=20000 \
+ --save_freq=20000 \
+ --policy.push_to_hub=false
 ```
 
 ### Multi-GPU Training
 
 ```
-torchrun --nproc_per_node=2 src/lerobot/scripts/train.py \
- --dataset.repo_id=local/my_dataset \
- --policy.type=act \
- --output_dir=outputs/train/act**my_dataset \
- --job_name=act**my_dataset \
- --policy.device=cuda \
- --wandb.enable=false \
- --policy.push_to_hub=false \
- --steps=300000 \
- --save_freq=20000 \
- --batch_size=64 \
- --distributed_training=true \
- --num_gpus=2### Training on Pretrained Models
+accelerate launch \
+  --multi_gpu \
+  --num_processes=2 \
+  $(which lerobot-train) \
+  --dataset.repo_id=sourccey-008/sourccey-008__counter-a__set000__name \
+  --policy.type=act \
+  --output_dir=outputs/train/act__sourccey-008__counter-a__set000__name \
+  --job_name=act_multi_gpu \
+  --steps=100000 \
+  --save_freq=10000 \
+  --batch_size=128 \
+  --wandb.enable=false \
+  --policy.push_to_hub=false
 ```
+
+### Training on Pretrained Models
 
 ## Evaluation
 
@@ -177,14 +246,15 @@ Evaluate a trained model on the robot:
 ```
 python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.243" \
- --model_path="outputs/train/act\_\_my_dataset/checkpoints/100000/pretrained_model" \
- --dataset.repo_id="local/eval_dataset" \
- --dataset.num_episodes=5 \
- --dataset.episode_time_s=30 \
+ --remote_ip="192.168.1.230" \
+ --model_path="outputs/train/act__sourccey-008__counter-a__set000__name/checkpoints/020000/pretrained_model" \
+ --dataset.repo_id="sourccey-008/eval_sourccey-008__counter-a__set000__name" \
+ --dataset.num_episodes=1 \
+ --dataset.episode_time_s=60 \
  --dataset.reset_time_s=5 \
  --dataset.task="Fold the towel" \
  --dataset.fps=30
+
 ```
 
 ## Utilities
@@ -195,11 +265,11 @@ Replay previously recorded episodes:
 
 ```
 python src/lerobot/control/sourccey/sourccey/replay.py \
- --robot.type=sourccey \
- --robot.port=COM4 \
- --robot.id=sourccey \
- --dataset.repo_id=local/my_dataset \
+ --id="sourccey" \
+ --remote_ip="192.168.1.166" \
+ --dataset.dataset="sourccey-011/sourccey-011__set_table-a__set000__name" \
  --dataset.episode=0
+ --dataset.fps=30
 ```
 
 ### Regenerating Protobuf Files
@@ -207,8 +277,10 @@ python src/lerobot/control/sourccey/sourccey/replay.py \
 If you modify the protobuf definitions, regenerate the Python files:
 
 ```
+
 rm -rf src/lerobot/robots/sourccey/sourccey/protobuf/generated
 uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.py
+
 ```
 
 ### Combining Datasets
@@ -216,16 +288,16 @@ uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.py
 Combine multiple datasets into one:
 
 ```
+
 python src/lerobot/scripts/sourccey/combine_datasets.py \
  --dataset_paths='[
-"sourccey-003/dataset-1",
-"sourccey-003/dataset-2",
-"sourccey-003/dataset-3"
+"sourccey-008/sourccey-008__counter-a__set000__name",
+"sourccey-008/sourccey-008__counter-a__set001__name",
 ]' \
- --output_path="sourccey-003/combined_dataset"**⚠️ Important:** Do not include trailing commas in the `--dataset_paths` array, as this will cause errors.
+ --output_path="sourccey-008/sourccey-008__counter-a__set000-combined__name"
 ```
 
----
+## **⚠️ Important:** Do not include trailing commas in the `--dataset_paths` array, as this will cause errors.
 
 ## Workflow Summary
 
@@ -256,3 +328,7 @@ python src/lerobot/scripts/sourccey/combine_datasets.py \
 
 -   If calibration fails, try a hard reset with `--full_reset=True`
 -   Manually edit calibration files if needed (see [Viewing/Editing Calibration Files](#viewingediting-calibration-files))
+
+```
+
+```

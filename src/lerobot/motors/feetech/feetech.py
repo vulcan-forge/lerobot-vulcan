@@ -35,7 +35,7 @@ from .tables import (
 
 DEFAULT_PROTOCOL_VERSION = 0
 DEFAULT_BAUDRATE = 1_000_000
-DEFAULT_TIMEOUT_MS = 2000
+DEFAULT_TIMEOUT_MS = 1000
 
 NORMALIZED_DATA = ["Goal_Position", "Present_Position"]
 
@@ -247,16 +247,6 @@ class FeetechMotorsBus(MotorsBus):
             self.calibration[motor].homing_offset == cal.homing_offset
             for motor, cal in motors_calibration.items()
         )
-
-        # Update 6/22/2025:
-        # In order to properly calibrate geared down motors, we need to manaully update the homing offset
-        # this is strictly for geared down motors, so we will actually update the calibration if the values are different
-        # in the actual motors
-        if (not same_ranges or not same_offsets):
-            print(f"Updating calibration")
-            self.write_calibration(self.calibration)
-            same_ranges = True
-            same_offsets = True
 
         return same_ranges and same_offsets
 

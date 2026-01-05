@@ -76,13 +76,6 @@ def assert_same_address(model_ctrl_table: dict[str, dict], motor_models: list[st
             f"({list(zip(motor_models, all_bytes, strict=False))})."
         )
 
-MOTOR_MOVEMENT_DATA_NAMES = [
-    "Present_Position",
-    "Goal_Position",
-    "Present_Velocity",
-    "Goal_Velocity"
-]
-
 class MotorNormMode(str, Enum):
     RANGE_0_100 = "range_0_100"
     RANGE_M100_100 = "range_m100_100"
@@ -258,7 +251,6 @@ class MotorsBus(abc.ABC):
     model_encoding_table: dict[str, dict]
     model_number_table: dict[str, int]
     model_resolution_table: dict[str, int]
-    model_substitution_table: dict[str, str]
     normalized_data: list[str]
 
     def __init__(

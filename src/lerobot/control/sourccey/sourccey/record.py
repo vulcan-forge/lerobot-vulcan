@@ -20,6 +20,7 @@ class DatasetRecordConfig:
     reset_time_s: int = 5
     task: str = "Follow me"
     fps: int = 30
+    reverse: bool = False
     push_to_hub: bool = False
     private: bool = False
 
@@ -30,12 +31,13 @@ class SourcceyRecordConfig:
     left_arm_port: str = "COM4"
     right_arm_port: str = "COM3"
     keyboard: str = "keyboard"
+    reverse: bool = False
     dataset: DatasetRecordConfig = field(default_factory=DatasetRecordConfig)
 
 @parser.wrap()
 def record(cfg: SourcceyRecordConfig):
     # Create the robot and teleoperator configurations
-    robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
+    robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id, reverse=cfg.reverse)
     teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port=cfg.left_arm_port, right_arm_port=cfg.right_arm_port, id=cfg.id)
     keyboard_config = KeyboardTeleopConfig(id=cfg.keyboard)
 

@@ -17,10 +17,12 @@ import json
 import time
 from pathlib import Path
 from typing import Any, Dict
-from venv import logger
 
+import logging
 from lerobot.motors.feetech.feetech import OperatingMode
 from lerobot.motors.motors_bus import MotorCalibration
+
+logger = logging.getLogger(__name__)
 
 class SourcceyFollowerCalibrator:
     """Handles calibration operations for Sourccey robots."""
@@ -28,14 +30,14 @@ class SourcceyFollowerCalibrator:
     def __init__(self, robot):
         self.robot = robot
 
-    def default_calibrate(self, reversed: bool = False) -> Dict[str, MotorCalibration]:
+    def default_calibrate(self, reverse: bool = False) -> Dict[str, MotorCalibration]:
         """Perform default calibration."""
 
-        homing_offsets = self._initialize_calibration(reversed)
+        homing_offsets = self._initialize_calibration(reverse)
 
         min_ranges = {}
         max_ranges = {}
-        default_calibration = self._load_default_calibration(reversed)
+        default_calibration = self._load_default_calibration(reverse)
         for motor, m in self.robot.bus.motors.items():
             min_ranges[motor] = default_calibration[motor]["range_min"]
             max_ranges[motor] = default_calibration[motor]["range_max"]
@@ -82,7 +84,7 @@ class SourcceyFollowerCalibrator:
         print("Calibration saved to", self.robot.calibration_fpath)
         return self.robot.calibration
 
-    def auto_calibrate(self, reversed: bool = False) -> Dict[str, MotorCalibration]:
+    def auto_calibrate(self, reverse: bool = False) -> Dict[str, MotorCalibration]:
         """Automatically calibrate the robot using current monitoring to detect mechanical limits.
 
         This method performs automatic calibration by:
@@ -97,19 +99,19 @@ class SourcceyFollowerCalibrator:
         logger.info(f"Starting automatic calibration of robot {self.robot.id}")
         if (not self.robot.is_calibrated):
             logger.info("Performing preliminary default calibration...")
-            self.default_calibrate(reversed)
+            self.default_calibrate(reverse)
 
         # Set all motors to half turn homings except shoulder_lift
         logger.warning("WARNING: Robot will move to detect mechanical limits. Ensure clear workspace!")
 
         # Step 1: Adjust calibration so current positions become desired logical positions
         logger.info("Adjusting calibration to align current positions with desired logical positions...")
-        homing_offsets = self._initialize_calibration(reversed)
+        homing_offsets = self._initialize_calibration(reverse)
 
         # Step 2: Detect actual mechanical limits using current monitoring
         # Note: Torque will be enabled during limit detection
         logger.info("Detecting mechanical limits using current monitoring...")
-        detected_ranges = self._detect_mechanical_limits(reversed)
+        detected_ranges = self._detect_mechanical_limits(reverse)
 
         # Step 3: Disable torque for safety before setting homing offsets
         logger.info("Disabling torque for safety...")
@@ -128,7 +130,7 @@ class SourcceyFollowerCalibrator:
                                 range_mins: Dict[str, Any], range_maxes: Dict[str, int] = None) -> Dict[str, MotorCalibration]:
         calibration = {}
         for motor, m in self.robot.bus.motors.items():
-            drive_mode = 1 if motor == "shoulder_lift" or (self.robot.config.orientation == "right" and motor == "gripper") else 0
+            drive_mode = 1 if (motor == "shoulder_lift" or motor == "gripper") else 0
 
             range_min = range_mins[motor]
             range_max = range_maxes[motor]
@@ -141,22 +143,22 @@ class SourcceyFollowerCalibrator:
             )
         return calibration
 
-    def _initialize_calibration(self, reversed: bool = False) -> Dict[str, int]:
+    def _initialize_calibration(self, reverse: bool = False) -> Dict[str, int]:
         """Initialize the calibration of the robot."""
         # Set all motors to half turn homings except shoulder_lift
         homing_offsets = self.robot.bus.set_half_turn_homings()
-        shoulder_lift_homing_offset = self.robot.bus.set_position_homings({"shoulder_lift": 296 if reversed else 3800})
+        shoulder_lift_homing_offset = self.robot.bus.set_position_homings({"shoulder_lift": 296 if reverse else 3800})
         homing_offsets["shoulder_lift"] = shoulder_lift_homing_offset["shoulder_lift"]
         return homing_offsets
 
-    def _load_default_calibration(self, reversed: bool = False) -> Dict[str, Any]:
+    def _load_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
         """Load default calibration from file."""
         # Get the directory of the current file
         current_dir = Path(__file__).parent
         # Navigate to the sourccey directory where the calibration files are located
         calibration_dir = current_dir.parent / "sourccey"
 
-        if reversed:
+        if reverse:
             calibration_file = calibration_dir / "left_arm_default_calibration.json"
         else:
             calibration_file = calibration_dir / "right_arm_default_calibration.json"
@@ -167,7 +169,7 @@ class SourcceyFollowerCalibrator:
         # If the calibration file doesn't exist, create it with default values
         if not calibration_file.exists():
             logger.info(f"Calibration file {calibration_file} not found. Creating default calibration...")
-            default_calibration = self._create_default_calibration(reversed)
+            default_calibration = self._create_default_calibration(reverse)
             with open(calibration_file, "w") as f:
                 json.dump(default_calibration, f, indent=4)
             logger.info(f"Created default calibration file: {calibration_file}")
@@ -175,9 +177,9 @@ class SourcceyFollowerCalibrator:
         with open(calibration_file, "r") as f:
             return json.load(f)
 
-    def _create_default_calibration(self, reversed: bool = False) -> Dict[str, Any]:
+    def _create_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
         """Create default calibration data for the robot."""
-        if reversed:
+        if reverse:
             # Left arm calibration (IDs 1-6)
             return {
                 "shoulder_pan": {
@@ -270,7 +272,7 @@ class SourcceyFollowerCalibrator:
                 }
             }
 
-    def _detect_mechanical_limits(self, reversed: bool = False) -> Dict[str, Dict[str, float]]:
+    def _detect_mechanical_limits(self, reverse: bool = False) -> Dict[str, Dict[str, float]]:
         """Detect the mechanical limits of the robot using current monitoring.
 
         This function moves each motor incrementally while monitoring current draw.
@@ -293,7 +295,7 @@ class SourcceyFollowerCalibrator:
         # Get current positions as starting points
         start_positions = self.robot.bus.sync_read("Present_Position", normalize=False)
         reset_positions = start_positions.copy()
-        reset_positions['shoulder_lift'] = 1792 if reversed else 2304 # Manually set shoulder_lift to half way position
+        reset_positions['shoulder_lift'] = 1792 if reverse else 2304 # Manually set shoulder_lift to half way position
 
         # Initialize results dictionary
         detected_ranges = {}
@@ -303,20 +305,29 @@ class SourcceyFollowerCalibrator:
         settle_time = 0.1
 
         # Motor-specific configuration
+        is_left_arm = (self.robot.config.orientation == "left")
+
         motor_configs = {
             "shoulder_lift": {
                 "search_range": 3800,
                 "search_step": base_step_size * 2,
                 "max_current": self.robot.config.max_current_calibration_threshold * 5,
-                "search_positive": reversed,
-                "search_negative": not reversed
+                "search_positive": reverse,
+                "search_negative": not reverse
+            },
+            "wrist_roll": {
+                "search_range": 1280, # Wrist should not roll around itself fully
+                "search_step": base_step_size,
+                "max_current": self.robot.config.max_current_calibration_threshold,
+                "search_positive": True,
+                "search_negative": True
             },
             "gripper": {
                 "search_range": 1664,
                 "search_step": base_step_size,
                 "max_current": self.robot.config.max_current_calibration_threshold,
-                "search_positive": False,
-                "search_negative": True
+                "search_positive": is_left_arm,
+                "search_negative": not is_left_arm
             }
         }
 
@@ -348,7 +359,7 @@ class SourcceyFollowerCalibrator:
             max_pos = start_pos
 
             # Determine search order based on reversed flag
-            if reversed:
+            if reverse:
                 search_order = [("negative", config["search_negative"]), ("positive", config["search_positive"])]
             else:
                 search_order = [("positive", config["search_positive"]), ("negative", config["search_negative"])]

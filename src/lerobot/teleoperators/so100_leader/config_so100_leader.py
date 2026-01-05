@@ -24,4 +24,4 @@ from ..config import TeleoperatorConfig
 class SO100LeaderConfig(TeleoperatorConfig):
     # Port to connect to the arm
     port: str
-    reversed: bool = False
+    reverse: bool = False

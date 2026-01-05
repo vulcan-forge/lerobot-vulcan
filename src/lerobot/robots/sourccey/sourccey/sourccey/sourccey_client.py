@@ -17,6 +17,7 @@ import base64
 import json
 import logging
 from functools import cached_property
+import time
 from typing import Any, Dict, Optional, Tuple
 
 import cv2
@@ -67,12 +68,12 @@ class SourcceyClient(Robot):
 
         # Define three speed levels and a current index
         self.speed_levels = [
-            {"x": 0.25, "y": 0.25, "z": 0.25, "theta": 0.25},  # slow
-            {"x": 0.5,  "y": 0.5,  "z": 0.5, "theta": 0.5},   # medium
-            {"x": 0.75, "y": 0.75, "z": 0.75, "theta": 0.75},  # fast
-            {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # max
+            {"x": 0.8,  "y": 0.8,  "z": 0.8, "theta": 0.8},   # slow
+            {"x": 0.9, "y": 0.9, "z": 0.9, "theta": 0.9},  # medium
+            {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # fast
         ]
-        self.speed_index = 3  # Start at max
+        self.speed_index = 1  # Start at medium speed (0.9)
+        self.reverse = config.reverse
 
         self._is_connected = False
         self.logs = {}
@@ -84,6 +85,16 @@ class SourcceyClient(Robot):
         self.untorque_left_active = False
         self.untorque_right_active = False
         self._prev_keys: set[str] = set()
+
+        # Time of last command
+        self._last_cmd_t = time.monotonic()
+        self._slew_time_s_levels = [0.25, 0.25, 1.0]
+        self._x_deadbane = 0.02
+
+        # max change in x.vel per second (tune this)
+        self._x_accel_levels = [7.0, 5.0, 3.0]   # units: (x.vel units) / s
+        self._x_decel_levels = [7.0, 5.0, 3.0]   # allow faster slowing down than speeding up (optional)
+        self._x_cmd_smoothed = 0.0
 
     ###################################################################
     # Properties and Attributes
@@ -135,6 +146,17 @@ class SourcceyClient(Robot):
     @property
     def is_calibrated(self) -> bool:
         pass
+
+    ###################################################################
+    # Event Management
+    ###################################################################
+    def on_key_down(self, key_char: str) -> None:
+        if key_char == self.teleop_keys["speed_up"]:
+            self.speed_index = min(self.speed_index + 1, len(self.speed_levels) - 1)
+            print(f"Speed index: {self.speed_index}")
+        elif key_char == self.teleop_keys["speed_down"]:
+            self.speed_index = max(self.speed_index - 1, 0)
+            print(f"Speed index: {self.speed_index}")
 
     ###################################################################
     # Connection Management
@@ -293,7 +315,7 @@ class SourcceyClient(Robot):
         self.last_remote_state = new_state
 
         return new_frames, new_state
-    
+
     ###################################################################
     # Private Message and Parsing Functions
     ###################################################################
@@ -378,39 +400,85 @@ class SourcceyClient(Robot):
     # Private Control Functions
     ###################################################################
     def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray):
-        # Speed control
-        if self.teleop_keys["speed_up"] in pressed_keys:
-            self.speed_index = min(self.speed_index + 1, 3)
-        if self.teleop_keys["speed_down"] in pressed_keys:
-            self.speed_index = max(self.speed_index - 1, 0)
+        reverse = self.reverse
         speed_setting = self.speed_levels[self.speed_index]
         x_speed = speed_setting["x"]
         y_speed = speed_setting["y"]
         z_speed = speed_setting["z"]
         theta_speed = speed_setting["theta"]
 
+        pressed = set(pressed_keys)
+
         x_cmd = 0.0
         y_cmd = 0.0
         z_cmd = 0.0
         theta_cmd = 0.0
+        x_cmd_target = 0.0
 
-        if self.teleop_keys["forward"] in pressed_keys:
-            x_cmd += x_speed
-        if self.teleop_keys["backward"] in pressed_keys:
-            x_cmd -= x_speed
-        if self.teleop_keys["left"] in pressed_keys:
-            y_cmd += y_speed
-        if self.teleop_keys["right"] in pressed_keys:
-            y_cmd -= y_speed
-        if self.teleop_keys["up"] in pressed_keys:
-            z_cmd += z_speed
-        if self.teleop_keys["down"] in pressed_keys:
-            z_cmd -= z_speed
-        if self.teleop_keys["rotate_left"] in pressed_keys:
-            theta_cmd += theta_speed
-        if self.teleop_keys["rotate_right"] in pressed_keys:
-            theta_cmd -= theta_speed
+        if self.teleop_keys["forward"] in pressed:
+            if reverse:
+                x_cmd_target -= x_speed
+            else:
+                x_cmd_target += x_speed
+        if self.teleop_keys["backward"] in pressed:
+            if reverse:
+                x_cmd_target += x_speed
+            else:
+                x_cmd_target -= x_speed
+        if self.teleop_keys["left"] in pressed:
+            if reverse:
+                y_cmd -= y_speed
+            else:
+                y_cmd += y_speed
+        if self.teleop_keys["right"] in pressed:
+            if reverse:
+                y_cmd += y_speed
+            else:
+                y_cmd -= y_speed
+        if self.teleop_keys["up"] in pressed:
+            if reverse:
+                z_cmd -= z_speed
+            else:
+                z_cmd += z_speed
+        if self.teleop_keys["down"] in pressed:
+            if reverse:
+                z_cmd += z_speed
+            else:
+                z_cmd -= z_speed
+        if self.teleop_keys["rotate_left"] in pressed:
+            if reverse:
+                theta_cmd -= theta_speed
+            else:
+                theta_cmd += theta_speed
+        if self.teleop_keys["rotate_right"] in pressed:
+            if reverse:
+                theta_cmd += theta_speed
+            else:
+                theta_cmd -= theta_speed
 
+        slew_time_s = self._slew_time_s_levels[self.speed_index]
+        x_accel = self._x_accel_levels[self.speed_index]
+        x_decel = self._x_decel_levels[self.speed_index]
+
+        now = time.monotonic()
+        dt = now - self._last_cmd_t
+        self._last_cmd_t = now
+        dt = max(0.0, min(dt, slew_time_s))  # cap big jumps if the loop stalls
+
+        if abs(self._x_cmd_smoothed) >= self._x_deadbane:
+            # already moving -> smooth changes
+            self._x_cmd_smoothed = self._slew(
+                current=self._x_cmd_smoothed,
+                target=x_cmd_target,
+                dt=dt,
+                up_rate=x_accel,
+                down_rate=x_decel,
+            )
+        else:
+            # basically stopped -> jump immediately
+            self._x_cmd_smoothed = x_cmd_target
+
+        x_cmd = float(self._x_cmd_smoothed)
         action = {
             "x.vel": x_cmd,
             "y.vel": y_cmd,
@@ -420,7 +488,6 @@ class SourcceyClient(Robot):
 
         # Integrated keyboard controls: toggle per-arm untorque on key press (edge-triggered)
         try:
-            pressed = set(pressed_keys)
             left_key = self.teleop_keys.get("untorque_left")
             right_key = self.teleop_keys.get("untorque_right")
 
@@ -517,3 +584,14 @@ class SourcceyClient(Robot):
             return None
 
     
+    def _slew(self, current: float, target: float, dt: float, up_rate: float, down_rate: float) -> float:
+        delta = target - current
+        # If delta would reduce |current| (i.e., braking toward 0), use down_rate, else up_rate.
+        rate = down_rate if (current != 0.0 and (current * delta) < 0.0) else up_rate
+        max_step = rate * dt
+        if delta > max_step:
+            return current + max_step
+        if delta < -max_step:
+            return current - max_step
+        return target
+

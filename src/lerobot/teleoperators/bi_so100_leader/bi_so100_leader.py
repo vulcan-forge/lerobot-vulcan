@@ -43,14 +43,14 @@ class BiSO100Leader(Teleoperator):
             id=f"{config.id}_left" if config.id else None,
             calibration_dir=config.calibration_dir,
             port=config.left_arm_port,
-            reversed=False,
+            reverse=False,
         )
 
         right_arm_config = SO100LeaderConfig(
             id=f"{config.id}_right" if config.id else None,
             calibration_dir=config.calibration_dir,
             port=config.right_arm_port,
-            reversed=True,
+            reverse=True,
         )
 
         self.left_arm = SO100Leader(config=left_arm_config)

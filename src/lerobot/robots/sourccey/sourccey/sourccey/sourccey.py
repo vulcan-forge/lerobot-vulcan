@@ -71,6 +71,8 @@ class Sourccey(Robot):
         self.left_arm = SourcceyFollower(left_arm_config)
         self.right_arm = SourcceyFollower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
+        # Cameras are treated as best-effort: startup should not fail if a camera fails to connect/read.
+        self._connected_cameras: set[str] = set()
 
         self.dc_motors_controller = PWMDCMotorsController(
             motors=self.config.dc_motors,
@@ -85,7 +87,8 @@ class Sourccey(Robot):
         self.untorque_right_prev = False
 
     def __del__(self):
-        self.disconnect()
+        if (self.is_connected):
+            self.disconnect()
 
     ###################################################################
     # Properties and Attributes
@@ -95,9 +98,9 @@ class Sourccey(Robot):
         return {
             f"{motor}.pos": float for motor in self.left_arm.bus.motors} | {
             f"{motor}.pos": float for motor in self.right_arm.bus.motors} | {
+                "z.pos": float,
                 "x.vel": float,
                 "y.vel": float,
-                "z.vel": float,
                 "theta.vel": float,
             }
 
@@ -118,7 +121,8 @@ class Sourccey(Robot):
     @property
     def is_connected(self) -> bool:
         arms_connected = self.left_arm.is_connected and self.right_arm.is_connected
-        cams_connected = all(self.cameras[k].is_connected for k in self.cameras.keys())
+        # Only require cameras that successfully connected (failed cameras are ignored).
+        cams_connected = all(self.cameras[k].is_connected for k in self._connected_cameras)
         return arms_connected and cams_connected
 
     ###################################################################
@@ -131,11 +135,19 @@ class Sourccey(Robot):
         self.dc_motors_controller.connect()
 
         # Connect only target cameras
+        self._connected_cameras.clear()
         for cam_key in self.cameras.keys():
-            self.cameras[cam_key].connect()
+            try:
+                self.cameras[cam_key].connect()
+                self._connected_cameras.add(cam_key)
+            except Exception as e:
+                logger.warning(f"Camera '{cam_key}' failed to connect: {e}. Continuing without it.")
 
     def disconnect(self):
-        print("Disconnecting Sourccey")
+        if not self.is_connected:
+            return
+
+        logger.info(f"Disconnecting Sourccey")
         self.left_arm.disconnect()
         self.right_arm.disconnect()
 
@@ -143,8 +155,14 @@ class Sourccey(Robot):
         self.dc_motors_controller.disconnect()
 
         # Disconnect only those we connected
-        for cam_key in self.cameras.keys():
-            self.cameras[cam_key].disconnect()
+        for cam_key in list(self._connected_cameras):
+            try:
+                self.cameras[cam_key].disconnect()
+            except Exception:
+                pass
+        self._connected_cameras.clear()
+
+        logger.info(f"Sourccey disconnected.")
 
     ###################################################################
     # Calibration and Configuration Management
@@ -166,11 +184,11 @@ class Sourccey(Robot):
             # Create threads for each arm
             left_thread = threading.Thread(
                 target=self.left_arm.auto_calibrate,
-                kwargs={"reversed": False, "full_reset": full_reset}
+                kwargs={"reverse": False, "full_reset": full_reset}
             )
             right_thread = threading.Thread(
                 target=self.right_arm.auto_calibrate,
-                kwargs={"reversed": True, "full_reset": full_reset}
+                kwargs={"reverse": True, "full_reset": full_reset}
             )
 
             # Start left arm immediately
@@ -189,9 +207,9 @@ class Sourccey(Robot):
             raise ValueError("arm must be one of: None, 'left', 'right'")
 
         if arm == "left":
-            self.left_arm.auto_calibrate(reversed=False, full_reset=full_reset)
+            self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)
         else:
-            self.right_arm.auto_calibrate(reversed=True, full_reset=full_reset)
+            self.right_arm.auto_calibrate(reverse=True, full_reset=full_reset)
 
     def configure(self) -> None:
         self.left_arm.configure()
@@ -220,7 +238,14 @@ class Sourccey(Robot):
             obs_dict.update(base_vel)
 
             for cam_key in self.cameras.keys():
-                obs_dict[cam_key] = self.cameras[cam_key].async_read()
+                try:
+                    obs_dict[cam_key] = self.cameras[cam_key].async_read()
+                except Exception as e:
+                    # Keep the observation schema stable even if a camera is down.
+                    h = int(self.config.cameras[cam_key].height)
+                    w = int(self.config.cameras[cam_key].width)
+                    obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)
+                    logger.warning(f"Camera '{cam_key}' read failed: {e}. Using black frame.")
 
             return obs_dict
         except Exception as e:
@@ -235,6 +260,7 @@ class Sourccey(Robot):
             left_action = {key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")}
             right_action = {key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")}
             base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
+            base_goal_pos = {k: v for k, v in action.items() if k.endswith(".pos")}
 
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}
@@ -260,13 +286,13 @@ class Sourccey(Robot):
             )
 
             linear_actuator_action = self._body_to_linear_actuator_normalized(
-                base_goal_vel.get("z.vel", 0.0)
+                base_goal_pos.get("z.pos", 0.0)
             )
 
-            dc_motors_action = {**wheel_action, **linear_actuator_action}
+            dc_motors_action = {**wheel_action }
             self.dc_motors_controller.set_velocities(dc_motors_action)
 
-            sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_vel}
+            sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_pos, **base_goal_vel}
             return sent_action
         except Exception as e:
             print(f"Error sending action: {e}")
@@ -310,7 +336,7 @@ class Sourccey(Robot):
 
     def update(self):
         # Can be used to update the robot every cycle. Such as potentially a motor
-        pass
+        self.dc_motors_controller.update_velocity(max_step=0.25)
 
     # Base Functions
     def stop_base(self):
@@ -328,7 +354,8 @@ class Sourccey(Robot):
         velocity_vector = np.array([x, y, theta])
 
         # Build the correct kinematic matrix for mecanum wheels
-        # Flip the sign of the lateral (y) column to correct strafing direction
+        # Columns correspond to [x, y (strafe), theta (turn)].
+        # This mapping makes A/D (y.vel) strafe and Z/X (theta.vel) rotate.
         m = np.array([
             [ 1, -1, -1], # Front-left wheel
             [-1, -1, -1], # Front-right wheel
@@ -381,10 +408,10 @@ class Sourccey(Robot):
 
     def _body_to_linear_actuator_normalized(
         self,
-        z: float,
+        z_pos: float,
     ) -> dict:
         return {
-            "linear_actuator": self.clean_value(z),
+            "linear_actuator": 100.0, # self.clean_value(z_pos),
         }
 
     def _linear_actuator_normalized_to_body(
@@ -392,7 +419,7 @@ class Sourccey(Robot):
         linear_actuator_normalized: dict[str, Any],
     ) -> dict[str, Any]:
         return {
-            "z.vel": self.clean_value(linear_actuator_normalized["linear_actuator"]),
+            "z.pos": 100.0, # self.clean_value(linear_actuator_normalized["linear_actuator"]),
         }
 
     # Round to prevent floating-point precision issues and handle -0.0
