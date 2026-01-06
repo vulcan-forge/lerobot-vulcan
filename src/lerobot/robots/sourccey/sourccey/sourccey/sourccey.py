@@ -120,7 +120,10 @@ class Sourccey(Robot):
 
     @property
     def is_connected(self) -> bool:
-        arms_connected = self.left_arm.is_connected and self.right_arm.is_connected
+        left_arm_connected = self.left_arm is not None and self.left_arm.is_connected
+        right_arm_connected = self.right_arm is not None and self.right_arm.is_connected
+        arms_connected = left_arm_connected and right_arm_connected
+
         # Only require cameras that successfully connected (failed cameras are ignored).
         cams_connected = all(self.cameras[k].is_connected for k in self._connected_cameras)
         return arms_connected and cams_connected
