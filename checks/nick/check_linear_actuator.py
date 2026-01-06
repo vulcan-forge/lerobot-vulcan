@@ -1,40 +1,98 @@
+import argparse
+import json
 import time
+from dataclasses import dataclass
+from typing import Optional
 
-# Optional import (same pattern as battery.py)
+# gpiozero only exists on target hardware
 try:
     from gpiozero import MCP3008  # type: ignore
 except Exception:
     MCP3008 = None  # type: ignore
 
-VREF = 3.30  # adjust to measured 3V3 rail if you want accuracy
+# MCP3008 / signal config
 ACTUATOR_ADC_CHANNEL = 1
-
-# If your actuator voltage goes through a resistor divider before the MCP3008,
-# set this to (V_adc / V_actuator). Example: same as battery.py divider => 0.2
-ACTUATOR_VOLTAGE_DIVIDER_RATIO = 1.0  # <-- change this if you have a divider
-
+VREF = 3.30  # measure your Pi 3V3 rail for better accuracy
 AVERAGE_SAMPLES = 50
 
-def read_channel_voltage(channel: int, *, average_samples: int = AVERAGE_SAMPLES) -> float:
+# Calibration (fill these in after you observe raw at each end-stop)
+RAW_MIN = 120  # fully retracted raw_value
+RAW_MAX = 920  # fully extended raw_value
+STROKE_MM = 100.0  # optional
+
+_adc: Optional["MCP3008"] = None
+
+
+@dataclass
+class ActuatorData:
+    raw: int
+    voltage: float
+    pos01: float
+    pos_mm: float
+
+
+def _get_adc() -> "MCP3008":
+    global _adc
     if MCP3008 is None:
         raise RuntimeError("gpiozero is not installed; MCP3008 is unavailable on this machine.")
+    if _adc is None:
+        _adc = MCP3008(channel=ACTUATOR_ADC_CHANNEL)
+    return _adc
 
-    adc = MCP3008(channel=channel)
 
-    total = 0.0
-    for _ in range(average_samples):
-        raw = adc.raw_value                 # 0..1023
-        v_adc = (raw / 1023.0) * VREF       # volts at the MCP3008 pin
-        total += v_adc
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return lo if x < lo else hi if x > hi else x
 
-    return total / average_samples
 
-def read_actuator_voltage() -> float:
-    v_adc = read_channel_voltage(ACTUATOR_ADC_CHANNEL)
-    return v_adc / ACTUATOR_VOLTAGE_DIVIDER_RATIO
+def read_actuator_data() -> ActuatorData:
+    adc = _get_adc()
+
+    # Average raw counts for stability
+    total_raw = 0.0
+    for _ in range(AVERAGE_SAMPLES):
+        total_raw += float(adc.raw_value)  # 0..1023
+
+    raw = int(round(total_raw / AVERAGE_SAMPLES))
+    voltage = (raw / 1023.0) * VREF
+
+    # Map raw -> 0..1 position
+    if RAW_MAX == RAW_MIN:
+        pos01 = 0.0
+    else:
+        pos01 = (raw - RAW_MIN) / float(RAW_MAX - RAW_MIN)
+        pos01 = _clamp(pos01, 0.0, 1.0)
+
+    pos_mm = pos01 * STROKE_MM
+
+    return ActuatorData(raw=raw, voltage=voltage, pos01=pos01, pos_mm=pos_mm)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--watch", action="store_true", help="Print repeatedly instead of once")
+    ap.add_argument("--period", type=float, default=0.2, help="Seconds between prints in --watch mode")
+    args = ap.parse_args()
+
+    def emit():
+        d = read_actuator_data()
+        print(
+            json.dumps(
+                {
+                    "raw": d.raw,
+                    "voltage": round(d.voltage, 4),
+                    "pos01": round(d.pos01, 4),
+                    "pos_mm": round(d.pos_mm, 2),
+                }
+            )
+        )
+
+    if args.watch:
+        while True:
+            emit()
+            time.sleep(args.period)
+    else:
+        emit()
+
 
 if __name__ == "__main__":
-    while True:
-        v = read_actuator_voltage()
-        print(f"Actuator voltage (ch {ACTUATOR_ADC_CHANNEL}): {v:.3f} V")
-        time.sleep(0.2)
+    main()
