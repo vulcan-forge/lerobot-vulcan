@@ -183,6 +183,11 @@ class Sourccey(Robot):
         Auto-calibrate arms. If arm is None, calibrate both in parallel.
         arm can be "left" or "right" to calibrate only that side.
         """
+        self.left_arm.auto_calibrate_z(reverse=False)
+        self.right_arm.auto_calibrate_z(reverse=True)
+
+        return
+
         if arm is None:
             # Create threads for each arm
             left_thread = threading.Thread(
@@ -204,15 +209,22 @@ class Sourccey(Robot):
             # Wait for both threads to complete
             left_thread.join()
             right_thread.join()
-            return
 
-        if arm not in ("left", "right"):
+            # Return True if successful
+            self.left_arm.auto_calibrate_z(reverse=False)
+            self.right_arm.auto_calibrate_z(reverse=True)
+        elif arm == "left":
+            self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)
+        elif arm == "right":
+            self.right_arm.auto_calibrate(reverse=True, full_reset=full_reset)
+        else:
             raise ValueError("arm must be one of: None, 'left', 'right'")
 
-        if arm == "left":
-            self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)
-        else:
-            self.right_arm.auto_calibrate(reverse=True, full_reset=full_reset)
+        print("Auto-calibration completed")
+        return True
+
+    def auto_calibrate_z(self) -> None:
+        pass
 
     def configure(self) -> None:
         self.left_arm.configure()

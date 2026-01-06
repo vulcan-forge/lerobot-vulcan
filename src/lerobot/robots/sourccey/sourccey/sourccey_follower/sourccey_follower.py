@@ -151,6 +151,10 @@ class SourcceyFollower(Robot):
         else:
             self.calibration = self.calibrator.default_calibrate(reverse=reverse)
 
+    def auto_calibrate_z(self, reverse: bool = False) -> None:
+        # This sets the motors in a position such that the linear actuator can be calibrated
+        self.calibrator._z_position_calibration(reverse=reverse)
+
     def configure(self) -> None:
         self.bus.disable_torque()
         for motor in self.bus.motors:

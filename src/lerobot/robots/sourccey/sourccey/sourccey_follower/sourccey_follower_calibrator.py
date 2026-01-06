@@ -510,6 +510,25 @@ class SourcceyFollowerCalibrator:
             logger.error(f"Error during slow movement of {motor_name}: {e}")
             return False
 
+
+    def _z_position_calibration(self, reverse: bool = False) -> None:
+        # This sets the motors in a position such that the linear actuator can be calibrated
+
+        # Get current positions as starting points
+        start_positions = self.robot.bus.sync_read("Present_Position", normalize=False)
+        reset_positions = {}
+        reset_positions['shoulder_lift'] = 1792 if reverse else 2304 # Manually set shoulder_lift to half way position
+
+        # Move the motors to the reset positions
+        self.robot.bus.write("Goal_Position", reset_positions, normalize=False)
+        time.sleep(3)
+
+        # set the shoulder_lift to the start position
+        self.robot.bus.write("Goal_Position", start_positions, normalize=False)
+        time.sleep(3)
+
+        return True
+
     def _save_calibration(self) -> None:
         """Save calibration to file."""
         self.robot.bus.write_calibration(self.robot.calibration)
