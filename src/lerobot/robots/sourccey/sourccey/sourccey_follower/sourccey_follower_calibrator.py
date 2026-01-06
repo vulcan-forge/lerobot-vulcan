@@ -516,16 +516,15 @@ class SourcceyFollowerCalibrator:
 
         # Get current positions as starting points
         start_positions = self.robot.bus.sync_read("Present_Position", normalize=False)
-        reset_positions = {}
+        reset_positions = start_positions.copy()
         reset_positions['shoulder_lift'] = 1792 if reverse else 2304 # Manually set shoulder_lift to half way position
 
         # Move the motors to the reset positions
-        motor_name = "shoulder_lift"
-        self.robot.bus.write("Goal_Position", motor_name, reset_positions[motor_name], normalize=False)
+        self.robot.bus.sync_write("Goal_Position", reset_positions, normalize=False)
         time.sleep(3)
 
         # set the shoulder_lift to the start position
-        self.robot.bus.write("Goal_Position", motor_name, start_positions[motor_name], normalize=False)
+        self.robot.bus.sync_write("Goal_Position", start_positions, normalize=False)
         time.sleep(3)
 
     def _save_calibration(self) -> None:
