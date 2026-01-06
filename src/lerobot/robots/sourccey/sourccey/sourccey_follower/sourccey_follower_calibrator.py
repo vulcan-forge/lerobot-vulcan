@@ -510,7 +510,14 @@ class SourcceyFollowerCalibrator:
             logger.error(f"Error during slow movement of {motor_name}: {e}")
             return False
 
+    def _save_calibration(self) -> None:
+        """Save calibration to file."""
+        self.robot.bus.write_calibration(self.robot.calibration)
+        self.robot._save_calibration()
 
+    ###################################################################
+    # Z Position Calibration
+    ###################################################################
     def _z_position_calibration(self, reverse: bool = False) -> None:
         # This sets the motors in a position such that the linear actuator can be calibrated
 
@@ -523,11 +530,12 @@ class SourcceyFollowerCalibrator:
         self.robot.bus.sync_write("Goal_Position", reset_positions, normalize=False)
         time.sleep(3)
 
+        # Detect the mechanical limit of the linear actuator
+        self._detect_z_mechanical_limit(reverse)
+
         # set the shoulder_lift to the start position
         self.robot.bus.sync_write("Goal_Position", start_positions, normalize=False)
         time.sleep(3)
 
-    def _save_calibration(self) -> None:
-        """Save calibration to file."""
-        self.robot.bus.write_calibration(self.robot.calibration)
-        self.robot._save_calibration()
+    def _detect_z_mechanical_limit(self, reverse: bool = False) -> None:
+        time.sleep(10)
