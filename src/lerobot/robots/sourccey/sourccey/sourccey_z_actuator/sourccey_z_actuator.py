@@ -168,32 +168,21 @@ class ZActuator:
 
 
     def update(self, dt_s: float, *, instant: bool = True) -> None:
-        """
-        Update the internal controller and command the motor to track the target position.
-
-        This is a PI controller (P by default since ki=0.0) producing a motor command in [-1, 1].
-        Call this at a fixed rate (e.g. 50–200 Hz).
-        """
         if self.driver is None:
             raise RuntimeError("No driver provided. Pass `driver=...` (e.g. Sourccey.dc_motors_controller).")
 
-        dt = max(1e-3, float(dt_s))
-        pos = self.read_position()
-        err = self._target_pos_m100_100 - float(pos)
+        pos = float(self.read_position())
+        err = float(self._target_pos_m100_100) - pos
 
-        # If close enough, stop and unwind integrator to avoid jitter.
+        # Stop if close enough
         if abs(err) <= float(self.deadband):
             self.stop()
             return
 
-        # Integrator (anti-windup via clamp).
-        self._i_term += err * dt
-        self._i_term = max(-float(self.i_limit), min(float(self.i_limit), self._i_term))
-
-        cmd = float(self.kp) * err + float(self.ki) * self._i_term
+        # Pure P controller: velocity command proportional to position error
+        cmd = float(self.kp) * err
         cmd = max(-float(self.max_cmd), min(float(self.max_cmd), cmd))
 
-        # Internal actuation: velocity-style command to the DC controller.
         self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
 
          # --- debug: print once per second ---
