@@ -7,6 +7,8 @@ def set_z_position_m100_100(
     target: int = 25,
     *,
     timeout_s: float = 8.0,
+    stall_timeout_s: float = 2.0,
+    stall_eps_pos: float = 0.1,
     hz: float = 100.0,
     status_cb=None,
 ) -> float:
@@ -19,6 +21,8 @@ def set_z_position_m100_100(
         period = 1.0 / float(hz)
         t_end = time.monotonic() + float(timeout_s)
         last_t = time.monotonic()
+        last_pos = float(robot.z_actuator.read_position())
+        last_pos_change_t = time.monotonic()
 
         while True:
             now = time.monotonic()
@@ -38,6 +42,15 @@ def set_z_position_m100_100(
                 status_cb(r, pos, float(target))
 
             pos = float(robot.z_actuator.read_position())
+
+            # Stall timeout: if position hasn't changed for a while, assume we're stuck (no motion).
+            if abs(pos - last_pos) > float(stall_eps_pos):
+                last_pos = pos
+                last_pos_change_t = now
+            elif (now - last_pos_change_t) >= float(stall_timeout_s):
+                robot.z_actuator.stop()
+                raise TimeoutError(f"Timed out: Z position did not change for {stall_timeout_s:.1f}s (stall)")
+
             if abs(pos - float(target)) <= float(robot.z_actuator.deadband):
                 robot.z_actuator.stop()
                 return pos
