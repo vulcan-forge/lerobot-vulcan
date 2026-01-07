@@ -113,7 +113,7 @@ class ZSensor:
         t = (float(raw_scaled) - rmin) / (rmax - rmin)  # 0..1 ideally
         t = self._clamp(t, 0.0, 1.0)
         pos = -100.0 + 200.0 * t  # -100..100
-        return -pos if self.invert else pos
+        return pos
 
     def position_m100_100_to_raw(self, position: float) -> int:
         """Map [-100,100] to [0,raw_scale_max] (not using calibration; just scale)."""
@@ -191,7 +191,6 @@ class ZActuator:
             self.stop()
             return
 
-        cmd = -cmd if self.sensor.invert else cmd
         self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
 
          # --- debug: print once per second ---
