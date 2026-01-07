@@ -218,12 +218,8 @@ class ZActuator:
 
     # --- Reads (delegated to sensor) ---
     def read_position(self) -> float:
-        pos = self.sensor.read_position_m100_100()
-        return self.sensor.raw_to_pos_m100_100(pos)
+        return self.sensor.read_position_m100_100()
 
      # --- Write Functions ---
-    def write_position(self, target_pos: float) -> None:
-        target_raw = self.sensor.position_m100_100_to_raw(target_pos)
-
-        """Set desired Z position in [-100, 100]. Call `update(dt)` periodically to track it."""
-        self._target_pos_m100_100 = max(-100.0, min(100.0, float(target_raw)))
+    def write_position(self, target_pos_m100_100: float) -> None:
+        self._target_pos_m100_100 = max(-100.0, min(100.0, float(target_pos_m100_100)))
