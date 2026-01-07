@@ -143,16 +143,15 @@ class ZActuator:
         *,
         sensor: ZSensor,
         driver: ZMotorDriver | None = None,
-        motor: str | int = "linear_actuator",
-        invert: bool = False,
+        motor: str | int = "linear_actuator"
     ) -> None:
         self.sensor = sensor
         self.driver = driver
         self.motor = motor
-        self.invert = bool(invert)
 
         # Position target (public API is position-only; motor command is internal).
         self._target_pos_m100_100: float = 0.0
+        self.invert = sensor.invert
 
         # Tunables (safe defaults; tune on hardware).
         self.kp: float = 0.02
