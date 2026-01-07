@@ -174,7 +174,7 @@ class ZActuator:
             raise RuntimeError("No driver provided. Pass `driver=...` (e.g. Sourccey.dc_motors_controller).")
 
         dt = max(1e-3, float(dt_s))
-        pos = self.read_position_m100_100()
+        pos = self.read_position()
         err = self._target_pos_m100_100 - float(pos)
 
         # If close enough, stop and unwind integrator to avoid jitter.
