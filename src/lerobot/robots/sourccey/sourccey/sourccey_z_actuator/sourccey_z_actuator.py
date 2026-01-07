@@ -192,7 +192,7 @@ class ZActuator:
             self.stop()
             return
 
-        if self.invert_motor:
+        if self.invert:
             cmd = -cmd
 
         self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
