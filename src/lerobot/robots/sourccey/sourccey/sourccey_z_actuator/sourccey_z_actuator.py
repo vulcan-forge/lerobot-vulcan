@@ -22,8 +22,8 @@ class SourcceyZActuator:
     Reads a linear actuator feedback potentiometer via MCP3008 and exposes a position in [-100, 100].
 
     Default calibration assumes you're using the *scaled* raw (0..4095):
-      raw_min=1800 -> -100
-      raw_max=2000 -> +100
+      raw_min=0 -> -100
+      raw_max=4095 -> +100
     """
 
     def __init__(
@@ -32,19 +32,17 @@ class SourcceyZActuator:
         adc_channel: int = 1,
         vref: float = 3.30,
         average_samples: int = 50,
-        raw_scale_max: int = 4095,
-        raw_min: int = 1800,
-        raw_max: int = 2000,
-        invert: bool = False,
     ) -> None:
         self.adc_channel = adc_channel
         self.vref = vref
         self.average_samples = average_samples
 
-        self.raw_scale_max = raw_scale_max
-        self.raw_min = raw_min
-        self.raw_max = raw_max
-        self.invert = invert
+
+        # Default calibration assumes you're using the *scaled* raw (0..4095):
+        self.raw_scale_max = 4095
+        self.raw_min = 0
+        self.raw_max = self.raw_scale_max
+        self.invert = False
 
         self._adc: Optional["MCP3008"] = None
 
@@ -71,6 +69,14 @@ class SourcceyZActuator:
         if invert is not None:
             self.invert = bool(invert)
 
+    ###################################################################
+    # Raw Functions
+    ###################################################################
+
+    @staticmethod
+    def _clamp(x: float, lo: float, hi: float) -> float:
+        return lo if x < lo else hi if x > hi else x
+
     def read_raw_10bit(self) -> int:
         """Averaged native MCP3008 raw (0..1023)."""
         if self._adc is None:
@@ -82,7 +88,7 @@ class SourcceyZActuator:
             total += float(self._adc.raw_value)
         return int(round(total / self.average_samples))
 
-    def read(self) -> ZActuatorReading:
+    def read_raw(self) -> ZActuatorReading:
         """Read averaged raw_10bit, scaled raw, and voltage."""
         raw_10bit = self.read_raw_10bit()
 
@@ -92,10 +98,6 @@ class SourcceyZActuator:
         raw_scaled = int(round((raw_10bit / 1023.0) * float(self.raw_scale_max)))
 
         return ZActuatorReading(raw_10bit=raw_10bit, raw=raw_scaled, voltage=voltage)
-
-    @staticmethod
-    def _clamp(x: float, lo: float, hi: float) -> float:
-        return lo if x < lo else hi if x > hi else x
 
     def raw_to_pos_m100_100(self, raw: int) -> float:
         """Convert scaled raw into position [-100, 100] using current calibration."""
@@ -109,7 +111,22 @@ class SourcceyZActuator:
 
         return -pos if self.invert else pos
 
-    def read_position_m100_100(self) -> float:
-        """One-shot: read sensor and return position in [-100, 100]."""
-        reading = self.read()
-        return self.raw_to_pos_m100_100(reading.raw)
+    def position_m100_100_to_raw(self, position: float) -> int:
+        return int(round(position / 100.0 * self.raw_scale_max))
+
+    ###################################################################
+    # Read / Write Functions
+    ##################################################################
+    def read(self, normalize: bool = True) -> int:
+        raw = self.read_raw().raw
+        if normalize:
+            return self.raw_to_pos_m100_100(raw)
+        else:
+            return raw
+
+    def write(self, value: int, normalize: bool = True) -> None:
+        if normalize:
+            raw = self.position_m100_100_to_raw(value)
+        else:
+            raw = value
+        self.write_raw(raw)
