@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Protocol
 
 
 try:
@@ -12,18 +12,24 @@ except Exception:  # pragma: no cover
 
 @dataclass(frozen=True)
 class ZActuatorReading:
-    raw_10bit: int     # 0..1023 (native MCP3008)
-    raw: int           # 0..raw_scale_max (scaled; default 0..4095)
-    voltage: float     # volts at the MCP3008 pin
+    raw_10bit: int  # 0..1023 (native MCP3008)
+    raw: int        # 0..raw_scale_max (scaled; default 0..4095)
+    voltage: float  # volts at the MCP3008 pin
 
 
-class SourcceyZActuator:
+class ZMotorDriver(Protocol):
+    """Small protocol so we can inject Sourccey’s DC controller without importing it here."""
+    def set_velocity(self, motor: str | int, velocity: float, normalize: bool = True, instant: bool = True) -> None: ...
+    def set_pwm(self, motor: str | int, duty_cycle: float) -> None: ...
+
+
+class ZSensor:
     """
-    Reads a linear actuator feedback potentiometer via MCP3008 and exposes a position in [-100, 100].
+    Potentiometer sensor reader via MCP3008.
 
-    Default calibration assumes you're using the *scaled* raw (0..4095):
-      raw_min=0 -> -100
-      raw_max=4095 -> +100
+    - Raw MCP3008 is 10-bit (0..1023).
+    - We also expose a scaled raw (default 0..4095) because it’s nicer to calibrate.
+    - Calibration maps scaled raw -> position in [-100, 100].
     """
 
     def __init__(
@@ -32,14 +38,13 @@ class SourcceyZActuator:
         adc_channel: int = 1,
         vref: float = 3.30,
         average_samples: int = 50,
+        raw_scale_max: int = 4095,
     ) -> None:
-        self.adc_channel = adc_channel
-        self.vref = vref
-        self.average_samples = average_samples
+        self.adc_channel = int(adc_channel)
+        self.vref = float(vref)
+        self.average_samples = int(average_samples)
 
-
-        # Default calibration assumes you're using the *scaled* raw (0..4095):
-        self.raw_scale_max = 4095
+        self.raw_scale_max = int(raw_scale_max)
         self.raw_min = 0
         self.raw_max = self.raw_scale_max
         self.invert = False
@@ -69,10 +74,6 @@ class SourcceyZActuator:
         if invert is not None:
             self.invert = bool(invert)
 
-    ###################################################################
-    # Raw Functions
-    ###################################################################
-
     @staticmethod
     def _clamp(x: float, lo: float, hi: float) -> float:
         return lo if x < lo else hi if x > hi else x
@@ -91,42 +92,122 @@ class SourcceyZActuator:
     def read_raw(self) -> ZActuatorReading:
         """Read averaged raw_10bit, scaled raw, and voltage."""
         raw_10bit = self.read_raw_10bit()
-
         voltage = (raw_10bit / 1023.0) * self.vref
 
         # Scale 10-bit raw into e.g. 0..4095 so calibration values like 1800..2000 make sense.
         raw_scaled = int(round((raw_10bit / 1023.0) * float(self.raw_scale_max)))
-
         return ZActuatorReading(raw_10bit=raw_10bit, raw=raw_scaled, voltage=voltage)
 
-    def raw_to_pos_m100_100(self, raw: int) -> float:
+    def raw_to_pos_m100_100(self, raw_scaled: int) -> float:
         """Convert scaled raw into position [-100, 100] using current calibration."""
         rmin, rmax = float(self.raw_min), float(self.raw_max)
         if rmax == rmin:
             return 0.0
 
-        t = (float(raw) - rmin) / (rmax - rmin)  # 0..1 ideally
+        t = (float(raw_scaled) - rmin) / (rmax - rmin)  # 0..1 ideally
         t = self._clamp(t, 0.0, 1.0)
         pos = -100.0 + 200.0 * t  # -100..100
-
         return -pos if self.invert else pos
 
     def position_m100_100_to_raw(self, position: float) -> int:
-        return int(round(position / 100.0 * self.raw_scale_max))
+        """Map [-100,100] to [0,raw_scale_max] (not using calibration; just scale)."""
+        p = self._clamp(float(position), -100.0, 100.0)
+        t = (p + 100.0) / 200.0
+        return int(round(t * float(self.raw_scale_max)))
 
-    ###################################################################
-    # Read / Write Functions
-    ##################################################################
-    def read(self, normalize: bool = True) -> int:
-        raw = self.read_raw().raw
-        if normalize:
-            return self.raw_to_pos_m100_100(raw)
-        else:
-            return raw
+    def read_position_m100_100(self) -> float:
+        return self.raw_to_pos_m100_100(self.read_raw().raw)
 
-    def write(self, value: int, normalize: bool = True) -> None:
-        if normalize:
-            raw = self.position_m100_100_to_raw(value)
-        else:
-            raw = value
-        self.write_raw(raw)
+
+class ZActuator:
+    """
+    Higher-level Z module:
+    - reads position through a ZSensor
+    - writes motor commands through an injected driver (e.g. Sourccey’s PWM DC controller)
+
+    This keeps the ADC concerns (sensor) separate from actuation concerns (motor driver).
+    """
+
+    def __init__(
+        self,
+        *,
+        sensor: ZSensor,
+        driver: ZMotorDriver | None = None,
+        motor: str | int = "linear_actuator",
+    ) -> None:
+        self.sensor = sensor
+        self.driver = driver
+        self.motor = motor
+
+        # Position target (public API is position-only; motor command is internal).
+        self._target_pos_m100_100: float = 0.0
+
+        # Controller state (integrator for PI; start with ki=0.0).
+        self._i_term: float = 0.0
+
+        # Tunables (safe defaults; tune on hardware).
+        self.kp: float = 0.02
+        self.ki: float = 0.0
+        self.deadband: float = 1.0
+        self.max_cmd: float = 0.6
+        self.i_limit: float = 0.5
+
+    @property
+    def is_connected(self) -> bool:
+        return self.sensor.is_connected
+
+    def connect(self) -> None:
+        self.sensor.connect()
+
+    def disconnect(self) -> None:
+        self.sensor.disconnect()
+
+
+    def update(self, dt_s: float, *, instant: bool = True) -> None:
+        """
+        Update the internal controller and command the motor to track the target position.
+
+        This is a PI controller (P by default since ki=0.0) producing a motor command in [-1, 1].
+        Call this at a fixed rate (e.g. 50–200 Hz).
+        """
+        if self.driver is None:
+            raise RuntimeError("No driver provided. Pass `driver=...` (e.g. Sourccey.dc_motors_controller).")
+
+        dt = max(1e-3, float(dt_s))
+        pos = self.read_position_m100_100()
+        err = self._target_pos_m100_100 - float(pos)
+
+        # If close enough, stop and unwind integrator to avoid jitter.
+        if abs(err) <= float(self.deadband):
+            self.stop()
+            return
+
+        # Integrator (anti-windup via clamp).
+        self._i_term += err * dt
+        self._i_term = max(-float(self.i_limit), min(float(self.i_limit), self._i_term))
+
+        cmd = float(self.kp) * err + float(self.ki) * self._i_term
+        cmd = max(-float(self.max_cmd), min(float(self.max_cmd), cmd))
+
+        # Internal actuation: velocity-style command to the DC controller.
+        self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
+
+
+    def stop(self) -> None:
+        """Stop motor output and reset integrator."""
+        self._i_term = 0.0
+        if self.driver is not None:
+            self.driver.set_velocity(self.motor, 0.0, normalize=True, instant=True)
+
+    # --- Reads (delegated to sensor) ---
+
+    def read_position(self) -> float:
+        pos = self.sensor.read_position_m100_100()
+        return self.sensor.raw_to_pos_m100_100(pos)
+
+     # --- Write Functions ---
+    def write_position(self, target_pos: float) -> None:
+        target_raw = self.sensor.position_m100_100_to_raw(target_pos)
+
+        """Set desired Z position in [-100, 100]. Call `update(dt)` periodically to track it."""
+        self._target_pos_m100_100 = max(-100.0, min(100.0, float(target_raw)))
