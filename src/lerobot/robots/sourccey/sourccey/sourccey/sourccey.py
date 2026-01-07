@@ -27,6 +27,7 @@ from lerobot.robots.robot import Robot
 from lerobot.robots.sourccey.sourccey.protobuf.sourccey_protobuf import SourcceyProtobuf
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower import SourcceyFollower
+from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import ZActuator, ZSensor
 from .config_sourccey import SourcceyConfig
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,14 @@ class Sourccey(Robot):
         self.dc_motors_controller = PWMDCMotorsController(
             motors=self.config.dc_motors,
             config=self.config.dc_motors_config,
+        )
+
+         # Z Actuator Code
+        self.z_sensor = ZSensor(adc_channel=1, vref=3.30, average_samples=50)
+        self.z_actuator = ZActuator(
+            sensor=self.z_sensor,
+            driver=self.dc_motors_controller,
+            motor="linear_actuator",
         )
 
         # Initialize protobuf converter
@@ -136,6 +145,7 @@ class Sourccey(Robot):
         self.right_arm.connect(calibrate)
 
         self.dc_motors_controller.connect()
+        self.z_actuator.connect()
 
         # Connect only target cameras
         self._connected_cameras.clear()
@@ -156,6 +166,9 @@ class Sourccey(Robot):
 
         self.stop_base()
         self.dc_motors_controller.disconnect()
+
+        self.z_actuator.stop()
+        self.z_actuator.disconnect()
 
         # Disconnect only those we connected
         for cam_key in list(self._connected_cameras):
