@@ -125,7 +125,7 @@ class ZSensor:
         return self.raw_to_pos_m100_100(self.read_raw().raw)
 
 
-class SourcceyZActuator:
+class ZActuator:
     """
     Higher-level Z module:
     - reads position through a ZSensor
