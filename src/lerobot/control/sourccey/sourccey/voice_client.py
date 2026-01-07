@@ -34,6 +34,10 @@ _llm_history = [
     {"role": "system", "content": SYSTEM_PROMPT}
 ]
 
+PHYSICAL_VERBS = {
+    "pick up", "lift", "carry", "take out", "wash", "drive", "move", "come to"
+}
+
 WAKE_WORD = "sourccey"
 
 # -----------------------------
@@ -120,6 +124,10 @@ def strip_wake_word(text: str) -> str:
         t = re.sub(pat, "", t, flags=re.IGNORECASE)
 
     return t.strip()
+
+def sounds_like_physical_action(text: str) -> bool:
+    t = text.lower()
+    return any(v in t for v in PHYSICAL_VERBS)
 
 def ask_llm(user_text: str) -> str:
     """
@@ -352,7 +360,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                                 and not is_similar_text(text, last_sent)
                             ):
                                 try:
-                                    reply = ask_llm(text)
+                                    if sounds_like_physical_action(text):
+                                        reply = "I can explain how to do that, but I can't physically perform it."
+                                    else:
+                                        reply = ask_llm(text)
                                 except Exception as e:
                                     print(f"[LLM ERROR] {e}", file=sys.stderr)
                                     reply = "Sorry, I had trouble thinking just now."
