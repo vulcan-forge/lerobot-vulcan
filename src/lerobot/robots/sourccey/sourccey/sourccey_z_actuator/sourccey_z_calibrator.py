@@ -54,13 +54,14 @@ class SourcceyZCalibrator:
     def _read_pos(self) -> float:
         return float(self.actuator.sensor.read_position_m100_100())
 
-    def _read_raw_scaled(self) -> int:
+    def _read_raw(self) -> int:
+        """Read native MCP3008 units (0..1023)."""
         return int(self.actuator.sensor.read_raw().raw)
 
     def _wait_until_stable(self) -> int:
         """
         Wait until position change stays within epsilon for stable_s.
-        Returns the raw_scaled value at the moment stability is achieved.
+        Returns the raw value (0..1023) at the moment stability is achieved.
         """
         period = 1.0 / max(1.0, self.sample_hz)
         t_deadline = time.monotonic() + self.max_phase_s
@@ -83,7 +84,7 @@ class SourcceyZCalibrator:
                     if stable_start is None:
                         stable_start = now
                     elif (now - stable_start) >= self.stable_s:
-                        return self._read_raw_scaled()
+                        return self._read_raw()
                 else:
                     stable_start = None
 
@@ -110,9 +111,10 @@ class SourcceyZCalibrator:
         time.sleep(0.25)
 
         # Decide mapping
-        raw_min = int(raw_bottom)
-        raw_max = int(raw_top)
-        invert = bool(self.actuator.sensor.invert)
+        raw_min = int(min(raw_bottom, raw_top))
+        raw_max = int(max(raw_bottom, raw_top))
+        # If bottom reads higher than top, invert so that bottom maps to -100 and top maps to +100.
+        invert = bool(raw_bottom > raw_top)
 
         self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
 

@@ -15,8 +15,7 @@ except Exception:  # pragma: no cover
 
 @dataclass(frozen=True)
 class ZActuatorReading:
-    raw_10bit: int  # 0..1023 (native MCP3008)
-    raw: int        # 0..raw_scale_max (scaled; default 0..4095)
+    raw: int        # 0..1023 (native MCP3008)
     voltage: float  # volts at the MCP3008 pin
 
 
@@ -31,8 +30,8 @@ class ZSensor:
     Potentiometer sensor reader via MCP3008.
 
     - Raw MCP3008 is 10-bit (0..1023).
-    - We also expose a scaled raw (default 0..4095) because it’s nicer to calibrate.
-    - Calibration maps scaled raw -> position in [-100, 100].
+    - We keep everything in native units for calibration and conversion.
+    - Calibration maps raw -> position in [-100, 100].
     """
 
     def __init__(
@@ -41,19 +40,18 @@ class ZSensor:
         adc_channel: int = 1,
         vref: float = 3.30,
         average_samples: int = 50,
-        raw_scale_min: int = 0,
-        raw_scale_max: int = 4095,
-        invert: bool = True, # We want to invert the potentiometer by default so that top is max and bottom is min
+        invert: bool = True,  # invert published position convention (e.g. make "up" positive)
     ) -> None:
         self.adc_channel = int(adc_channel)
         self.vref = float(vref)
         self.average_samples = int(average_samples)
 
+        # Calibration bounds in native MCP3008 units.
         self.raw_min = 0
         self.raw_max = 1023
-        self.raw_scale_min = int(raw_scale_min)
-        self.raw_scale_max = int(raw_scale_max)
-        self.invert = invert
+        self.calibration_min = self.raw_min
+        self.calibration_max = self.raw_max
+        self.invert = bool(invert)
 
         self._adc: Optional["MCP3008"] = None
 
@@ -75,8 +73,8 @@ class ZSensor:
             self._adc = None
 
     def set_calibration(self, *, raw_min: int, raw_max: int, invert: Optional[bool] = None) -> None:
-        self.raw_min = int(raw_min)
-        self.raw_max = int(raw_max)
+        self.calibration_min = int(raw_min)
+        self.calibration_max = int(raw_max)
         if invert is not None:
             self.invert = bool(invert)
 
@@ -88,8 +86,8 @@ class ZSensor:
     ############################################################
     # Read Functions
     ############################################################
-    def read_raw_10bit(self) -> int:
-        """Averaged native MCP3008 raw (0..1023)."""
+    def read_raw(self) -> ZActuatorReading:
+        """Read averaged raw (0..1023) and voltage."""
         if self._adc is None:
             self.connect()
         assert self._adc is not None
@@ -97,16 +95,9 @@ class ZSensor:
         total = 0.0
         for _ in range(self.average_samples):
             total += float(self._adc.raw_value)
-        return int(round(total / self.average_samples))
-
-    def read_raw(self) -> ZActuatorReading:
-        """Read averaged raw_10bit, scaled raw, and voltage."""
-        raw_10bit = self.read_raw_10bit()
-        voltage = (raw_10bit / 1023.0) * self.vref
-
-        # Scale 10-bit raw into e.g. 0..4095 so calibration values like 1800..2000 make sense.
-        raw_scaled = int(round((raw_10bit / 1023.0) * float(self.raw_scale_max)))
-        return ZActuatorReading(raw_10bit=raw_10bit, raw=raw_scaled, voltage=voltage)
+        raw = int(round(total / self.average_samples))
+        voltage = (raw / 1023.0) * self.vref
+        return ZActuatorReading(raw=raw, voltage=voltage)
 
     def read_position_m100_100(self) -> float:
         return self.raw_to_pos_m100_100(self.read_raw().raw)
@@ -115,13 +106,13 @@ class ZSensor:
     # Conversion Functions
     ############################################################
 
-    def raw_to_pos_m100_100(self, raw_scaled: int) -> float:
-        """Convert scaled raw into position [-100, 100] using current calibration."""
-        rmin, rmax = float(self.raw_min), float(self.raw_max)
+    def raw_to_pos_m100_100(self, raw: int) -> float:
+        """Convert native raw (0..1023) into position [-100, 100] using current calibration."""
+        rmin, rmax = float(self.calibration_min), float(self.calibration_max)
         if rmax == rmin:
             return 0.0
 
-        t = (float(raw_scaled) - rmin) / (rmax - rmin)  # 0..1 ideally
+        t = (float(raw) - rmin) / (rmax - rmin)  # 0..1 ideally
         t = self._clamp(t, 0.0, 1.0)
         pos = -100.0 + 200.0 * t  # -100..100
 
@@ -129,10 +120,13 @@ class ZSensor:
         return -pos if self.invert else pos
 
     def position_m100_100_to_raw(self, position: float) -> int:
-        """Map [-100,100] to [0,raw_scale_max] (not using calibration; just scale)."""
+        """Map [-100,100] -> [calibration_min, calibration_max] (inverse of raw_to_pos_m100_100)."""
         p = self._clamp(float(position), -100.0, 100.0)
+        if self.invert:
+            p = -p
         t = (p + 100.0) / 200.0
-        return int(round(t * float(self.raw_scale_max)))
+        rmin, rmax = float(self.calibration_min), float(self.calibration_max)
+        return int(round(rmin + t * (rmax - rmin)))
 
 
 class ZActuator:
@@ -150,14 +144,15 @@ class ZActuator:
         sensor: ZSensor,
         driver: ZMotorDriver | None = None,
         motor: str | int = "linear_actuator",
+        invert: bool = False,
     ) -> None:
         self.sensor = sensor
         self.driver = driver
         self.motor = motor
+        self.invert = bool(invert)
 
         # Position target (public API is position-only; motor command is internal).
         self._target_pos_m100_100: float = 0.0
-        self.invert = bool(sensor.invert)
 
         # Tunables (safe defaults; tune on hardware).
         self.kp: float = 0.02
@@ -197,7 +192,7 @@ class ZActuator:
             self.stop()
             return
 
-        if self.invert:
+        if self.invert_motor:
             cmd = -cmd
 
         self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)

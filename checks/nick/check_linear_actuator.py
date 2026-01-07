@@ -51,8 +51,7 @@ if __name__ == "__main__":
     def status_printer(r, pos, target):
         print(
             {
-                "raw_10bit": r.raw_10bit,
-                "raw_scaled": r.raw,
+                "raw": r.raw,
                 "voltage": round(r.voltage, 4),
                 "pos_m100_100": round(float(pos), 2),
                 "target_m100_100": round(float(target), 2),
