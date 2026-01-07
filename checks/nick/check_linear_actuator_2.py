@@ -34,10 +34,10 @@ def set_z_position_m100_100(
             # Print / callback every loop
             if status_cb is not None:
                 r = robot.z_sensor.read_raw()
-                pos = float(robot.z_actuator.read_position_m100_100())
+                pos = float(robot.z_actuator.read_position())
                 status_cb(r, pos, float(target))
 
-            pos = float(robot.z_actuator.read_position_m100_100())
+            pos = float(robot.z_actuator.read_position())
             if abs(pos - float(target)) <= float(robot.z_actuator.deadband):
                 robot.z_actuator.stop()
                 return pos
