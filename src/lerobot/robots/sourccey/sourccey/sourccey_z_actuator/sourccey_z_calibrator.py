@@ -30,7 +30,7 @@ class SourcceyZCalibrator:
         self,
         actuator,  # ZActuator
         *,
-        stable_s: float = 3.0,
+        stable_s: float = 1.0,
         sample_hz: float = 30.0,
         stable_eps_pos: float = 0.25,
         max_phase_s: float = 30.0,
@@ -112,6 +112,7 @@ class SourcceyZCalibrator:
         # Decide mapping
         raw_min = int(raw_bottom)
         raw_max = int(raw_top)
+        invert = bool(self.actuator.sensor.invert)
 
         self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
 
@@ -120,5 +121,5 @@ class SourcceyZCalibrator:
             raw_top=int(raw_top),
             raw_min=int(raw_min),
             raw_max=int(raw_max),
-            invert=bool(self.actuator.sensor.invert),
+            invert=invert,
         )
