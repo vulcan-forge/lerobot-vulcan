@@ -41,7 +41,7 @@ class ZSensor:
         average_samples: int = 50,
         raw_scale_min: int = 0,
         raw_scale_max: int = 4095,
-        invert: bool = False, # We want to invert the potentiometer by default so that top is max and bottom is min
+        invert: bool = True, # We want to invert the potentiometer by default so that top is max and bottom is min
     ) -> None:
         self.adc_channel = int(adc_channel)
         self.vref = float(vref)
@@ -187,6 +187,7 @@ class ZActuator:
             self.stop()
             return
 
+        cmd = -cmd if self.sensor.invert else cmd
         self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
 
          # --- debug: print once per second ---
