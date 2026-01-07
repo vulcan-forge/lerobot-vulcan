@@ -197,24 +197,31 @@ class Sourccey(Robot):
         arm can be "left" or "right" to calibrate only that side.
         """
 
-        left_thread_z = threading.Thread(
-            target=self.left_arm.auto_calibrate_z,
-            kwargs={"reverse": False}
-        )
-        right_thread_z = threading.Thread(
-            target=self.right_arm.auto_calibrate_z,
-            kwargs={"reverse": True}
-        )
+        print("Starting Z Actuator Calibration")
 
-        # Start left and right arm z threads immediately
-        left_thread_z.start()
-        right_thread_z.start()
+        self.z_actuator.calibrator.auto_calibrate()
 
-        # Wait for both threads to complete
-        left_thread_z.join()
-        right_thread_z.join()
-
+        print("Z Actuator Calibration Completed")
         return
+
+        # left_thread_z = threading.Thread(
+        #     target=self.left_arm.auto_calibrate_z,
+        #     kwargs={"reverse": False}
+        # )
+        # right_thread_z = threading.Thread(
+        #     target=self.right_arm.auto_calibrate_z,
+        #     kwargs={"reverse": True}
+        # )
+
+        # # Start left and right arm z threads immediately
+        # left_thread_z.start()
+        # right_thread_z.start()
+
+        # # Wait for both threads to complete
+        # left_thread_z.join()
+        # right_thread_z.join()
+
+        # return
 
         if arm is None:
             # Create threads for each arm

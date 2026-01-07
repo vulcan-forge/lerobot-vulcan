@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import time
 from typing import Optional, Protocol
 
+from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator import SourcceyZCalibrator
+
 
 try:
     from gpiozero import MCP3008  # type: ignore
@@ -146,18 +148,25 @@ class ZActuator:
         # Position target (public API is position-only; motor command is internal).
         self._target_pos_m100_100: float = 0.0
 
-        # Controller state (integrator for PI; start with ki=0.0).
-        self._i_term: float = 0.0
-
         # Tunables (safe defaults; tune on hardware).
         self.kp: float = 0.02
-        self.ki: float = 0.0
-        self.deadband: float = 1.0
         self.max_cmd: float = 1.0
-        self.i_limit: float = 0.5
+        self.deadband: float = 1.0
 
         # Debugging
         self._last_cmd_print_t = 0.0
+
+        # Calibrator
+        self.calibrator = SourcceyZCalibrator(
+            self,
+            stable_s=3.0,
+            sample_hz=30.0,
+            stable_eps_pos=0.25,
+            max_phase_s=30.0,
+            down_cmd=-1.0,
+            up_cmd=1.0,
+            invert_top_positive=True,
+        )
 
     @property
     def is_connected(self) -> bool:
@@ -206,7 +215,6 @@ class ZActuator:
 
     def stop(self) -> None:
         """Stop motor output and reset integrator."""
-        self._i_term = 0.0
         if self.driver is not None:
             self.driver.set_velocity(self.motor, 0.0, normalize=True, instant=True)
 
