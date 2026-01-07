@@ -200,7 +200,6 @@ class ZActuator:
             self.driver.set_velocity(self.motor, 0.0, normalize=True, instant=True)
 
     # --- Reads (delegated to sensor) ---
-
     def read_position(self) -> float:
         pos = self.sensor.read_position_m100_100()
         return self.sensor.raw_to_pos_m100_100(pos)

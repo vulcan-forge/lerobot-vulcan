@@ -1,87 +1,72 @@
-import time
-
-from lerobot.motors.dc_pwm.dc_pwm import PWMDCMotorsController
-from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import (
-    sourccey_dc_motors,
-    sourccey_dc_motors_config,
-)
-from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import ZSensor
-
-
 def set_z_position_m100_100(
-    target_pos_m100_100: int = 25,
+    target: int = 25,
     *,
-    raw_min: int = 0,
-    raw_max: int = 4096,
     timeout_s: float = 8.0,
     hz: float = 100.0,
-    kp: float = 0.02,
-    ki: float = 0.0,          # start at 0.0; increase slightly if it stalls under load
-    deadband: float = 1.0,
-    max_cmd: float = 0.6,
-    i_limit: float = 0.5,
+    status_cb=None,
 ) -> float:
-    """
-    Closed-loop "servo" move: drive Z until it reaches target_pos_m100_100 (in [-100, 100]).
-    Returns the final measured position.
-    """
-    target = float(target_pos_m100_100)
+    robot = Sourccey(SourcceyConfig())
+    robot.connect(calibrate=False)
 
-    dc = PWMDCMotorsController(
-        config=sourccey_dc_motors_config(),
-        motors=sourccey_dc_motors(),
-    )
-    sensor = ZSensor(adc_channel=1, vref=3.30, average_samples=50)
-    sensor.set_calibration(raw_min=raw_min, raw_max=raw_max)
-
-    i_term = 0.0
-    period = 1.0 / float(hz)
-    t_end = time.monotonic() + float(timeout_s)
-    last_t = time.monotonic()
-
-    dc.connect()
-    sensor.connect()
     try:
+        robot.z_actuator.write_position(float(target))  # or set_target_position_m100_100(...)
+
+        period = 1.0 / float(hz)
+        t_end = time.monotonic() + float(timeout_s)
+        last_t = time.monotonic()
+
         while True:
             now = time.monotonic()
             if now >= t_end:
-                dc.set_velocity("linear_actuator", 0.0, normalize=True, instant=True)
-                raise TimeoutError(f"Timed out driving Z to {target_pos_m100_100} (last pos={pos:.2f})")  # type: ignore
+                robot.z_actuator.stop()
+                raise TimeoutError("Timed out reaching Z target")
 
-            dt = max(1e-3, now - last_t)
+            dt = now - last_t
             last_t = now
 
-            pos = float(sensor.read_position_m100_100())
-            err = target - pos
+            robot.z_actuator.update(dt)
 
-            if abs(err) <= float(deadband):
-                dc.set_velocity("linear_actuator", 0.0, normalize=True, instant=True)
+            # Print / callback every loop
+            if status_cb is not None:
+                r = robot.z_sensor.read_raw()
+                pos = float(robot.z_actuator.read_position_m100_100())
+                status_cb(r, pos, float(target))
+
+            pos = float(robot.z_actuator.read_position_m100_100())
+            if abs(pos - float(target)) <= float(robot.z_actuator.deadband):
+                robot.z_actuator.stop()
                 return pos
 
-            # PI control
-            i_term += err * dt
-            i_term = max(-float(i_limit), min(float(i_limit), i_term))
-
-            cmd = float(kp) * err + float(ki) * i_term
-            cmd = max(-float(max_cmd), min(float(max_cmd), cmd))
-
-            dc.set_velocity("linear_actuator", cmd, normalize=True, instant=True)
             time.sleep(period)
     finally:
-        try:
-            dc.set_velocity("linear_actuator", 0.0, normalize=True, instant=True)
-        except Exception:
-            pass
-        try:
-            sensor.disconnect()
-        except Exception:
-            pass
-        try:
-            dc.disconnect()
-        except Exception:
-            pass
+        robot.disconnect()
 
 
 if __name__ == "__main__":
-    final_pos = set_z_position_m100_100(25)
-    print(f"Reached z≈{final_pos:.2f}")
+    def status_printer(r, pos, target):
+        print(
+            {
+                "raw_10bit": r.raw_10bit,
+                "raw_scaled": r.raw,
+                "voltage": round(r.voltage, 4),
+                "pos_m100_100": round(float(pos), 2),
+                "target_m100_100": round(float(target), 2),
+            }
+        )
+
+    print("Type a target z position in [-100, 100]. Type 'q' to quit.")
+    while True:
+        s = input("target_z> ").strip().lower()
+        if s in ("q", "quit", "exit"):
+            break
+        try:
+            target = int(float(s))
+        except ValueError:
+            print("Please enter a number or 'q' to quit.")
+            continue
+
+        try:
+            final_pos = set_z_position_m100_100(target, hz=30.0, status_cb=status_printer)
+            print(f"Reached z≈{final_pos:.2f}")
+        except Exception as e:
+            print(f"Error: {e}")
