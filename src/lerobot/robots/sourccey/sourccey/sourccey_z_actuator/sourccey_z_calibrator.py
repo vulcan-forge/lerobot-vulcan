@@ -36,7 +36,6 @@ class SourcceyZCalibrator:
         max_phase_s: float = 30.0,
         down_cmd: float = -1.0,
         up_cmd: float = 1.0,
-        invert_top_positive: bool = True,
     ) -> None:
         self.actuator = actuator
         self.stable_s = float(stable_s)
@@ -45,7 +44,6 @@ class SourcceyZCalibrator:
         self.max_phase_s = float(max_phase_s)
         self.down_cmd = float(down_cmd)
         self.up_cmd = float(up_cmd)
-        self.invert_top_positive = bool(invert_top_positive)
 
     def _drive(self, cmd: float) -> None:
         if self.actuator.driver is None:
@@ -112,16 +110,8 @@ class SourcceyZCalibrator:
         time.sleep(0.25)
 
         # Decide mapping
-        if self.invert_top_positive:
-            # Want TOP = +100, BOTTOM = -100
-            # With current ZSensor math, that means invert=True and raw_min=raw_top, raw_max=raw_bottom
-            raw_min = int(raw_top)
-            raw_max = int(raw_bottom)
-            invert = True
-        else:
-            raw_min = int(raw_bottom)
-            raw_max = int(raw_top)
-            invert = False
+        raw_min = int(raw_bottom)
+        raw_max = int(raw_top)
 
         self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
 
@@ -130,5 +120,5 @@ class SourcceyZCalibrator:
             raw_top=int(raw_top),
             raw_min=int(raw_min),
             raw_max=int(raw_max),
-            invert=bool(invert),
+            invert=bool(self.actuator.sensor.invert),
         )
