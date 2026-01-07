@@ -150,7 +150,7 @@ class ZActuator:
         self.kp: float = 0.02
         self.ki: float = 0.0
         self.deadband: float = 1.0
-        self.max_cmd: float = 0.6
+        self.max_cmd: float = 1.0
         self.i_limit: float = 0.5
 
         # Debugging
