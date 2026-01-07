@@ -152,6 +152,9 @@ class ZActuator:
         self.max_cmd: float = 0.6
         self.i_limit: float = 0.5
 
+        # Debugging
+        self._last_cmd_print_t = 0.0
+
     @property
     def is_connected(self) -> bool:
         return self.sensor.is_connected
@@ -191,6 +194,19 @@ class ZActuator:
 
         # Internal actuation: velocity-style command to the DC controller.
         self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
+
+         # --- debug: print once per second ---
+        now = time.monotonic()
+        if now - self._last_cmd_print_t >= 1.0:
+            self._last_cmd_print_t = now
+            print(
+                {
+                    "z_cmd": round(float(cmd), 3),
+                    "z_err": round(float(err), 2),
+                    "z_pos": round(float(pos), 2),
+                    "z_target": round(float(self._target_pos_m100_100), 2),
+                }
+            )
 
 
     def stop(self) -> None:
