@@ -174,14 +174,14 @@ class ZActuator:
         pos = float(self.read_position())
         err = float(self._target_pos_m100_100) - pos
 
-        # Stop if close enough
-        if abs(err) <= float(self.deadband):
+        # Bang-bang control: full speed toward target
+        if err > float(self.deadband):
+            cmd = 1.0
+        elif err < -float(self.deadband):
+            cmd = -1.0
+        else:
             self.stop()
             return
-
-        # Pure P controller: velocity command proportional to position error
-        cmd = float(self.kp) * err
-        cmd = max(-float(self.max_cmd), min(float(self.max_cmd), cmd))
 
         self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
 
