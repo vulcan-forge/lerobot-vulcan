@@ -191,6 +191,7 @@ class ZActuator:
             self.stop()
             return
 
+        cmd = -1.0
         self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
 
          # --- debug: print once per second ---
