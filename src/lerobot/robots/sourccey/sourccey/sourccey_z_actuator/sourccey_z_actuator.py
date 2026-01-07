@@ -39,16 +39,19 @@ class ZSensor:
         adc_channel: int = 1,
         vref: float = 3.30,
         average_samples: int = 50,
+        raw_scale_min: int = 0,
         raw_scale_max: int = 4095,
+        invert: bool = True, # We want to invert the potentiometer by default so that top is max and bottom is min
     ) -> None:
         self.adc_channel = int(adc_channel)
         self.vref = float(vref)
         self.average_samples = int(average_samples)
 
+        self.raw_scale_min = int(raw_scale_min)
         self.raw_scale_max = int(raw_scale_max)
-        self.raw_min = 0
+        self.raw_min = self.raw_scale_min
         self.raw_max = self.raw_scale_max
-        self.invert = False
+        self.invert = invert
 
         self._adc: Optional["MCP3008"] = None
 
@@ -175,6 +178,7 @@ class ZActuator:
         err = float(self._target_pos_m100_100) - pos
 
         # Bang-bang control: full speed toward target
+        # This is fine because the z actuator motor is slow and has a lot of torque.
         if err > float(self.deadband):
             cmd = 1.0
         elif err < -float(self.deadband):
