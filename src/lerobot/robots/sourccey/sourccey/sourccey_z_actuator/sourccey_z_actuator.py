@@ -177,7 +177,10 @@ class SourcceyZActuator:
         # Endpoint assist: when commanding near +/-100, we may need full power to overcome
         # stiction / deadzone near the ends.
         self.endpoint_target_threshold: float = 90.0
-        self.endpoint_full_power_err_margin: float = 2.5
+        # Hysteresis: enter assist when far, exit when close (prevents rapid toggling/oscillation).
+        self.endpoint_enter_margin: float = 4.0
+        self.endpoint_exit_margin: float = 1.0
+        self._endpoint_assist_active: bool = False
 
         # Controller state for D term.
         self._prev_err: float = 0.0
@@ -239,16 +242,30 @@ class SourcceyZActuator:
             self.stop()
             return
 
-        # Endpoint full-power assist:
-        # If the target is near the endpoints, command full power until we're close, then let PD settle.
-        if abs(target) >= 99.0 or (abs(target) >= float(self.endpoint_target_threshold) and abs(err) > float(self.endpoint_full_power_err_margin)):
-            # Reset controller state to avoid a D "kick" when we hand back to PID.
-            self._prev_err_valid = False
-            cmd = self.max_cmd if err > 0.0 else -self.max_cmd
-            if self.invert:
-                cmd = -cmd
-            self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
-            return
+        # Endpoint assist with hysteresis:
+        # - uses enter/exit margins to avoid rapid toggling near the endpoint
+        # - only pushes *toward* the endpoint, never away (prevents banging back and forth)
+        near_endpoint_target = (abs(target) >= 99.0) or (abs(target) >= float(self.endpoint_target_threshold))
+        if near_endpoint_target:
+            if (not self._endpoint_assist_active) and (abs(err) >= float(self.endpoint_enter_margin)):
+                self._endpoint_assist_active = True
+            elif self._endpoint_assist_active and (abs(err) <= float(self.endpoint_exit_margin)):
+                self._endpoint_assist_active = False
+
+            if self._endpoint_assist_active:
+                if (target > 0.0 and err > 0.0):
+                    cmd = self.max_cmd
+                elif (target < 0.0 and err < 0.0):
+                    cmd = -self.max_cmd
+                else:
+                    cmd = 0.0  # past the endpoint; don't drive back with full power
+
+                # Reset controller state to avoid a D "kick" when we hand back to PD.
+                self._prev_err_valid = False
+                if self.invert:
+                    cmd = -cmd
+                self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
+                return
 
         dt = float(dt_s)
         if dt <= 1e-6:
