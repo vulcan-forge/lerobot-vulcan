@@ -174,7 +174,7 @@ class SourcceyZActuator:
 
         self.endpoint_boost_target: float = 85.0   # start boosting when target beyond this
         self.endpoint_min_cmd: float = 0.9         # known minimum that actually moves
-        self.endpoint_err_margin: float = 3.0      # don't boost when already very close
+        self.endpoint_err_margin: float = 1.0      # don't boost when already very close
 
         # Debugging
         self._debug_mode = True
