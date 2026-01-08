@@ -276,16 +276,16 @@ class SourcceyZActuator:
                 self.update(dt, instant=instant)
             except Exception as e:
                 # Don't let the thread die on transient hardware/read errors.
-                print(f"Error updating Z actuator: {e}")
                 try:
                     self.stop()
                 except Exception as e2:
-                    print(f"Error stopping Z actuator: {e2}")
                     pass
                 precise_sleep(0.1)
 
+
+
             it += 1
-            if now - last_print >= 1.0:
+            if self._debug_mode and now - last_print >= 1.0:
                 last_print = now
                 try:
                     raw = self.sensor.read_raw().raw
@@ -308,7 +308,6 @@ class SourcceyZActuator:
         try:
             self.stop()
         except Exception as e3:
-            print(f"Error stopping Z actuator: {e3}")
             pass
 
     def _ensure_controller_running(self, *, hz: float = 30.0, instant: bool = True) -> None:
