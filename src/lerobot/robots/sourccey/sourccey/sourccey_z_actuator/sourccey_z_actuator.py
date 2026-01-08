@@ -172,6 +172,7 @@ class SourcceyZActuator:
         self.deadband: float = 2.5
 
         # Debugging
+        self._debug_mode = True
         self._last_cmd_print_t = 0.0
 
         # Calibration
@@ -227,9 +228,9 @@ class SourcceyZActuator:
 
         self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
 
-         # --- debug: print once per second ---
+        # --- debug: print once per second ---
         now = time.monotonic()
-        if now - self._last_cmd_print_t >= 1.0:
+        if self._debug_mode and now - self._last_cmd_print_t >= 1.0:
             self._last_cmd_print_t = now
             print(
                 {

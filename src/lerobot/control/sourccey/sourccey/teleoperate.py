@@ -55,11 +55,10 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
         initial_observation = robot.get_observation()
         if isinstance(initial_observation, dict) and ("z.pos" in initial_observation):
             robot._z_pos_cmd = float(initial_observation["z.pos"])  # keep internal target aligned to reality
+        print(f"Initial z position target: {robot._z_pos_cmd}")
     except Exception:
         pass
 
-    print(f"Initial z position target: {robot._z_pos_cmd}")
-    return
 
     start_speed_listener(robot)
     init_rerun(session_name="sourccey_teleop")
