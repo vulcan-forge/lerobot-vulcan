@@ -61,8 +61,8 @@ class SourcceyClient(Robot):
 
         # Define three speed levels and a current index
         self.speed_levels = [
-            {"x": 0.8,  "y": 0.8,  "z": 0.8, "theta": 0.8},   # slow
-            {"x": 0.9, "y": 0.9, "z": 0.9, "theta": 0.9},  # medium
+            {"x": 0.8,  "y": 0.8,  "z": 1.0, "theta": 0.8},   # slow
+            {"x": 0.9, "y": 0.9, "z": 1.0, "theta": 0.9},  # medium
             {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # fast
         ]
         self.speed_index = 1  # Start at medium speed (0.9)
@@ -82,16 +82,7 @@ class SourcceyClient(Robot):
         # Time of last command
         self._last_cmd_t = time.monotonic()
 
-        # --- Z position command state (replaces z.vel teleop) ---
-        # You measured ~6s for z to go from +100 to -100 units (200-unit travel).
-        self._z_min = -100.0
-        self._z_max = 100.0
-        self._z_full_travel_s = 6.0
-        self._z_units_per_s = (self._z_max - self._z_min) / self._z_full_travel_s  # ~33.33 units/s
-        # Keep "30 FPS resolution" regardless of minor loop jitter: cap dt used for z integration.
-        self._z_dt_cap_s = 1.0 / 30.0
-        # Stored target position (what we "expect" z to be at while holding keys).
-        self._z_pos_cmd = 0.0
+        # Base movement smoothing
         self._slew_time_s_levels = [0.25, 0.25, 1.0]
         self._x_deadbane = 0.02
 
@@ -99,6 +90,17 @@ class SourcceyClient(Robot):
         self._x_accel_levels = [7.0, 5.0, 3.0]   # units: (x.vel units) / s
         self._x_decel_levels = [7.0, 5.0, 3.0]   # allow faster slowing down than speeding up (optional)
         self._x_cmd_smoothed = 0.0
+
+        # Z Position Control
+        # You measured ~5s for z to go from +100 to -100 units (200-unit travel).
+        self._z_min = -100.0
+        self._z_max = 100.0
+        self._z_full_travel_s = 5.0
+        self._z_units_per_s = (self._z_max - self._z_min) / self._z_full_travel_s  #
+        self._z_dt_cap_s = 1.0 / 30.0
+
+        # Stored target position (what we "expect" z to be at while holding keys).
+        self._z_pos_cmd = 0.0
 
     ###################################################################
     # Properties and Attributes
@@ -393,6 +395,7 @@ class SourcceyClient(Robot):
         speed_setting = self.speed_levels[self.speed_index]
         x_speed = speed_setting["x"]
         y_speed = speed_setting["y"]
+        z_speed = speed_setting["z"]
         theta_speed = speed_setting["theta"]
 
         pressed = set(pressed_keys)
@@ -426,14 +429,14 @@ class SourcceyClient(Robot):
         z_dir = 0.0
         if self.teleop_keys["up"] in pressed:
             if reverse:
-                z_dir -= 1.0
+                z_dir -= z_speed
             else:
-                z_dir += 1.0
+                z_dir += z_speed
         if self.teleop_keys["down"] in pressed:
             if reverse:
-                z_dir += 1.0
+                z_dir += z_speed
             else:
-                z_dir -= 1.0
+                z_dir -= z_speed
         if self.teleop_keys["rotate_left"] in pressed:
             if reverse:
                 theta_cmd -= theta_speed
