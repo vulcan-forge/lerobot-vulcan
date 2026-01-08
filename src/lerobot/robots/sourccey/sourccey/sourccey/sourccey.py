@@ -27,6 +27,7 @@ from lerobot.robots.robot import Robot
 from lerobot.robots.sourccey.sourccey.protobuf.sourccey_protobuf import SourcceyProtobuf
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower import SourcceyFollower
+from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import SourcceyZActuator, ZSensor
 from .config_sourccey import SourcceyConfig
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,14 @@ class Sourccey(Robot):
         self.dc_motors_controller = PWMDCMotorsController(
             motors=self.config.dc_motors,
             config=self.config.dc_motors_config,
+        )
+
+         # Z Actuator Code
+        self.z_sensor = ZSensor(adc_channel=1, vref=3.30, average_samples=50)
+        self.z_actuator = SourcceyZActuator(
+            sensor=self.z_sensor,
+            driver=self.dc_motors_controller,
+            motor="linear_actuator",
         )
 
         # Initialize protobuf converter
@@ -136,6 +145,7 @@ class Sourccey(Robot):
         self.right_arm.connect(calibrate)
 
         self.dc_motors_controller.connect()
+        self.z_actuator.connect()
 
         # Connect only target cameras
         self._connected_cameras.clear()
@@ -156,6 +166,9 @@ class Sourccey(Robot):
 
         self.stop_base()
         self.dc_motors_controller.disconnect()
+
+        self.z_actuator.stop()
+        self.z_actuator.disconnect()
 
         # Disconnect only those we connected
         for cam_key in list(self._connected_cameras):
@@ -183,6 +196,7 @@ class Sourccey(Robot):
         Auto-calibrate arms. If arm is None, calibrate both in parallel.
         arm can be "left" or "right" to calibrate only that side.
         """
+
         if arm is None:
             # Create threads for each arm
             left_thread = threading.Thread(
@@ -204,15 +218,19 @@ class Sourccey(Robot):
             # Wait for both threads to complete
             left_thread.join()
             right_thread.join()
-            return
 
-        if arm not in ("left", "right"):
+            # Calibrate the z actuator
+            self.z_actuator.calibrator.auto_calibrate()
+
+        elif arm == "left":
+            self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)
+        elif arm == "right":
+            self.right_arm.auto_calibrate(reverse=True, full_reset=full_reset)
+        else:
             raise ValueError("arm must be one of: None, 'left', 'right'")
 
-        if arm == "left":
-            self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)
-        else:
-            self.right_arm.auto_calibrate(reverse=True, full_reset=full_reset)
+        print("Auto-calibration completed")
+        return True
 
     def configure(self) -> None:
         self.left_arm.configure()
@@ -239,6 +257,15 @@ class Sourccey(Robot):
             base_wheel_vel = self.dc_motors_controller.get_velocities()
             base_vel = self._wheel_normalized_to_body(base_wheel_vel)
             obs_dict.update(base_vel)
+
+            # Z actuator position (best-effort; keep schema stable)
+            try:
+                if self.z_actuator is not None and self.z_actuator.is_connected:
+                    obs_dict["z.pos"] = float(self.z_actuator.read_position())
+                else:
+                    obs_dict["z.pos"] = 100.0
+            except Exception:
+                obs_dict["z.pos"] = 100.0
 
             for cam_key in self.cameras.keys():
                 try:
@@ -288,9 +315,12 @@ class Sourccey(Robot):
                 base_goal_vel.get("theta.vel", 0.0)
             )
 
-            linear_actuator_action = self._body_to_linear_actuator_normalized(
-                base_goal_pos.get("z.pos", 0.0)
-            )
+            # Z actuator is position-controlled; drive toward the latest z.pos target (non-blocking).
+            if "z.pos" in base_goal_pos:
+                try:
+                    self.z_actuator.move_to_position(float(base_goal_pos.get("z.pos", 100.0)), hz=30.0, instant=True)
+                except Exception as e:
+                    logger.warning(f"Failed to command z actuator: {e}")
 
             dc_motors_action = {**wheel_action }
             self.dc_motors_controller.set_velocities(dc_motors_action)
@@ -407,22 +437,6 @@ class Sourccey(Robot):
             "x.vel": self.clean_value(x),
             "y.vel": self.clean_value(y),
             "theta.vel": self.clean_value(theta),
-        }
-
-    def _body_to_linear_actuator_normalized(
-        self,
-        z_pos: float,
-    ) -> dict:
-        return {
-            "linear_actuator": 100.0, # self.clean_value(z_pos),
-        }
-
-    def _linear_actuator_normalized_to_body(
-        self,
-        linear_actuator_normalized: dict[str, Any],
-    ) -> dict[str, Any]:
-        return {
-            "z.pos": 100.0, # self.clean_value(linear_actuator_normalized["linear_actuator"]),
         }
 
     # Round to prevent floating-point precision issues and handle -0.0

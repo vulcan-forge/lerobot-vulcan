@@ -87,8 +87,8 @@ Then Calibrate the bi-manual teleoperator (leader arms):
 python src/lerobot/scripts/sourccey/auto_calibrate.py \
  --teleop.type=bi_sourccey_leader \
  --teleop.id=bi_sourccey_leader \
- --teleop.left_arm_port="COM4" \
- --teleop.right_arm_port="COM3"
+ --teleop.left_arm_port="COM14" \
+ --teleop.right_arm_port="COM15"
 ```
 
 For single-arm teleoperator:
@@ -107,6 +107,7 @@ View calibration files:
 ```
 cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_left.json
 cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_right.json
+cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_z_actuator/sourccey_z_actuator.json
 ```
 
 Edit calibration files:
@@ -114,6 +115,7 @@ Edit calibration files:
 ```
 nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_left.json
 nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_right.json
+nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_z_actuator/sourccey_z_actuator.json
 ```
 
 ## Hosting the Robot
@@ -143,9 +145,9 @@ source .venv/Scripts/activate
 ```
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.210" \
- --left_arm_port="/dev/ttyACM1" \
- --right_arm_port="/dev/ttyACM0" \
+ --remote_ip="192.168.1.211" \
+ --left_arm_port="COM14" \
+ --right_arm_port="COM15" \
  --keyboard_port="keyboard" \
  --fps=30 \
  --reverse=True

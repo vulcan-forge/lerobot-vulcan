@@ -47,8 +47,24 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
         print(f"Teleoperating without keyboard")
         pass
 
+
+
+    # Prime z position target from the robot's current observation to avoid a "jump"
+    # on the first control tick / first time holding the z keys.
+    try:
+        initial_observation = robot.get_observation()
+        if isinstance(initial_observation, dict) and ("z.pos" in initial_observation):
+            robot._z_pos_cmd = float(initial_observation["z.pos"])  # keep internal target aligned to reality
+        print(f"Initial z position target: {robot._z_pos_cmd}")
+    except Exception:
+        pass
+
     start_speed_listener(robot)
     init_rerun(session_name="sourccey_teleop")
+
+
+    debug_mode = False
+    last_action_print_t = time.monotonic()
 
     print("Teleoperating Sourccey")
     while True:
@@ -58,13 +74,20 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
         arm_action = leader_arm.get_action()
         keyboard_keys = keyboard.get_action()
 
-        base_action = robot._from_keyboard_to_base_action(keyboard_keys)
+        z_obs_pos = observation.get("z.pos", None)
+        base_action = robot._from_keyboard_to_base_action(keyboard_keys, z_obs_pos=z_obs_pos)
 
         log_rerun_data(observation, {**arm_action, **base_action})
 
         action = {**arm_action, **base_action}
-        robot.send_action(action)
 
+        # Debug
+        now = time.monotonic()
+        if debug_mode and now - last_action_print_t >= 3.0:
+            last_action_print_t = now
+            print(action)
+
+        robot.send_action(action)
         precise_sleep(max(1.0 / cfg.fps - (time.perf_counter() - t0), 0.0))
 
 def start_speed_listener(robot: SourcceyClient):

@@ -45,9 +45,13 @@ class SourcceyProtobuf:
             base_action.x_vel = float(action.get("x.vel", 0.0))
             base_action.y_vel = float(action.get("y.vel", 0.0))
             base_action.theta_vel = float(action.get("theta.vel", 0.0))
-            base_action.z_vel = float(action.get("z.vel", 0.0))
             robot_action.base_target_velocity.CopyFrom(base_action)
-            
+
+            # Process base position (linear actuator)
+            base_pos = sourccey_pb2.BasePosition()
+            base_pos.z_pos = float(action.get("z.pos", 0.0))
+            robot_action.base_target_position.CopyFrom(base_pos)
+
             # Per-arm flags
             if "untorque_left" in action:
                 try:
@@ -98,7 +102,10 @@ class SourcceyProtobuf:
             base_vel.x_vel = observation.get("x.vel", 0.0)
             base_vel.y_vel = observation.get("y.vel", 0.0)
             base_vel.theta_vel = observation.get("theta.vel", 0.0)
-            base_vel.z_vel = observation.get("z.vel", 0.0)
+
+            # Set base position (linear actuator)
+            base_pos = msg.base_position
+            base_pos.z_pos = observation.get("z.pos", 0.0)
 
             # Process cameras - convert numpy arrays to CameraImage messages
             for cam_key, cam_data in observation.items():
@@ -153,8 +160,10 @@ class SourcceyProtobuf:
                 "x.vel": base_vel.x_vel,
                 "y.vel": base_vel.y_vel,
                 "theta.vel": base_vel.theta_vel,
-                "z.vel": base_vel.z_vel,
             })
+
+            # Convert base position (linear actuator)
+            action["z.pos"] = action_msg.base_target_position.z_pos
 
             # Per-arm flags from protobuf
             action["untorque_left"] = bool(getattr(action_msg, "untorque_left", False))
@@ -198,7 +207,9 @@ class SourcceyProtobuf:
             observation["x.vel"] = base_vel.x_vel
             observation["y.vel"] = base_vel.y_vel
             observation["theta.vel"] = base_vel.theta_vel
-            observation["z.vel"] = base_vel.z_vel
+
+            # Z position (linear actuator)
+            observation["z.pos"] = robot_state.base_position.z_pos
 
             # Process cameras from the cameras list
             for camera in robot_state.cameras:

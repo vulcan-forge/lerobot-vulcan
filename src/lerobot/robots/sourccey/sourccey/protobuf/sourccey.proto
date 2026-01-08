@@ -18,12 +18,16 @@ message MotorJoint {
     float gripper = 6;
 }
 
-// Base velocity information
+// Base velocity information (mobile base + yaw)
 message BaseVelocity {
     float x_vel = 1;
     float y_vel = 2;
     float theta_vel = 3;
-    float z_vel = 4;          // Linear actuator
+}
+
+// Base position information (linear actuator)
+message BasePosition {
+    float z_pos = 1;          // Linear actuator position
 }
 
 // Complete sourccey robot state (2 arms + base + cameras)
@@ -33,10 +37,11 @@ message SourcceyRobotState {
     MotorJoint right_arm_joints = 2;
 
     // Base State
-    BaseVelocity base_velocity = 3;
+    BasePosition base_position = 3;
+    BaseVelocity base_velocity = 4;
 
     // Camera State - simplified to just name and bytes
-    repeated CameraImage cameras = 4;
+    repeated CameraImage cameras = 5;
 }
 
 // Complete sourccey robot action
@@ -46,9 +51,10 @@ message SourcceyRobotAction {
     MotorJoint right_arm_target_joints = 2;
 
     // Base Action
-    BaseVelocity base_target_velocity = 3;
+    BasePosition base_target_position = 3;
+    BaseVelocity base_target_velocity = 4;
 
     // Host control actions (per-arm)
-    bool untorque_left = 4;
-    bool untorque_right = 5;
+    bool untorque_left = 5;
+    bool untorque_right = 6;
 }

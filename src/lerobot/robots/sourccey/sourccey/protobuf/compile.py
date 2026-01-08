@@ -190,9 +190,13 @@ def test_protobuf_functionality():
         base_velocity = sourccey_pb2.BaseVelocity()
         base_velocity.x_vel = 1.0
         base_velocity.y_vel = 2.0
-        base_velocity.z_vel = 3.0
-        base_velocity.theta_vel = 4.0
+        base_velocity.theta_vel = 3.0
         print("  ✓ BaseVelocity can be created and populated")
+
+        # Test BasePosition
+        base_position = sourccey_pb2.BasePosition()
+        base_position.z_pos = 1.0
+        print("  ✓ BasePosition can be created and populated")
 
         # Test CameraImage with simplified structure
         camera_image = sourccey_pb2.CameraImage()
@@ -204,6 +208,7 @@ def test_protobuf_functionality():
         robot_state = sourccey_pb2.SourcceyRobotState()
         robot_state.left_arm_joints.CopyFrom(motor_joint)
         robot_state.right_arm_joints.CopyFrom(motor_joint)
+        robot_state.base_position.CopyFrom(base_position)
         robot_state.base_velocity.CopyFrom(base_velocity)
         robot_state.cameras.append(camera_image)
         print("  ✓ SourcceyRobotState can be created and populated with single cameras field")
@@ -212,6 +217,7 @@ def test_protobuf_functionality():
         robot_action = sourccey_pb2.SourcceyRobotAction()
         robot_action.left_arm_target_joints.CopyFrom(motor_joint)
         robot_action.right_arm_target_joints.CopyFrom(motor_joint)
+        robot_action.base_target_position.CopyFrom(base_position)
         robot_action.base_target_velocity.CopyFrom(base_velocity)
         print("  ✓ SourcceyRobotAction can be created and populated")
 
@@ -261,7 +267,7 @@ def validate_proto_structure():
             content = f.read()
 
         # Check for expected structure
-        if "repeated CameraImage cameras = 4;" in content:
+        if "repeated CameraImage cameras = 5;" in content:
             print("  ✓ Proto file has correct cameras field structure")
         else:
             print("  ✗ Proto file missing expected cameras field structure")

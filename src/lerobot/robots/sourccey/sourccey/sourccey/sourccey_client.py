@@ -61,8 +61,8 @@ class SourcceyClient(Robot):
 
         # Define three speed levels and a current index
         self.speed_levels = [
-            {"x": 0.8,  "y": 0.8,  "z": 0.8, "theta": 0.8},   # slow
-            {"x": 0.9, "y": 0.9, "z": 0.9, "theta": 0.9},  # medium
+            {"x": 0.8,  "y": 0.8,  "z": 1.0, "theta": 0.8},   # slow
+            {"x": 0.9, "y": 0.9, "z": 1.0, "theta": 0.9},  # medium
             {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # fast
         ]
         self.speed_index = 1  # Start at medium speed (0.9)
@@ -81,6 +81,8 @@ class SourcceyClient(Robot):
 
         # Time of last command
         self._last_cmd_t = time.monotonic()
+
+        # Base movement smoothing
         self._slew_time_s_levels = [0.25, 0.25, 1.0]
         self._x_deadbane = 0.02
 
@@ -88,6 +90,19 @@ class SourcceyClient(Robot):
         self._x_accel_levels = [7.0, 5.0, 3.0]   # units: (x.vel units) / s
         self._x_decel_levels = [7.0, 5.0, 3.0]   # allow faster slowing down than speeding up (optional)
         self._x_cmd_smoothed = 0.0
+
+        # Z Position Control
+        # You measured ~5s for z to go from +100 to -100 units (200-unit travel).
+        self._z_min = -100.0
+        self._z_max = 100.0
+        self._z_full_travel_s = 3.0
+        self._z_units_per_s = (self._z_max - self._z_min) / self._z_full_travel_s  #
+        self._z_dt_cap_s = 1.0 / 30.0
+
+        # Stored target position (what we "expect" z to be at while holding keys).
+        self._z_pos_cmd = 0.0
+        self._z_snap_period_s = 3.0
+        self._z_last_snap_t = 0.0
 
     ###################################################################
     # Properties and Attributes
@@ -108,9 +123,9 @@ class SourcceyClient(Robot):
                 "right_wrist_flex.pos",
                 "right_wrist_roll.pos",
                 "right_gripper.pos",
+                "z.pos",
                 "x.vel",
                 "y.vel",
-                "z.vel",
                 "theta.vel",
             ),
             float,
@@ -377,7 +392,7 @@ class SourcceyClient(Robot):
     ###################################################################
     # Private Control Functions
     ###################################################################
-    def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray):
+    def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray, z_obs_pos: float | None = None):
         reverse = self.reverse
         speed_setting = self.speed_levels[self.speed_index]
         x_speed = speed_setting["x"]
@@ -389,7 +404,6 @@ class SourcceyClient(Robot):
 
         x_cmd = 0.0
         y_cmd = 0.0
-        z_cmd = 0.0
         theta_cmd = 0.0
         x_cmd_target = 0.0
 
@@ -413,16 +427,18 @@ class SourcceyClient(Robot):
                 y_cmd += y_speed
             else:
                 y_cmd -= y_speed
+        # Z: integrate held keys into a stored position command (z.pos)
+        z_dir = 0.0
         if self.teleop_keys["up"] in pressed:
             if reverse:
-                z_cmd -= z_speed
+                z_dir -= z_speed
             else:
-                z_cmd += z_speed
+                z_dir += z_speed
         if self.teleop_keys["down"] in pressed:
             if reverse:
-                z_cmd += z_speed
+                z_dir += z_speed
             else:
-                z_cmd -= z_speed
+                z_dir -= z_speed
         if self.teleop_keys["rotate_left"] in pressed:
             if reverse:
                 theta_cmd -= theta_speed
@@ -443,6 +459,15 @@ class SourcceyClient(Robot):
         self._last_cmd_t = now
         dt = max(0.0, min(dt, slew_time_s))  # cap big jumps if the loop stalls
 
+        # Use a capped dt for z integration to preserve the desired 30fps resolution.
+        dt_z = min(dt, self._z_dt_cap_s)
+        z_rate = float(self._z_units_per_s)
+        self._z_pos_cmd = float(np.clip(self._z_pos_cmd + (z_dir * z_rate * dt_z), self._z_min, self._z_max))
+
+        if z_obs_pos is not None and z_dir == 0.0 and (now - self._z_last_snap_t) >= self._z_snap_period_s:
+            self._z_pos_cmd = float(z_obs_pos)
+            self._z_last_snap_t = now
+
         if abs(self._x_cmd_smoothed) >= self._x_deadbane:
             # already moving -> smooth changes
             self._x_cmd_smoothed = self._slew(
@@ -460,8 +485,8 @@ class SourcceyClient(Robot):
         action = {
             "x.vel": x_cmd,
             "y.vel": y_cmd,
-            "z.vel": z_cmd,
             "theta.vel": theta_cmd,
+            "z.pos": self._z_pos_cmd,
         }
 
         # Integrated keyboard controls: toggle per-arm untorque on key press (edge-triggered)
@@ -484,27 +509,27 @@ class SourcceyClient(Robot):
 
         return action
 
-    def _from_analog_to_base_action(self, x: float, y: float, z: float, theta: float):
+    def _from_analog_to_base_action(self, x: float, y: float, theta: float):
         """Map analog base inputs (in [-1,1]) through the same speed scaling used for keyboard.
 
         Ensures behavior is consistent with `_from_keyboard_to_base_action` speed levels.
+
+        Note: since z is now position-controlled, we interpret analog z as an absolute position
+        target in [-100, 100] (i.e. z=-1 -> -100, z=+1 -> +100).
         """
         # Clamp to [-1, 1]
         x_in = max(-1.0, min(1.0, float(x)))
         y_in = max(-1.0, min(1.0, float(y)))
-        z_in = max(-1.0, min(1.0, float(z)))
         theta_in = max(-1.0, min(1.0, float(theta)))
 
         speed_setting = self.speed_levels[self.speed_index]
         x_speed = speed_setting["x"]
         y_speed = speed_setting["y"]
-        z_speed = speed_setting["z"]
         theta_speed = speed_setting["theta"]
 
         return {
             "x.vel": float(x_in * x_speed),
             "y.vel": float(y_in * y_speed),
-            "z.vel": float(z_in * z_speed),
             "theta.vel": float(theta_in * theta_speed),
         }
 
