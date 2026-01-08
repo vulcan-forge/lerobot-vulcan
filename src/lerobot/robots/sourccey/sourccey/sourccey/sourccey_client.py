@@ -95,14 +95,11 @@ class SourcceyClient(Robot):
         # You measured ~5s for z to go from +100 to -100 units (200-unit travel).
         self._z_min = -100.0
         self._z_max = 100.0
-        self._z_full_travel_s = 3.0
-        self._z_units_per_s = (self._z_max - self._z_min) / self._z_full_travel_s  #
-        self._z_dt_cap_s = 1.0 / 30.0
+        self._z_full_travel_s = 1.0
+        self._z_units_per_s = (self._z_max - self._z_min) / self._z_full_travel_s
 
         # Stored target position (what we "expect" z to be at while holding keys).
         self._z_pos_cmd = 0.0
-        self._z_snap_period_s = 3.0
-        self._z_last_snap_t = 0.0
 
     ###################################################################
     # Properties and Attributes
@@ -459,14 +456,15 @@ class SourcceyClient(Robot):
         self._last_cmd_t = now
         dt = max(0.0, min(dt, slew_time_s))  # cap big jumps if the loop stalls
 
-        # Use a capped dt for z integration to preserve the desired 30fps resolution.
-        dt_z = min(dt, self._z_dt_cap_s)
+        # Z position target integration should reflect the *actual* loop timing.
+        # If we cap dt to 1/30 while the loop runs slower (e.g., due to camera/network load),
+        # z.pos changes become tiny and it can take ~seconds before the actuator deadband is exceeded.
+        # We already cap dt above with `slew_time_s`, so using dt here is safe and makes Z feel immediate.
         z_rate = float(self._z_units_per_s)
-        self._z_pos_cmd = float(np.clip(self._z_pos_cmd + (z_dir * z_rate * dt_z), self._z_min, self._z_max))
+        self._z_pos_cmd = float(np.clip(self._z_pos_cmd + (z_dir * z_rate * dt), self._z_min, self._z_max))
 
-        if z_obs_pos is not None and z_dir == 0.0 and (now - self._z_last_snap_t) >= self._z_snap_period_s:
+        if z_obs_pos is not None and z_dir == 0.0:
             self._z_pos_cmd = float(z_obs_pos)
-            self._z_last_snap_t = now
 
         if abs(self._x_cmd_smoothed) >= self._x_deadbane:
             # already moving -> smooth changes

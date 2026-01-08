@@ -168,9 +168,23 @@ class SourcceyZActuator:
         self.invert = sensor.invert
 
         # Tunables (safe defaults; tune on hardware).
-        self.kp: float = 0.02
+        self.kp: float = 0.05
+        self.kd: float = 0.02 # Derivative gain: damps overshoot by "braking" when error is changing quickly. # (cmd = kp*err + kd*d(err)/dt)
+
         self.max_cmd: float = 1.0
-        self.deadband: float = 5.0
+        self.deadband: float = 1.0
+
+        # Endpoint assist: when commanding near +/-100, we may need full power to overcome
+        # stiction / deadzone near the ends.
+        self.endpoint_target_threshold: float = 90.0
+        # Hysteresis: enter assist when far, exit when close (prevents rapid toggling/oscillation).
+        self.endpoint_enter_margin: float = 4.0
+        self.endpoint_exit_margin: float = 1.0
+        self._endpoint_assist_active: bool = False
+
+        # Controller state for D term.
+        self._prev_err: float = 0.0
+        self._prev_err_valid: bool = False
 
         # Debugging
         self._debug_mode = False
@@ -221,15 +235,51 @@ class SourcceyZActuator:
         if abs(target) >= 99.0:
             deadband = 0.1
 
-        # Bang-bang control: full speed toward target
-        # This is fine because the z actuator motor is slow and has a lot of torque.
-        if err > deadband:
-            cmd = 1.0
-        elif err < -deadband:
-            cmd = -1.0
-        else:
+        # --- PD control (P + D damping) ---
+        if abs(err) <= deadband:
+            # Reset derivative state so we don't get a "kick" when restarting from a stop.
+            self._prev_err_valid = False
             self.stop()
             return
+
+        # Endpoint assist with hysteresis:
+        # - uses enter/exit margins to avoid rapid toggling near the endpoint
+        # - only pushes *toward* the endpoint, never away (prevents banging back and forth)
+        near_endpoint_target = (abs(target) >= 99.0) or (abs(target) >= float(self.endpoint_target_threshold))
+        if near_endpoint_target:
+            if (not self._endpoint_assist_active) and (abs(err) >= float(self.endpoint_enter_margin)):
+                self._endpoint_assist_active = True
+            elif self._endpoint_assist_active and (abs(err) <= float(self.endpoint_exit_margin)):
+                self._endpoint_assist_active = False
+
+            if self._endpoint_assist_active:
+                if (target > 0.0 and err > 0.0):
+                    cmd = self.max_cmd
+                elif (target < 0.0 and err < 0.0):
+                    cmd = -self.max_cmd
+                else:
+                    cmd = 0.0  # past the endpoint; don't drive back with full power
+
+                # Reset controller state to avoid a D "kick" when we hand back to PD.
+                self._prev_err_valid = False
+                if self.invert:
+                    cmd = -cmd
+                self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
+                return
+
+        dt = float(dt_s)
+        if dt <= 1e-6:
+            dt = 1e-3
+
+        # Derivative of error (finite difference). This adds damping near the target.
+        derr = 0.0
+        if self._prev_err_valid:
+            derr = (err - self._prev_err) / dt
+        self._prev_err = err
+        self._prev_err_valid = True
+
+        cmd = (self.kp * err) + (self.kd * derr)
+        cmd = max(-self.max_cmd, min(self.max_cmd, cmd))
 
         if self.invert:
             cmd = -cmd
