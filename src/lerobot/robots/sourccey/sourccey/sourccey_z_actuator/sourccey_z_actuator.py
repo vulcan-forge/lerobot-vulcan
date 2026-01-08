@@ -173,7 +173,7 @@ class SourcceyZActuator:
         self.deadband: float = 5.0
 
         # Debugging
-        self._debug_mode = False
+        self._debug_mode = True
         self._last_cmd_print_t = 0.0
 
         # Calibration
