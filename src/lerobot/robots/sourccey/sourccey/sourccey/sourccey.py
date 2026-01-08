@@ -197,7 +197,7 @@ class Sourccey(Robot):
         arm can be "left" or "right" to calibrate only that side.
         """
         # Calibrate the z actuator
-        self.z_actuator.auto_calibrate()
+        self.z_actuator.calibrator.auto_calibrate()
         return
 
         if arm is None:
