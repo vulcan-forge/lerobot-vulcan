@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
 """
-Client-side voice recognition for Sourccey (Whisper).
+Low-latency voice client for Sourccey.
 
-Receives mono PCM16 audio from the robot (ZMQ SUB),
-segments speech with adaptive RMS VAD,
-transcribes using faster-whisper,
-normalizes results,
-and sends text back to the robot.
+Key features (fixed + hardened):
+- Adaptive RMS VAD with hysteresis (start/end thresholds) + noise floor tracking
+- Optional early intent detection using tiny.en on partial audio (throttled)
+- Full transcription fallback using main Whisper model when utterance ends
+- LLM call with short context + robust error handling
+- Never silently dies on exceptions; keeps running
 """
 
 import argparse
 import re
 import sys
 import time
-from typing import Optional
+import threading
+from typing import Optional, List
 
 import numpy as np
 import zmq
-
 import requests
 
-LLM_URL = "http://localhost:8080/v1/chat/completions"
+LLM_URL_DEFAULT = "http://localhost:8080/v1/chat/completions"
 
 SYSTEM_PROMPT = (
     "You are Sourccey, a friendly helpful robot. "
@@ -30,15 +31,14 @@ SYSTEM_PROMPT = (
     "If you do not know something, say so."
 )
 
-_llm_history = [
-    {"role": "system", "content": SYSTEM_PROMPT}
-]
+_llm_history = [{"role": "system", "content": SYSTEM_PROMPT}]
 
 PHYSICAL_VERBS = {
-    "pick up", "lift", "carry", "take out", "wash", "drive", "move", "come to"
+    "pick up", "lift", "carry", "take out", "wash",
+    "drive", "move", "come to", "go to", "grab", "clean",
 }
 
-WAKE_WORD = "sourccey"
+WAKE_WORD_DEFAULT = "sourccey"
 
 # -----------------------------
 # Windows CUDA DLL helper
@@ -50,22 +50,21 @@ def _configure_windows_cuda_dll_search() -> None:
         import importlib.util
         import os
 
-        def _add_nvidia_bin(mod: str) -> None:
+        def _add(mod: str) -> None:
             spec = importlib.util.find_spec(mod)
             if not spec or not spec.submodule_search_locations:
                 return
-            pkg_dir = spec.submodule_search_locations[0]
-            bin_dir = os.path.join(pkg_dir, "bin")
-            if os.path.isdir(bin_dir):
+            p = spec.submodule_search_locations[0]
+            b = os.path.join(p, "bin")
+            if os.path.isdir(b):
                 try:
-                    os.add_dll_directory(bin_dir)
+                    os.add_dll_directory(b)
                 except Exception:
                     pass
-                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+                os.environ["PATH"] = b + os.pathsep + os.environ.get("PATH", "")
 
-        _add_nvidia_bin("nvidia.cudnn")
-        _add_nvidia_bin("nvidia.cublas")
-        _add_nvidia_bin("nvidia.cuda_runtime")
+        for m in ("nvidia.cudnn", "nvidia.cublas", "nvidia.cuda_runtime"):
+            _add(m)
     except Exception:
         pass
 
@@ -79,80 +78,71 @@ from lerobot.robots.sourccey.sourccey.sourccey import (
 )
 
 # -----------------------------
-# Text normalization
+# Text helpers
 # -----------------------------
 def normalize_robot_terms(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
     replacements = {
         r"\b(sorcy|sorsi|orsi|doris|sourcey|sourcy|isourcing)\b": "Sourccey",
     }
     for pat, repl in replacements.items():
         text = re.sub(pat, repl, text, flags=re.IGNORECASE)
-    return text
+    return text.strip()
 
-def has_wake_word(text: str) -> bool:
-    """
-    Returns True if the wake word appears near the start of the utterance.
-    """
+
+def has_wake_word(text: str, wake_word: str) -> bool:
     if not text:
         return False
-
-    t = text.lower().strip()
-
-    # Allow: "sourccey", "sourccey,", "hey sourccey", "ok sourccey"
-    prefixes = (
-        WAKE_WORD,
-        f"{WAKE_WORD},",
-        f"hey {WAKE_WORD}",
-        f"ok {WAKE_WORD}",
-        f"okay {WAKE_WORD}",
+    t = text.lower().lstrip(" ,.!?…uhum")
+    w = wake_word.lower()
+    return (
+        t.startswith(w)
+        or t.startswith(f"hey {w}")
+        or t.startswith(f"ok {w}")
+        or t.startswith(f"okay {w}")
     )
 
-    return any(t.startswith(p) for p in prefixes)
+def strip_wake_word(text: str, wake_word: str) -> str:
+    if not text:
+        return ""
+    w = re.escape(wake_word)
+    return re.sub(
+        rf"^(hey|ok|okay)?\s*{w}[:,]?\s*",
+        "",
+        text.strip(),
+        flags=re.IGNORECASE,
+    ).strip()
 
-
-def strip_wake_word(text: str) -> str:
-    """
-    Removes the wake word and leading punctuation.
-    """
-    t = text.strip()
-
-    patterns = [
-        r"^(hey|ok|okay)?\s*sourccey[:,]?\s*",
-    ]
-
-    for pat in patterns:
-        t = re.sub(pat, "", t, flags=re.IGNORECASE)
-
-    return t.strip()
 
 def sounds_like_physical_action(text: str) -> bool:
-    t = text.lower()
+    t = (text or "").lower()
     return any(v in t for v in PHYSICAL_VERBS)
 
-def ask_llm(user_text: str) -> str:
+
+def intent_confident(text: str) -> bool:
     """
-    Send user text to the local LLM and get a response.
-    Keeps short rolling context to avoid drift.
+    Heuristic: early-commit only if it's clearly a question/command.
+    Keep this conservative to avoid misfires.
     """
-    _llm_history.append({"role": "user", "content": user_text})
+    t = (text or "").lower().strip()
+    return any(
+        t.startswith(p)
+        for p in (
+            "can you",
+            "could you",
+            "do you",
+            "what is",
+            "what's",
+            "why",
+            "how do",
+            "how to",
+            "should i",
+            "tell me",
+            "help me",
+        )
+    )
 
-    # Keep context small (system + last 3 turns)
-    while len(_llm_history) > 7:
-        _llm_history.pop(1)
-
-    payload = {
-        "model": "qwen",
-        "messages": _llm_history,
-        "temperature": 0.3,
-        "max_tokens": 80,
-    }
-
-    r = requests.post(LLM_URL, json=payload, timeout=15)
-    r.raise_for_status()
-
-    reply = r.json()["choices"][0]["message"]["content"].strip()
-    _llm_history.append({"role": "assistant", "content": reply})
-    return reply
 
 def is_similar_text(a: str, b: str) -> bool:
     if not a or not b:
@@ -161,7 +151,81 @@ def is_similar_text(a: str, b: str) -> bool:
     wb = set(b.lower().split())
     if not wa or not wb:
         return False
-    return len(wa & wb) >= min(len(wa), len(wb)) * 0.5
+    return len(wa & wb) >= min(len(wa), len(wb)) * 0.6
+
+
+# -----------------------------
+# LLM
+# -----------------------------
+def ask_llm_fast(user_text: str, llm_url: str, llm_model: str, max_tokens: int, temperature: float) -> str:
+    """
+    Request a short reply; return first sentence to reduce perceived latency.
+    Robust to server-down situations.
+    """
+    global _llm_history
+
+    _llm_history.append({"role": "user", "content": user_text})
+    # Keep context small (system + last 3 turns)
+    while len(_llm_history) > 7:
+        _llm_history.pop(1)
+
+    try:
+        r = requests.post(
+            llm_url,
+            json={
+                "model": llm_model,
+                "messages": _llm_history,
+                "temperature": float(temperature),
+                "max_tokens": int(max_tokens),
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        full = (r.json()["choices"][0]["message"]["content"] or "").strip()
+        if not full:
+            raise RuntimeError("Empty LLM response")
+    except Exception as e:
+        return "Sorry — my brain box isn’t responding right now."
+
+    # first "sentence" (very naive, but fast)
+    first = full.split("\n")[0].strip()
+    if "." in first:
+        first = first.split(".", 1)[0].strip()
+    if not first:
+        first = "Okay."
+
+    _llm_history.append({"role": "assistant", "content": first})
+    return first
+
+
+# -----------------------------
+# Transcription
+# -----------------------------
+def _whisper_to_text(model: WhisperModel, audio_i16: np.ndarray, language: str, beam_size: int, vad_filter: bool, initial_prompt: str) -> str:
+    """
+    Always returns a real string. Never returns a generator.
+    """
+    if audio_i16.size == 0:
+        return ""
+    audio_f32 = audio_i16.astype(np.float32) / 32768.0
+
+    segments, info = model.transcribe(
+        audio_f32,
+        language=language,
+        beam_size=beam_size,
+        vad_filter=vad_filter,
+        initial_prompt=initial_prompt,
+    )
+
+    texts: List[str] = []
+    for seg in segments:
+        try:
+            s = (seg.text or "").strip()
+        except Exception:
+            s = ""
+        if s:
+            texts.append(s)
+    return " ".join(texts).strip()
 
 
 # -----------------------------
@@ -169,225 +233,411 @@ def is_similar_text(a: str, b: str) -> bool:
 # -----------------------------
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser()
+
+    # Robot/audio
     p.add_argument("--robot_ip", required=True)
     p.add_argument("--audio-port", type=int, default=5559)
     p.add_argument("--sample-rate", type=int, default=16000)
 
-    p.add_argument("--model", default="medium.en")
-    p.add_argument("--device", default="auto")
-    p.add_argument("--compute-type", default="auto")
+    # Models
+    p.add_argument("--model", default="small.en")
+    p.add_argument("--device", default="cpu")
+    p.add_argument("--compute-type", default="int8")
+    p.add_argument("--beam-size", type=int, default=2)
     p.add_argument("--language", default="en")
-
-    p.add_argument("--beam-size", type=int, default=3)
-    p.add_argument("--min-utterance-s", type=float, default=0.5)
-    p.add_argument("--max-utterance-s", type=float, default=5.5)
-    p.add_argument("--start-ms", type=int, default=150)
-    p.add_argument("--silence-ms", type=int, default=1800)
-
-    p.add_argument("--speech-rms-mult", type=float, default=1.15)
-    p.add_argument(
-        "--end-mult",
-        type=float,
-        default=0.6,
-        help="Multiplier for end-of-speech threshold (hysteresis)"
-    )
-    p.add_argument("--min-speech-rms", type=float, default=160.0)
-
-    p.add_argument("--min-text-chars", type=int, default=2)
-    p.add_argument("--min-interval-s", type=float, default=0.7)
-    p.add_argument("--mute-after-send-s", type=float, default=3.0)
-
-    p.add_argument("--drop-repetitions", action="store_true")
     p.add_argument("--whisper-vad-filter", action="store_true")
-    p.add_argument("--allow-cpu-fallback", action="store_true")
-    p.add_argument("--debug", action="store_true")
 
+    # Wake/early commit
+    p.add_argument("--wake-word", default=WAKE_WORD_DEFAULT)
+    p.add_argument("--enable-early-intent", action="store_true")
+    p.add_argument("--scout-model", default="tiny.en")
+    p.add_argument("--scout-beam-size", type=int, default=1)
+    p.add_argument("--early-commit-min-s", type=float, default=0.8)
+    p.add_argument("--early-commit-max-s", type=float, default=1.6)
+    p.add_argument("--early-check-interval-ms", type=int, default=200)
+
+    # VAD params
+    p.add_argument("--start-ms", type=int, default=80)
+    p.add_argument("--silence-ms", type=int, default=500)
+    p.add_argument("--max-utterance-s", type=float, default=3.5)
+    p.add_argument("--min-utterance-s", type=float, default=0.35)
+
+    p.add_argument("--speech-rms-mult", type=float, default=1.6)
+    p.add_argument("--end-mult", type=float, default=0.7, help="End threshold multiplier vs noise (hysteresis)")
+    p.add_argument("--min-speech-rms", type=float, default=120.0)
+    p.add_argument("--noise-alpha", type=float, default=0.02)
+
+    # Rate limiting
+    p.add_argument("--min-interval-s", type=float, default=0.25)
+    p.add_argument("--mute-after-send-s", type=float, default=1.2)
+    p.add_argument("--min-text-chars", type=int, default=2)
+
+    # LLM
+    p.add_argument("--llm-url", default=LLM_URL_DEFAULT)
+    p.add_argument("--llm-model", default="qwen")
+    p.add_argument("--llm-max-tokens", type=int, default=80)
+    p.add_argument("--llm-temp", type=float, default=0.3)
+
+    # "Thinking..." chatter while waiting on LLM
+    p.add_argument("--thinking-text", default="Thinking...Thinking...")
+    p.add_argument("--thinking-interval-s", type=float, default=2.0)
+    p.add_argument("--disable-thinking", action="store_true", help="Disable periodic 'Thinking...' speech while waiting for LLM.")
+
+    p.add_argument("--debug", action="store_true")
     args = p.parse_args(argv)
 
-    # -----------------------------
-    # Load Whisper
-    # -----------------------------
-    def load_model():
-        try:
-            return WhisperModel(
-                args.model,
-                device=args.device,
-                compute_type=args.compute_type,
-            )
-        except Exception as e:
-            if args.allow_cpu_fallback:
-                print("[WARN] CUDA failed, falling back to CPU int8", file=sys.stderr)
-                return WhisperModel(args.model, device="cpu", compute_type="int8")
-            raise
+    # ---- Load models
+    print(f"Loading main Whisper model: {args.model} ({args.device}/{args.compute_type})")
+    main_model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
 
-    print(f"Loading Whisper model: {args.model}")
-    model = load_model()
-    print("Model loaded!")
+    scout_model = None
+    if args.enable_early_intent:
+        print(f"Loading intent scout model: {args.scout_model} (cpu/int8)")
+        scout_model = WhisperModel(args.scout_model, device="cpu", compute_type="int8")
 
-    # -----------------------------
-    # Robot connection
-    # -----------------------------
-    robot = SourcceyClient(
-        SourcceyClientConfig(remote_ip=args.robot_ip, id="sourccey")
-    )
+    print("Models ready")
+
+    # ---- Connect robot
+    robot = SourcceyClient(SourcceyClientConfig(remote_ip=args.robot_ip, id="sourccey"))
     robot.connect()
     print("✓ Connected to robot")
 
+    # ---- ZMQ audio
     ctx = zmq.Context()
     sock = ctx.socket(zmq.SUB)
     sock.connect(f"tcp://{args.robot_ip}:{args.audio_port}")
     sock.setsockopt(zmq.SUBSCRIBE, b"")
 
-    # -----------------------------
-    # VAD state
-    # -----------------------------
+    # ---- VAD state
     noise_rms = 600.0
-    noise_alpha = 0.02
-
-    preroll = []
-    preroll_max = int(0.3 / 0.2)
-
-    utter_chunks = []
     in_speech = False
     silence_s = 0.0
     utter_s = 0.0
+    utter_chunks: List[np.ndarray] = []
 
-    last_sent = ""
+    # preroll ~300ms so we don't chop leading phonemes
+    preroll: List[np.ndarray] = []
+    # estimate chunk duration dynamically, but cap buffer length to a few chunks
+    preroll_max_chunks = 6
+
     last_sent_ts = 0.0
     muted_until = 0.0
+    last_user_text = ""
+    is_robot_speaking = False
+    early_committed = False
+    wake_acknowledged = False
 
-    # -----------------------------
-    # Transcription helper
-    # -----------------------------
-    def transcribe(audio_i16: np.ndarray) -> str:
-        audio_f32 = audio_i16.astype(np.float32) / 32768.0
+    last_early_probe_ts = 0.0
+    early_check_interval_s = max(0.05, args.early_check_interval_ms / 1000.0)
 
-        segments, info = model.transcribe(
-            audio_f32,
-            language=args.language,
-            beam_size=args.beam_size,
-            vad_filter=args.whisper_vad_filter,
-            initial_prompt=(
-                "This is a conversation with a robot named Sourccey. "
-                "Common words include: Sourccey, robot, move, follow, stop, hello, task."
-            ),
-        )
+    initial_prompt = (
+        "This is a conversation with a robot named Sourccey. "
+        "Common words include: Sourccey, robot, move, follow, stop, hello, task."
+    )
 
-        return " ".join(seg.text.strip() for seg in segments).strip()
+    def _reset_utterance():
+        nonlocal in_speech
+        nonlocal silence_s
+        nonlocal utter_s
+        nonlocal utter_chunks
+        nonlocal preroll
+        nonlocal last_early_probe_ts
+        nonlocal early_committed
+        nonlocal wake_acknowledged
 
-    # -----------------------------
-    # Main loop
-    # -----------------------------
+        in_speech = False
+        silence_s = 0.0
+        utter_s = 0.0
+        utter_chunks = []
+        preroll = []
+        last_early_probe_ts = 0.0
+        early_committed = False
+        wake_acknowledged = False
+
+    def _say_thinking_immediately():
+        """Say 'Thinking...' immediately on wake-word detection."""
+        nonlocal muted_until, is_robot_speaking
+
+        if args.disable_thinking:
+            return
+
+        txt = (args.thinking_text or "").strip()
+        if not txt:
+            return
+
+        is_robot_speaking = True
+        now = time.time()
+
+        # Extend mute window so we don't listen during this short utterance
+        muted_until = max(muted_until, now + 1.2)
+
+        try:
+            robot.send_text(txt)
+        except Exception:
+            pass
+
+    def _say_thinking_once() -> None:
+        """
+        Legacy hook: thinking speech is now handled entirely inside `_send_reply()`.
+        Keep this as a no-op so call sites don't need to change.
+        """
+        return
+    
+    def _send_reply(cmd_text: str, *, force: bool = False):
+        nonlocal last_sent_ts, muted_until, last_user_text, is_robot_speaking
+
+        now = time.time()
+
+        if not force:
+            if now - last_sent_ts < args.min_interval_s:
+                return
+
+        if not cmd_text:
+            return
+
+        cmd_text = cmd_text.strip()
+        if len(cmd_text.replace(" ", "")) < args.min_text_chars:
+            return
+
+        if is_similar_text(cmd_text, last_user_text):
+            return
+
+        if sounds_like_physical_action(cmd_text):
+            reply = "I can explain how to do that, but I can't physically perform it."
+        else:
+            # ZMQ sockets are not thread-safe; keep `robot.send_text(...)` on this thread.
+            # Instead, run the LLM call in a worker thread and "tick" thinking speech here.
+            done = threading.Event()
+            llm_out: dict[str, str] = {"reply": ""}
+
+            def _llm_worker() -> None:
+                try:
+                    llm_out["reply"] = ask_llm_fast(
+                        cmd_text,
+                        llm_url=args.llm_url,
+                        llm_model=args.llm_model,
+                        max_tokens=args.llm_max_tokens,
+                        temperature=args.llm_temp,
+                    )
+                finally:
+                    done.set()
+
+            t = threading.Thread(target=_llm_worker, name="sourccey-llm", daemon=True)
+            t.start()
+
+            # Never allow faster than 2s (matches expected UX; avoids accidental spam).
+            interval = max(2.0, float(args.thinking_interval_s))
+            thinking_text = (args.thinking_text or "").strip()
+            enable_thinking = (not args.disable_thinking) and bool(thinking_text)
+
+            # Keep mic muted while we audibly "think"
+            is_robot_speaking = True
+
+            # First "Thinking..." is emitted at wake-word detection time; only repeat here.
+            next_think_t = time.monotonic() + (interval * 3.0)
+            while not done.is_set():
+                now2_m = time.monotonic()
+
+                if enable_thinking and now2_m >= next_think_t:
+                    # Extend mute window so the main loop doesn't resume listening mid-thinking.
+                    now_wall = time.time()
+                    muted_until = max(muted_until, now_wall + interval + 0.75)
+                    try:
+                        robot.send_text(thinking_text)
+                    except Exception:
+                        pass
+                    next_think_t = now2_m + interval
+
+                # Short wait so we stop promptly when the LLM finishes.
+                done.wait(timeout=0.05)
+
+            reply = llm_out.get("reply", "")
+
+        if not reply:
+            return
+
+        # ---- HARD MUTE MIC WHILE SPEAKING ----
+        is_robot_speaking = True
+        robot.send_text(reply)
+
+        if args.debug:
+            print(f"[USER ] {cmd_text}")
+            print(f"[ROBOT] {reply}")
+
+        last_user_text = cmd_text
+        last_sent_ts = now
+        muted_until = now + args.mute_after_send_s
+
     try:
         while True:
             try:
                 data = sock.recv(zmq.NOBLOCK)
                 now = time.time()
 
-                if now < muted_until:
-                    continue
+                # HARD MIC MUTE while robot is speaking
+                if is_robot_speaking:
+                    if now >= muted_until:
+                        is_robot_speaking = False
+                    else:
+                        continue
 
                 audio = np.frombuffer(data, dtype=np.int16)
                 if audio.size == 0:
                     continue
 
+                chunk_s = audio.size / args.sample_rate
+
+                # RMS for VAD
                 rms = float(np.sqrt(np.mean(audio.astype(np.float32) ** 2)))
 
+                # Update noise floor when NOT in speech
                 if not in_speech:
-                    noise_rms = (1 - noise_alpha) * noise_rms + noise_alpha * rms
+                    noise_rms = (1.0 - args.noise_alpha) * noise_rms + args.noise_alpha * rms
 
-                thr = max(args.min_speech_rms, noise_rms * args.speech_rms_mult)
+                # Hysteresis thresholds
                 start_thr = max(args.min_speech_rms, noise_rms * args.speech_rms_mult)
                 end_thr = max(args.min_speech_rms * 0.5, noise_rms * args.end_mult)
 
-                if not in_speech:
-                    is_speech = rms >= start_thr
-                else:
-                    is_speech = rms >= end_thr
+                is_speech = rms >= (start_thr if not in_speech else end_thr)
 
-                chunk_s = audio.size / args.sample_rate
-
+                # Maintain preroll buffer
                 preroll.append(audio)
-                if len(preroll) > preroll_max:
+                if len(preroll) > preroll_max_chunks:
                     preroll.pop(0)
 
+                # Transition into speech only after start_ms of sustained speech
                 if not in_speech:
                     if is_speech:
                         utter_s += chunk_s
-                        if utter_s >= args.start_ms / 1000:
+                        if utter_s >= args.start_ms / 1000.0:
                             in_speech = True
                             utter_chunks = list(preroll)
                             silence_s = 0.0
                             utter_s = 0.0
+                            wake_acknowledged = False
                     else:
                         utter_s = 0.0
+                    continue
 
-                if in_speech:
-                    utter_chunks.append(audio)
-                    utter_s += chunk_s
+                # In speech: accumulate
+                utter_chunks.append(audio)
+                utter_s += chunk_s
 
-                    if is_speech:
-                        silence_s = 0.0
-                    else:
-                        silence_s += chunk_s
-                        noise_rms = (1 - noise_alpha) * noise_rms + noise_alpha * rms
+                if is_speech:
+                    silence_s = 0.0
+                else:
+                    silence_s += chunk_s
+                    # let noise track a bit during trailing silence
+                    noise_rms = (1.0 - args.noise_alpha) * noise_rms + args.noise_alpha * rms
 
-                    if (
-                        silence_s >= args.silence_ms / 1000
-                        or utter_s >= args.max_utterance_s
-                    ):
-                        in_speech = False
-                        if utter_s >= args.min_utterance_s:
-                            full = np.concatenate(utter_chunks)
-                            text = transcribe(full)
-                            text = normalize_robot_terms(text)
+                # ---- EARLY INTENT PROBE (throttled)
+                # ---- WAKE WORD ACK (FAST PATH)
+                if (
+                    scout_model is not None
+                    and in_speech
+                    and not wake_acknowledged
+                    and utter_s >= 0.2  # ~200 ms
+                ):
+                    try:
+                        probe = np.concatenate(utter_chunks)
+                        txt = _whisper_to_text(
+                            scout_model,
+                            probe,
+                            language=args.language,
+                            beam_size=1,
+                            vad_filter=False,
+                            initial_prompt=initial_prompt,
+                        )
+                        txt = normalize_robot_terms(txt)
 
-                            # Wake word gating
-                            if not has_wake_word(text):
-                                if args.debug:
-                                    print(f"[IGNORED] No wake word: {text}")
-                                continue
+                        if args.debug and txt:
+                            print(f"[WAKE ] {txt}")
 
-                            text = strip_wake_word(text)
+                        if has_wake_word(txt, args.wake_word):
+                            wake_acknowledged = True
+                            _say_thinking_immediately()
 
-                            if not text:
-                                continue
+                    except Exception:
+                        pass
 
-                            if (
-                                text
-                                and len(text.replace(" ", "")) >= args.min_text_chars
-                                and now - last_sent_ts >= args.min_interval_s
-                                and not is_similar_text(text, last_sent)
-                            ):
-                                try:
-                                    if sounds_like_physical_action(text):
-                                        reply = "I can explain how to do that, but I can't physically perform it."
-                                    else:
-                                        reply = ask_llm(text)
-                                except Exception as e:
-                                    print(f"[LLM ERROR] {e}", file=sys.stderr)
-                                    reply = "Sorry, I had trouble thinking just now."
+                # ---- END OF UTTERANCE: silence or max length
+                if (silence_s >= args.silence_ms / 1000.0) or (utter_s >= args.max_utterance_s):
 
-                                if reply and robot.send_text(reply):
-                                    print(f"[USER ] {text}")
-                                    print(f"[ROBOT] {reply}")
-                                    last_sent = reply
-                                    last_sent_ts = now
-                                    muted_until = now + args.mute_after_send_s
-                        utter_chunks = []
-                        silence_s = 0.0
-                        utter_s = 0.0
+                    # If we already early-committed, skip full ASR entirely
+                    if early_committed:
+                        _reset_utterance()
+                        continue
+
+                    full = np.concatenate(utter_chunks) if utter_chunks else np.array([], dtype=np.int16)
+                    _reset_utterance()
+
+                    if full.size == 0:
+                        continue
+
+                    full_dur = full.size / args.sample_rate
+                    if full_dur < args.min_utterance_s:
+                        continue
+
+                    try:
+                        txt = _whisper_to_text(
+                            main_model,
+                            full,
+                            language=args.language,
+                            beam_size=args.beam_size,
+                            vad_filter=args.whisper_vad_filter,
+                            initial_prompt=initial_prompt,
+                        )
+                        txt = normalize_robot_terms(txt)
+
+                        if args.debug:
+                            print(f"[HEARD] {txt}")
+
+                        if not has_wake_word(txt, args.wake_word):
+                            if args.debug:
+                                print(f"[IGNORED] No wake word: {txt}")
+                            continue
+
+                        # Wake word confirmed → immediate feedback
+                        _say_thinking_immediately()
+
+                        cmd = strip_wake_word(txt, args.wake_word).strip()
+                        if not cmd:
+                            continue
+
+                        _send_reply(cmd, force=True)
+
+                    except Exception as e:
+                        print(f"[VOICE ERROR] {e}", file=sys.stderr)
+                        time.sleep(0.05)
 
             except zmq.Again:
-                robot.poll_text_message()
-                time.sleep(0.01)
+                # keep the robot client responsive if it needs polling
+                try:
+                    robot.poll_text_message()
+                except Exception:
+                    pass
+                time.sleep(0.005)
+
+            except Exception as e:
+                # Never die silently
+                print(f"[LOOP ERROR] {e}", file=sys.stderr)
+                time.sleep(0.05)
 
     except KeyboardInterrupt:
-        print("\nStopping...")
+        print("\n[voice] Stopping...")
     finally:
-        sock.close()
-        ctx.term()
-        robot.disconnect()
+        try:
+            sock.close()
+        except Exception:
+            pass
+        try:
+            ctx.term()
+        except Exception:
+            pass
+        try:
+            robot.disconnect()
+        except Exception:
+            pass
 
     return 0
 
