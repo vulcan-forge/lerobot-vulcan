@@ -234,7 +234,7 @@ class ZActuator:
         self,
         target_pos_m100_100: float,
         *,
-        timeout_s: float = 3.0,
+        timeout_s: float = 10.0,
         hz: float = 30.0,
         instant: bool = True,
     ) -> float:
