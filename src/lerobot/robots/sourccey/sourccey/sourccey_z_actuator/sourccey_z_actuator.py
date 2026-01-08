@@ -172,13 +172,18 @@ class SourcceyZActuator:
         # Derivative gain: damps overshoot by "braking" when error is changing quickly.
         # (cmd = kp*err + kd*d(err)/dt)
         self.kd: float = 0.02
+        # Integral gain: helps overcome stiction/deadzone by accumulating error over time.
+        # Use small values + anti-windup clamp to avoid slow oscillations.
+        self.ki: float = 0.02
 
         self.max_cmd: float = 1.0
         self.deadband: float = 1.0
 
-        # Controller state for D term.
+        # Controller state for D/I terms.
         self._prev_err: float = 0.0
         self._prev_err_valid: bool = False
+        self._err_i: float = 0.0
+        self.i_limit: float = 30.0  # clamp on integral state (err*s)
 
         # Debugging
         self._debug_mode = True
@@ -229,10 +234,11 @@ class SourcceyZActuator:
         if abs(target) >= 99.0:
             deadband = 0.1
 
-        # --- PD control (P + D damping) ---
+        # --- PID control (P + D damping + I for endpoint push-through) ---
         if abs(err) <= deadband:
             # Reset derivative state so we don't get a "kick" when restarting from a stop.
             self._prev_err_valid = False
+            self._err_i = 0.0
             self.stop()
             return
 
@@ -247,10 +253,21 @@ class SourcceyZActuator:
         self._prev_err = err
         self._prev_err_valid = True
 
-        cmd = (self.kp * err) + (self.kd * derr)
+        # Integrate error with clamp (anti-windup baseline).
+        err_i_before = self._err_i
+        self._err_i += err * dt
+        self._err_i = max(-self.i_limit, min(self.i_limit, self._err_i))
 
-        # Clamp to safe output range.
-        cmd = max(-self.max_cmd, min(self.max_cmd, cmd))
+        cmd_raw = (self.kp * err) + (self.kd * derr) + (self.ki * self._err_i)
+        cmd = max(-self.max_cmd, min(self.max_cmd, cmd_raw))
+
+        # Simple anti-windup: if we're saturated and the error would drive us further into saturation,
+        # undo the last integrator step.
+        if cmd != cmd_raw:
+            if (cmd > 0.0 and err > 0.0) or (cmd < 0.0 and err < 0.0):
+                self._err_i = err_i_before
+                cmd_raw = (self.kp * err) + (self.kd * derr) + (self.ki * self._err_i)
+                cmd = max(-self.max_cmd, min(self.max_cmd, cmd_raw))
 
         if self.invert:
             cmd = -cmd
