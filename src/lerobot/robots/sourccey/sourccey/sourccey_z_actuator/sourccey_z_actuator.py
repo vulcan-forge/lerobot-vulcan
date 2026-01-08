@@ -178,8 +178,12 @@ class SourcceyZActuator:
 
         self.max_cmd: float = 1.0
         self.deadband: float = 1.0
-        self.kp_endpoint: float = 5
-        self.endpoint_target_threshold: float = 85.0
+        # Endpoint assist: when commanding near +/-100, we may need full power to overcome
+        # stiction / deadzone near the ends.
+        self.endpoint_target_threshold: float = 90.0
+        # Only apply full power when we're still meaningfully away from the target to avoid oscillation.
+        # Should typically be > deadband.
+        self.endpoint_full_power_err_margin: float = 2.0
 
         # Controller state for D/I terms.
         self._prev_err: float = 0.0
@@ -244,6 +248,18 @@ class SourcceyZActuator:
             self.stop()
             return
 
+        # Endpoint full-power assist:
+        # If the target is near the endpoints, command full power until we're close, then let PID settle.
+        if abs(target) >= float(self.endpoint_target_threshold) and abs(err) > float(self.endpoint_full_power_err_margin):
+            # Reset controller state to avoid a D "kick" when we hand back to PID.
+            self._prev_err_valid = False
+            self._err_i = 0.0
+            cmd = self.max_cmd if err > 0.0 else -self.max_cmd
+            if self.invert:
+                cmd = -cmd
+            self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
+            return
+
         dt = float(dt_s)
         if dt <= 1e-6:
             dt = 1e-3
@@ -260,11 +276,7 @@ class SourcceyZActuator:
         self._err_i += err * dt
         self._err_i = max(-self.i_limit, min(self.i_limit, self._err_i))
 
-        kp_eff = self.kp
-        if abs(target) >= self.endpoint_target_threshold:
-            kp_eff = max(kp_eff, self.kp_endpoint)
-
-        cmd_raw = (kp_eff * err) + (self.kd * derr) + (self.ki * self._err_i)
+        cmd_raw = (self.kp * err) + (self.kd * derr) + (self.ki * self._err_i)
         cmd = max(-self.max_cmd, min(self.max_cmd, cmd_raw))
 
         # Simple anti-windup: if we're saturated and the error would drive us further into saturation,
