@@ -168,12 +168,17 @@ class SourcceyZActuator:
         self.invert = sensor.invert
 
         # Tunables (safe defaults; tune on hardware).
-        self.kp: float = 0.05
+        self.kp: float = 0.075
+        # Derivative gain: damps overshoot by "braking" when error is changing quickly.
+        # (cmd = kp*err + kd*d(err)/dt)
+        self.kd: float = 0.02
+
         self.max_cmd: float = 1.0
         self.deadband: float = 1.0
 
-        self.endpoint_boost_target: float = 85.0   # start boosting when target beyond this
-        self.endpoint_min_cmd: float = 0.9         # known minimum that actually moves
+        # Controller state for D term.
+        self._prev_err: float = 0.0
+        self._prev_err_valid: bool = False
 
         # Debugging
         self._debug_mode = True
@@ -224,18 +229,28 @@ class SourcceyZActuator:
         if abs(target) >= 99.0:
             deadband = 0.1
 
-        # --- P control instead of bang-bang ---
+        # --- PD control (P + D damping) ---
         if abs(err) <= deadband:
+            # Reset derivative state so we don't get a "kick" when restarting from a stop.
+            self._prev_err_valid = False
             self.stop()
             return
 
-       # Proportional command: slow down as we approach target
-        cmd = self.kp * err
-        cmd = max(-self.max_cmd, min(self.max_cmd, cmd))
+        dt = float(dt_s)
+        if dt <= 1e-6:
+            dt = 1e-3
 
-        # Endpoint boost: if we're commanding near the ends, ensure we overcome motor deadzone.
-        if abs(target) >= self.endpoint_boost_target and 0.0 < abs(cmd) < self.endpoint_min_cmd:
-            cmd = self.endpoint_min_cmd if cmd > 0.0 else -self.endpoint_min_cmd
+        # Derivative of error (finite difference). This adds damping near the target.
+        derr = 0.0
+        if self._prev_err_valid:
+            derr = (err - self._prev_err) / dt
+        self._prev_err = err
+        self._prev_err_valid = True
+
+        cmd = (self.kp * err) + (self.kd * derr)
+
+        # Clamp to safe output range.
+        cmd = max(-self.max_cmd, min(self.max_cmd, cmd))
 
         if self.invert:
             cmd = -cmd
