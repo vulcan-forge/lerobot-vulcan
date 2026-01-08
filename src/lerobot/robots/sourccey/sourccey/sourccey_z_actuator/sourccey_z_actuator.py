@@ -169,7 +169,7 @@ class SourcceyZActuator:
         # Tunables (safe defaults; tune on hardware).
         self.kp: float = 0.02
         self.max_cmd: float = 1.0
-        self.deadband: float = 1.0
+        self.deadband: float = 2.0
 
         # Debugging
         self._last_cmd_print_t = 0.0
