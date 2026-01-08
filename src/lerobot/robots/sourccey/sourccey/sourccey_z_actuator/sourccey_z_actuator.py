@@ -174,10 +174,12 @@ class SourcceyZActuator:
         self.kd: float = 0.02
         # Integral gain: helps overcome stiction/deadzone by accumulating error over time.
         # Use small values + anti-windup clamp to avoid slow oscillations.
-        self.ki: float = 0.2
+        self.ki: float = 0.05
 
         self.max_cmd: float = 1.0
         self.deadband: float = 1.0
+        self.kp_endpoint: float = 0.2
+        self.endpoint_target_threshold: float = 85.0
 
         # Controller state for D/I terms.
         self._prev_err: float = 0.0
@@ -258,7 +260,11 @@ class SourcceyZActuator:
         self._err_i += err * dt
         self._err_i = max(-self.i_limit, min(self.i_limit, self._err_i))
 
-        cmd_raw = (self.kp * err) + (self.kd * derr) + (self.ki * self._err_i)
+        kp_eff = self.kp
+        if abs(target) >= self.endpoint_target_threshold:
+            kp_eff = max(kp_eff, self.kp_endpoint)
+
+        cmd_raw = (kp_eff * err) + (self.kd * derr) + (self.ki * self._err_i)
         cmd = max(-self.max_cmd, min(self.max_cmd, cmd_raw))
 
         # Simple anti-windup: if we're saturated and the error would drive us further into saturation,
