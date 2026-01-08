@@ -178,7 +178,7 @@ class SourcceyZActuator:
 
         self.max_cmd: float = 1.0
         self.deadband: float = 1.0
-        self.kp_endpoint: float = 0.5
+        self.kp_endpoint: float = 5
         self.endpoint_target_threshold: float = 85.0
 
         # Controller state for D/I terms.
