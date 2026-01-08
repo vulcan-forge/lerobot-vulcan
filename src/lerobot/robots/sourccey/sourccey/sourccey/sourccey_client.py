@@ -101,6 +101,8 @@ class SourcceyClient(Robot):
 
         # Stored target position (what we "expect" z to be at while holding keys).
         self._z_pos_cmd = 0.0
+        self._z_snap_period_s = 3.0
+        self._z_last_snap_t = 0.0
 
     ###################################################################
     # Properties and Attributes
@@ -462,8 +464,9 @@ class SourcceyClient(Robot):
         z_rate = float(self._z_units_per_s)
         self._z_pos_cmd = float(np.clip(self._z_pos_cmd + (z_dir * z_rate * dt_z), self._z_min, self._z_max))
 
-        if z_obs_pos is not None and z_dir == 0.0:
-            self._z_pos_cmd = z_obs_pos
+        if z_obs_pos is not None and z_dir == 0.0 and (now - self._z_last_snap_t) >= self._z_snap_period_s:
+            self._z_pos_cmd = float(z_obs_pos)
+            self._z_last_snap_t = now
 
         if abs(self._x_cmd_smoothed) >= self._x_deadbane:
             # already moving -> smooth changes

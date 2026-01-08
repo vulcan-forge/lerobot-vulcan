@@ -212,13 +212,20 @@ class SourcceyZActuator:
             raise RuntimeError("No driver provided. Pass `driver=...` (e.g. Sourccey.dc_motors_controller).")
 
         pos = float(self.read_position())
-        err = float(self._target_pos_m100_100) - pos
+        target = float(self._target_pos_m100_100)
+        err = target - pos
+
+        # Keep the existing deadband behavior for normal targets, but when commanding extreme
+        # endpoints, tighten the deadband so we actually reach +/-100 instead of stopping short.
+        deadband = float(self.deadband)
+        if abs(target) >= 99.0:
+            deadband = 0.1
 
         # Bang-bang control: full speed toward target
         # This is fine because the z actuator motor is slow and has a lot of torque.
-        if err > float(self.deadband):
+        if err > deadband:
             cmd = 1.0
-        elif err < -float(self.deadband):
+        elif err < -deadband:
             cmd = -1.0
         else:
             self.stop()
