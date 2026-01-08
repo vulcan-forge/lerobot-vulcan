@@ -192,7 +192,6 @@ class ZActuator:
             return
 
         if self.invert:
-            print(f"Inverting command from {cmd} to {-cmd}")
             cmd = -cmd
 
         self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
