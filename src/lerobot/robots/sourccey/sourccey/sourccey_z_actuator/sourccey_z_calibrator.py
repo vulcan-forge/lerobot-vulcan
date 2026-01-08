@@ -46,6 +46,8 @@ class SourcceyZCalibrator:
         self.up_cmd = float(up_cmd)
 
     def _drive(self, cmd: float) -> None:
+
+        cmd = -cmd if self.actuator.invert else cmd
         if self.actuator.driver is None:
             raise RuntimeError("ZActuator has no driver; cannot drive motor.")
         # Important: cmd sign here is MOTOR sign. If this moves opposite of expected, swap down_cmd/up_cmd.
