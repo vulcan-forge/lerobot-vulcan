@@ -168,7 +168,7 @@ class SourcceyZActuator:
         self.invert = sensor.invert
 
         # Tunables (safe defaults; tune on hardware).
-        self.kp: float = 0.075
+        self.kp: float = 0.05
         # Derivative gain: damps overshoot by "braking" when error is changing quickly.
         # (cmd = kp*err + kd*d(err)/dt)
         self.kd: float = 0.02
