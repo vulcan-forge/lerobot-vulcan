@@ -45,9 +45,10 @@ class SourcceyProtobuf:
             base_action.x_vel = float(action.get("x.vel", 0.0))
             base_action.y_vel = float(action.get("y.vel", 0.0))
             base_action.theta_vel = float(action.get("theta.vel", 0.0))
-            base_action.z_vel = float(action.get("z.vel", 0.0))
+            # NOTE: we now use z.pos end-to-end; we carry it over the existing z_vel protobuf field.
+            base_action.z_vel = float(action.get("z.pos", 0.0))
             robot_action.base_target_velocity.CopyFrom(base_action)
-            
+
             # Per-arm flags
             if "untorque_left" in action:
                 try:
@@ -98,7 +99,8 @@ class SourcceyProtobuf:
             base_vel.x_vel = observation.get("x.vel", 0.0)
             base_vel.y_vel = observation.get("y.vel", 0.0)
             base_vel.theta_vel = observation.get("theta.vel", 0.0)
-            base_vel.z_vel = observation.get("z.vel", 0.0)
+            # NOTE: z.pos carried in z_vel field (see comment in action_to_protobuf)
+            base_vel.z_vel = observation.get("z.pos", 0.0)
 
             # Process cameras - convert numpy arrays to CameraImage messages
             for cam_key, cam_data in observation.items():
@@ -153,7 +155,7 @@ class SourcceyProtobuf:
                 "x.vel": base_vel.x_vel,
                 "y.vel": base_vel.y_vel,
                 "theta.vel": base_vel.theta_vel,
-                "z.vel": base_vel.z_vel,
+                "z.pos": base_vel.z_vel,
             })
 
             # Per-arm flags from protobuf
@@ -198,7 +200,7 @@ class SourcceyProtobuf:
             observation["x.vel"] = base_vel.x_vel
             observation["y.vel"] = base_vel.y_vel
             observation["theta.vel"] = base_vel.theta_vel
-            observation["z.vel"] = base_vel.z_vel
+            observation["z.pos"] = base_vel.z_vel
 
             # Process cameras from the cameras list
             for camera in robot_state.cameras:

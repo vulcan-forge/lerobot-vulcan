@@ -258,6 +258,15 @@ class Sourccey(Robot):
             base_vel = self._wheel_normalized_to_body(base_wheel_vel)
             obs_dict.update(base_vel)
 
+            # Z actuator position (best-effort; keep schema stable)
+            try:
+                if self.z_actuator is not None and self.z_actuator.is_connected:
+                    obs_dict["z.pos"] = float(self.z_actuator.read_position())
+                else:
+                    obs_dict["z.pos"] = 100.0
+            except Exception:
+                obs_dict["z.pos"] = 100.0
+
             for cam_key in self.cameras.keys():
                 try:
                     obs_dict[cam_key] = self.cameras[cam_key].async_read()
@@ -306,9 +315,12 @@ class Sourccey(Robot):
                 base_goal_vel.get("theta.vel", 0.0)
             )
 
-            linear_actuator_action = self._body_to_linear_actuator_normalized(
-                base_goal_pos.get("z.pos", 0.0)
-            )
+            # Z actuator is position-controlled; drive toward the latest z.pos target (non-blocking).
+            if "z.pos" in base_goal_pos:
+                try:
+                    self.z_actuator.move_to_position(float(base_goal_pos.get("z.pos", 100.0)), hz=30.0, instant=True)
+                except Exception as e:
+                    logger.warning(f"Failed to command z actuator: {e}")
 
             dc_motors_action = {**wheel_action }
             self.dc_motors_controller.set_velocities(dc_motors_action)
@@ -425,22 +437,6 @@ class Sourccey(Robot):
             "x.vel": self.clean_value(x),
             "y.vel": self.clean_value(y),
             "theta.vel": self.clean_value(theta),
-        }
-
-    def _body_to_linear_actuator_normalized(
-        self,
-        z_pos: float,
-    ) -> dict:
-        return {
-            "linear_actuator": 100.0, # self.clean_value(z_pos),
-        }
-
-    def _linear_actuator_normalized_to_body(
-        self,
-        linear_actuator_normalized: dict[str, Any],
-    ) -> dict[str, Any]:
-        return {
-            "z.pos": 100.0, # self.clean_value(linear_actuator_normalized["linear_actuator"]),
         }
 
     # Round to prevent floating-point precision issues and handle -0.0
