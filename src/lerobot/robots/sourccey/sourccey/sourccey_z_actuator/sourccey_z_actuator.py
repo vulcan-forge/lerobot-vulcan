@@ -9,6 +9,7 @@ from typing import Optional, Protocol
 
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator import SourcceyZCalibrator
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
+from lerobot.utils.robot_utils import precise_sleep
 
 
 try:
@@ -172,7 +173,7 @@ class SourcceyZActuator:
         self.deadband: float = 2.5
 
         # Debugging
-        self._debug_mode = True
+        self._debug_mode = False
         self._last_cmd_print_t = 0.0
 
         # Calibration
@@ -191,7 +192,7 @@ class SourcceyZActuator:
         self._ctl_lock = threading.Lock()
         self._ctl_stop_event = threading.Event()
         self._ctl_thread: Optional[threading.Thread] = None
-        self._ctl_hz: float = 5.0
+        self._ctl_hz: float = 10.0
         self._ctl_instant: bool = True
 
     @property
@@ -247,10 +248,12 @@ class SourcceyZActuator:
     ############################################################
     def _control_loop(self) -> None:
         last_t = time.monotonic()
+        last_print = time.monotonic()
+        it = 0
         while not self._ctl_stop_event.is_set():
             # If we're not ready to drive, just idle.
             if self.driver is None:
-                time.sleep(0.05)
+                precise_sleep(0.05)
                 last_t = time.monotonic()
                 continue
 
@@ -264,21 +267,41 @@ class SourcceyZActuator:
 
             try:
                 self.update(dt, instant=instant)
-            except Exception:
+            except Exception as e:
                 # Don't let the thread die on transient hardware/read errors.
+                print(f"Error updating Z actuator: {e}")
                 try:
                     self.stop()
-                except Exception:
+                except Exception as e2:
+                    print(f"Error stopping Z actuator: {e2}")
                     pass
-                time.sleep(0.1)
+                precise_sleep(0.1)
+
+            it += 1
+            if now - last_print >= 1.0:
+                last_print = now
+                try:
+                    raw = self.sensor.read_raw().raw
+                except Exception as e:
+                    raw = f"ERR:{type(e).__name__}"
+                print({
+                    "it": it,
+                    "stop_event": self._ctl_stop_event.is_set(),
+                    "hz": hz,
+                    "instant": instant,
+                    "target": round(float(self._target_pos_m100_100), 2),
+                    "pos": round(float(self.read_position()), 2),
+                    "raw": raw,
+                })
 
             period = 1.0 / max(1.0, hz)
-            time.sleep(period)
+            precise_sleep(period)
 
         # best-effort stop on exit
         try:
             self.stop()
-        except Exception:
+        except Exception as e3:
+            print(f"Error stopping Z actuator: {e3}")
             pass
 
     def _ensure_controller_running(self, *, hz: float = 30.0, instant: bool = True) -> None:
@@ -298,6 +321,7 @@ class SourcceyZActuator:
         self._ctl_thread.start()
 
     def stop_position_controller(self, *, join_timeout_s: float = 1.0) -> None:
+        print("Stopping Z actuator position controller")
         """Stop the background position controller (if running) and stop motor output."""
         self._ctl_stop_event.set()
         t = self._ctl_thread
