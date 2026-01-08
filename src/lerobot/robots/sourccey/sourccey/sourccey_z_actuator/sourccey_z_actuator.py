@@ -170,7 +170,9 @@ class SourcceyZActuator:
         # Tunables (safe defaults; tune on hardware).
         self.kp: float = 0.02
         self.max_cmd: float = 1.0
-        self.deadband: float = 5.0
+        # Smaller deadband makes the actuator respond immediately to small target changes
+        # (especially important when z.pos targets are updated incrementally from teleop).
+        self.deadband: float = 1.0
 
         # Debugging
         self._debug_mode = True
