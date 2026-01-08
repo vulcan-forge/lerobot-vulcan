@@ -187,7 +187,7 @@ class SourcceyZActuator:
         self._prev_err_valid: bool = False
 
         # Debugging
-        self._debug_mode = True
+        self._debug_mode = False
         self._last_cmd_print_t = 0.0
 
         # Calibration
