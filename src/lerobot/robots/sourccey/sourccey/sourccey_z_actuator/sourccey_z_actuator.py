@@ -239,7 +239,7 @@ class SourcceyZActuator:
     ############################################################
     # Calibration Functions
     ############################################################
-    def _load_calibration(self, calibration_dir: str | Path, *, filename: str = "sourccey_z_actuator.json") -> bool:
+    def _load_calibration(self, fpath: Path | None = None) -> bool:
         """
         Load Z sensor calibration from `<calibration_dir>/<filename>`.
 
@@ -252,7 +252,7 @@ class SourcceyZActuator:
 
         Returns True if loaded, False if file doesn't exist.
         """
-        fpath = Path(calibration_dir) / filename
+        fpath = self.calibration_fpath if fpath is None else fpath
         if not fpath.is_file():
             return False
 
