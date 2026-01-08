@@ -174,7 +174,7 @@ class SourcceyZActuator:
         self.kd: float = 0.02
         # Integral gain: helps overcome stiction/deadzone by accumulating error over time.
         # Use small values + anti-windup clamp to avoid slow oscillations.
-        self.ki: float = 0.1
+        self.ki: float = 0.2
 
         self.max_cmd: float = 1.0
         self.deadband: float = 1.0
