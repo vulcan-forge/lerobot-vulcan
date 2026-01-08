@@ -172,6 +172,10 @@ class SourcceyZActuator:
         self.max_cmd: float = 1.0
         self.deadband: float = 1.0
 
+        self.endpoint_boost_target: float = 85.0   # start boosting when target beyond this
+        self.endpoint_min_cmd: float = 0.9         # known minimum that actually moves
+        self.endpoint_err_margin: float = 3.0      # don't boost when already very close
+
         # Debugging
         self._debug_mode = True
         self._last_cmd_print_t = 0.0
@@ -229,6 +233,11 @@ class SourcceyZActuator:
        # Proportional command: slow down as we approach target
         cmd = self.kp * err
         cmd = max(-self.max_cmd, min(self.max_cmd, cmd))
+
+        # Endpoint boost: if we're commanding near the ends, ensure we overcome motor deadzone.
+        if abs(target) >= self.endpoint_boost_target and abs(err) >= self.endpoint_err_margin:
+            if 0.0 < abs(cmd) < self.endpoint_min_cmd:
+                cmd = self.endpoint_min_cmd if cmd > 0.0 else -self.endpoint_min_cmd
 
         if self.invert:
             cmd = -cmd
