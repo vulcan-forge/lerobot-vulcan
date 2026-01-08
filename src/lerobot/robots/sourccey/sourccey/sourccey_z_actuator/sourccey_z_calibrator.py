@@ -98,25 +98,32 @@ class SourcceyZCalibrator:
         """
         Returns calibration and also writes it to ZSensor.
         """
+
+        # If bottom reads higher than top, invert so that bottom maps to -100 and top maps to +100.
+        invert = self.actuator.invert
+
         # Phase 1: DOWN -> bottom
         self._drive(self.down_cmd)
         raw_bottom = self._wait_until_stable()
-        print(f"raw_bottom: {raw_bottom}")
+
+        # The raw bottom can get stuck, ensure the raw bottom is 10 units closer to the top then what we waited for
+        raw_bottom = raw_bottom + 10 if invert else raw_bottom - 10
+
         self.actuator.stop()
         time.sleep(0.25)
 
         # Phase 2: UP -> top
         self._drive(self.up_cmd)
         raw_top = self._wait_until_stable()
-        print(f"raw_top: {raw_top}")
         self.actuator.stop()
         time.sleep(0.25)
+
+        print(f"raw_bottom: {raw_bottom}")
+        print(f"raw_top: {raw_top}")
 
         # Decide mapping
         raw_min = int(min(raw_bottom, raw_top))
         raw_max = int(max(raw_bottom, raw_top))
-        # If bottom reads higher than top, invert so that bottom maps to -100 and top maps to +100.
-        invert = bool(raw_bottom > raw_top)
 
         self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
 
