@@ -241,7 +241,7 @@ class SourcceyZActuator:
 
         # Endpoint full-power assist:
         # If the target is near the endpoints, command full power until we're close, then let PD settle.
-        if abs(target) >= float(self.endpoint_target_threshold) and abs(err) > float(self.endpoint_full_power_err_margin):
+        if abs(target) >= 99.0 or (abs(target) >= float(self.endpoint_target_threshold) and abs(err) > float(self.endpoint_full_power_err_margin)):
             # Reset controller state to avoid a D "kick" when we hand back to PID.
             self._prev_err_valid = False
             cmd = self.max_cmd if err > 0.0 else -self.max_cmd
