@@ -169,27 +169,19 @@ class SourcceyZActuator:
 
         # Tunables (safe defaults; tune on hardware).
         self.kp: float = 0.05
-        # Derivative gain: damps overshoot by "braking" when error is changing quickly.
-        # (cmd = kp*err + kd*d(err)/dt)
-        self.kd: float = 0.02
-        # Integral gain: helps overcome stiction/deadzone by accumulating error over time.
-        # Use small values + anti-windup clamp to avoid slow oscillations.
-        self.ki: float = 0.05
+        self.kd: float = 0.02 # Derivative gain: damps overshoot by "braking" when error is changing quickly. # (cmd = kp*err + kd*d(err)/dt)
 
         self.max_cmd: float = 1.0
         self.deadband: float = 1.0
+
         # Endpoint assist: when commanding near +/-100, we may need full power to overcome
         # stiction / deadzone near the ends.
         self.endpoint_target_threshold: float = 90.0
-        # Only apply full power when we're still meaningfully away from the target to avoid oscillation.
-        # Should typically be > deadband.
         self.endpoint_full_power_err_margin: float = 2.0
 
-        # Controller state for D/I terms.
+        # Controller state for D term.
         self._prev_err: float = 0.0
         self._prev_err_valid: bool = False
-        self._err_i: float = 0.0
-        self.i_limit: float = 30.0  # clamp on integral state (err*s)
 
         # Debugging
         self._debug_mode = True
@@ -240,20 +232,18 @@ class SourcceyZActuator:
         if abs(target) >= 99.0:
             deadband = 0.1
 
-        # --- PID control (P + D damping + I for endpoint push-through) ---
+        # --- PD control (P + D damping) ---
         if abs(err) <= deadband:
             # Reset derivative state so we don't get a "kick" when restarting from a stop.
             self._prev_err_valid = False
-            self._err_i = 0.0
             self.stop()
             return
 
         # Endpoint full-power assist:
-        # If the target is near the endpoints, command full power until we're close, then let PID settle.
+        # If the target is near the endpoints, command full power until we're close, then let PD settle.
         if abs(target) >= float(self.endpoint_target_threshold) and abs(err) > float(self.endpoint_full_power_err_margin):
             # Reset controller state to avoid a D "kick" when we hand back to PID.
             self._prev_err_valid = False
-            self._err_i = 0.0
             cmd = self.max_cmd if err > 0.0 else -self.max_cmd
             if self.invert:
                 cmd = -cmd
@@ -271,21 +261,8 @@ class SourcceyZActuator:
         self._prev_err = err
         self._prev_err_valid = True
 
-        # Integrate error with clamp (anti-windup baseline).
-        err_i_before = self._err_i
-        self._err_i += err * dt
-        self._err_i = max(-self.i_limit, min(self.i_limit, self._err_i))
-
-        cmd_raw = (self.kp * err) + (self.kd * derr) + (self.ki * self._err_i)
-        cmd = max(-self.max_cmd, min(self.max_cmd, cmd_raw))
-
-        # Simple anti-windup: if we're saturated and the error would drive us further into saturation,
-        # undo the last integrator step.
-        if cmd != cmd_raw:
-            if (cmd > 0.0 and err > 0.0) or (cmd < 0.0 and err < 0.0):
-                self._err_i = err_i_before
-                cmd_raw = (self.kp * err) + (self.kd * derr) + (self.ki * self._err_i)
-                cmd = max(-self.max_cmd, min(self.max_cmd, cmd_raw))
+        cmd = (self.kp * err) + (self.kd * derr)
+        cmd = max(-self.max_cmd, min(self.max_cmd, cmd))
 
         if self.invert:
             cmd = -cmd
