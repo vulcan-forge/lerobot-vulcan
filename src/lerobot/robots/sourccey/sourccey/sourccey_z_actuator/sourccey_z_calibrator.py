@@ -28,7 +28,7 @@ class SourcceyZCalibrator:
 
     def __init__(
         self,
-        actuator,  # ZActuator
+        actuator,  # SourcceyZActuator
         *,
         stable_s: float = 0.1,
         sample_hz: float = 30.0,
@@ -49,7 +49,7 @@ class SourcceyZCalibrator:
 
         cmd = -cmd if self.actuator.invert else cmd
         if self.actuator.driver is None:
-            raise RuntimeError("ZActuator has no driver; cannot drive motor.")
+            raise RuntimeError("SourcceyZActuator has no driver; cannot drive motor.")
         # Important: cmd sign here is MOTOR sign. If this moves opposite of expected, swap down_cmd/up_cmd.
         self.actuator.driver.set_velocity(self.actuator.motor, float(cmd), normalize=True, instant=True)
 
@@ -147,6 +147,9 @@ class SourcceyZCalibrator:
 
         # Set the actuator to 100
         self.actuator.move_to_position(100.0)
+
+        # Save the calibration
+        self.actuator._save_calibration()
 
         return ZCalibrationResult(
             raw_bottom=int(raw_bottom),

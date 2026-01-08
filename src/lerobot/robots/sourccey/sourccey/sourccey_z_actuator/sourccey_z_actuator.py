@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 import time
 from typing import Optional, Protocol
 
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator import SourcceyZCalibrator
+from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 
 
 try:
@@ -18,6 +21,12 @@ class ZActuatorReading:
     raw: int        # 0..1023 (native MCP3008)
     voltage: float  # volts at the MCP3008 pin
 
+
+@dataclass(frozen=True)
+class ZActuatorCalibration:
+    raw_min: int
+    raw_max: int
+    invert: bool
 
 class ZMotorDriver(Protocol):
     """Small protocol so we can inject Sourccey’s DC controller without importing it here."""
@@ -129,7 +138,7 @@ class ZSensor:
         return int(round(rmin + t * (rmax - rmin)))
 
 
-class ZActuator:
+class SourcceyZActuator:
     """
     Higher-level Z module:
     - reads position through a ZSensor
@@ -145,6 +154,9 @@ class ZActuator:
         driver: ZMotorDriver | None = None,
         motor: str | int = "linear_actuator"
     ) -> None:
+
+        self.name = "sourccey_z_actuator"
+
         self.sensor = sensor
         self.driver = driver
         self.motor = motor
@@ -161,7 +173,16 @@ class ZActuator:
         # Debugging
         self._last_cmd_print_t = 0.0
 
-        # Calibrator
+        # Calibration
+        self.calibration_dir = (
+            HF_LEROBOT_CALIBRATION / ROBOTS / self.name
+        )
+        self.calibration_dir.mkdir(parents=True, exist_ok=True)
+        self.calibration_fpath = self.calibration_dir / f"{self.name}.json"
+        self.calibration: dict[str, ZActuatorCalibration] = {}
+        if self.calibration_fpath.is_file():
+            self._load_calibration()
+
         self.calibrator = SourcceyZCalibrator(self)
 
     @property
@@ -214,6 +235,53 @@ class ZActuator:
         """Stop motor output and reset integrator."""
         if self.driver is not None:
             self.driver.set_velocity(self.motor, 0.0, normalize=True, instant=True)
+
+    ############################################################
+    # Calibration Functions
+    ############################################################
+    def _load_calibration(self, calibration_dir: str | Path, *, filename: str = "sourccey_z_actuator.json") -> bool:
+        """
+        Load Z sensor calibration from `<calibration_dir>/<filename>`.
+
+        Expected JSON:
+          "z_actuator": {
+            "raw_min": 123,
+            "raw_max": 987,
+            "invert": true   # optional
+          }
+
+        Returns True if loaded, False if file doesn't exist.
+        """
+        fpath = Path(calibration_dir) / filename
+        if not fpath.is_file():
+            return False
+
+        with open(fpath, "r") as f:
+            data = json.load(f)
+
+        raw_min = int(data["z_actuator"]["raw_min"])
+        raw_max = int(data["z_actuator"]["raw_max"])
+        invert = bool(data["z_actuator"]["invert"])
+
+        self.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
+
+        # Keep actuator inversion consistent with sensor inversion (since update() uses self.invert).
+        self.invert = bool(self.sensor.invert)
+        return True
+
+    def _save_calibration(self, fpath: Path | None = None) -> None:
+        """
+        Save Z sensor calibration to `<calibration_dir>/<filename>`.
+        """
+        fpath = self.calibration_fpath if fpath is None else fpath
+        with open(fpath, "w") as f:
+            json.dump({
+                "z_actuator": {
+                    "raw_min": self.sensor.calibration_min,
+                    "raw_max": self.sensor.calibration_max,
+                    "invert": self.sensor.invert
+                }
+            }, f, indent=4)
 
     ############################################################
     # Read / Write Functions

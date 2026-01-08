@@ -514,28 +514,3 @@ class SourcceyFollowerCalibrator:
         """Save calibration to file."""
         self.robot.bus.write_calibration(self.robot.calibration)
         self.robot._save_calibration()
-
-    ###################################################################
-    # Z Position Calibration
-    ###################################################################
-    def _z_position_calibration(self, reverse: bool = False) -> None:
-        # This sets the motors in a position such that the linear actuator can be calibrated
-
-        # Get current positions as starting points
-        start_positions = self.robot.bus.sync_read("Present_Position", normalize=False)
-        reset_positions = start_positions.copy()
-        reset_positions['shoulder_lift'] = 1792 if reverse else 2304 # Manually set shoulder_lift to half way position
-
-        # Move the motors to the reset positions
-        self.robot.bus.sync_write("Goal_Position", reset_positions, normalize=False)
-        time.sleep(3)
-
-        # Detect the mechanical limit of the linear actuator
-        self._detect_z_mechanical_limit(reverse)
-
-        # set the shoulder_lift to the start position
-        self.robot.bus.sync_write("Goal_Position", start_positions, normalize=False)
-        time.sleep(3)
-
-    def _detect_z_mechanical_limit(self, reverse: bool = False) -> None:
-        time.sleep(10)

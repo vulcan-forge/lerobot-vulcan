@@ -27,7 +27,7 @@ from lerobot.robots.robot import Robot
 from lerobot.robots.sourccey.sourccey.protobuf.sourccey_protobuf import SourcceyProtobuf
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower import SourcceyFollower
-from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import ZActuator, ZSensor
+from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import SourcceyZActuator, ZSensor
 from .config_sourccey import SourcceyConfig
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ class Sourccey(Robot):
 
          # Z Actuator Code
         self.z_sensor = ZSensor(adc_channel=1, vref=3.30, average_samples=50)
-        self.z_actuator = ZActuator(
+        self.z_actuator = SourcceyZActuator(
             sensor=self.z_sensor,
             driver=self.dc_motors_controller,
             motor="linear_actuator",
@@ -197,32 +197,6 @@ class Sourccey(Robot):
         arm can be "left" or "right" to calibrate only that side.
         """
 
-        print("Starting Z Actuator Calibration")
-
-        self.z_actuator.calibrator.auto_calibrate()
-
-        print("Z Actuator Calibration Completed")
-        return
-
-        # left_thread_z = threading.Thread(
-        #     target=self.left_arm.auto_calibrate_z,
-        #     kwargs={"reverse": False}
-        # )
-        # right_thread_z = threading.Thread(
-        #     target=self.right_arm.auto_calibrate_z,
-        #     kwargs={"reverse": True}
-        # )
-
-        # # Start left and right arm z threads immediately
-        # left_thread_z.start()
-        # right_thread_z.start()
-
-        # # Wait for both threads to complete
-        # left_thread_z.join()
-        # right_thread_z.join()
-
-        # return
-
         if arm is None:
             # Create threads for each arm
             left_thread = threading.Thread(
@@ -245,9 +219,9 @@ class Sourccey(Robot):
             left_thread.join()
             right_thread.join()
 
-            # Return True if successful
-            self.left_arm.auto_calibrate_z(reverse=False)
-            self.right_arm.auto_calibrate_z(reverse=True)
+            # Calibrate the z actuator
+            self.z_actuator.auto_calibrate()
+
         elif arm == "left":
             self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)
         elif arm == "right":
@@ -257,9 +231,6 @@ class Sourccey(Robot):
 
         print("Auto-calibration completed")
         return True
-
-    def auto_calibrate_z(self) -> None:
-        pass
 
     def configure(self) -> None:
         self.left_arm.configure()
