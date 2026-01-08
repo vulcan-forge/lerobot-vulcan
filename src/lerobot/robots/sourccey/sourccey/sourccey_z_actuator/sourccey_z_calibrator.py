@@ -94,6 +94,25 @@ class SourcceyZCalibrator:
 
             time.sleep(period)
 
+    def _wait_for_seconds(self, cmd: float, seconds: float) -> int:
+        """
+        Drive at `cmd` for a fixed time (no end-stop detection).
+        Returns the last raw value (0..1023) sampled during the window.
+
+        Useful for "soft" calibration where you *don't* want to hit the mechanical edge.
+        """
+        period = 1.0 / max(1.0, self.sample_hz)
+        t_end = time.monotonic() + float(seconds)
+
+        last_raw = self._read_raw()
+        while time.monotonic() < t_end:
+            # Keep refreshing the motor command while we wait
+            self._drive(cmd)
+            last_raw = self._read_raw()
+            time.sleep(period)
+
+        return int(last_raw)
+
     def auto_calibrate(self) -> ZCalibrationResult:
         """
         Returns calibration and also writes it to ZSensor.
@@ -102,19 +121,18 @@ class SourcceyZCalibrator:
         # If bottom reads higher than top, invert so that bottom maps to -100 and top maps to +100.
         invert = self.actuator.invert
 
-        # Phase 1: DOWN -> bottom
-        self._drive(self.down_cmd)
-        raw_bottom = self._wait_until_stable()
-
-        # The raw bottom can get stuck, ensure the raw bottom is 10 units closer to the top then what we waited for
-        raw_bottom = raw_bottom + 10 if invert else raw_bottom - 10
-
+        # Phase 1: UP -> top
+        self._drive(self.up_cmd)
+        raw_top = self._wait_until_stable()
         self.actuator.stop()
         time.sleep(0.25)
 
-        # Phase 2: UP -> top
-        self._drive(self.up_cmd)
-        raw_top = self._wait_until_stable()
+        # Phase 2: DOWN -> bottom
+        # The linear actuator can get stuck at the bottom without a hardware block,
+        # So we wait for 5 seconds until we have a hardware stop
+        self._drive(self.down_cmd)
+        raw_bottom = self._wait_for_seconds(self.down_cmd, 5.0)
+        #raw_bottom = self._wait_until_stable()
         self.actuator.stop()
         time.sleep(0.25)
 
@@ -126,6 +144,9 @@ class SourcceyZCalibrator:
         raw_max = int(max(raw_bottom, raw_top))
 
         self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
+
+        # Set the actuator to 100
+        self.actuator.move_to_position(100.0)
 
         return ZCalibrationResult(
             raw_bottom=int(raw_bottom),

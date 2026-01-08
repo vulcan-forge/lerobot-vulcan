@@ -215,6 +215,10 @@ class ZActuator:
         if self.driver is not None:
             self.driver.set_velocity(self.motor, 0.0, normalize=True, instant=True)
 
+    ############################################################
+    # Read / Write Functions
+    ############################################################
+
     # --- Reads (delegated to sensor) ---
     def read_position(self) -> float:
         return self.sensor.read_position_m100_100()
@@ -222,3 +226,45 @@ class ZActuator:
      # --- Write Functions ---
     def write_position(self, target_pos_m100_100: float) -> None:
         self._target_pos_m100_100 = max(-100.0, min(100.0, float(target_pos_m100_100)))
+
+    ############################################################
+    # Move Position Functions
+    ############################################################
+    def move_to_position(
+        self,
+        target_pos_m100_100: float,
+        *,
+        timeout_s: float = 3.0,
+        hz: float = 30.0,
+        instant: bool = True,
+    ) -> float:
+        """
+        Blocking move: set a target position and drive until within deadband (or timeout).
+        Returns the final measured position.
+        """
+        if self.driver is None:
+            raise RuntimeError("No driver provided. Pass `driver=...` to move the actuator.")
+
+        self.write_position(float(target_pos_m100_100))
+
+        period = 1.0 / max(1.0, float(hz))
+        t_end = time.monotonic() + float(timeout_s)
+        last_t = time.monotonic()
+
+        while True:
+            now = time.monotonic()
+            if now >= t_end:
+                self.stop()
+                raise TimeoutError(f"Timed out moving Z to {target_pos_m100_100}")
+
+            dt = now - last_t
+            last_t = now
+
+            self.update(dt, instant=instant)
+            pos = float(self.read_position())
+
+            if abs(pos - float(target_pos_m100_100)) <= float(self.deadband):
+                self.stop()
+                return pos
+
+            time.sleep(period)
