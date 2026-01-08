@@ -59,9 +59,12 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
     except Exception:
         pass
 
-
     start_speed_listener(robot)
     init_rerun(session_name="sourccey_teleop")
+
+
+    debug_mode = False
+    last_action_print_t = time.monotonic()
 
     print("Teleoperating Sourccey")
     while True:
@@ -77,8 +80,14 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
         log_rerun_data(observation, {**arm_action, **base_action})
 
         action = {**arm_action, **base_action}
-        robot.send_action(action)
 
+        # Debug
+        now = time.monotonic()
+        if debug_mode and now - last_action_print_t >= 3.0:
+            last_action_print_t = now
+            print(action)
+
+        robot.send_action(action)
         precise_sleep(max(1.0 / cfg.fps - (time.perf_counter() - t0), 0.0))
 
 def start_speed_listener(robot: SourcceyClient):
