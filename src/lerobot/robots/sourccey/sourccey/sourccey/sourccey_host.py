@@ -85,8 +85,6 @@ def main():
 
                 # Send action to robot
                 _action_sent = robot.send_action(data)
-                print(f"Action data: {data}")
-                print(f"Action sent: {_action_sent}")
 
                 # Update the robot
                 robot.update()
