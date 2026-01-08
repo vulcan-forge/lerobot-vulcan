@@ -71,7 +71,8 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
         arm_action = leader_arm.get_action()
         keyboard_keys = keyboard.get_action()
 
-        base_action = robot._from_keyboard_to_base_action(keyboard_keys)
+        z_obs_pos = observation.get("z.pos", None)
+        base_action = robot._from_keyboard_to_base_action(keyboard_keys, z_obs_pos=z_obs_pos)
 
         log_rerun_data(observation, {**arm_action, **base_action})
 

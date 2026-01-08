@@ -192,7 +192,7 @@ class SourcceyZActuator:
         self._ctl_lock = threading.Lock()
         self._ctl_stop_event = threading.Event()
         self._ctl_thread: Optional[threading.Thread] = None
-        self._ctl_hz: float = 10.0
+        self._ctl_hz: float = 30.0
         self._ctl_instant: bool = True
 
     @property

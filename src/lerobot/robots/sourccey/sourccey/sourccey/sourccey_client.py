@@ -95,7 +95,7 @@ class SourcceyClient(Robot):
         # You measured ~5s for z to go from +100 to -100 units (200-unit travel).
         self._z_min = -100.0
         self._z_max = 100.0
-        self._z_full_travel_s = 5.0
+        self._z_full_travel_s = 3.0
         self._z_units_per_s = (self._z_max - self._z_min) / self._z_full_travel_s  #
         self._z_dt_cap_s = 1.0 / 30.0
 
@@ -390,7 +390,7 @@ class SourcceyClient(Robot):
     ###################################################################
     # Private Control Functions
     ###################################################################
-    def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray):
+    def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray, z_obs_pos: float | None = None):
         reverse = self.reverse
         speed_setting = self.speed_levels[self.speed_index]
         x_speed = speed_setting["x"]
@@ -461,6 +461,9 @@ class SourcceyClient(Robot):
         dt_z = min(dt, self._z_dt_cap_s)
         z_rate = float(self._z_units_per_s)
         self._z_pos_cmd = float(np.clip(self._z_pos_cmd + (z_dir * z_rate * dt_z), self._z_min, self._z_max))
+
+        if z_obs_pos is not None and z_dir == 0.0:
+            self._z_pos_cmd = z_obs_pos
 
         if abs(self._x_cmd_smoothed) >= self._x_deadbane:
             # already moving -> smooth changes
