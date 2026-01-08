@@ -168,10 +168,8 @@ class SourcceyZActuator:
         self.invert = sensor.invert
 
         # Tunables (safe defaults; tune on hardware).
-        self.kp: float = 0.02
+        self.kp: float = 0.05
         self.max_cmd: float = 1.0
-        # Smaller deadband makes the actuator respond immediately to small target changes
-        # (especially important when z.pos targets are updated incrementally from teleop).
         self.deadband: float = 1.0
 
         # Debugging
@@ -223,15 +221,14 @@ class SourcceyZActuator:
         if abs(target) >= 99.0:
             deadband = 0.1
 
-        # Bang-bang control: full speed toward target
-        # This is fine because the z actuator motor is slow and has a lot of torque.
-        if err > deadband:
-            cmd = 1.0
-        elif err < -deadband:
-            cmd = -1.0
-        else:
+        # --- P control instead of bang-bang ---
+        if abs(err) <= deadband:
             self.stop()
             return
+
+       # Proportional command: slow down as we approach target
+        cmd = self.kp * err
+        cmd = max(-self.max_cmd, min(self.max_cmd, cmd))
 
         if self.invert:
             cmd = -cmd
