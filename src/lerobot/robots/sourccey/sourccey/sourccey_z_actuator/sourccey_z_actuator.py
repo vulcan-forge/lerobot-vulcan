@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import threading
 import time
 from typing import Optional, Protocol
 
@@ -185,6 +186,13 @@ class SourcceyZActuator:
 
         self.calibrator = SourcceyZCalibrator(self)
 
+        # --- background "servo-like" position controller thread ---
+        self._ctl_lock = threading.Lock()
+        self._ctl_stop_event = threading.Event()
+        self._ctl_thread: Optional[threading.Thread] = None
+        self._ctl_hz: float = 5.0
+        self._ctl_instant: bool = True
+
     @property
     def is_connected(self) -> bool:
         return self.sensor.is_connected
@@ -193,6 +201,8 @@ class SourcceyZActuator:
         self.sensor.connect()
 
     def disconnect(self) -> None:
+        # Ensure no background thread is still calling update() while we disconnect the ADC.
+        self.stop_position_controller()
         self.sensor.disconnect()
 
     def update(self, dt_s: float, *, instant: bool = True) -> None:
@@ -230,6 +240,70 @@ class SourcceyZActuator:
                 }
             )
 
+
+    ############################################################
+    # Control Functions
+    ############################################################
+    def _control_loop(self) -> None:
+        last_t = time.monotonic()
+        while not self._ctl_stop_event.is_set():
+            # If we're not ready to drive, just idle.
+            if self.driver is None:
+                time.sleep(0.05)
+                last_t = time.monotonic()
+                continue
+
+            now = time.monotonic()
+            dt = now - last_t
+            last_t = now
+
+            with self._ctl_lock:
+                hz = float(self._ctl_hz)
+                instant = bool(self._ctl_instant)
+
+            try:
+                self.update(dt, instant=instant)
+            except Exception:
+                # Don't let the thread die on transient hardware/read errors.
+                try:
+                    self.stop()
+                except Exception:
+                    pass
+                time.sleep(0.1)
+
+            period = 1.0 / max(1.0, hz)
+            time.sleep(period)
+
+        # best-effort stop on exit
+        try:
+            self.stop()
+        except Exception:
+            pass
+
+    def _ensure_controller_running(self, *, hz: float = 30.0, instant: bool = True) -> None:
+        with self._ctl_lock:
+            self._ctl_hz = float(hz)
+            self._ctl_instant = bool(instant)
+
+        if self._ctl_thread is not None and self._ctl_thread.is_alive():
+            return
+
+        self._ctl_stop_event.clear()
+        self._ctl_thread = threading.Thread(
+            target=self._control_loop,
+            name="SourcceyZActuatorControl",
+            daemon=True,
+        )
+        self._ctl_thread.start()
+
+    def stop_position_controller(self, *, join_timeout_s: float = 1.0) -> None:
+        """Stop the background position controller (if running) and stop motor output."""
+        self._ctl_stop_event.set()
+        t = self._ctl_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=float(join_timeout_s))
+        self._ctl_thread = None
+        self.stop()
 
     def stop(self) -> None:
         """Stop motor output and reset integrator."""
@@ -302,6 +376,26 @@ class SourcceyZActuator:
         self,
         target_pos_m100_100: float,
         *,
+        hz: float = 30.0,
+        instant: bool = True,
+    ) -> None:
+        """
+        Non-blocking "servo-like" position command.
+
+        - Sets the target position immediately.
+        - Starts (or reconfigures) a background loop that continuously drives toward the latest target.
+        - Call again at any time with a new target; the background loop will move to the new value.
+        """
+        if self.driver is None:
+            raise RuntimeError("No driver provided. Pass `driver=...` to move the actuator.")
+
+        self.write_position(float(target_pos_m100_100))
+        self._ensure_controller_running(hz=float(hz), instant=bool(instant))
+
+    def move_to_position_blocking(
+        self,
+        target_pos_m100_100: float,
+        *,
         timeout_s: float = 10.0,
         hz: float = 30.0,
         instant: bool = True,
@@ -312,6 +406,9 @@ class SourcceyZActuator:
         """
         if self.driver is None:
             raise RuntimeError("No driver provided. Pass `driver=...` to move the actuator.")
+
+        # Avoid concurrent control from background thread.
+        self.stop_position_controller()
 
         self.write_position(float(target_pos_m100_100))
 

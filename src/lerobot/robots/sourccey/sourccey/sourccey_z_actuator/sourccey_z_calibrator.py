@@ -118,6 +118,12 @@ class SourcceyZCalibrator:
         Returns calibration and also writes it to ZSensor.
         """
 
+        # Ensure any background position controller isn't fighting direct motor commands.
+        try:
+            self.actuator.stop_position_controller()
+        except Exception:
+            pass
+
         # If bottom reads higher than top, invert so that bottom maps to -100 and top maps to +100.
         invert = self.actuator.invert
 
@@ -146,7 +152,7 @@ class SourcceyZCalibrator:
         self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
 
         # Set the actuator to 100
-        self.actuator.move_to_position(100.0)
+        self.actuator.move_to_position_blocking(100.0)
 
         # Save the calibration
         self.actuator._save_calibration()

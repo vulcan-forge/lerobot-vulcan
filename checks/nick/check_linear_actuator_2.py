@@ -21,7 +21,7 @@ def set_z_position_m100_100(
 
         def _worker():
             try:
-                result["pos"] = robot.z_actuator.move_to_position(
+                result["pos"] = robot.z_actuator.move_to_position_blocking(
                     float(target),
                     timeout_s=float(timeout_s),
                     hz=float(hz),
