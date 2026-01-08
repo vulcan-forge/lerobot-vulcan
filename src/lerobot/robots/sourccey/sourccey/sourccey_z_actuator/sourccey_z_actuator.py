@@ -177,7 +177,7 @@ class SourcceyZActuator:
         # Endpoint assist: when commanding near +/-100, we may need full power to overcome
         # stiction / deadzone near the ends.
         self.endpoint_target_threshold: float = 90.0
-        self.endpoint_full_power_err_margin: float = 2.0
+        self.endpoint_full_power_err_margin: float = 2.5
 
         # Controller state for D term.
         self._prev_err: float = 0.0
