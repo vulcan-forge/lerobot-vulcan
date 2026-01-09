@@ -295,6 +295,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     muted_until = 0.0
     thinking = False
     next_think_ts = 0.0
+    awaiting_reply = False
 
     last_sent_text = ""
     last_sent_ts = 0.0
@@ -498,9 +499,40 @@ def main(argv: Optional[list[str]] = None) -> int:
                     print(f"[HEARD] {text}")
 
                 if not has_wake_word(text):
-                    if args.debug and text:
-                        print(f"[IGNORED] No wake word: {text}")
                     continue
+
+                cmd = strip_wake_word(text).strip()
+
+                # =============================
+                # STEP 4: EARLIEST THINKING START
+                # =============================
+                if cmd and not args.disable_thinking and not thinking:
+                    if args.debug:
+                        print("[THINK ] Command confirmed, starting thinking immediately")
+
+                    speak_thinking_now()
+
+                # ---- WAKE WORD ONLY (no command yet) ----
+                if not cmd:
+                    if args.debug:
+                        print("[INFO ] Wake word detected, no command yet")
+
+                    # Do NOT start thinking yet
+                    awaiting_reply = False
+                    thinking = False
+                    continue
+
+                # ---- VALID COMMAND CONFIRMED ----
+                awaiting_reply = True
+
+                if not args.disable_thinking and not thinking:
+                    if args.debug:
+                        print("[THINK ] Starting thinking loop")
+
+                    robot.send_text(args.thinking_text)
+                    muted_until = time.time() + 1.2
+                    thinking = True
+                    next_thinking_ts = time.time() + args.thinking_interval_s
 
                 cmd = strip_wake_word(text).strip()
 
@@ -539,6 +571,25 @@ def main(argv: Optional[list[str]] = None) -> int:
                     reply = "Sorry, I had trouble thinking just now."
                 finally:
                     thinking = False  # stop repeating thinking immediately when reply is ready
+
+                # =============================
+                # STEP 5: STOP THINKING + SPEAK
+                # =============================
+                thinking = False
+                next_think_ts = 0.0
+
+                if reply:
+                    robot.send_text(reply)
+                    if args.debug:
+                        print(f"[USER ] {cmd}")
+                        print(f"[ROBOT] {reply}")
+
+                    last_sent_text = cmd
+                    last_sent_ts = time.time()
+                    muted_until = last_sent_ts + args.mute_after_send_s
+
+                    # Prevent wake-probe echo loops
+                    hard_reset_utterance()
 
                 if reply:
                     robot.send_text(reply)
