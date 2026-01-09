@@ -214,50 +214,47 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--device", default="auto")
     p.add_argument("--compute-type", default="auto")
     p.add_argument("--language", default="en")
-    p.add_argument("--beam-size", type=int, default=3)
-    p.add_argument("--whisper-vad-filter", action="store_true")
-    p.add_argument("--allow-cpu-fallback", action="store_true")
 
-    # VAD
+    p.add_argument("--beam-size", type=int, default=3)
     p.add_argument("--min-utterance-s", type=float, default=0.5)
     p.add_argument("--max-utterance-s", type=float, default=5.5)
     p.add_argument("--start-ms", type=int, default=150)
     p.add_argument("--silence-ms", type=int, default=1800)
+
     p.add_argument("--speech-rms-mult", type=float, default=1.15)
     p.add_argument("--end-mult", type=float, default=0.6)
     p.add_argument("--min-speech-rms", type=float, default=160.0)
-    p.add_argument("--noise-alpha", type=float, default=0.02)
 
-    # Rate limiting + mute
     p.add_argument("--min-text-chars", type=int, default=2)
     p.add_argument("--min-interval-s", type=float, default=0.7)
     p.add_argument("--mute-after-send-s", type=float, default=3.0)
 
-    # Thinking system
-    p.add_argument("--thinking-text", default="Thinking...")
+    # 🔔 THINKING CONFIG
+    p.add_argument("--thinking-text", default="Thinking…")
     p.add_argument("--thinking-interval-s", type=float, default=3.0)
-    p.add_argument("--thinking-first-delay-s", type=float, default=0.0)
     p.add_argument("--disable-thinking", action="store_true")
 
+    # Wake-probe tuning
+    p.add_argument("--wake-probe-min-s", type=float, default=0.25)
+    p.add_argument("--wake-probe-interval-ms", type=int, default=250)
+
+    p.add_argument("--whisper-vad-filter", action="store_true")
+    p.add_argument("--allow-cpu-fallback", action="store_true")
     p.add_argument("--debug", action="store_true")
+
     args = p.parse_args(argv)
 
-    initial_prompt = (
-        "This is a conversation with a robot named Sourccey. "
-        "Common words include: Sourccey, robot, move, follow, stop, hello, task."
-    )
-
     # -----------------------------
-    # Load Whisper
+    # Whisper model
     # -----------------------------
     def load_model() -> WhisperModel:
         try:
             return WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
-        except Exception as e:
-            if args.allow_cpu_fallback:
-                print("[WARN] Whisper init failed; falling back to CPU int8", file=sys.stderr)
-                return WhisperModel(args.model, device="cpu", compute_type="int8")
-            raise
+        except Exception:
+            if not args.allow_cpu_fallback:
+                raise
+            print("[WARN] Failed to init requested device; falling back to CPU int8", file=sys.stderr)
+            return WhisperModel(args.model, device="cpu", compute_type="int8")
 
     print(f"Loading Whisper model: {args.model} ({args.device}/{args.compute_type})")
     model = load_model()
@@ -270,134 +267,136 @@ def main(argv: Optional[list[str]] = None) -> int:
     robot.connect()
     print("✓ Connected to robot")
 
+    # -----------------------------
+    # ZMQ audio
+    # -----------------------------
     ctx = zmq.Context()
     sock = ctx.socket(zmq.SUB)
     sock.connect(f"tcp://{args.robot_ip}:{args.audio_port}")
     sock.setsockopt(zmq.SUBSCRIBE, b"")
 
     # -----------------------------
-    # VAD state
+    # VAD + buffers
     # -----------------------------
     noise_rms = 600.0
+    noise_alpha = 0.02
+
+    preroll: list[np.ndarray] = []
+    preroll_max_chunks = 6  # ~ small leading buffer; actual duration depends on chunk sizes
+
+    utter_chunks: list[np.ndarray] = []
     in_speech = False
     silence_s = 0.0
     utter_s = 0.0
-    utter_chunks: List[np.ndarray] = []
 
-    # preroll ~300ms (based on actual chunk duration)
-    preroll: List[np.ndarray] = []
-    preroll_max_chunks = 6
-
-    # send gating
-    last_cmd = ""
-    last_cmd_ts = 0.0
-
-    # mic mute handling
+    # -----------------------------
+    # Think / mute / rate limit
+    # -----------------------------
     muted_until = 0.0
-
-    # thinking + LLM async
-    llm_done = threading.Event()
-    llm_reply: dict[str, str] = {"text": ""}
-    thinking_active = False
+    thinking = False
     next_think_ts = 0.0
-    first_think_ts = 0.0
-    pending_cmd: Optional[str] = None
 
-    def _reset_utterance() -> None:
-        nonlocal in_speech, silence_s, utter_s, utter_chunks
-        nonlocal preroll
+    last_sent_text = ""
+    last_sent_ts = 0.0
+
+    # -----------------------------
+    # Wake probe state
+    # -----------------------------
+    wake_detected = False
+    wake_ack_spoken = False
+    last_wake_probe_ts = 0.0
+    wake_probe_interval_s = max(0.05, args.wake_probe_interval_ms / 1000.0)
+
+    INITIAL_PROMPT = (
+        "This is a conversation with a robot named Sourccey. "
+        "Common words include: Sourccey, robot, move, follow, stop, hello, task."
+    )
+
+    # -----------------------------
+    # Helpers
+    # -----------------------------
+    def hard_reset_utterance() -> None:
+        nonlocal in_speech, silence_s, utter_s, utter_chunks, preroll
+        nonlocal wake_detected, wake_ack_spoken, thinking, next_think_ts, last_wake_probe_ts
+
         in_speech = False
         silence_s = 0.0
         utter_s = 0.0
-        utter_chunks = []
-        preroll = []
+        utter_chunks.clear()
+        preroll.clear()
 
-    def _safe_send(text: str) -> None:
-        # robot.send_text() can throw; never let it kill the loop
+        wake_detected = False
+        wake_ack_spoken = False
+        last_wake_probe_ts = 0.0
+
+        thinking = False
+        next_think_ts = 0.0
+
+    def transcribe(audio_i16: np.ndarray) -> str:
+        if audio_i16.size == 0:
+            return ""
+        audio_f32 = audio_i16.astype(np.float32) / 32768.0
+
+        # NOTE: faster-whisper returns an iterator; we must consume it inside try
         try:
-            robot.send_text(text)
+            segments, _ = model.transcribe(
+                audio_f32,
+                language=args.language,
+                beam_size=args.beam_size,
+                vad_filter=args.whisper_vad_filter,
+                initial_prompt=INITIAL_PROMPT,
+            )
+            parts = []
+            for seg in segments:
+                t = (seg.text or "").strip()
+                if t:
+                    parts.append(t)
+            return " ".join(parts).strip()
         except Exception as e:
-            if args.debug:
-                print(f"[ROBOT SEND ERROR] {e}", file=sys.stderr)
+            # Never crash the main loop on Whisper failures
+            print(f"[ASR ERROR] {e}", file=sys.stderr)
+            return ""
 
-    def _start_llm(cmd: str) -> None:
-        nonlocal thinking_active, next_think_ts, first_think_ts, pending_cmd, muted_until
-        nonlocal llm_reply
-
-        pending_cmd = cmd
-        llm_reply["text"] = ""
-        llm_done.clear()
-
-        # Activate thinking loop (but first think can be delayed)
-        thinking_active = (not args.disable_thinking) and bool((args.thinking_text or "").strip())
-        now = time.time()
-        first_think_ts = now + max(0.0, float(args.thinking_first_delay_s))
-        next_think_ts = first_think_ts  # first emission time
-
-        def _worker() -> None:
-            try:
-                if sounds_like_physical_action(cmd):
-                    llm_reply["text"] = "I can explain how to do that, but I can't physically perform it."
-                else:
-                    llm_reply["text"] = ask_llm(cmd, timeout_s=15.0)
-            except Exception as e:
-                llm_reply["text"] = "Sorry, I had trouble thinking just now."
-                if args.debug:
-                    print(f"[LLM ERROR] {e}", file=sys.stderr)
-            finally:
-                llm_done.set()
-
-        threading.Thread(target=_worker, name="sourccey-llm", daemon=True).start()
-
-        # While thinking/LLM is active, keep mic muted to avoid self-hearing.
-        # We'll extend this as we emit "Thinking..." and when we speak the final reply.
-        muted_until = max(muted_until, now + 0.25)
-
-    def _maybe_emit_thinking(now: float) -> None:
-        nonlocal next_think_ts, muted_until
-        if not thinking_active:
+    def speak_thinking_now() -> None:
+        nonlocal muted_until, thinking, next_think_ts
+        if args.disable_thinking:
             return
-        if llm_done.is_set():
-            return
-        if now < next_think_ts:
-            return
-
         txt = (args.thinking_text or "").strip()
         if not txt:
             return
-
-        _safe_send(txt)
-        # mute briefly so the robot doesn't hear itself
+        now = time.time()
+        try:
+            robot.send_text(txt)
+        except Exception:
+            return
         muted_until = max(muted_until, now + 1.2)
+        thinking = True
+        next_think_ts = now + float(args.thinking_interval_s)
 
-        # schedule next
-        interval = max(0.5, float(args.thinking_interval_s))
-        next_think_ts = now + interval
+    def tick_thinking() -> None:
+        nonlocal muted_until, next_think_ts, thinking
+        if args.disable_thinking or not thinking:
+            return
+        txt = (args.thinking_text or "").strip()
+        if not txt:
+            return
+        now = time.time()
+        if now >= next_think_ts:
+            try:
+                robot.send_text(txt)
+            except Exception:
+                return
+            muted_until = max(muted_until, now + 1.2)
+            next_think_ts = now + float(args.thinking_interval_s)
 
     # -----------------------------
     # Main loop
     # -----------------------------
     try:
         while True:
-            now = time.time()
+            # periodic thinking while waiting on LLM, etc.
+            tick_thinking()
 
-            # Keep thinking loop alive even while we're not receiving audio.
-            _maybe_emit_thinking(now)
-
-            # If LLM finished, speak reply immediately and stop thinking.
-            if pending_cmd is not None and llm_done.is_set():
-                reply = (llm_reply.get("text") or "").strip()
-                if reply:
-                    _safe_send(reply)
-                    muted_until = max(muted_until, time.time() + float(args.mute_after_send_s))
-                    if args.debug:
-                        print(f"[USER ] {pending_cmd}")
-                        print(f"[ROBOT] {reply}")
-                # clear pending
-                pending_cmd = None
-                thinking_active = False
-
-            # Receive audio
             try:
                 data = sock.recv(zmq.NOBLOCK)
             except zmq.Again:
@@ -405,10 +404,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                     robot.poll_text_message()
                 except Exception:
                     pass
-                time.sleep(0.005)
+                time.sleep(0.01)
                 continue
 
-            # If mic muted, discard audio quickly.
+            now = time.time()
             if now < muted_until:
                 continue
 
@@ -416,23 +415,24 @@ def main(argv: Optional[list[str]] = None) -> int:
             if audio.size == 0:
                 continue
 
-            chunk_s = audio.size / float(args.sample_rate)
+            chunk_s = audio.size / args.sample_rate
             rms = float(np.sqrt(np.mean(audio.astype(np.float32) ** 2)))
 
+            # Track noise when not speaking
             if not in_speech:
-                noise_rms = (1.0 - args.noise_alpha) * noise_rms + args.noise_alpha * rms
+                noise_rms = (1 - noise_alpha) * noise_rms + noise_alpha * rms
 
             start_thr = max(args.min_speech_rms, noise_rms * args.speech_rms_mult)
             end_thr = max(args.min_speech_rms * 0.5, noise_rms * args.end_mult)
 
             is_speech = rms >= (start_thr if not in_speech else end_thr)
 
-            # preroll buffer
+            # preroll buffer (for not chopping wake word)
             preroll.append(audio)
             if len(preroll) > preroll_max_chunks:
                 preroll.pop(0)
 
-            # Speech start detection with hysteresis + start-ms hold
+            # Enter speech only after sustained start_ms
             if not in_speech:
                 if is_speech:
                     utter_s += chunk_s
@@ -453,62 +453,105 @@ def main(argv: Optional[list[str]] = None) -> int:
                 silence_s = 0.0
             else:
                 silence_s += chunk_s
-                # let noise track a bit during trailing silence
-                noise_rms = (1.0 - args.noise_alpha) * noise_rms + args.noise_alpha * rms
+                # let noise track a little during trailing silence
+                noise_rms = (1 - noise_alpha) * noise_rms + noise_alpha * rms
 
-            # End of utterance
+            # -----------------------------
+            # FAST wake probe (only while in speech)
+            # -----------------------------
+            if (
+                in_speech
+                and not wake_detected
+                and utter_s >= float(args.wake_probe_min_s)
+                and (now - last_wake_probe_ts) >= wake_probe_interval_s
+            ):
+                last_wake_probe_ts = now
+                probe_audio = np.concatenate(utter_chunks) if utter_chunks else np.array([], dtype=np.int16)
+                probe_text = normalize_robot_terms(transcribe(probe_audio)).strip()
+
+                if args.debug and probe_text:
+                    print(f"[WAKE PROBE] {probe_text}")
+
+                if has_wake_word(probe_text):
+                    wake_detected = True
+                    # 🔥 IMMEDIATE "Thinking..." the moment wake word is detected
+                    if not wake_ack_spoken:
+                        speak_thinking_now()
+                        wake_ack_spoken = True
+
+            # -----------------------------
+            # END OF UTTERANCE
+            # -----------------------------
             if (silence_s >= args.silence_ms / 1000.0) or (utter_s >= args.max_utterance_s):
                 full = np.concatenate(utter_chunks) if utter_chunks else np.array([], dtype=np.int16)
-                _reset_utterance()
 
+                # Too short? ignore
                 if full.size == 0:
                     continue
-                full_dur = full.size / float(args.sample_rate)
+                full_dur = full.size / args.sample_rate
                 if full_dur < args.min_utterance_s:
                     continue
 
-                # Transcribe full utterance
-                try:
-                    text = whisper_transcribe(
-                        model,
-                        full,
-                        language=args.language,
-                        beam_size=args.beam_size,
-                        vad_filter=args.whisper_vad_filter,
-                        initial_prompt=initial_prompt,
-                    )
-                except Exception as e:
-                    if args.debug:
-                        print(f"[WHISPER ERROR] {e}", file=sys.stderr)
-                    continue
-
-                text = normalize_robot_terms(text)
+                # Full transcription
+                text = normalize_robot_terms(transcribe(full)).strip()
                 if args.debug:
                     print(f"[HEARD] {text}")
 
                 if not has_wake_word(text):
-                    if args.debug:
+                    if args.debug and text:
                         print(f"[IGNORED] No wake word: {text}")
                     continue
 
-                cmd = strip_wake_word(text)
-                cmd = cmd.strip()
+                cmd = strip_wake_word(text).strip()
+
+                # --- WAKE WORD ONLY (no command) ---
                 if not cmd:
+                    if args.debug:
+                        print("[INFO ] Wake word only, awaiting command")
+
+                    # Stop thinking immediately
+                    thinking = False
+                    next_thinking_ts = 0.0
+
+                    # Brief mute to avoid instant re-trigger
+                    muted_until = time.time() + 0.2
                     continue
 
-                # Rate limit + repetition drop
-                now2 = time.time()
                 if len(cmd.replace(" ", "")) < args.min_text_chars:
                     continue
-                if (now2 - last_cmd_ts) < float(args.min_interval_s):
+                if (now - last_sent_ts) < args.min_interval_s:
                     continue
-                if is_similar_text(cmd, last_cmd):
+                if is_similar_text(cmd, last_sent_text):
                     continue
 
-                # Start async LLM + thinking loop
-                last_cmd = cmd
-                last_cmd_ts = now2
-                _start_llm(cmd)
+                # Start/restart thinking loop (if wake was only confirmed late)
+                if not args.disable_thinking:
+                    speak_thinking_now()
+
+                # Generate reply
+                try:
+                    if sounds_like_physical_action(cmd):
+                        reply = "I can explain how to do that, but I can't physically perform it."
+                    else:
+                        reply = ask_llm(cmd)
+                except Exception as e:
+                    print(f"[LLM ERROR] {e}", file=sys.stderr)
+                    reply = "Sorry, I had trouble thinking just now."
+                finally:
+                    thinking = False  # stop repeating thinking immediately when reply is ready
+
+                if reply:
+                    robot.send_text(reply)
+                    if args.debug:
+                        print(f"[USER ] {cmd}")
+                        print(f"[ROBOT] {reply}")
+
+                    last_sent_text = cmd
+                    last_sent_ts = time.time()
+                    muted_until = last_sent_ts + args.mute_after_send_s
+
+                    # 🔒 HARD RESET AFTER REPLY (prevents WAKE PROBE spam)
+                    hard_reset_utterance()
 
     except KeyboardInterrupt:
         print("\nStopping...")
