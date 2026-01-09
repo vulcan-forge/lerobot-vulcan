@@ -296,6 +296,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     thinking = False
     next_think_ts = 0.0
     awaiting_reply = False
+    thinking_stop = threading.Event()
+    thinking_thread: Optional[threading.Thread] = None
 
     last_sent_text = ""
     last_sent_ts = 0.0
@@ -359,7 +361,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             return ""
 
     def speak_thinking_now() -> None:
-        nonlocal muted_until, thinking, next_think_ts
+        nonlocal muted_until, thinking, next_think_ts, thinking_thread
         if args.disable_thinking:
             return
         txt = (args.thinking_text or "").strip()
@@ -370,13 +372,53 @@ def main(argv: Optional[list[str]] = None) -> int:
             robot.send_text(txt)
         except Exception:
             return
+        # NOTE: don't hard-mute the mic if we're already inside speech (otherwise we can chop the command).
+        # The main loop will ignore `muted_until` only when not in_speech.
         muted_until = max(muted_until, now + 1.2)
+
         thinking = True
         next_think_ts = now + float(args.thinking_interval_s)
 
+        # Ensure "Thinking..." repeats at a steady cadence even while Whisper/LLM blocks.
+        if thinking_thread is None or not thinking_thread.is_alive():
+            thinking_stop.clear()
+
+            interval_s = max(0.25, float(args.thinking_interval_s))
+            txt_copy = txt
+
+            def _thinking_loop() -> None:
+                nonlocal muted_until, next_think_ts, thinking
+                # First "Thinking..." already sent; schedule from that moment.
+                next_t = time.monotonic() + interval_s
+                while not thinking_stop.is_set():
+                    # Sleep until the next scheduled time, maintaining steady cadence (no drift).
+                    now_m = time.monotonic()
+                    sleep_s = next_t - now_m
+                    if sleep_s > 0:
+                        time.sleep(min(sleep_s, 0.25))
+                        continue
+
+                    if not thinking:
+                        # stop quickly when reply is ready
+                        break
+
+                    try:
+                        robot.send_text(txt_copy)
+                    except Exception:
+                        pass
+
+                    wall_now = time.time()
+                    muted_until = max(muted_until, wall_now + 1.2)
+                    next_think_ts = wall_now + interval_s
+                    next_t += interval_s
+
+            thinking_thread = threading.Thread(target=_thinking_loop, daemon=True)
+            thinking_thread.start()
+
     def tick_thinking() -> None:
         nonlocal muted_until, next_think_ts, thinking
-        if args.disable_thinking or not thinking:
+        # With the dedicated thinking thread, the main loop no longer needs to schedule repeats.
+        if True:
             return
         txt = (args.thinking_text or "").strip()
         if not txt:
@@ -409,7 +451,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                 continue
 
             now = time.time()
-            if now < muted_until:
+            # If muted and not already tracking speech, ignore audio entirely (prevents robot/TTS echo triggering VAD).
+            # But if we're already inside a user utterance, keep accumulating so we don't drop the rest of the command.
+            if now < muted_until and not in_speech:
                 continue
 
             audio = np.frombuffer(data, dtype=np.int16)
@@ -532,7 +576,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     robot.send_text(args.thinking_text)
                     muted_until = time.time() + 1.2
                     thinking = True
-                    next_thinking_ts = time.time() + args.thinking_interval_s
+                    next_think_ts = time.time() + args.thinking_interval_s
 
                 cmd = strip_wake_word(text).strip()
 
@@ -571,12 +615,14 @@ def main(argv: Optional[list[str]] = None) -> int:
                     reply = "Sorry, I had trouble thinking just now."
                 finally:
                     thinking = False  # stop repeating thinking immediately when reply is ready
+                    thinking_stop.set()
 
                 # =============================
                 # STEP 5: STOP THINKING + SPEAK
                 # =============================
                 thinking = False
                 next_think_ts = 0.0
+                thinking_stop.set()
 
                 if reply:
                     robot.send_text(reply)
@@ -591,22 +637,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                     # Prevent wake-probe echo loops
                     hard_reset_utterance()
 
-                if reply:
-                    robot.send_text(reply)
-                    if args.debug:
-                        print(f"[USER ] {cmd}")
-                        print(f"[ROBOT] {reply}")
-
-                    last_sent_text = cmd
-                    last_sent_ts = time.time()
-                    muted_until = last_sent_ts + args.mute_after_send_s
-
-                    # 🔒 HARD RESET AFTER REPLY (prevents WAKE PROBE spam)
-                    hard_reset_utterance()
-
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
+        thinking_stop.set()
         try:
             sock.close()
         except Exception:
