@@ -196,6 +196,8 @@ class Sourccey(Robot):
         Auto-calibrate arms. If arm is None, calibrate both in parallel.
         arm can be "left" or "right" to calibrate only that side.
         """
+        self.z_actuator.calibrator.auto_calibrate()
+        return
 
         if arm is None:
             # Create threads for each arm
