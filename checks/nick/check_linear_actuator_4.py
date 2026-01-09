@@ -54,7 +54,7 @@ class _raw_terminal:
 
 def jog_linear_actuator_raw(
     *,
-    speed: float = 0.35,          # 0..1 (normalized duty). Start low.
+    speed: float = 1.0,          # 0..1 (normalized duty). Start low.
     loop_hz: float = 50.0,
     hold_timeout_s: float = 0.25, # if no key seen recently, stop motor
 ) -> None:
@@ -124,4 +124,4 @@ def jog_linear_actuator_raw(
 
 
 if __name__ == "__main__":
-    jog_linear_actuator_raw(speed=0.30)
+    jog_linear_actuator_raw(speed=1.0)
