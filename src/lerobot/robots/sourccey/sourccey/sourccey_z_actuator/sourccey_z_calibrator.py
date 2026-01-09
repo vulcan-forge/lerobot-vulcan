@@ -152,7 +152,7 @@ class SourcceyZCalibrator:
         self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
 
         # Set the actuator to 100
-        self.actuator.move_to_position_blocking(100.0)
+        # self.actuator.move_to_position_blocking(100.0)
 
         # Save the calibration
         self.actuator._save_calibration()
