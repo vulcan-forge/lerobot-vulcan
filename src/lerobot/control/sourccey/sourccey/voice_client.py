@@ -35,6 +35,11 @@ SYSTEM_PROMPT = (
 
 _llm_history = [{"role": "system", "content": SYSTEM_PROMPT}]
 
+def reset_llm_history() -> None:
+    """Reset rolling LLM context so each interaction can be truly stateless if desired."""
+    global _llm_history
+    _llm_history = [{"role": "system", "content": SYSTEM_PROMPT}]
+
 PHYSICAL_VERBS = {
     "pick up", "lift", "carry", "take out", "wash",
     "drive", "move", "come to", "go to", "grab", "clean",
@@ -309,6 +314,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     reply_text: str = ""
     reply_cmd: str = ""
     llm_inflight = False
+    turn_id = 0  # increments on each "hard reset everything" to invalidate stale LLM worker results
 
     last_sent_text = ""
     last_sent_ts = 0.0
@@ -346,16 +352,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         last_wake_probe_ts = 0.0
         wake_probe_count = 0
 
+    def stop_thinking() -> None:
+        """Stop the thinking repeater immediately."""
+        nonlocal thinking, next_think_ts
+        thinking = False
+        next_think_ts = 0.0
+        thinking_stop.set()
+
     def hard_reset_utterance() -> None:
         nonlocal in_speech, silence_s, utter_s, utter_chunks, preroll
         nonlocal wake_detected, wake_ack_spoken, thinking, next_think_ts, last_wake_probe_ts, awaiting_reply
         nonlocal llm_inflight
         reset_speech_state()
 
-        thinking = False
-        next_think_ts = 0.0
+        stop_thinking()
         awaiting_reply = False
-        thinking_stop.set()
         llm_inflight = False
 
     def end_utterance(mute_s: float = 0.0) -> None:
@@ -371,15 +382,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         When `after_reply=True`, we keep the post-reply mute window intact (caller sets muted_until).
         """
         nonlocal noise_rms, muted_until
-        nonlocal thinking, next_think_ts, awaiting_reply
+        nonlocal thinking, next_think_ts, awaiting_reply, turn_id
         nonlocal reply_text, reply_cmd, llm_inflight, last_sent_text, last_sent_ts
         nonlocal thinking_thread
 
         # Stop any thinking loop immediately
-        thinking = False
-        next_think_ts = 0.0
+        stop_thinking()
         awaiting_reply = False
-        thinking_stop.set()
 
         # Clear reply worker state
         llm_inflight = False
@@ -387,6 +396,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         with reply_lock:
             reply_text = ""
             reply_cmd = ""
+        turn_id += 1
+        reset_llm_history()
 
         # Reset VAD/noise + speech buffers
         noise_rms = max(600.0, float(args.noise_rms_floor))
@@ -437,7 +448,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             return ""
 
     def speak_thinking_now() -> None:
-        nonlocal muted_until, thinking, next_think_ts, thinking_thread
+        nonlocal muted_until, thinking, next_think_ts, thinking_thread, thinking_stop
         if args.disable_thinking:
             return
         txt = (args.thinking_text or "").strip()
@@ -456,17 +467,23 @@ def main(argv: Optional[list[str]] = None) -> int:
         next_think_ts = now + float(args.thinking_interval_s)
 
         # Ensure "Thinking..." repeats at a steady cadence even while Whisper/LLM blocks.
+        # Always restart the thread cleanly to avoid stale Event/thread state after many turns.
         if thinking_thread is None or not thinking_thread.is_alive():
             thinking_stop.clear()
+        else:
+            # Stop old thread (if any) and start a fresh one.
+            thinking_stop.set()
+            thinking_stop = threading.Event()
 
             interval_s = max(0.25, float(args.thinking_interval_s))
             txt_copy = txt
+            stop_event = thinking_stop
 
-            def _thinking_loop() -> None:
+            def _thinking_loop(ev: threading.Event) -> None:
                 nonlocal muted_until, next_think_ts, thinking
                 # First "Thinking..." already sent; schedule from that moment.
                 next_t = time.monotonic() + interval_s
-                while not thinking_stop.is_set():
+                while not ev.is_set():
                     # Sleep until the next scheduled time, maintaining steady cadence (no drift).
                     now_m = time.monotonic()
                     sleep_s = next_t - now_m
@@ -488,7 +505,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     next_think_ts = wall_now + interval_s
                     next_t += interval_s
 
-            thinking_thread = threading.Thread(target=_thinking_loop, daemon=True)
+            thinking_thread = threading.Thread(target=_thinking_loop, args=(stop_event,), daemon=True)
             thinking_thread.start()
 
     def tick_thinking() -> None:
@@ -523,9 +540,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     r_cmd = (reply_cmd or "").strip()
                 reply_ready.clear()
 
-                thinking = False
-                next_think_ts = 0.0
-                thinking_stop.set()
+                stop_thinking()
                 awaiting_reply = False
                 llm_inflight = False
 
@@ -694,14 +709,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                 # ---- VALID COMMAND CONFIRMED ----
                 awaiting_reply = True
 
-                if not args.disable_thinking and not thinking:
+                # Always start the thinking repeater once a full command is confirmed.
+                if not args.disable_thinking:
                     if args.debug:
                         print("[THINK ] Starting thinking loop")
-
-                    robot.send_text(args.thinking_text)
-                    muted_until = time.time() + 1.2
-                    thinking = True
-                    next_think_ts = time.time() + args.thinking_interval_s
+                    speak_thinking_now()
 
                 cmd = strip_wake_word(text).strip()
 
@@ -711,9 +723,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                         print("[INFO ] Wake word only, awaiting command")
 
                     # Stop thinking immediately
-                    thinking = False
-                    next_think_ts = 0.0
-                    thinking_stop.set()
+                    stop_thinking()
 
                     # Brief mute to avoid instant re-trigger
                     muted_until = time.time() + 0.2
@@ -737,8 +747,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                 # Generate reply in a background worker so "Thinking..." cadence is stable.
                 if not llm_inflight:
                     llm_inflight = True
+                    my_turn = turn_id
 
-                    def _llm_worker(command_text: str) -> None:
+                    def _llm_worker(command_text: str, worker_turn: int) -> None:
                         nonlocal reply_text, reply_cmd
                         try:
                             if sounds_like_physical_action(command_text):
@@ -748,12 +759,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                         except Exception as e:
                             print(f"[LLM ERROR] {e}", file=sys.stderr)
                             out = "Sorry, I had trouble thinking just now."
+                        # If we reset since this worker started, drop the result (prevents stale replies / stuck states).
+                        if worker_turn != turn_id:
+                            return
                         with reply_lock:
                             reply_text = out
                             reply_cmd = command_text
                         reply_ready.set()
 
-                    threading.Thread(target=_llm_worker, args=(cmd,), daemon=True).start()
+                    threading.Thread(target=_llm_worker, args=(cmd, my_turn), daemon=True).start()
 
                 # Clear speech buffers now; mic remains off while awaiting_reply/thinking.
                 end_utterance(mute_s=0.0)
