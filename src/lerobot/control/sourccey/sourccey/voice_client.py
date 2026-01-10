@@ -156,7 +156,8 @@ def ask_llm(user_text: str, timeout_s: float = 15.0) -> str:
             "temperature": 0.3,
             "max_tokens": 80,
         },
-        timeout=float(timeout_s),
+        # Separate connect/read timeouts behave better with local servers.
+        timeout=(5.0, float(timeout_s)),
     )
     r.raise_for_status()
 
@@ -224,6 +225,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--speech-rms-mult", type=float, default=1.15)
     p.add_argument("--end-mult", type=float, default=0.6)
     p.add_argument("--min-speech-rms", type=float, default=160.0)
+    # Helps prevent false triggers / hallucinated wake probes in quiet environments.
+    p.add_argument("--noise-rms-floor", type=float, default=300.0)
 
     p.add_argument("--min-text-chars", type=int, default=2)
     p.add_argument("--min-interval-s", type=float, default=0.7)
@@ -237,6 +240,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Wake-probe tuning
     p.add_argument("--wake-probe-min-s", type=float, default=0.25)
     p.add_argument("--wake-probe-interval-ms", type=int, default=250)
+    p.add_argument("--wake-probe-max-per-utterance", type=int, default=12)
+    p.add_argument("--wake-probe-min-rms-mult", type=float, default=1.15)
+    p.add_argument("--wake-probe-print-all", action="store_true")
 
     p.add_argument("--whisper-vad-filter", action="store_true")
     p.add_argument("--allow-cpu-fallback", action="store_true")
@@ -298,6 +304,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     awaiting_reply = False
     thinking_stop = threading.Event()
     thinking_thread: Optional[threading.Thread] = None
+    reply_ready = threading.Event()
+    reply_lock = threading.Lock()
+    reply_text: str = ""
+    reply_cmd: str = ""
+    llm_inflight = False
 
     last_sent_text = ""
     last_sent_ts = 0.0
@@ -308,6 +319,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     wake_detected = False
     wake_ack_spoken = False
     last_wake_probe_ts = 0.0
+    wake_probe_count = 0
     wake_probe_interval_s = max(0.05, args.wake_probe_interval_ms / 1000.0)
 
     INITIAL_PROMPT = (
@@ -318,9 +330,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     # -----------------------------
     # Helpers
     # -----------------------------
-    def hard_reset_utterance() -> None:
+    def reset_speech_state() -> None:
+        """Reset speech/VAD/wake tracking only (keeps thinking/thread state)."""
         nonlocal in_speech, silence_s, utter_s, utter_chunks, preroll
-        nonlocal wake_detected, wake_ack_spoken, thinking, next_think_ts, last_wake_probe_ts
+        nonlocal wake_detected, wake_ack_spoken, last_wake_probe_ts, wake_probe_count
 
         in_speech = False
         silence_s = 0.0
@@ -331,9 +344,72 @@ def main(argv: Optional[list[str]] = None) -> int:
         wake_detected = False
         wake_ack_spoken = False
         last_wake_probe_ts = 0.0
+        wake_probe_count = 0
+
+    def hard_reset_utterance() -> None:
+        nonlocal in_speech, silence_s, utter_s, utter_chunks, preroll
+        nonlocal wake_detected, wake_ack_spoken, thinking, next_think_ts, last_wake_probe_ts, awaiting_reply
+        nonlocal llm_inflight
+        reset_speech_state()
 
         thinking = False
         next_think_ts = 0.0
+        awaiting_reply = False
+        thinking_stop.set()
+        llm_inflight = False
+
+    def end_utterance(mute_s: float = 0.0) -> None:
+        """Always clear speech buffers after deciding an utterance outcome."""
+        nonlocal muted_until
+        reset_speech_state()
+        if mute_s and mute_s > 0:
+            muted_until = max(muted_until, time.time() + float(mute_s))
+
+    def hard_reset_everything(after_reply: bool = False) -> None:
+        """Reset ALL runtime state so the next interaction behaves like a fresh start.
+
+        When `after_reply=True`, we keep the post-reply mute window intact (caller sets muted_until).
+        """
+        nonlocal noise_rms, muted_until
+        nonlocal thinking, next_think_ts, awaiting_reply
+        nonlocal reply_text, reply_cmd, llm_inflight, last_sent_text, last_sent_ts
+        nonlocal thinking_thread
+
+        # Stop any thinking loop immediately
+        thinking = False
+        next_think_ts = 0.0
+        awaiting_reply = False
+        thinking_stop.set()
+
+        # Clear reply worker state
+        llm_inflight = False
+        reply_ready.clear()
+        with reply_lock:
+            reply_text = ""
+            reply_cmd = ""
+
+        # Reset VAD/noise + speech buffers
+        noise_rms = max(600.0, float(args.noise_rms_floor))
+        reset_speech_state()
+
+        # Clear anti-duplicate guards (prevents "works once then ignores the next command")
+        last_sent_text = ""
+        last_sent_ts = 0.0
+
+        # Optionally drain any queued audio frames so we don't immediately re-trigger on stale audio.
+        # Keep it short so we don't block shutdown.
+        try:
+            t0 = time.monotonic()
+            while (time.monotonic() - t0) < 0.15:
+                try:
+                    sock.recv(zmq.NOBLOCK)
+                except zmq.Again:
+                    break
+        except Exception:
+            pass
+
+        # Allow a new thinking thread to be created on next use.
+        thinking_thread = None
 
     def transcribe(audio_i16: np.ndarray) -> str:
         if audio_i16.size == 0:
@@ -440,6 +516,32 @@ def main(argv: Optional[list[str]] = None) -> int:
             # periodic thinking while waiting on LLM, etc.
             tick_thinking()
 
+            # If the LLM worker finished, speak the reply ASAP (without waiting for more audio).
+            if reply_ready.is_set():
+                with reply_lock:
+                    r_txt = (reply_text or "").strip()
+                    r_cmd = (reply_cmd or "").strip()
+                reply_ready.clear()
+
+                thinking = False
+                next_think_ts = 0.0
+                thinking_stop.set()
+                awaiting_reply = False
+                llm_inflight = False
+
+                if r_txt:
+                    robot.send_text(r_txt)
+                    if args.debug:
+                        print(f"[USER ] {r_cmd}")
+                        print(f"[ROBOT] {r_txt}")
+
+                    last_sent_text = r_cmd
+                    last_sent_ts = time.time()
+                    muted_until = last_sent_ts + args.mute_after_send_s
+
+                # HARD RESET EVERYTHING after we finish speaking a reply.
+                hard_reset_everything(after_reply=True)
+
             try:
                 data = sock.recv(zmq.NOBLOCK)
             except zmq.Again:
@@ -447,6 +549,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                     robot.poll_text_message()
                 except Exception:
                     pass
+                time.sleep(0.01)
+                continue
+
+            # While awaiting a confirmed command's reply, the mic is OFF: discard audio frames.
+            # IMPORTANT: do NOT gate on `thinking` because wake-probe uses thinking as an early ACK
+            # while the user is still speaking their command.
+            if awaiting_reply:
                 time.sleep(0.01)
                 continue
 
@@ -466,6 +575,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             # Track noise when not speaking
             if not in_speech:
                 noise_rms = (1 - noise_alpha) * noise_rms + noise_alpha * rms
+                noise_rms = max(noise_rms, float(args.noise_rms_floor))
 
             start_thr = max(args.min_speech_rms, noise_rms * args.speech_rms_mult)
             end_thr = max(args.min_speech_rms * 0.5, noise_rms * args.end_mult)
@@ -500,6 +610,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 silence_s += chunk_s
                 # let noise track a little during trailing silence
                 noise_rms = (1 - noise_alpha) * noise_rms + noise_alpha * rms
+                noise_rms = max(noise_rms, float(args.noise_rms_floor))
 
             # -----------------------------
             # FAST wake probe (only while in speech)
@@ -511,18 +622,27 @@ def main(argv: Optional[list[str]] = None) -> int:
                 and (now - last_wake_probe_ts) >= wake_probe_interval_s
             ):
                 last_wake_probe_ts = now
-                probe_audio = np.concatenate(utter_chunks) if utter_chunks else np.array([], dtype=np.int16)
-                probe_text = normalize_robot_terms(transcribe(probe_audio)).strip()
+                # Avoid runaway probes on noise: require stronger audio and cap total probes/utterance.
+                if wake_probe_count < int(args.wake_probe_max_per_utterance):
+                    probe_gate = max(
+                        float(args.min_speech_rms),
+                        start_thr * float(args.wake_probe_min_rms_mult),
+                    )
+                    if rms >= probe_gate:
+                        wake_probe_count += 1
+                        probe_audio = np.concatenate(utter_chunks) if utter_chunks else np.array([], dtype=np.int16)
+                        probe_text = normalize_robot_terms(transcribe(probe_audio)).strip()
 
-                if args.debug and probe_text:
-                    print(f"[WAKE PROBE] {probe_text}")
+                        if args.debug and probe_text:
+                            if args.wake_probe_print_all or has_wake_word(probe_text):
+                                print(f"[WAKE PROBE] {probe_text}")
 
-                if has_wake_word(probe_text):
-                    wake_detected = True
-                    # 🔥 IMMEDIATE "Thinking..." the moment wake word is detected
-                    if not wake_ack_spoken:
-                        speak_thinking_now()
-                        wake_ack_spoken = True
+                        if has_wake_word(probe_text):
+                            wake_detected = True
+                            # 🔥 IMMEDIATE "Thinking..." the moment wake word is detected
+                            if not wake_ack_spoken:
+                                speak_thinking_now()
+                                wake_ack_spoken = True
 
             # -----------------------------
             # END OF UTTERANCE
@@ -532,9 +652,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
                 # Too short? ignore
                 if full.size == 0:
+                    end_utterance(mute_s=0.05)
                     continue
                 full_dur = full.size / args.sample_rate
                 if full_dur < args.min_utterance_s:
+                    end_utterance(mute_s=0.05)
                     continue
 
                 # Full transcription
@@ -543,6 +665,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     print(f"[HEARD] {text}")
 
                 if not has_wake_word(text):
+                    end_utterance(mute_s=0.05)
                     continue
 
                 cmd = strip_wake_word(text).strip()
@@ -564,6 +687,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     # Do NOT start thinking yet
                     awaiting_reply = False
                     thinking = False
+                    thinking_stop.set()
+                    end_utterance(mute_s=0.2)
                     continue
 
                 # ---- VALID COMMAND CONFIRMED ----
@@ -587,55 +712,51 @@ def main(argv: Optional[list[str]] = None) -> int:
 
                     # Stop thinking immediately
                     thinking = False
-                    next_thinking_ts = 0.0
+                    next_think_ts = 0.0
+                    thinking_stop.set()
 
                     # Brief mute to avoid instant re-trigger
                     muted_until = time.time() + 0.2
+                    end_utterance(mute_s=0.2)
                     continue
 
                 if len(cmd.replace(" ", "")) < args.min_text_chars:
+                    end_utterance(mute_s=0.1)
                     continue
                 if (now - last_sent_ts) < args.min_interval_s:
+                    end_utterance(mute_s=0.1)
                     continue
                 if is_similar_text(cmd, last_sent_text):
+                    end_utterance(mute_s=0.1)
                     continue
 
                 # Start/restart thinking loop (if wake was only confirmed late)
                 if not args.disable_thinking:
                     speak_thinking_now()
 
-                # Generate reply
-                try:
-                    if sounds_like_physical_action(cmd):
-                        reply = "I can explain how to do that, but I can't physically perform it."
-                    else:
-                        reply = ask_llm(cmd)
-                except Exception as e:
-                    print(f"[LLM ERROR] {e}", file=sys.stderr)
-                    reply = "Sorry, I had trouble thinking just now."
-                finally:
-                    thinking = False  # stop repeating thinking immediately when reply is ready
-                    thinking_stop.set()
+                # Generate reply in a background worker so "Thinking..." cadence is stable.
+                if not llm_inflight:
+                    llm_inflight = True
 
-                # =============================
-                # STEP 5: STOP THINKING + SPEAK
-                # =============================
-                thinking = False
-                next_think_ts = 0.0
-                thinking_stop.set()
+                    def _llm_worker(command_text: str) -> None:
+                        nonlocal reply_text, reply_cmd
+                        try:
+                            if sounds_like_physical_action(command_text):
+                                out = "I can explain how to do that, but I can't physically perform it."
+                            else:
+                                out = ask_llm(command_text)
+                        except Exception as e:
+                            print(f"[LLM ERROR] {e}", file=sys.stderr)
+                            out = "Sorry, I had trouble thinking just now."
+                        with reply_lock:
+                            reply_text = out
+                            reply_cmd = command_text
+                        reply_ready.set()
 
-                if reply:
-                    robot.send_text(reply)
-                    if args.debug:
-                        print(f"[USER ] {cmd}")
-                        print(f"[ROBOT] {reply}")
+                    threading.Thread(target=_llm_worker, args=(cmd,), daemon=True).start()
 
-                    last_sent_text = cmd
-                    last_sent_ts = time.time()
-                    muted_until = last_sent_ts + args.mute_after_send_s
-
-                    # Prevent wake-probe echo loops
-                    hard_reset_utterance()
+                # Clear speech buffers now; mic remains off while awaiting_reply/thinking.
+                end_utterance(mute_s=0.0)
 
     except KeyboardInterrupt:
         print("\nStopping...")
