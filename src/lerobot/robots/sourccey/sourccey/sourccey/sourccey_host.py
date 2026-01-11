@@ -17,6 +17,7 @@ import logging
 import time
 import subprocess
 import shutil
+import threading
 
 import zmq
 
@@ -55,6 +56,17 @@ class SourcceyHost:
 
         # Track a running TTS process so we can avoid stacking audio
         self._tts_process = None
+        self._tts_seq = 0
+        self._tts_current_seq = 0
+        self._tts_lock = threading.Lock()
+
+    def _send_tts_event(self, kind: str, seq: int) -> None:
+        # Lightweight plain-text control message to the client.
+        # Client should ignore unknown messages and only parse this prefix.
+        try:
+            self.send_text(f"__TTS_EVENT__:{kind}:{int(seq)}")
+        except Exception:
+            pass
 
     def set_text_message_callback(self, callback):
         """Set a callback function to handle incoming text messages.
@@ -79,13 +91,14 @@ class SourcceyHost:
         try:
             # Stop any previous speech to prevent overlaps
             if self._tts_process and self._tts_process.poll() is None:
+                
                 try:
                     self._tts_process.terminate()
                 except Exception:
                     pass
 
             # High-pitched, clear, robot-y voice
-            self._tts_process = subprocess.Popen(
+            proc = subprocess.Popen(
                 [
                     tts_cmd,
                     "-v", "en-us+f3",  # higher-pitched female variant
@@ -97,6 +110,22 @@ class SourcceyHost:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            with self._tts_lock:
+                self._tts_seq += 1
+                seq = int(self._tts_seq)
+                self._tts_current_seq = seq
+                self._tts_process = proc
+
+            self._send_tts_event("start", seq)
+
+            def _wait_and_emit_end(p: subprocess.Popen, s: int) -> None:
+                try:
+                    p.wait()
+                except Exception:
+                    pass
+                self._send_tts_event("end", s)
+
+            threading.Thread(target=_wait_and_emit_end, args=(proc, seq), daemon=True).start()
             return True
 
         except Exception as e:
@@ -149,8 +178,6 @@ class SourcceyHost:
 
 
 def main():
-    _silence_camera_warnings_for_host()
-
     logging.info("Configuring Sourccey")
     robot_config = SourcceyConfig(id="sourccey")
     robot = Sourccey(robot_config)
@@ -249,40 +276,6 @@ def main():
         host.disconnect()
 
     logging.info("Finished Sourccey cleanly")
-
-
-def _silence_camera_warnings_for_host() -> None:
-    """
-    Host-mode ergonomics: camera disconnects are expected sometimes; don't spam WARNING logs.
-    """
-    # Silence our OpenCV camera wrapper warnings
-    logging.getLogger("lerobot.cameras.opencv.camera_opencv").setLevel(logging.ERROR)
-    # Silence Sourccey camera fallback warnings (black frame fallback)
-    logging.getLogger("lerobot.robots.sourccey.sourccey.sourccey.sourccey").setLevel(logging.ERROR)
-
-    # Best-effort: silence OpenCV's own internal logging if available
-    try:
-        import cv2  # type: ignore
-
-        # OpenCV 4.x often exposes cv2.utils.logging.setLogLevel
-        if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging") and hasattr(cv2.utils.logging, "setLogLevel"):
-            level = getattr(cv2.utils.logging, "LOG_LEVEL_ERROR", None)
-            if level is None:
-                level = getattr(cv2.utils.logging, "LOG_LEVEL_SILENT", None)
-            if level is not None:
-                cv2.utils.logging.setLogLevel(level)
-            return
-
-        # Some builds expose cv2.setLogLevel
-        if hasattr(cv2, "setLogLevel"):
-            level = getattr(cv2, "LOG_LEVEL_ERROR", None)
-            if level is None:
-                level = getattr(cv2, "LOG_LEVEL_SILENT", None)
-            if level is not None:
-                cv2.setLogLevel(level)
-    except Exception:
-        # Don't fail startup just because OpenCV logging APIs differ
-        pass
 
 if __name__ == "__main__":
     main()

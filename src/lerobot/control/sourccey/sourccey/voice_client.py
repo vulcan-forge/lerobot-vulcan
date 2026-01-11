@@ -329,6 +329,32 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Fuzzy match threshold in [0..1]. Lower = more sensitive, higher = fewer false wakes.",
     )
 
+    # Mic unmute behavior after robot speaks a reply
+    p.add_argument(
+        "--unmute-on-tts-end",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If supported by the host, re-enable the mic exactly when robot TTS ends (instead of a fixed timer).",
+    )
+    p.add_argument(
+        "--post-tts-mute-s",
+        type=float,
+        default=0.25,
+        help="Small extra mute window after TTS end to avoid tail echo retrigger.",
+    )
+    p.add_argument(
+        "--tts-fallback-wpm",
+        type=float,
+        default=165.0,
+        help="Fallback TTS speed estimate (words per minute) used if host doesn't send TTS end events.",
+    )
+    p.add_argument(
+        "--tts-fallback-base-s",
+        type=float,
+        default=0.4,
+        help="Fallback constant seconds added to TTS duration estimate.",
+    )
+
     p.add_argument("--whisper-vad-filter", action="store_true")
     p.add_argument("--allow-cpu-fallback", action="store_true")
     p.add_argument("--debug", action="store_true")
@@ -396,6 +422,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     llm_inflight = False
     turn_id = 0  # increments on each "hard reset everything" to invalidate stale LLM worker results
 
+    # Host TTS tracking (so we can unmute immediately when the robot finishes speaking)
+    waiting_tts_end = False
+    tts_current_seq = 0
+    tts_fallback_unmute_ts = 0.0
+
     last_sent_text = ""
     last_sent_ts = 0.0
 
@@ -456,7 +487,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         if mute_s and mute_s > 0:
             muted_until = max(muted_until, time.time() + float(mute_s))
 
-    def hard_reset_everything(after_reply: bool = False) -> None:
+    def hard_reset_everything(after_reply: bool = False, keep_awaiting_reply: bool = False) -> None:
         """Reset ALL runtime state so the next interaction behaves like a fresh start.
 
         When `after_reply=True`, we keep the post-reply mute window intact (caller sets muted_until).
@@ -468,7 +499,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         # Stop any thinking loop immediately
         stop_thinking()
-        awaiting_reply = False
+        if not keep_awaiting_reply:
+            awaiting_reply = False
 
         # Clear reply worker state
         llm_inflight = False
@@ -501,6 +533,59 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         # Allow a new thinking thread to be created on next use.
         thinking_thread = None
+
+    def _estimate_tts_duration_s(text: str) -> float:
+        # Fallback only: estimate how long the host will speak, based on configured WPM.
+        words = len(re.findall(r"\w+", text or ""))
+        wpm = max(30.0, float(args.tts_fallback_wpm))
+        return float(args.tts_fallback_base_s) + (words / (wpm / 60.0))
+
+    def _drain_audio(max_s: float = 0.2) -> None:
+        # Drop queued audio frames so we don't immediately re-trigger on stale buffered audio.
+        t0 = time.monotonic()
+        while (time.monotonic() - t0) < float(max_s):
+            try:
+                sock.recv(zmq.NOBLOCK)
+            except zmq.Again:
+                break
+            except Exception:
+                break
+
+    def _handle_host_text_message(msg: str) -> None:
+        nonlocal awaiting_reply, waiting_tts_end, tts_current_seq, muted_until
+        if not msg:
+            return
+        # Host emits: "__TTS_EVENT__:start:<seq>" and "__TTS_EVENT__:end:<seq>"
+        if not msg.startswith("__TTS_EVENT__:"):
+            return
+        try:
+            _prefix, kind, seq_s = msg.split(":", 2)
+            seq = int(seq_s)
+        except Exception:
+            return
+        if kind == "start":
+            tts_current_seq = seq
+            return
+        if kind == "end":
+            if seq != int(tts_current_seq):
+                return
+            # We are ready for the next user turn immediately after TTS ends.
+            waiting_tts_end = False
+            awaiting_reply = False
+            muted_until = max(muted_until, time.time() + float(args.post_tts_mute_s))
+            _drain_audio(max_s=0.25)
+
+    # Receive host text/control messages even while audio is streaming.
+    robot.set_text_message_callback(_handle_host_text_message)
+
+    def _poll_host_text(limit: int = 5) -> None:
+        for _ in range(int(limit)):
+            try:
+                m = robot.poll_text_message()
+            except Exception:
+                break
+            if not m:
+                break
 
     def transcribe(audio_i16: np.ndarray) -> str:
         if audio_i16.size == 0:
@@ -610,6 +695,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     # -----------------------------
     try:
         while True:
+            _poll_host_text()
+
             # periodic thinking while waiting on LLM, etc.
             tick_thinking()
 
@@ -621,7 +708,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                 reply_ready.clear()
 
                 stop_thinking()
-                awaiting_reply = False
                 llm_inflight = False
 
                 if r_txt:
@@ -632,18 +718,26 @@ def main(argv: Optional[list[str]] = None) -> int:
 
                     last_sent_text = r_cmd
                     last_sent_ts = time.time()
-                    muted_until = last_sent_ts + args.mute_after_send_s
+                    if bool(args.unmute_on_tts_end):
+                        # Stay muted until we get host TTS end (or fallback estimate, if host doesn't send events).
+                        awaiting_reply = True
+                        waiting_tts_end = True
+                        tts_fallback_unmute_ts = last_sent_ts + max(
+                            float(args.mute_after_send_s),
+                            _estimate_tts_duration_s(r_txt),
+                        )
+                    else:
+                        awaiting_reply = False
+                        muted_until = last_sent_ts + args.mute_after_send_s
 
-                # HARD RESET EVERYTHING after we finish speaking a reply.
-                hard_reset_everything(after_reply=True)
+                # Drop any remaining work/buffers immediately.
+                # If we're waiting for TTS end, keep `awaiting_reply=True` so we don't process audio.
+                hard_reset_everything(after_reply=True, keep_awaiting_reply=awaiting_reply)
 
             try:
                 data = sock.recv(zmq.NOBLOCK)
             except zmq.Again:
-                try:
-                    robot.poll_text_message()
-                except Exception:
-                    pass
+                _poll_host_text()
                 time.sleep(0.01)
                 continue
 
@@ -651,6 +745,16 @@ def main(argv: Optional[list[str]] = None) -> int:
             # IMPORTANT: do NOT gate on `thinking` because wake-probe uses thinking as an early ACK
             # while the user is still speaking their command.
             if awaiting_reply:
+                _poll_host_text()
+                # Fallback: if we never got host TTS end events, unmute after an estimated duration.
+                if waiting_tts_end and (time.time() >= float(tts_fallback_unmute_ts)):
+                    waiting_tts_end = False
+                    awaiting_reply = False
+                    muted_until = max(muted_until, time.time() + float(args.post_tts_mute_s))
+                    _drain_audio(max_s=0.25)
+                else:
+                    # Keep the audio socket fresh by draining queued frames quickly.
+                    _drain_audio(max_s=0.01)
                 time.sleep(0.01)
                 continue
 
