@@ -30,7 +30,7 @@ class SourcceyZCalibrator:
         self,
         actuator,  # SourcceyZActuator
         *,
-        stable_s: float = 2.0,
+        stable_s: float = 1.0,
         sample_hz: float = 30.0,
         stable_eps_pos: float = 0.25,
         max_phase_s: float = 30.0,
