@@ -13,6 +13,7 @@ once the wake word is confirmed, without freezing the main loop.
 """
 
 import argparse
+import difflib
 import re
 import sys
 import time
@@ -92,14 +93,57 @@ def normalize_robot_terms(text: str) -> str:
     if not isinstance(text, str):
         return ""
     return re.sub(
-        r"\b(sorcy|sorsi|orsi|doris|sourcey|sourcy|isourcing)\b",
+        # Common Whisper spellings / near-homophones for "Sourccey"
+        r"\b(sorcy|sorsi|sorcie|sorci|sorsee|sorcey|"
+        r"orsi|doris|"
+        r"sourcey|sourcee|sourcy|soursee|sourcie|sourci|"
+        r"saucey|saucy|"
+        r"isourcing)\b",
         "Sourccey",
         text,
         flags=re.IGNORECASE,
     ).strip()
 
+def _wake_cleanup(text: str) -> str:
+    # Normalize punctuation/spacing for robust wake matching without affecting downstream command text.
+    t = (text or "").strip().lower()
+    # Normalize common unicode quotes
+    t = re.sub(r"[\u2019\u2018\u201c\u201d]", "'", t)
+    # Replace punctuation with spaces (keep letters/digits/_ and spaces and apostrophes)
+    t = re.sub(r"[^\w\s']", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
-def has_wake_word(text: str) -> bool:
+
+def _wake_first_token(text: str) -> str:
+    t = _wake_cleanup(text)
+    if not t:
+        return ""
+    # Drop common attention prefixes
+    t = re.sub(r"^(hey|ok|okay)\s+", "", t).strip()
+    if not t:
+        return ""
+    return t.split(" ", 1)[0].strip()
+
+
+def _wake_fuzzy_match(token: str, target: str, min_ratio: float) -> bool:
+    if not token or not target:
+        return False
+    try:
+        r = float(min_ratio)
+    except Exception:
+        r = 0.76
+    r = max(0.0, min(1.0, r))
+    token = token.lower().strip()
+    target = target.lower().strip()
+    if not token or not target:
+        return False
+    if token == target:
+        return True
+    return difflib.SequenceMatcher(None, token, target).ratio() >= r
+
+
+def has_wake_word(text: str, *, enable_fuzzy: bool = True, fuzzy_min_ratio: float = 0.76) -> bool:
     if not text:
         return False
     t = text.lower().strip()
@@ -110,18 +154,40 @@ def has_wake_word(text: str) -> bool:
         f"ok {WAKE_WORD}",
         f"okay {WAKE_WORD}",
     )
-    return any(t.startswith(p) for p in prefixes)
+    if any(t.startswith(p) for p in prefixes):
+        return True
+    if not enable_fuzzy:
+        return False
+    tok = _wake_first_token(text)
+    return _wake_fuzzy_match(tok, WAKE_WORD, fuzzy_min_ratio)
 
 
-def strip_wake_word(text: str) -> str:
+def strip_wake_word(text: str, *, enable_fuzzy: bool = True, fuzzy_min_ratio: float = 0.76) -> str:
     if not text:
         return ""
-    return re.sub(
+    s = text.strip()
+    # Exact path: "Sourccey" (after optional hey/ok/okay)
+    stripped = re.sub(
         r"^(hey|ok|okay)?\s*sourccey[:,]?\s*",
         "",
-        text.strip(),
+        s,
         flags=re.IGNORECASE,
     ).strip()
+    if stripped != s:
+        return stripped
+    if not enable_fuzzy:
+        return s
+    # Fuzzy path: if the first token sounds like the wake word, drop it.
+    cleaned = _wake_cleanup(s)
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"^(hey|ok|okay)\s+", "", cleaned).strip()
+    if not cleaned:
+        return ""
+    first, *rest = cleaned.split(" ")
+    if _wake_fuzzy_match(first, WAKE_WORD, fuzzy_min_ratio):
+        return " ".join(rest).strip()
+    return s
 
 
 def sounds_like_physical_action(text: str) -> bool:
@@ -248,6 +314,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--wake-probe-max-per-utterance", type=int, default=12)
     p.add_argument("--wake-probe-min-rms-mult", type=float, default=1.15)
     p.add_argument("--wake-probe-print-all", action="store_true")
+
+    # Wake-word sensitivity (fuzzy matching)
+    p.add_argument(
+        "--wake-fuzzy",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable fuzzy wake-word matching (accepts near-homophones of 'Sourccey').",
+    )
+    p.add_argument(
+        "--wake-fuzzy-min-ratio",
+        type=float,
+        default=0.55,
+        help="Fuzzy match threshold in [0..1]. Lower = more sensitive, higher = fewer false wakes.",
+    )
 
     p.add_argument("--whisper-vad-filter", action="store_true")
     p.add_argument("--allow-cpu-fallback", action="store_true")
@@ -649,10 +729,18 @@ def main(argv: Optional[list[str]] = None) -> int:
                         probe_text = normalize_robot_terms(transcribe(probe_audio)).strip()
 
                         if args.debug and probe_text:
-                            if args.wake_probe_print_all or has_wake_word(probe_text):
+                            if args.wake_probe_print_all or has_wake_word(
+                                probe_text,
+                                enable_fuzzy=bool(args.wake_fuzzy),
+                                fuzzy_min_ratio=float(args.wake_fuzzy_min_ratio),
+                            ):
                                 print(f"[WAKE PROBE] {probe_text}")
 
-                        if has_wake_word(probe_text):
+                        if has_wake_word(
+                            probe_text,
+                            enable_fuzzy=bool(args.wake_fuzzy),
+                            fuzzy_min_ratio=float(args.wake_fuzzy_min_ratio),
+                        ):
                             wake_detected = True
                             # 🔥 IMMEDIATE "Thinking..." the moment wake word is detected
                             if not wake_ack_spoken:
@@ -679,11 +767,19 @@ def main(argv: Optional[list[str]] = None) -> int:
                 if args.debug:
                     print(f"[HEARD] {text}")
 
-                if not has_wake_word(text):
+                if not has_wake_word(
+                    text,
+                    enable_fuzzy=bool(args.wake_fuzzy),
+                    fuzzy_min_ratio=float(args.wake_fuzzy_min_ratio),
+                ):
                     end_utterance(mute_s=0.05)
                     continue
 
-                cmd = strip_wake_word(text).strip()
+                cmd = strip_wake_word(
+                    text,
+                    enable_fuzzy=bool(args.wake_fuzzy),
+                    fuzzy_min_ratio=float(args.wake_fuzzy_min_ratio),
+                ).strip()
 
                 # =============================
                 # STEP 4: EARLIEST THINKING START
@@ -715,7 +811,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                         print("[THINK ] Starting thinking loop")
                     speak_thinking_now()
 
-                cmd = strip_wake_word(text).strip()
+                cmd = strip_wake_word(
+                    text,
+                    enable_fuzzy=bool(args.wake_fuzzy),
+                    fuzzy_min_ratio=float(args.wake_fuzzy_min_ratio),
+                ).strip()
 
                 # --- WAKE WORD ONLY (no command) ---
                 if not cmd:
