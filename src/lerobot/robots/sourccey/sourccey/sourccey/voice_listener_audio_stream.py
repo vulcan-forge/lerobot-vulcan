@@ -154,6 +154,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--device", type=int, default=None)
     p.add_argument("--sample-rate", type=int, default=16000)
     p.add_argument("--blocksize", type=int, default=3200)
+    p.add_argument(
+        "--channels",
+        type=int,
+        default=2,
+        help="Number of input channels to capture (must match the selected audio device).",
+    )
+    p.add_argument(
+        "--mono-channel",
+        type=int,
+        default=0,
+        help="If channels>1, which channel to use for mono (0-based). Use -1 to average all channels.",
+    )
 
     # DSP
     p.add_argument("--hpf-hz", type=float, default=120.0)
@@ -201,7 +213,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             samplerate=args.sample_rate,
             blocksize=args.blocksize,
             dtype="int16",
-            channels=2,   # MUST match ALSA device
+            channels=int(args.channels),
             device=args.device,
             callback=audio_cb,
         ):
@@ -215,19 +227,19 @@ def main(argv: Optional[list[str]] = None) -> int:
                     continue
 
                 # Decode stereo PCM16
-                stereo = np.frombuffer(raw, dtype=np.int16)
-
-                # Safety check (must be even number of samples)
-                if stereo.size % 2 != 0:
-                    continue
-
-                stereo = stereo.reshape(-1, 2)
-
-                # Pick left mic (stable, lower noise on USB mics)
-                mono = stereo[:, 0]
-
-                # Alternative (optional): average both mics
-                # mono = ((stereo[:, 0].astype(np.int32) + stereo[:, 1].astype(np.int32)) // 2).astype(np.int16)
+                buf = np.frombuffer(raw, dtype=np.int16)
+                ch = int(args.channels)
+                if ch <= 1:
+                    mono = buf
+                else:
+                    if buf.size % ch != 0:
+                        continue
+                    frames = buf.reshape(-1, ch)
+                    if int(args.mono_channel) == -1:
+                        mono = np.mean(frames.astype(np.int32), axis=1).astype(np.int16)
+                    else:
+                        idx = max(0, min(ch - 1, int(args.mono_channel)))
+                        mono = frames[:, idx]
 
                 if mono.size == 0:
                     continue

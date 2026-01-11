@@ -358,6 +358,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--whisper-vad-filter", action="store_true")
     p.add_argument("--allow-cpu-fallback", action="store_true")
     p.add_argument("--debug", action="store_true")
+    p.add_argument(
+        "--debug-audio",
+        action="store_true",
+        help="Print basic audio stats (duration/rms/peak) for each transcription (helps confirm audio is non-silent).",
+    )
 
     args = p.parse_args(argv)
 
@@ -376,6 +381,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"Loading Whisper model: {args.model} ({args.device}/{args.compute_type})")
     model = load_model()
     print("Model loaded!")
+    asr_forced_cpu = False
 
     # -----------------------------
     # Robot connection
@@ -588,11 +594,16 @@ def main(argv: Optional[list[str]] = None) -> int:
                 break
 
     def transcribe(audio_i16: np.ndarray) -> str:
+        nonlocal model, asr_forced_cpu
         if audio_i16.size == 0:
             return ""
         audio_f32 = audio_i16.astype(np.float32) / 32768.0
+        if args.debug_audio:
+            rms = float(np.sqrt(np.mean(audio_i16.astype(np.float32) ** 2)))
+            peak = int(np.max(np.abs(audio_i16))) if audio_i16.size else 0
+            dur_s = float(audio_i16.size) / float(args.sample_rate)
+            print(f"[AUDIO] dur_s={dur_s:.2f} rms={rms:.1f} peak={peak}", file=sys.stderr)
 
-        # NOTE: faster-whisper returns an iterator; we must consume it inside try
         try:
             segments, _ = model.transcribe(
                 audio_f32,
@@ -601,14 +612,39 @@ def main(argv: Optional[list[str]] = None) -> int:
                 vad_filter=args.whisper_vad_filter,
                 initial_prompt=INITIAL_PROMPT,
             )
-            parts = []
+            parts: list[str] = []
             for seg in segments:
                 t = (seg.text or "").strip()
                 if t:
                     parts.append(t)
             return " ".join(parts).strip()
+
         except Exception as e:
-            # Never crash the main loop on Whisper failures
+            # If CUDA/cuDNN is misconfigured at runtime, retry on CPU (best-effort).
+            msg = str(e)
+            is_cudnn_init = ("CUDNN_STATUS_NOT_INITIALIZED" in msg) or ("cuDNN" in msg) or ("cudnn" in msg)
+            if is_cudnn_init and args.allow_cpu_fallback and not asr_forced_cpu:
+                asr_forced_cpu = True
+                try:
+                    print("[WARN] ASR cuDNN error detected; switching Whisper to CPU int8 fallback.", file=sys.stderr)
+                    model = WhisperModel(args.model, device="cpu", compute_type="int8")
+                    segments, _ = model.transcribe(
+                        audio_f32,
+                        language=args.language,
+                        beam_size=args.beam_size,
+                        vad_filter=args.whisper_vad_filter,
+                        initial_prompt=INITIAL_PROMPT,
+                    )
+                    parts: list[str] = []
+                    for seg in segments:
+                        t = (seg.text or "").strip()
+                        if t:
+                            parts.append(t)
+                    return " ".join(parts).strip()
+                except Exception as e2:
+                    print(f"[ASR ERROR] {e2}", file=sys.stderr)
+                    return ""
+
             print(f"[ASR ERROR] {e}", file=sys.stderr)
             return ""
 
