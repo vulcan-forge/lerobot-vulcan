@@ -349,8 +349,13 @@ def _run_host_loop(stop_event: threading.Event) -> None:
                 except Exception as e:
                     logging.error(f"Failed to send observation: {e}")
 
-            # Poll for incoming text -> speak + emit TTS events
-            host._poll_text_messages()
+            # Poll for incoming text (only supported in some host variants).
+            # On `main`, text/TTS is handled by the `TextTtsGateway` in this file.
+            if hasattr(host, "_poll_text_messages"):
+                try:
+                    host._poll_text_messages()
+                except Exception:
+                    pass
 
             # Rate limit
             elapsed = time.time() - loop_start_time
