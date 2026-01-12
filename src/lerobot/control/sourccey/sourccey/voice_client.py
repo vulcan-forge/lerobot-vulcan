@@ -560,13 +560,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     _NUM_WORDS = {
         "zero": "0",
         "one": "1",
+        "won": "1",
         "two": "2",
+        "to": "2",
+        "too": "2",
         "three": "3",
+        "tree": "3",
         "four": "4",
+        "for": "4",
         "five": "5",
         "six": "6",
         "seven": "7",
         "eight": "8",
+        "ate": "8",
         "nine": "9",
         "ten": "10",
     }
@@ -582,7 +588,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     def _strip_command_mode_prefix(text: str) -> tuple[bool, str]:
         """
         Returns (in_command_mode, remaining_text).
-        Accepts: "commands ..." or "commands, ..." etc.
+        Accepts: "commands ..." or "... commands, ..." etc.
         """
         t = (text or "").strip()
         if not t:
@@ -590,7 +596,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         mode = (args.command_mode_word or "commands").strip().lower()
         if not mode:
             return False, t
-        m = re.match(rf"^{re.escape(mode)}\\b[:,]?\\s*(.*)$", t, flags=re.IGNORECASE)
+        # Find the FIRST occurrence of the mode word and take everything after it.
+        m = re.search(rf"\\b{re.escape(mode)}\\b[:,]?\\s*(.*)$", t, flags=re.IGNORECASE)
         if not m:
             return False, t
         return True, (m.group(1) or "").strip()
@@ -1187,17 +1194,45 @@ def main(argv: Optional[list[str]] = None) -> int:
                 if bool(args.enable_voice_eval):
                     in_mode, rest = _strip_command_mode_prefix(cmd)
                     if (not bool(args.require_command_mode_for_eval)) or in_mode:
-                        m = re.match(
-                            r"^(execute|run)\\s+command\\s+([a-z0-9]+)\\b",
-                            rest if in_mode else cmd,
-                            flags=re.IGNORECASE,
-                        )
-                        if m:
-                            cid = _parse_command_id(m.group(2))
+                        candidate = (rest if in_mode else cmd).strip()
+
+                        # If the user entered command mode but didn't say a command, prompt instead of sending to LLM.
+                        if in_mode and not candidate:
+                            send_text("Say: execute command one.")
+                            end_utterance(mute_s=0.2)
+                            continue
+
+                        # Accept a few phrasings:
+                        # - "execute command one"
+                        # - "run command 1"
+                        # - "command one"
+                        # - "execute one"
+                        patterns = [
+                            r"^(execute|run|start)\\s+(?:eval\\s+)?command\\s+([a-z0-9]+)\\b",
+                            r"^command\\s+([a-z0-9]+)\\b",
+                            r"^(execute|run|start)\\s+([a-z0-9]+)\\b",
+                        ]
+                        cmd_id_raw: Optional[str] = None
+                        for pat in patterns:
+                            mm = re.match(pat, candidate, flags=re.IGNORECASE)
+                            if not mm:
+                                continue
+                            cmd_id_raw = mm.group(mm.lastindex or 1)
+                            break
+
+                        if cmd_id_raw is not None:
+                            cid = _parse_command_id(cmd_id_raw)
                             if cid is None:
                                 send_text("I didn't understand which command number you meant.")
                             else:
                                 _start_eval_command(cid)
+                            end_utterance(mute_s=0.2)
+                            continue
+
+                        # If we required command mode and heard it, but didn't parse a command,
+                        # do NOT forward to the LLM (prevents confusing responses like "What command one?").
+                        if in_mode and bool(args.require_command_mode_for_eval):
+                            send_text("I didn't catch a command number. Try: execute command one.")
                             end_utterance(mute_s=0.2)
                             continue
 
