@@ -30,7 +30,7 @@ class SourcceyZCalibrator:
         self,
         actuator,  # SourcceyZActuator
         *,
-        stable_s: float = 0.1,
+        stable_s: float = 0.25,
         sample_hz: float = 30.0,
         stable_eps_pos: float = 0.25,
         max_phase_s: float = 30.0,
@@ -118,6 +118,13 @@ class SourcceyZCalibrator:
         Returns calibration and also writes it to ZSensor.
         """
 
+        try:
+            if (not self.actuator.is_connected):
+                return None
+        except Exception as e:
+            print(f"Error: actuator is not connected: {e}")
+            return None
+
         # Ensure any background position controller isn't fighting direct motor commands.
         try:
             self.actuator.stop_position_controller()
@@ -137,8 +144,8 @@ class SourcceyZCalibrator:
         # The linear actuator can get stuck at the bottom without a hardware block,
         # So we wait for 5 seconds until we have a hardware stop
         self._drive(self.down_cmd)
-        raw_bottom = self._wait_for_seconds(self.down_cmd, 5.0)
-        #raw_bottom = self._wait_until_stable()
+        # raw_bottom = self._wait_for_seconds(self.down_cmd, 5.0)
+        raw_bottom = self._wait_until_stable()
         self.actuator.stop()
         time.sleep(0.25)
 
