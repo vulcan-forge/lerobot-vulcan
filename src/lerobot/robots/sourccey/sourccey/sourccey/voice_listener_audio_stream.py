@@ -209,8 +209,12 @@ class TextTtsGateway:
         msg = (message or "").strip()
         if not msg:
             return
-        # Don't speak internal event/control messages
+        # Don't speak internal event/control messages (but DO print them for debugging).
         if msg.startswith("__TTS_EVENT__:"):
+            return
+        if msg.startswith("__EVAL_LOG__:") or msg.startswith("__EVAL_STATUS__:"):
+            # Eval logs/status are for operator visibility; never speak them.
+            print(f"[eval] {msg}", file=sys.stderr)
             return
 
         # Always log + ACK so the client can confirm delivery even if TTS is missing.

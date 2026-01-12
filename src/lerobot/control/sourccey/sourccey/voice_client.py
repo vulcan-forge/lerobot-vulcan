@@ -444,6 +444,24 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="If true, ignore new audio/commands while an eval run is active.",
     )
     p.add_argument(
+        "--stream-eval-logs",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="If true, stream evaluate.py stdout/stderr back to the host via the text gateway (printed there, not spoken).",
+    )
+    p.add_argument(
+        "--eval-log-max-lines",
+        type=int,
+        default=200,
+        help="Max number of eval log lines to forward per eval run (only when --stream-eval-logs).",
+    )
+    p.add_argument(
+        "--eval-log-max-chars",
+        type=int,
+        default=240,
+        help="Max characters per forwarded eval log line (only when --stream-eval-logs).",
+    )
+    p.add_argument(
         "--require-command-mode-for-eval",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -478,6 +496,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     eval_proc: Optional[subprocess.Popen] = None
     eval_lock = threading.Lock()
     eval_active_id: Optional[str] = None
+    eval_log_thread: Optional[threading.Thread] = None
+    eval_log_stop = threading.Event()
 
     def _build_evaluate_argv(entry: dict) -> list[str]:
         # Build args for: python -m lerobot.control.sourccey.sourccey.evaluate ...
@@ -524,8 +544,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         else:
             send_text(f"Eval command {cid} finished (exit={rc}).")
 
+        # Stop log pump if it is running
+        try:
+            eval_log_stop.set()
+        except Exception:
+            pass
+
+        if bool(getattr(args, "stream_eval_logs", False)):
+            send_text(f"__EVAL_STATUS__:end:{cid}:{rc}")
+
     def _start_eval_command(cmd_id: str) -> bool:
-        nonlocal eval_proc, eval_active_id, awaiting_reply
+        nonlocal eval_proc, eval_active_id, awaiting_reply, eval_log_thread
         entry = eval_map.get(str(cmd_id))
         if not entry:
             send_text(f"I don't have an eval mapping for command {cmd_id}.")
@@ -540,16 +569,55 @@ def main(argv: Optional[list[str]] = None) -> int:
                 return False
             argv2 = _build_evaluate_argv(entry)
             try:
+                # Reset any previous log pump.
+                try:
+                    eval_log_stop.set()
+                except Exception:
+                    pass
+                eval_log_stop.clear()
+
                 eval_proc = subprocess.Popen(
                     argv2,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
                     cwd=str(Path.cwd()),
                 )
                 eval_active_id = str(cmd_id)
                 if bool(args.block_while_eval):
                     awaiting_reply = True
                 send_text(f"Executing {cmd_name}.")
+
+                # Optionally stream logs back to the host.
+                if bool(getattr(args, "stream_eval_logs", False)) and eval_proc.stdout is not None:
+                    send_text(f"__EVAL_STATUS__:start:{cmd_id}:{cmd_name}")
+
+                    def _log_pump(p: subprocess.Popen, stop_ev: threading.Event) -> None:
+                        max_lines = int(getattr(args, "eval_log_max_lines", 200))
+                        max_chars = int(getattr(args, "eval_log_max_chars", 240))
+                        sent = 0
+                        try:
+                            for line in p.stdout:
+                                if stop_ev.is_set():
+                                    break
+                                s = (line or "").rstrip("\n")
+                                if not s:
+                                    continue
+                                sent += 1
+                                if sent > max_lines:
+                                    send_text(f\"__EVAL_LOG__:... truncated after {max_lines} lines ...\")
+                                    break
+                                if len(s) > max_chars:
+                                    s = s[: max_chars - 3] + \"...\"
+                                send_text(f\"__EVAL_LOG__:{s}\")
+                        except Exception:
+                            pass
+
+                    eval_log_thread = threading.Thread(
+                        target=_log_pump, args=(eval_proc, eval_log_stop), daemon=True
+                    )
+                    eval_log_thread.start()
                 return True
             except Exception as e:
                 eval_proc = None
@@ -599,7 +667,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         # Find the first occurrence of any mode token and take everything after it.
         for mword in sorted(modes, key=len, reverse=True):
-            m = re.search(rf"\\b{re.escape(mword)}\\b[:,]?\\s*(.*)$", t, flags=re.IGNORECASE)
+            m = re.search(rf"\b{re.escape(mword)}\b[:,]?\s*(.*)$", t, flags=re.IGNORECASE)
             if not m:
                 continue
             return True, (m.group(1) or "").strip()
