@@ -23,6 +23,7 @@ import subprocess
 import shutil
 import time
 from typing import Optional
+import os
 
 import numpy as np
 import sounddevice as sd
@@ -401,9 +402,11 @@ def _run_host_loop(stop_event: threading.Event) -> None:
 # -----------------------------
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--device", type=int, default=None)
-    p.add_argument("--sample-rate", type=int, default=16000)
-    p.add_argument("--blocksize", type=int, default=3200)
+    # Allow setting once via env var so you don't have to pass it every run.
+    dev_env = os.environ.get("SOURCCEY_AUDIO_DEVICE")
+    p.add_argument("--device", type=int, default=(int(dev_env) if dev_env is not None else None))
+    p.add_argument("--sample-rate", type=int, default=int(os.environ.get("SOURCCEY_AUDIO_SR", "16000")))
+    p.add_argument("--blocksize", type=int, default=int(os.environ.get("SOURCCEY_AUDIO_BLOCK", "3200")))
     p.add_argument(
         "--channels",
         type=int,
@@ -482,7 +485,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         stop_event = threading.Event()
         host_thread: Optional[threading.Thread] = None
         if bool(args.run_host):
-            host_thread = threading.Thread(target=_run_host_loop, args=(stop_event,), daemon=True)
+            # Non-daemon so we can join cleanly on shutdown (avoids interpreter exiting while the thread is in ZMQ/C++).
+            host_thread = threading.Thread(target=_run_host_loop, args=(stop_event,))
             host_thread.start()
 
         tts = None
@@ -573,6 +577,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         try:
             if tts is not None:
                 tts.close()
+        except Exception:
+            pass
+        # Join host thread briefly to avoid C++/ZMQ teardown races.
+        try:
+            if host_thread is not None:
+                host_thread.join(timeout=2.0)
         except Exception:
             pass
         pub.close()

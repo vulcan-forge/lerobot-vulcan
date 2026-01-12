@@ -28,6 +28,8 @@ class SourcceyEvaluateConfig:
     remote_ip: str = "192.168.1.243"
     model_path: str = "outputs/train/act__sourccey-003__myles__large-towel-fold-a-001-010/checkpoints/200000/pretrained_model"
     dataset: DatasetEvaluateConfig = field(default_factory=DatasetEvaluateConfig)
+    enable_keyboard: bool = True
+    enable_rerun: bool = True
 
 @parser.wrap()
 def evaluate(cfg: SourcceyEvaluateConfig):
@@ -68,8 +70,13 @@ def evaluate(cfg: SourcceyEvaluateConfig):
 
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
-    listener, events = init_keyboard_listener()
-    init_rerun(session_name="recording")
+    if cfg.enable_keyboard:
+        listener, events = init_keyboard_listener()
+    else:
+        listener, events = None, {"exit_early": False, "rerecord_episode": False, "stop_recording": False}
+
+    if cfg.enable_rerun:
+        init_rerun(session_name="recording")
 
     if not robot.is_connected:
         raise ValueError("Robot is not connected!")
@@ -127,7 +134,8 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     # dataset.push_to_hub()
     log_say("Stop recording")
     robot.disconnect()
-    listener.stop()
+    if listener is not None:
+        listener.stop()
 
 def main():
     evaluate()

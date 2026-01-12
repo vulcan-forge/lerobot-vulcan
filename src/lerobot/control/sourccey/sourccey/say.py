@@ -2,7 +2,7 @@
 """
 Send text to the Sourccey host text/TTS gateway (so the robot speaks what you type).
 
-Requires the host-side `voice_listener_audio_stream.py` (or another host gateway) to be running
+Requires the host-side `voice_listener.py` / `voice_listener_audio_stream.py` (or another host gateway) to be running
 with the text gateway enabled (PULL on port 5557 by default).
 """
 

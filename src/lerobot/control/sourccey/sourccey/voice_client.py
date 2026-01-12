@@ -14,11 +14,15 @@ once the wake word is confirmed, without freezing the main loop.
 
 import argparse
 import difflib
+import json
 import re
 import sys
 import time
 import threading
 from typing import Optional, List
+from pathlib import Path
+import subprocess
+import os
 
 import numpy as np
 import zmq
@@ -297,15 +301,22 @@ def whisper_transcribe(
 # -----------------------------
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--robot_ip", required=True)
+    # Allow setting once via env var so you don't have to pass it every run.
+    p.add_argument(
+        "--robot_ip",
+        default=os.environ.get("SOURCCEY_ROBOT_IP"),
+        required=(os.environ.get("SOURCCEY_ROBOT_IP") is None),
+        help="Robot/host IP. Can also be set via SOURCCEY_ROBOT_IP.",
+    )
     p.add_argument("--audio-port", type=int, default=5559)
     p.add_argument("--text-in-port", type=int, default=5557, help="Host text input port (client -> host).")
     p.add_argument("--text-out-port", type=int, default=5558, help="Host text output port (host -> client).")
     p.add_argument("--sample-rate", type=int, default=16000)
 
-    p.add_argument("--model", default="medium.en")
-    p.add_argument("--device", default="auto")
-    p.add_argument("--compute-type", default="auto")
+    # These defaults are tuned for your working setup; override via flags if desired.
+    p.add_argument("--model", default=os.environ.get("SOURCCEY_ASR_MODEL", "large-v3"))
+    p.add_argument("--device", default=os.environ.get("SOURCCEY_ASR_DEVICE", "cuda"))
+    p.add_argument("--compute-type", default=os.environ.get("SOURCCEY_ASR_COMPUTE", "float16"))
     p.add_argument("--language", default="en")
 
     p.add_argument("--beam-size", type=int, default=3)
@@ -416,12 +427,113 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--allow-cpu-fallback", action="store_true")
     p.add_argument("--debug", action="store_true")
     p.add_argument(
+        "--voice-eval-config",
+        default=str(Path(__file__).resolve().parents[5] / "data" / "voice_eval_commands.json"),
+        help="JSON mapping for 'execute command N' voice triggers.",
+    )
+    p.add_argument(
+        "--enable-voice-eval",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable voice-triggered 'execute command N' which launches lerobot evaluate runs.",
+    )
+    p.add_argument(
+        "--block-while-eval",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If true, ignore new audio/commands while an eval run is active.",
+    )
+    p.add_argument(
         "--debug-audio",
         action="store_true",
         help="Print basic audio stats (duration/rms/peak) for each transcription (helps confirm audio is non-silent).",
     )
 
     args = p.parse_args(argv)
+
+    def _load_eval_map() -> dict:
+        if not args.enable_voice_eval:
+            return {}
+        try:
+            pth = Path(args.voice_eval_config).expanduser()
+            if not pth.is_absolute():
+                # Make relative paths resolve from repo root (modules/lerobot-vulcan)
+                pth = Path.cwd() / pth
+            return json.loads(pth.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    eval_map = _load_eval_map()
+    eval_proc: Optional[subprocess.Popen] = None
+    eval_lock = threading.Lock()
+    eval_active_id: Optional[str] = None
+
+    def _build_evaluate_argv(entry: dict) -> list[str]:
+        # Build args for: python -m lerobot.control.sourccey.sourccey.evaluate ...
+        remote_ip = str(entry.get("remote_ip", "{robot_ip}")).replace("{robot_ip}", str(args.robot_ip))
+        out: list[str] = [
+            sys.executable,
+            "-m",
+            "lerobot.control.sourccey.sourccey.evaluate",
+            f"--id={entry.get('id', 'sourccey')}",
+            f"--remote_ip={remote_ip}",
+            f"--model_path={entry['model_path']}",
+        ]
+        dataset = entry.get("dataset") or {}
+        for k, v in dataset.items():
+            out.append(f"--dataset.{k}={v}")
+        # Make it automation-friendly by default
+        out.append(f"--enable_keyboard={bool(entry.get('enable_keyboard', False))}")
+        out.append(f"--enable_rerun={bool(entry.get('enable_rerun', False))}")
+        return out
+
+    def _maybe_finish_eval() -> None:
+        nonlocal eval_proc, eval_active_id, awaiting_reply
+        with eval_lock:
+            p = eval_proc
+            cid = eval_active_id
+        if p is None:
+            return
+        rc = p.poll()
+        if rc is None:
+            return
+        with eval_lock:
+            eval_proc = None
+            eval_active_id = None
+        awaiting_reply = False
+        send_text(f"Eval command {cid} finished (exit={rc}).")
+
+    def _start_eval_command(cmd_id: str) -> bool:
+        nonlocal eval_proc, eval_active_id, awaiting_reply
+        entry = eval_map.get(str(cmd_id))
+        if not entry:
+            send_text(f"I don't have an eval mapping for command {cmd_id}.")
+            return False
+        if "model_path" not in entry:
+            send_text(f"Eval command {cmd_id} is missing model_path.")
+            return False
+        with eval_lock:
+            if eval_proc is not None and eval_proc.poll() is None:
+                send_text("I'm already running an eval command.")
+                return False
+            argv2 = _build_evaluate_argv(entry)
+            try:
+                eval_proc = subprocess.Popen(
+                    argv2,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    cwd=str(Path.cwd()),
+                )
+                eval_active_id = str(cmd_id)
+                if bool(args.block_while_eval):
+                    awaiting_reply = True
+                send_text(f"Executing eval command {cmd_id}.")
+                return True
+            except Exception as e:
+                eval_proc = None
+                eval_active_id = None
+                send_text(f"Failed to start eval command {cmd_id}: {e}")
+                return False
 
     # -----------------------------
     # Whisper model
@@ -810,6 +922,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # -----------------------------
     try:
         while True:
+            _maybe_finish_eval()
             _poll_host_text()
 
             # periodic thinking while waiting on LLM, etc.
@@ -1009,6 +1122,14 @@ def main(argv: Optional[list[str]] = None) -> int:
                     enable_fuzzy=bool(args.wake_fuzzy),
                     fuzzy_min_ratio=float(args.wake_fuzzy_min_ratio),
                 ).strip()
+
+                # Voice-triggered eval commands: "execute command N"
+                if bool(args.enable_voice_eval):
+                    m = re.match(r"^(execute|run)\\s+command\\s+(\\d+)\\b", cmd, flags=re.IGNORECASE)
+                    if m:
+                        _start_eval_command(m.group(2))
+                        end_utterance(mute_s=0.2)
+                        continue
 
                 # =============================
                 # STEP 4: EARLIEST THINKING START
