@@ -118,6 +118,13 @@ class SourcceyZCalibrator:
         Returns calibration and also writes it to ZSensor.
         """
 
+        try:
+            if (not self.actuator.is_connected):
+                return None
+        except Exception as e:
+            print(f"Error: actuator is not connected: {e}")
+            return None
+
         # Ensure any background position controller isn't fighting direct motor commands.
         try:
             self.actuator.stop_position_controller()
