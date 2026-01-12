@@ -6,6 +6,10 @@ Sourccey voice listener (FINAL BASELINE v2)
 - Smooth software AGC (no hardware AGC available)
 - Clean mono int16 stream for ASR
 - Preroll + hangover gating
+
+Optional:
+- Can also run the Sourccey host gateway loop in-process, so you only need one command
+  to bring up text + command/observation ZMQ ports *and* the audio stream.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import argparse
 import collections
 import queue
 import sys
+import threading
 import time
 from typing import Optional
 
@@ -146,6 +151,109 @@ class AudioStreamPublisher:
         self.ctx.term()
 
 
+def _run_host_loop(stop_event: threading.Event) -> None:
+    """
+    Run the Sourccey host gateway loop (ports 5555-5558) until stop_event is set.
+
+    This is a lightly-adapted version of `sourccey_host.main()` that can be stopped
+    from another thread (KeyboardInterrupt only hits the main thread).
+    """
+    # Import lazily so this file can still be used as "audio only" without pulling in the full host stack.
+    import logging
+
+    from ..protobuf.generated import sourccey_pb2
+    from .sourccey import Sourccey
+    from .config_sourccey import SourcceyConfig
+    from .sourccey_host import SourcceyHost
+
+    logging.info("Configuring Sourccey")
+    robot_config = SourcceyConfig(id="sourccey")
+    robot = Sourccey(robot_config)
+
+    logging.info("Connecting Sourccey")
+    robot.connect()
+
+    logging.info("Starting Host")
+    host_config = SourcceyHostConfig()
+    host = SourcceyHost(host_config)
+
+    print("[host] Waiting for commands...")
+
+    last_cmd_time = time.time()
+    watchdog_active = False
+
+    try:
+        previous_observation = None
+        while (not stop_event.is_set()) and (time.time() - last_cmd_time) < host.connection_time_s:
+            loop_start_time = time.time()
+            try:
+                msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
+
+                robot_action = sourccey_pb2.SourcceyRobotAction()
+                robot_action.ParseFromString(msg_bytes)
+                data = robot.protobuf_converter.protobuf_to_action(robot_action)
+
+                _action_sent = robot.send_action(data)
+                robot.update()
+
+                last_cmd_time = time.time()
+                watchdog_active = False
+            except zmq.Again:
+                pass
+            except Exception as e:
+                logging.error("Host message handling failed: %s", e)
+
+            now = time.time()
+            if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
+                logging.warning(
+                    f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. Stopping the base."
+                )
+                watchdog_active = True
+                try:
+                    robot.stop_base()
+                except Exception:
+                    pass
+
+            # Send observation (best-effort)
+            observation = None
+            try:
+                observation = robot.get_observation()
+            except Exception:
+                observation = None
+
+            if observation is None or observation == {}:
+                observation = previous_observation
+            else:
+                previous_observation = observation
+
+            if observation is not None and observation != {}:
+                try:
+                    robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
+                    host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
+                except zmq.Again:
+                    pass
+                except Exception as e:
+                    logging.error(f"Failed to send observation: {e}")
+
+            # Poll for incoming text -> speak + emit TTS events
+            host._poll_text_messages()
+
+            # Rate limit
+            elapsed = time.time() - loop_start_time
+            time.sleep(max(1 / host.max_loop_freq_hz - elapsed, 0))
+
+    finally:
+        print("[host] Shutting down...")
+        try:
+            robot.disconnect()
+        except Exception:
+            pass
+        try:
+            host.disconnect()
+        except Exception:
+            pass
+
+
 # -----------------------------
 # Main
 # -----------------------------
@@ -180,6 +288,12 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Debug
     p.add_argument("--debug", action="store_true")
+    p.add_argument(
+        "--run-host",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Also run Sourccey host gateway loop (ports 5555-5558) in this process.",
+    )
 
     args = p.parse_args(argv)
 
@@ -209,6 +323,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     last_voice_ts = 0.0
 
     try:
+        stop_event = threading.Event()
+        host_thread: Optional[threading.Thread] = None
+        if bool(args.run_host):
+            host_thread = threading.Thread(target=_run_host_loop, args=(stop_event,), daemon=True)
+            host_thread.start()
+
         with sd.RawInputStream(
             samplerate=args.sample_rate,
             blocksize=args.blocksize,
@@ -273,8 +393,16 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     except KeyboardInterrupt:
         print("[voice] Stopping...")
+        try:
+            stop_event.set()
+        except Exception:
+            pass
         return 0
     finally:
+        try:
+            stop_event.set()
+        except Exception:
+            pass
         pub.close()
 
     return 0
