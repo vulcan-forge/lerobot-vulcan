@@ -384,7 +384,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument(
         "--wake-fuzzy-min-ratio",
         type=float,
-        default=0.76,
+        default=0.90,
         help="Fuzzy match threshold in [0..1]. Lower = more sensitive, higher = fewer false wakes.",
     )
 
