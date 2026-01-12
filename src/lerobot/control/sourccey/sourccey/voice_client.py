@@ -594,13 +594,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not t:
             return False, ""
         mode = (args.command_mode_word or "commands").strip().lower()
-        if not mode:
-            return False, t
-        # Find the FIRST occurrence of the mode word and take everything after it.
-        m = re.search(rf"\\b{re.escape(mode)}\\b[:,]?\\s*(.*)$", t, flags=re.IGNORECASE)
-        if not m:
-            return False, t
-        return True, (m.group(1) or "").strip()
+        # Be robust to ASR: treat "command" and "commands" as equivalent, and accept "command mode".
+        modes = {m for m in [mode, mode.rstrip("s"), f"{mode.rstrip('s')}s", "command", "commands", "command mode"] if m}
+
+        # Find the first occurrence of any mode token and take everything after it.
+        for mword in sorted(modes, key=len, reverse=True):
+            m = re.search(rf"\\b{re.escape(mword)}\\b[:,]?\\s*(.*)$", t, flags=re.IGNORECASE)
+            if not m:
+                continue
+            return True, (m.group(1) or "").strip()
+
+        return False, t
 
     # -----------------------------
     # Whisper model
@@ -1195,6 +1199,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                     in_mode, rest = _strip_command_mode_prefix(cmd)
                     if (not bool(args.require_command_mode_for_eval)) or in_mode:
                         candidate = (rest if in_mode else cmd).strip()
+                        
+                        if args.debug:
+                            print(f"[EVAL] cmd={cmd!r} in_mode={in_mode} candidate={candidate!r}", file=sys.stderr)
 
                         # If the user entered command mode but didn't say a command, prompt instead of sending to LLM.
                         if in_mode and not candidate:
@@ -1207,10 +1214,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                         # - "run command 1"
                         # - "command one"
                         # - "execute one"
+                        # - "one" (if in command mode)
                         patterns = [
-                            r"^(execute|run|start)\\s+(?:eval\\s+)?command\\s+([a-z0-9]+)\\b",
-                            r"^command\\s+([a-z0-9]+)\\b",
-                            r"^(execute|run|start)\\s+([a-z0-9]+)\\b",
+                            r"^(execute|run|start)\s+(?:eval\s+)?command\s+([a-z0-9]+)\b",
+                            r"^command\s+([a-z0-9]+)\b",
+                            r"^(execute|run|start)\s+([a-z0-9]+)\b",
+                            r"^([a-z0-9]+)\b",  # Just a number/word if in command mode
                         ]
                         cmd_id_raw: Optional[str] = None
                         for pat in patterns:
@@ -1218,13 +1227,28 @@ def main(argv: Optional[list[str]] = None) -> int:
                             if not mm:
                                 continue
                             cmd_id_raw = mm.group(mm.lastindex or 1)
+                            if args.debug:
+                                print(f"[EVAL] pattern matched: {pat!r} -> {cmd_id_raw!r}", file=sys.stderr)
                             break
+
+                        # Fallback: search for any number word in the candidate text
+                        if cmd_id_raw is None and candidate:
+                            words = re.findall(r"\b([a-z0-9]+)\b", candidate, flags=re.IGNORECASE)
+                            for word in words:
+                                parsed = _parse_command_id(word)
+                                if parsed is not None:
+                                    cmd_id_raw = word
+                                    if args.debug:
+                                        print(f"[EVAL] fallback found number word: {word!r} -> {parsed!r}", file=sys.stderr)
+                                    break
 
                         if cmd_id_raw is not None:
                             cid = _parse_command_id(cmd_id_raw)
                             if cid is None:
                                 send_text("I didn't understand which command number you meant.")
                             else:
+                                if args.debug:
+                                    print(f"[EVAL] executing command {cid}", file=sys.stderr)
                                 _start_eval_command(cid)
                             end_utterance(mute_s=0.2)
                             continue
@@ -1232,6 +1256,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                         # If we required command mode and heard it, but didn't parse a command,
                         # do NOT forward to the LLM (prevents confusing responses like "What command one?").
                         if in_mode and bool(args.require_command_mode_for_eval):
+                            if args.debug:
+                                print(f"[EVAL] command mode detected but no command parsed from {candidate!r}", file=sys.stderr)
                             send_text("I didn't catch a command number. Try: execute command one.")
                             end_utterance(mute_s=0.2)
                             continue
