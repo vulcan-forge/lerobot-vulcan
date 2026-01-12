@@ -183,6 +183,15 @@ class TextTtsGateway:
         except Exception:
             pass
 
+    def _send_info(self, text: str) -> None:
+        msg = (text or "").strip()
+        if not msg:
+            return
+        try:
+            self.sock_out.send_string(msg, flags=zmq.NOBLOCK)
+        except Exception:
+            pass
+
     def _tts_cmd(self) -> Optional[str]:
         return shutil.which("espeak-ng") or shutil.which("espeak")
 
@@ -194,8 +203,13 @@ class TextTtsGateway:
         if msg.startswith("__TTS_EVENT__:"):
             return
 
+        # Always log + ACK so the client can confirm delivery even if TTS is missing.
+        print(f"[tts] IN: {msg}", file=sys.stderr)
+        self._send_info(f"__SAY_ACK__:{msg}")
+
         tts_cmd = self._tts_cmd()
         if not tts_cmd:
+            self._send_info("__SAY_ERR__:no_tts_engine (install espeak-ng or espeak)")
             return
 
         with self._lock:
@@ -408,6 +422,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Debug
     p.add_argument("--debug", action="store_true")
     p.add_argument(
+        "--debug-rms-interval-s",
+        type=float,
+        default=1.0,
+        help="When --debug is set, print RMS/AGC info at most once per this many seconds.",
+    )
+    p.add_argument(
         "--run-host",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -447,6 +467,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     streaming = False
     last_voice_ts = 0.0
+    last_dbg_ts = 0.0
 
     try:
         stop_event = threading.Event()
@@ -507,7 +528,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 above = args.audio_threshold <= 0 or level >= args.audio_threshold
 
                 if args.debug:
-                    print(f"rms={level:6.1f} gain={agc.gain:4.2f}", file=sys.stderr)
+                    interval = max(0.0, float(args.debug_rms_interval_s))
+                    if interval == 0.0 or (now - last_dbg_ts) >= interval:
+                        print(f"rms={level:6.1f} gain={agc.gain:4.2f}", file=sys.stderr)
+                        last_dbg_ts = now
 
                 mono_bytes = mono.tobytes()
                 preroll.append(mono_bytes)
