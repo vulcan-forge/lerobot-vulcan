@@ -176,6 +176,15 @@ class TextTtsGateway:
         self._tts_process: Optional[subprocess.Popen] = None
         self._tts_seq = 0
         self._lock = threading.Lock()
+        self._engine = self._tts_cmd()
+
+        # Startup banner (helps debug networking / missing TTS)
+        eng = self._engine or "NONE"
+        print(
+            f"[tts] gateway up: recv tcp://*:{int(text_in_port)} send tcp://*:{int(text_out_port)} engine={eng}",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def _send_event(self, kind: str, seq: int) -> None:
         try:
