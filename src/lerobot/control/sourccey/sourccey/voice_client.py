@@ -74,6 +74,29 @@ def _configure_windows_cuda_dll_search() -> None:
         _add_nvidia_bin("nvidia.cudnn")
         _add_nvidia_bin("nvidia.cublas")
         _add_nvidia_bin("nvidia.cuda_runtime")
+
+        # Some Windows setups have multiple CUDA toolkit versions on PATH (v12.x, v13.x, etc.).
+        # That can cause cuDNN/CT2 to load incompatible DLLs even when the correct pip-provided
+        # NVIDIA runtime packages are installed, leading to CUDNN_STATUS_NOT_INITIALIZED.
+        #
+        # For *this process only*, prefer the venv's `site-packages/nvidia/**/bin` DLLs by
+        # removing CUDA Toolkit paths from PATH (unless explicitly disabled).
+        if os.environ.get("SOURCCEY_CUDA_PATH_SANITIZE", "1") != "0":
+            parts = (os.environ.get("PATH", "") or "").split(os.pathsep)
+            cleaned: list[str] = []
+            for p in parts:
+                pl = (p or "").lower()
+                # Keep the pip-provided NVIDIA DLL dirs we just prepended.
+                if "site-packages" in pl and (f"{os.sep}nvidia{os.sep}" in pl):
+                    cleaned.append(p)
+                    continue
+                # Drop CUDA toolkit entries (bin/libnvvp) to avoid version conflicts.
+                if "nvidia gpu computing toolkit" in pl and f"{os.sep}cuda{os.sep}" in pl:
+                    continue
+                if f"{os.sep}cuda{os.sep}v" in pl and (pl.endswith(f"{os.sep}bin") or "libnvvp" in pl):
+                    continue
+                cleaned.append(p)
+            os.environ["PATH"] = os.pathsep.join(cleaned)
     except Exception:
         pass
 
@@ -288,6 +311,31 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--language", default="en")
 
     p.add_argument("--beam-size", type=int, default=3)
+    # Whisper decoding / hallucination controls
+    p.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Whisper sampling temperature (0.0 is most deterministic).",
+    )
+    p.add_argument(
+        "--condition-on-previous-text",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="If true, allow Whisper to condition on previous text (can increase hallucinations in noisy audio).",
+    )
+    p.add_argument(
+        "--no-speech-threshold",
+        type=float,
+        default=None,
+        help="Optional Whisper no-speech threshold (higher can reduce hallucinated text on silence).",
+    )
+    p.add_argument(
+        "--log-prob-threshold",
+        type=float,
+        default=None,
+        help="Optional Whisper log-prob threshold (can reduce low-confidence hallucinations).",
+    )
     p.add_argument("--min-utterance-s", type=float, default=0.5)
     p.add_argument("--max-utterance-s", type=float, default=5.5)
     p.add_argument("--start-ms", type=int, default=150)
@@ -314,6 +362,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--wake-probe-max-per-utterance", type=int, default=12)
     p.add_argument("--wake-probe-min-rms-mult", type=float, default=1.15)
     p.add_argument("--wake-probe-print-all", action="store_true")
+    p.add_argument(
+        "--wake-probe-prompt",
+        default="",
+        help="Initial prompt used for wake-probe transcriptions. Default empty to reduce prompt-echo hallucinations.",
+    )
+    p.add_argument(
+        "--thinking-on-wake",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If true, say 'Thinking…' immediately when the wake word is detected (even before the command is finished).",
+    )
 
     # Wake-word sensitivity (fuzzy matching)
     p.add_argument(
@@ -325,7 +384,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument(
         "--wake-fuzzy-min-ratio",
         type=float,
-        default=0.55,
+        default=0.76,
         help="Fuzzy match threshold in [0..1]. Lower = more sensitive, higher = fewer false wakes.",
     )
 
@@ -447,7 +506,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     INITIAL_PROMPT = (
         "This is a conversation with a robot named Sourccey. "
-        "Common words include: Sourccey, robot, move, follow, stop, hello, task."
+        "Common words include: Sourccey."
     )
 
     # -----------------------------
@@ -517,8 +576,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         turn_id += 1
         reset_llm_history()
 
-        # Reset VAD/noise + speech buffers
-        noise_rms = max(600.0, float(args.noise_rms_floor))
+        # Reset speech buffers, but KEEP the learned noise estimate so the next utterance
+        # doesn't start with miscalibrated thresholds (which can clip the wake word).
+        noise_rms = max(float(noise_rms), float(args.noise_rms_floor))
         reset_speech_state()
 
         # Clear anti-duplicate guards (prevents "works once then ignores the next command")
@@ -611,6 +671,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 beam_size=args.beam_size,
                 vad_filter=args.whisper_vad_filter,
                 initial_prompt=INITIAL_PROMPT,
+                temperature=float(args.temperature),
+                condition_on_previous_text=bool(args.condition_on_previous_text),
+                no_speech_threshold=args.no_speech_threshold,
+                log_prob_threshold=args.log_prob_threshold,
             )
             parts: list[str] = []
             for seg in segments:
@@ -634,6 +698,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                         beam_size=args.beam_size,
                         vad_filter=args.whisper_vad_filter,
                         initial_prompt=INITIAL_PROMPT,
+                        temperature=float(args.temperature),
+                        condition_on_previous_text=bool(args.condition_on_previous_text),
+                        no_speech_threshold=args.no_speech_threshold,
+                        log_prob_threshold=args.log_prob_threshold,
                     )
                     parts: list[str] = []
                     for seg in segments:
@@ -866,7 +934,17 @@ def main(argv: Optional[list[str]] = None) -> int:
                     if rms >= probe_gate:
                         wake_probe_count += 1
                         probe_audio = np.concatenate(utter_chunks) if utter_chunks else np.array([], dtype=np.int16)
-                        probe_text = normalize_robot_terms(transcribe(probe_audio)).strip()
+                        # Wake probe: use a minimal prompt (or none) to reduce prompt-echo hallucinations.
+                        probe_text = normalize_robot_terms(
+                            whisper_transcribe(
+                                model=model,
+                                audio_i16=probe_audio,
+                                language=args.language,
+                                beam_size=args.beam_size,
+                                vad_filter=args.whisper_vad_filter,
+                                initial_prompt=str(args.wake_probe_prompt or ""),
+                            )
+                        ).strip()
 
                         if args.debug and probe_text:
                             if args.wake_probe_print_all or has_wake_word(
@@ -883,7 +961,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                         ):
                             wake_detected = True
                             # 🔥 IMMEDIATE "Thinking..." the moment wake word is detected
-                            if not wake_ack_spoken:
+                            if bool(args.thinking_on_wake) and not wake_ack_spoken:
                                 speak_thinking_now()
                                 wake_ack_spoken = True
 
@@ -935,10 +1013,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                     if args.debug:
                         print("[INFO ] Wake word detected, no command yet")
 
-                    # Do NOT start thinking yet
+                    # Ensure thinking is OFF (wake-only should not keep thinking running)
                     awaiting_reply = False
-                    thinking = False
-                    thinking_stop.set()
+                    stop_thinking()
                     end_utterance(mute_s=0.2)
                     continue
 
