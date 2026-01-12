@@ -11,13 +11,19 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import os
 
 import zmq
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--robot_ip", required=True, help="IP of the Sourccey host machine.")
+    default_robot_ip = os.environ.get("SOURCCEY_ROBOT_IP", "192.168.1.213")
+    p.add_argument(
+        "--robot_ip",
+        default=default_robot_ip,
+        help="IP of the Sourccey host machine (default: 192.168.1.213). Can also be set via SOURCCEY_ROBOT_IP.",
+    )
     p.add_argument("--text-in-port", type=int, default=5557, help="Host text input port (client -> host).")
     p.add_argument("--text-out-port", type=int, default=5558, help="Host text output port (host -> client).")
     p.add_argument("--text", default="", help="One-shot text to speak.")

@@ -301,12 +301,12 @@ def whisper_transcribe(
 # -----------------------------
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser()
-    # Allow setting once via env var so you don't have to pass it every run.
+    # Defaults: keep a working "no-args" path, but allow overrides via flag/env.
+    default_robot_ip = os.environ.get("SOURCCEY_ROBOT_IP", "192.168.1.213")
     p.add_argument(
         "--robot_ip",
-        default=os.environ.get("SOURCCEY_ROBOT_IP"),
-        required=(os.environ.get("SOURCCEY_ROBOT_IP") is None),
-        help="Robot/host IP. Can also be set via SOURCCEY_ROBOT_IP.",
+        default=default_robot_ip,
+        help="Robot/host IP (default: 192.168.1.213). Can also be set via SOURCCEY_ROBOT_IP.",
     )
     p.add_argument("--audio-port", type=int, default=5559)
     p.add_argument("--text-in-port", type=int, default=5557, help="Host text input port (client -> host).")
@@ -444,6 +444,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="If true, ignore new audio/commands while an eval run is active.",
     )
     p.add_argument(
+        "--require-command-mode-for-eval",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If true, require a 'commands' keyword before allowing voice-triggered eval runs.",
+    )
+    p.add_argument(
+        "--command-mode-word",
+        default="commands",
+        help="Second wake word for eval triggers (default: 'commands'). Example: 'Sourccey, commands, execute command 1'.",
+    )
+    p.add_argument(
         "--debug-audio",
         action="store_true",
         help="Print basic audio stats (duration/rms/peak) for each transcription (helps confirm audio is non-silent).",
@@ -497,11 +508,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         rc = p.poll()
         if rc is None:
             return
+        entry = eval_map.get(str(cid or "")) if cid is not None else None
+        cmd_name = ""
+        try:
+            if entry:
+                cmd_name = (entry.get("name") or entry.get("description") or "").strip()
+        except Exception:
+            cmd_name = ""
         with eval_lock:
             eval_proc = None
             eval_active_id = None
         awaiting_reply = False
-        send_text(f"Eval command {cid} finished (exit={rc}).")
+        if cmd_name:
+            send_text(f"Finished {cmd_name} (exit={rc}).")
+        else:
+            send_text(f"Eval command {cid} finished (exit={rc}).")
 
     def _start_eval_command(cmd_id: str) -> bool:
         nonlocal eval_proc, eval_active_id, awaiting_reply
@@ -512,6 +533,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         if "model_path" not in entry:
             send_text(f"Eval command {cmd_id} is missing model_path.")
             return False
+        cmd_name = (entry.get("name") or entry.get("description") or f"command {cmd_id}").strip()
         with eval_lock:
             if eval_proc is not None and eval_proc.poll() is None:
                 send_text("I'm already running an eval command.")
@@ -527,13 +549,51 @@ def main(argv: Optional[list[str]] = None) -> int:
                 eval_active_id = str(cmd_id)
                 if bool(args.block_while_eval):
                     awaiting_reply = True
-                send_text(f"Executing eval command {cmd_id}.")
+                send_text(f"Executing {cmd_name}.")
                 return True
             except Exception as e:
                 eval_proc = None
                 eval_active_id = None
                 send_text(f"Failed to start eval command {cmd_id}: {e}")
                 return False
+
+    _NUM_WORDS = {
+        "zero": "0",
+        "one": "1",
+        "two": "2",
+        "three": "3",
+        "four": "4",
+        "five": "5",
+        "six": "6",
+        "seven": "7",
+        "eight": "8",
+        "nine": "9",
+        "ten": "10",
+    }
+
+    def _parse_command_id(raw: str) -> Optional[str]:
+        s = (raw or "").strip().lower()
+        if not s:
+            return None
+        if s.isdigit():
+            return s
+        return _NUM_WORDS.get(s)
+
+    def _strip_command_mode_prefix(text: str) -> tuple[bool, str]:
+        """
+        Returns (in_command_mode, remaining_text).
+        Accepts: "commands ..." or "commands, ..." etc.
+        """
+        t = (text or "").strip()
+        if not t:
+            return False, ""
+        mode = (args.command_mode_word or "commands").strip().lower()
+        if not mode:
+            return False, t
+        m = re.match(rf"^{re.escape(mode)}\\b[:,]?\\s*(.*)$", t, flags=re.IGNORECASE)
+        if not m:
+            return False, t
+        return True, (m.group(1) or "").strip()
 
     # -----------------------------
     # Whisper model
@@ -1125,11 +1185,21 @@ def main(argv: Optional[list[str]] = None) -> int:
 
                 # Voice-triggered eval commands: "execute command N"
                 if bool(args.enable_voice_eval):
-                    m = re.match(r"^(execute|run)\\s+command\\s+(\\d+)\\b", cmd, flags=re.IGNORECASE)
-                    if m:
-                        _start_eval_command(m.group(2))
-                        end_utterance(mute_s=0.2)
-                        continue
+                    in_mode, rest = _strip_command_mode_prefix(cmd)
+                    if (not bool(args.require_command_mode_for_eval)) or in_mode:
+                        m = re.match(
+                            r"^(execute|run)\\s+command\\s+([a-z0-9]+)\\b",
+                            rest if in_mode else cmd,
+                            flags=re.IGNORECASE,
+                        )
+                        if m:
+                            cid = _parse_command_id(m.group(2))
+                            if cid is None:
+                                send_text("I didn't understand which command number you meant.")
+                            else:
+                                _start_eval_command(cid)
+                            end_utterance(mute_s=0.2)
+                            continue
 
                 # =============================
                 # STEP 4: EARLIEST THINKING START
