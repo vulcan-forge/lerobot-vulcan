@@ -29,7 +29,7 @@ lerobot-replay \
 Example replay with bimanual so100:
 ```shell
 lerobot-replay \
-  --robot.type=bi_so100_follower \
+  --robot.type=bi_so_follower \
   --robot.left_arm_port=/dev/tty.usbmodem5A460851411 \
   --robot.right_arm_port=/dev/tty.usbmodem5A460812391 \
   --robot.id=bimanual_follower \
@@ -53,13 +53,15 @@ from lerobot.processor import (
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
-    bi_so100_follower,
+    bi_so_follower,
     earthrover_mini_plus,
     hope_jr,
     koch_follower,
     make_robot_from_config,
-    so100_follower,
-    so101_follower,
+    omx_follower,
+    reachy2,
+    so_follower,
+    unitree_g1,
 )
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
 from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.sourccey_leader import SourcceyLeader
@@ -124,7 +126,7 @@ def replay(cfg: ReplayConfig):
         _ = robot.send_action(processed_action)
 
         dt_s = time.perf_counter() - start_episode_t
-        precise_sleep(1 / dataset.fps - dt_s)
+        precise_sleep(max(1 / dataset.fps - dt_s, 0.0))
 
     robot.disconnect()
 
