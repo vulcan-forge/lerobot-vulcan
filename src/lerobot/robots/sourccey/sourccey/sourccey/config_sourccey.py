@@ -93,6 +93,10 @@ class SourcceyHostConfig:
     # Network Configuration
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
+    # Text + audio (used by voice pipeline)
+    port_zmq_text_in: int = 5557  # receive text from client
+    port_zmq_text_out: int = 5558  # send text/events to client
+    port_zmq_audio: int = 5559  # publish PCM16 audio stream
 
     # Duration of the application
     connection_time_s: int = 86400
