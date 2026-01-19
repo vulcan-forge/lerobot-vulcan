@@ -8,7 +8,7 @@ from venv import logger
 from lerobot.motors.feetech.feetech import OperatingMode
 from lerobot.motors.motors_bus import MotorCalibration
 
-class SO100FollowerCalibrator:
+class SOFollowerCalibrator:
     """Handles calibration operations for Sourccey robots."""
 
     def __init__(self, robot):
