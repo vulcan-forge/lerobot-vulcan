@@ -26,8 +26,8 @@ from lerobot.motors.feetech import (
     OperatingMode,
 )
 from lerobot.processor import RobotAction, RobotObservation
-from lerobot.robots.so_follower.so100_follower_calibrator import SO100FollowerCalibrator
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.robots.so_follower.so_follower_calibrator import SOFollowerCalibrator
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
@@ -53,19 +53,19 @@ class SOFollower(Robot):
         self.bus = FeetechMotorsBus(
             port=self.config.port,
             motors={
-                "shoulder_pan": Motor(motor_ids[0], "sts3215", norm_mode_body),
-                "shoulder_lift": Motor(motor_ids[1], "sts3215", norm_mode_body),
-                "elbow_flex": Motor(motor_ids[2], "sts3215", norm_mode_body),
-                "wrist_flex": Motor(motor_ids[3], "sts3215", norm_mode_body),
-                "wrist_roll": Motor(motor_ids[4], "sts3215", norm_mode_body),
-                "gripper": Motor(motor_ids[5], "sts3215", MotorNormMode.RANGE_0_100),
+                "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
+                "shoulder_lift": Motor(2, "sts3215", norm_mode_body),
+                "elbow_flex": Motor(3, "sts3215", norm_mode_body),
+                "wrist_flex": Motor(4, "sts3215", norm_mode_body),
+                "wrist_roll": Motor(5, "sts3215", norm_mode_body),
+                "gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )
         self.cameras = make_cameras_from_configs(config.cameras)
 
         # Initialize calibrator
-        self.calibrator = SO100FollowerCalibrator(
+        self.calibrator = SOFollowerCalibrator(
             robot=self
         )
 
@@ -91,13 +91,12 @@ class SOFollower(Robot):
     def is_connected(self) -> bool:
         return self.bus.is_connected and all(cam.is_connected for cam in self.cameras.values())
 
+    @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
         """
         We assume that at connection time, arm is in a rest position,
         and torque can be safely disabled to run calibration.
         """
-        if self.is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} already connected")
 
         self.bus.connect()
         if not self.is_calibrated and calibrate:
@@ -185,10 +184,8 @@ class SOFollower(Robot):
             self.bus.setup_motor(motor)
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
+    @check_if_not_connected
     def get_observation(self) -> RobotObservation:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
         # Read arm position
         start = time.perf_counter()
         obs_dict = self.bus.sync_read("Present_Position")
@@ -205,6 +202,7 @@ class SOFollower(Robot):
 
         return obs_dict
 
+    @check_if_not_connected
     def send_action(self, action: RobotAction) -> RobotAction:
         """Command arm to move to a target joint configuration.
 
@@ -218,8 +216,6 @@ class SOFollower(Robot):
         Returns:
             RobotAction: the action sent to the motors, potentially clipped.
         """
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
 
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
@@ -234,10 +230,8 @@ class SOFollower(Robot):
         self.bus.sync_write("Goal_Position", goal_pos)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
+    @check_if_not_connected
     def disconnect(self):
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
         self.bus.disconnect(self.config.disable_torque_on_disconnect)
         for cam in self.cameras.values():
             cam.disconnect()
