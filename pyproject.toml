@@ -114,11 +114,10 @@ unitree_g1 = [
 reachy2 = ["reachy2_sdk>=1.0.15,<1.1.0"]
 sourccey = [
     "lerobot[feetech]",
+    "lerobot[grpcio-dep]",
     "pyzmq>=26.2.1",
     "gpiozero>=2.0.1 ; sys_platform == 'linux'",
     "lgpio>=0.2.2 ; sys_platform == 'linux'",
-    "grpcio-tools==1.73.1",
-    "protobuf==6.31.1",
     "numpy>=1.24",
 
     # Audio
