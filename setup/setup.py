@@ -303,32 +303,30 @@ class SetupScript:
         self.cleanup_evdev_conflict()
 
         try:
-            # Avoid `uv run` here: it can trigger a full dependency resolution/split-environment solve.
-            # We already created the venv earlier, so we can run the compiler script directly.
-            python_path = self.get_venv_python_path()
+            # Use uv to run the Python command if available, otherwise fall back to direct Python
+            if self.check_command_exists("uv"):
+                self.print_status("Compiling Sourccey protobuf with uv...")
 
-            if not python_path.exists():
-                self.print_error(f"Virtual environment Python not found at {python_path}")
-                self.print_error("Please run the setup script first to create the virtual environment")
-                return False
+                # Use uv run to execute the Python command in the virtual environment
+                result = subprocess.run([
+                    "uv", "run", "python", "-c",
+                    "from lerobot.robots.sourccey.sourccey.protobuf.compile import compile_sourccey_protobuf; compile_sourccey_protobuf()"
+                ], check=True, cwd=self.project_root)
 
-            compile_script = (
-                self.project_root
-                / "src"
-                / "lerobot"
-                / "robots"
-                / "sourccey"
-                / "sourccey"
-                / "protobuf"
-                / "compile.py"
-            )
+            else:
+                # Fallback to direct Python interpreter
+                python_path = self.get_venv_python_path()
 
-            if not compile_script.exists():
-                self.print_error(f"Sourccey protobuf compiler not found at {compile_script}")
-                return False
+                if not python_path.exists():
+                    self.print_error(f"Virtual environment Python not found at {python_path}")
+                    self.print_error("Please run the setup script first to create the virtual environment")
+                    return False
 
-            self.print_status("Compiling Sourccey protobuf...")
-            subprocess.run([str(python_path), str(compile_script)], check=True, cwd=self.project_root)
+                self.print_status("Compiling Sourccey protobuf...")
+                result = subprocess.run([
+                    str(python_path), "-c",
+                    "from lerobot.robots.sourccey.sourccey.protobuf.compile import compile_sourccey_protobuf; compile_sourccey_protobuf()"
+                ], check=True, cwd=self.project_root)
 
             self.print_success("Sourccey protobuf compiled successfully!")
             return True
