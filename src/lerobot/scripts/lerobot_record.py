@@ -352,7 +352,10 @@ def record_loop(
         elif policy is None and isinstance(teleop, list):
             arm_action = teleop_arm.get_action()
             keyboard_action = teleop_keyboard.get_action()
-            base_action = robot._from_keyboard_to_base_action(keyboard_action)
+            z_obs_pos = obs.get("z.pos", None)
+            base_action = robot._from_keyboard_to_base_action(
+                keyboard_action, z_obs_pos=z_obs_pos
+            )
             act = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
             act_processed_teleop = teleop_action_processor((act, obs))
         else:
