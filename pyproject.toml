@@ -29,7 +29,7 @@ version = "0.4.3"
 description = "🤗 LeRobot: State-of-the-art Machine Learning for Real-World Robotics in Pytorch"
 dynamic = ["readme"]
 license = { text = "Apache-2.0" }
-requires-python = ">=3.10,<3.11"
+requires-python = ">=3.10"
 authors = [
     { name = "Rémi Cadène", email = "re.cadene@gmail.com" },
     { name = "Simon Alibert", email = "alibert.sim@gmail.com" },
@@ -181,7 +181,10 @@ lerobot-imgtransform-viz="lerobot.scripts.lerobot_imgtransform_viz:main"
 lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
 
 # ---------------- Tool Configurations ----------------
-
+[tool.uv]
+environments = [
+  "sys_platform == 'linux' and platform_machine == 'aarch64' and python_full_version >= '3.10' and python_full_version < '3.11'"
+]
 
 [tool.uv.sources]
 torch = [
