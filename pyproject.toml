@@ -135,7 +135,6 @@ sourccey-desktop = [
     # Audio
     # Pin known-good CUDA/cuDNN stack for Windows GPU Whisper.
     "ctranslate2==4.6.3 ; sys_platform == 'win32'",
-    "nvidia-cudnn-cu12==9.17.1.4 ; sys_platform == 'win32'",
 ]
 kinematics = ["lerobot[placo-dep]"]
 intelrealsense = [
