@@ -29,7 +29,7 @@ version = "0.4.3"
 description = "🤗 LeRobot: State-of-the-art Machine Learning for Real-World Robotics in Pytorch"
 dynamic = ["readme"]
 license = { text = "Apache-2.0" }
-requires-python = "==3.10.*"
+requires-python = ">=3.10"
 authors = [
     { name = "Rémi Cadène", email = "re.cadene@gmail.com" },
     { name = "Simon Alibert", email = "alibert.sim@gmail.com" },
@@ -96,7 +96,7 @@ dependencies = [
 # Common
 pygame-dep = ["pygame>=2.5.1,<2.7.0"]
 placo-dep = ["placo>=0.9.6,<0.10.0"]
-transformers-dep = ["transformers>=4.57.1,<5.0.0"]
+transformers-dep = ["transformers>=4.53.0,<5.0.0"]
 grpcio-dep = ["grpcio==1.73.1", "protobuf>=6.31.1,<6.32.0"]
 
 # Motors
