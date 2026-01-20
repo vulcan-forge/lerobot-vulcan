@@ -234,3 +234,35 @@ lerobot-imgtransform-viz="lerobot.scripts.lerobot_imgtransform_viz:main"
 lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
 
 # ---------------- Tool Configurations ----------------
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 110
+exclude = ["tests/artifacts/**/*.safetensors", "*_pb2.py", "*_pb2_grpc.py"]
+
+[tool.ruff.lint]
+# E, W: pycodestyle errors and warnings
+# F: PyFlakes
+# I: isort
+# UP: pyupgrade
+# B: flake8-bugbear (good practices, potential bugs)
+# C4: flake8-comprehensions (more concise comprehensions)
+# A: flake8-builtins (shadowing builtins)
+# SIM: flake8-simplify
+# RUF: Ruff-specific rules
+# D: pydocstyle (for docstring style/formatting)
+# S: flake8-bandit (some security checks, complements Bandit)
+# T20: flake8-print (discourage print statements in production code)
+# N: pep8-naming
+# TODO: Uncomment rules when ready to use
+select = [
+    "E", "W", "F", "I", "B", "C4", "T20", "N", "UP", "SIM" #, "A", "S", "D", "RUF"
+]
+ignore = [
+    "E501", # Line too long
+    "T201", # Print statement found
+    "T203", # Pprint statement found
+    "B008", # Perform function call in argument defaults
+]
