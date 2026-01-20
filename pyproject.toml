@@ -266,3 +266,150 @@ ignore = [
     "T203", # Pprint statement found
     "B008", # Perform function call in argument defaults
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]
+"src/lerobot/policies/wall_x/**" = ["N801", "N812", "SIM102", "SIM108", "SIM210", "SIM211", "B006", "B007", "SIM118"] # Supprese these as they are coming from original Qwen2_5_vl code TODO(pepijn): refactor original
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["lerobot"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = true
+
+[tool.bandit]
+exclude_dirs = [
+    "tests",
+    "benchmarks",
+    "src/lerobot/datasets/push_dataset_to_hub",
+]
+skips = ["B101", "B311", "B404", "B603", "B615"]
+
+[tool.typos]
+default.extend-ignore-re = [
+    "(?Rm)^.*(#|//)\\s*spellchecker:disable-line$",                      # spellchecker:disable-line
+    "(?s)(#|//)\\s*spellchecker:off.*?\\n\\s*(#|//)\\s*spellchecker:on", # spellchecker:<on|off>
+]
+default.extend-ignore-identifiers-re = [
+    # Add individual words here to ignore them
+    "2nd",
+    "pn",
+    "ser",
+    "ein",
+    "thw",
+    "inpt",
+    "ROBOTIS",
+]
+
+# TODO: Uncomment when ready to use
+# [tool.interrogate]
+# ignore-init-module = true
+# ignore-init-method = true
+# ignore-nested-functions = false
+# ignore-magic = false
+# ignore-semiprivate = false
+# ignore-private = false
+# ignore-property-decorators = false
+# ignore-module = false
+# ignore-setters = false
+# fail-under = 80
+# output-format = "term-missing"
+# color = true
+# paths = ["src/lerobot"]
+
+# TODO: Enable mypy gradually module by module across multiple PRs
+# Uncomment [tool.mypy] first, then uncomment individual module overrides as they get proper type annotations
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+follow_imports = "skip"
+# warn_return_any = true
+# warn_unused_configs = true
+# strict = true
+# disallow_untyped_defs = true
+# disallow_incomplete_defs = true
+# check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "lerobot.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "lerobot.envs.*"
+ignore_errors = false
+
+
+# [[tool.mypy.overrides]]
+# module = "lerobot.utils.*"
+# ignore_errors = false
+
+[[tool.mypy.overrides]]
+module = "lerobot.configs.*"
+ignore_errors = false
+
+# extra strictness for configs
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "lerobot.optim.*"
+ignore_errors = false
+
+[[tool.mypy.overrides]]
+module = "lerobot.model.*"
+ignore_errors = false
+
+# [[tool.mypy.overrides]]
+# module = "lerobot.processor.*"
+# ignore_errors = false
+
+# [[tool.mypy.overrides]]
+# module = "lerobot.datasets.*"
+# ignore_errors = false
+
+[[tool.mypy.overrides]]
+module = "lerobot.cameras.*"
+ignore_errors = false
+
+# [[tool.mypy.overrides]]
+# module = "lerobot.motors.*"
+# ignore_errors = false
+
+# [[tool.mypy.overrides]]
+# module = "lerobot.robots.*"
+# ignore_errors = false
+
+# [[tool.mypy.overrides]]
+# module = "lerobot.teleoperators.*"
+# ignore_errors = false
+
+# [[tool.mypy.overrides]]
+# module = "lerobot.policies.*"
+# ignore_errors = false
+
+# [[tool.mypy.overrides]]
+# module = "lerobot.rl.*"
+# ignore_errors = false
+
+
+# [[tool.mypy.overrides]]
+# module = "lerobot.async_inference.*"
+# ignore_errors = false
+
+[[tool.mypy.overrides]]
+module = "lerobot.transport.*"
+ignore_errors = false
+
+# [[tool.mypy.overrides]]
+# module = "lerobot.scripts.*"
+# ignore_errors = false
