@@ -230,8 +230,8 @@ class SetupScript:
                              check=True, cwd=self.project_root)
                 self.print_success("Virtual environment created with uv")
 
-                # Install dependencies with feetech and smolvla extras
-                subprocess.run(["uv", "pip", "install", "-e", ".[feetech,sourccey]"],
+                # Install dependencies with sourccey extras
+                subprocess.run(["uv", "pip", "install", "-e", ".[sourccey]"],
                              check=True, cwd=self.project_root)
                 self.print_success("LeRobot dependencies installed with uv")
 

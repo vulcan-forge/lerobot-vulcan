@@ -195,32 +195,35 @@ libero = ["lerobot[transformers-dep]", "hf-libero>=0.1.3,<0.2.0"]
 metaworld = ["metaworld==3.0.0"]
 
 # All
-all = [
-    "lerobot[dynamixel]",
-    "lerobot[gamepad]",
-    "lerobot[hopejr]",
-    "lerobot[lekiwi]",
-    "lerobot[reachy2]",
-    "lerobot[kinematics]",
-    "lerobot[intelrealsense]",
-    # "lerobot[wallx]",
-    # "lerobot[pi]", TODO(Pepijn): Update pi to transformers v5
-    "lerobot[smolvla]",
-    # "lerobot[groot]", TODO(Steven): Gr00t requires specific installation instructions for flash-attn
-    "lerobot[xvla]",
-    "lerobot[hilserl]",
-    "lerobot[async]",
-    "lerobot[dev]",
-    "lerobot[test]",
-    "lerobot[video_benchmark]",
-    "lerobot[aloha]",
-    "lerobot[pusht]",
-    "lerobot[phone]",
-    "lerobot[libero]",
-    "lerobot[metaworld]",
-    "lerobot[sarm]",
-    "lerobot[peft]",
-]
+
+# All auto installs all dependencies when only using a subset with uv. Commetning it out to prevent this
+# all = [
+#     "lerobot[dynamixel]",
+#     "lerobot[gamepad]",
+#     "lerobot[hopejr]",
+#     "lerobot[lekiwi]",
+#     "lerobot[reachy2]",
+#     "lerobot[kinematics]",
+#     "lerobot[intelrealsense]",
+#     # "lerobot[wallx]",
+#     # "lerobot[pi]", TODO(Pepijn): Update pi to transformers v5
+#     "lerobot[smolvla]",
+#     # "lerobot[groot]", TODO(Steven): Gr00t requires specific installation instructions for flash-attn
+#     "lerobot[xvla]",
+#     "lerobot[hilserl]",
+#     "lerobot[async]",
+#     "lerobot[dev]",
+#     "lerobot[test]",
+#     "lerobot[video_benchmark]",
+#     "lerobot[aloha]",
+#     "lerobot[pusht]",
+#     "lerobot[phone]",
+#     "lerobot[libero]",
+#     "lerobot[metaworld]",
+#     "lerobot[sarm]",
+#     "lerobot[peft]",
+# ]
+
 
 [project.scripts]
 lerobot-calibrate="lerobot.scripts.lerobot_calibrate:main"

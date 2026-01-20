@@ -38,7 +38,7 @@ pipx install uv### Setting Up the Environment
 1. **Create a virtual environment:**h
    uv venv
 2. **Install LeRobot with Sourccey dependencies:**
-   uv pip install -e ".[feetech,smolvla,sourccey]"This installs the project in editable mode with all required extras for the Sourccey robot.
+   uv pip install -e ".[sourccey]"This installs the project in editable mode with all required extras for the Sourccey robot.
 
 3. **Compile Sourccey protobuf files:**sh
    uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.pyAlternatively, you can use the function import method:h
