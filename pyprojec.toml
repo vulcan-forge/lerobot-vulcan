@@ -1,0 +1,153 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+homepage = "https://huggingface.co/lerobot"
+documentation = "https://huggingface.co/docs/lerobot/index"
+source = "https://github.com/huggingface/lerobot"
+issues = "https://github.com/huggingface/lerobot/issues"
+discord = "https://discord.gg/s3KuuzsPFb"
+
+[project]
+name = "lerobot"
+version = "0.4.3"
+description = "🤗 LeRobot: State-of-the-art Machine Learning for Real-World Robotics in Pytorch"
+dynamic = ["readme"]
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Rémi Cadène", email = "re.cadene@gmail.com" },
+    { name = "Simon Alibert", email = "alibert.sim@gmail.com" },
+    { name = "Alexander Soare", email = "alexander.soare159@gmail.com" },
+    { name = "Quentin Gallouédec", email = "quentin.gallouedec@ec-lyon.fr" },
+    { name = "Steven Palma", email = "imstevenpmwork@ieee.org" },
+    { name = "Pepijn Kooijmans", email = "pepijnkooijmans@outlook.com"},
+    { name = "Michel Aractingi", email = "michel.aractingi@gmail.com"},
+    { name = "Adil Zouitine", email = "adilzouitinegm@gmail.com" },
+    { name = "Dana Aubakirova", email = "danaaubakirova17@gmail.com"},
+    { name = "Caroline Pascal", email = "caroline8.pascal@gmail.com"},
+    { name = "Martino Russi", email = "nopyeps@gmail.com"},
+    { name = "Thomas Wolf", email = "thomaswolfcontact@gmail.com" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+keywords = ["lerobot", "huggingface", "robotics",  "machine learning", "artificial intelligence"]
+
+dependencies = [
+
+    # Hugging Face dependencies
+    "datasets>=4.0.0,<4.2.0",
+    "diffusers>=0.27.2,<0.36.0",
+    "huggingface-hub[hf-transfer,cli]>=0.34.2,<0.36.0",
+    "accelerate>=1.10.0,<2.0.0",
+
+    # Core dependencies
+    "setuptools>=71.0.0,<81.0.0",
+    "cmake>=3.29.0.1,<4.2.0",
+    "einops>=0.8.0,<0.9.0",
+    "opencv-python-headless>=4.9.0,<4.13.0",
+    "av>=15.0.0,<16.0.0",
+    "jsonlines>=4.0.0,<5.0.0",
+    "packaging>=24.2,<26.0",
+    "pynput>=1.7.7,<1.9.0",
+    "pyserial>=3.5,<4.0",
+    "wandb>=0.24.0,<0.25.0",
+
+    "torch>=2.2.1,<=2.9.1", # TODO: Bumb dependency
+    "torchcodec>=0.2.1,<=0.9.1; sys_platform != 'win32' and (sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l')) and (sys_platform != 'darwin' or platform_machine != 'x86_64')", # TODO: Bumb dependency
+    "torchvision>=0.21.0,<0.25.0", # Allow 0.21.x through 0.24.x (including nightly)
+    "draccus==0.10.0", # TODO: Remove ==
+    "gymnasium>=1.1.1,<2.0.0",
+    "rerun-sdk>=0.24.0,<0.27.0",
+
+    # Support dependencies
+    "deepdiff>=7.0.1,<9.0.0",
+    "imageio[ffmpeg]>=2.34.0,<3.0.0",
+    "termcolor>=2.4.0,<4.0.0",
+    "grpcio==1.73.1",
+]
+
+# Optional dependencies
+[project.optional-dependencies]
+
+sourccey = [
+    "lerobot[feetech]",
+    "lerobot[grpcio-dep]",
+
+    "pyzmq>=26.2.1",
+    "gpiozero>=2.0.1 ; sys_platform == 'linux'",
+    "lgpio>=0.2.2 ; sys_platform == 'linux'",
+    "numpy>=1.24",
+    "grpcio-tools==1.73.1",
+
+    # Audio
+    "vosk>=0.3.45",
+    "sounddevice>=0.4.6",
+    "faster-whisper>=1.1.1",
+]
+sourccey-desktop = [
+    "torch>=2.9.1",
+    "torchvision>=0.24.1",
+    "torchcodec>=0.9.1",
+
+    # Audio
+    # Pin known-good CUDA/cuDNN stack for Windows GPU Whisper.
+    "ctranslate2==4.6.3 ; sys_platform == 'win32'",
+    "nvidia-cudnn-cu12==9.17.1.4 ; sys_platform == 'win32'",
+]
+
+[project.scripts]
+lerobot-calibrate="lerobot.scripts.lerobot_calibrate:main"
+lerobot-find-cameras="lerobot.scripts.lerobot_find_cameras:main"
+lerobot-find-port="lerobot.scripts.lerobot_find_port:main"
+lerobot-record="lerobot.scripts.lerobot_record:main"
+lerobot-replay="lerobot.scripts.lerobot_replay:main"
+lerobot-setup-motors="lerobot.scripts.lerobot_setup_motors:main"
+lerobot-teleoperate="lerobot.scripts.lerobot_teleoperate:main"
+lerobot-eval="lerobot.scripts.lerobot_eval:main"
+lerobot-train="lerobot.scripts.lerobot_train:main"
+lerobot-train-tokenizer="lerobot.scripts.lerobot_train_tokenizer:main"
+lerobot-dataset-viz="lerobot.scripts.lerobot_dataset_viz:main"
+lerobot-info="lerobot.scripts.lerobot_info:main"
+lerobot-find-joint-limits="lerobot.scripts.lerobot_find_joint_limits:main"
+lerobot-imgtransform-viz="lerobot.scripts.lerobot_imgtransform_viz:main"
+lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
+
+# ---------------- Tool Configurations ----------------
+
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and platform_machine == 'x86_64')" }
+]
+torchvision = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and platform_machine == 'x86_64')" }
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
