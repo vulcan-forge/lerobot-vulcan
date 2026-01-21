@@ -316,6 +316,7 @@ class Sourccey(Robot):
             )
 
             # Z actuator is position-controlled; drive toward the latest z.pos target (non-blocking).
+            print(f"z_actuator.use_z_actuator: {self.z_actuator.use_z_actuator}")
             if "z.pos" in base_goal_pos and self.z_actuator.use_z_actuator:
                 try:
                     self.z_actuator.move_to_position(float(base_goal_pos.get("z.pos", 100.0)), hz=30.0, instant=True)
