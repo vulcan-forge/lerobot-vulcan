@@ -147,6 +147,8 @@ class Sourccey(Robot):
         self.dc_motors_controller.connect()
         self.z_actuator.connect()
 
+        print(f"z_actuator.use_z_actuator: {self.z_actuator.use_z_actuator}")
+
         # Connect only target cameras
         self._connected_cameras.clear()
         for cam_key in self.cameras.keys():
