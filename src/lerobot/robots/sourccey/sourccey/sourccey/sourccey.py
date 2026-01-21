@@ -260,7 +260,7 @@ class Sourccey(Robot):
 
             # Z actuator position (best-effort; keep schema stable)
             try:
-                if self.z_actuator is not None and self.z_actuator.is_connected:
+                if self.z_actuator is not None and self.z_actuator.is_connected and self.z_actuator.use_z_actuator:
                     obs_dict["z.pos"] = float(self.z_actuator.read_position())
                 else:
                     obs_dict["z.pos"] = 100.0
