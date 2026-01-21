@@ -63,6 +63,7 @@ class SourcceyLeader(Teleoperator):
 
         # Connection
         self.leader_connected = False
+        self.using_arm = False
 
         # Initialize calibrator for automatic calibration
         self.calibrator = SourcceyLeaderCalibrator(self)
