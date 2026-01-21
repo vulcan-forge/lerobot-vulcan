@@ -86,10 +86,11 @@ class ZSensor:
                             candidate.close()  # type: ignore[attr-defined]
                         except Exception:
                             pass
-                    raise RuntimeError(
+                    print(
                         f"MCP3008 on channel {self.adc_channel} appears to have a floating signal "
                         f"(no sensor connected). This robot may not have a Z sensor installed."
                     )
+                    return
             except RuntimeError:
                 raise  # Re-raise our floating signal error
             except Exception as exc:
