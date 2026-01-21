@@ -99,7 +99,9 @@ class ZSensor:
                         candidate.close()  # type: ignore[attr-defined]
                     except Exception:
                         pass
-                raise RuntimeError(f"Failed to initialize MCP3008 on channel {self.adc_channel}.") from exc
+                print(f"Failed to initialize MCP3008 on channel {self.adc_channel}. {exc}")
+                return
+
             self._adc = candidate
 
     def disconnect(self) -> None:
