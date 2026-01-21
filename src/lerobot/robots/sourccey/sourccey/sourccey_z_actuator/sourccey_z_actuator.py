@@ -162,6 +162,7 @@ class SourcceyZActuator:
         self.sensor = sensor
         self.driver = driver
         self.motor = motor
+        self.use_z_actuator = False
 
         # Position target (public API is position-only; motor command is internal).
         self._target_pos_m100_100: float = 0.0
@@ -215,6 +216,7 @@ class SourcceyZActuator:
 
     def connect(self) -> None:
         self.sensor.connect()
+        self.use_z_actuator = True if self.sensor.is_connected else False
 
     def disconnect(self) -> None:
         # Ensure no background thread is still calling update() while we disconnect the ADC.
