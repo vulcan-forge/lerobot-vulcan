@@ -74,7 +74,20 @@ class ZSensor:
         if MCP3008 is None:
             raise RuntimeError("gpiozero is not installed; MCP3008 is unavailable on this machine.")
         if self._adc is None:
-            self._adc = MCP3008(channel=self.adc_channel)
+            candidate = None
+            try:
+                candidate = MCP3008(channel=self.adc_channel)
+                _ = candidate.raw_value  # probe once to confirm the ADC responds
+            except Exception as exc:
+                if candidate is not None:
+                    try:
+                        candidate.close()  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                raise RuntimeError(f"Failed to initialize MCP3008 on channel {self.adc_channel}.") from exc
+            self._adc = candidate
+            print(f"MCP3008 connected on channel {self.adc_channel}")
+            print(f"MCP3008 raw_value: {candidate.raw_value}")
 
     def disconnect(self) -> None:
         if self._adc is not None:
