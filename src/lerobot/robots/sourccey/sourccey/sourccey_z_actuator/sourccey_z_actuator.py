@@ -139,13 +139,14 @@ class ZSensor:
     def read_position_m100_100(self) -> float:
         return self.raw_to_pos_m100_100(self.read_raw().raw)
 
-    def _detect_floating_signal(self, adc: "MCP3008", num_samples: int = 1000, max_variance: float = 1.0) -> bool:
+    def _detect_floating_signal(self, adc: "MCP3008", num_samples: int = 100) -> bool:
         """
         Detect if the ADC signal is floating (unconnected).
 
         A floating signal typically:
         - Has very high variance (unstable readings)
         - Or is stuck at extremes (0, 1023) or mid-range (512)
+        - Or oscillates between a few values
 
         Returns True if signal appears to be floating.
         """
@@ -159,23 +160,43 @@ class ZSensor:
         if len(samples) < num_samples:
             return True
 
-        # Calculate variance
+        # Calculate statistics
         mean = sum(samples) / len(samples)
         variance = sum((x - mean) ** 2 for x in samples) / len(samples)
+        std_dev = variance ** 0.5
+        min_val = min(samples)
+        max_val = max(samples)
+        value_range = max_val - min_val
 
-        # High variance suggests floating/unstable signal
-        if variance > max_variance * 100:  # Very unstable
+        # Check 1: Very high variance (unstable floating signal)
+        # Lower threshold - floating signals often have std_dev > 50-100
+        if std_dev > 50.0:
             return True
 
-        # Check if stuck at common floating values
-        # Floating signals often read near 0, 512 (mid), or 1023
-        stuck_threshold = 5  # Allow small noise
-        if all(abs(s - 0) < stuck_threshold for s in samples):
-            return True  # Stuck near 0
-        if all(abs(s - 512) < stuck_threshold for s in samples):
-            return True  # Stuck near mid-range
-        if all(abs(s - 1023) < stuck_threshold for s in samples):
-            return True  # Stuck near max
+        # Check 2: Very low variance but stuck at common floating values
+        # Check if most samples (80%+) are near common floating values
+        stuck_threshold = 10  # Allow more noise
+        near_zero = sum(1 for s in samples if abs(s - 0) < stuck_threshold)
+        near_mid = sum(1 for s in samples if abs(s - 512) < stuck_threshold)
+        near_max = sum(1 for s in samples if abs(s - 1023) < stuck_threshold)
+
+        if near_zero / len(samples) > 0.8:
+            return True  # 80%+ stuck near 0
+        if near_mid / len(samples) > 0.8:
+            return True  # 80%+ stuck near mid-range
+        if near_max / len(samples) > 0.8:
+            return True  # 80%+ stuck near max
+
+        # Check 3: Very narrow range (stuck at a single value with small noise)
+        # A real sensor should have a reasonable range when moved
+        if value_range < 20 and std_dev < 5.0:
+            return True  # Very stable, narrow range - likely floating
+
+        # Check 4: Moderate variance but oscillating between few values
+        # Count unique values - floating signals often have few distinct values
+        unique_values = len(set(round(s) for s in samples))
+        if unique_values < 10 and std_dev > 10.0:
+            return True  # Few unique values with some variance - likely floating
 
         return False
 
