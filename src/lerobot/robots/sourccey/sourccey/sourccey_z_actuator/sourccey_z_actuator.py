@@ -139,7 +139,7 @@ class ZSensor:
     def read_position_m100_100(self) -> float:
         return self.raw_to_pos_m100_100(self.read_raw().raw)
 
-    def _detect_floating_signal(self, adc: "MCP3008", num_samples: int = 100, max_variance: float = 1.0) -> bool:
+    def _detect_floating_signal(self, adc: "MCP3008", num_samples: int = 1000, max_variance: float = 1.0) -> bool:
         """
         Detect if the ADC signal is floating (unconnected).
 
