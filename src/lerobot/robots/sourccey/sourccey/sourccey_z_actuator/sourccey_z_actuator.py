@@ -78,6 +78,20 @@ class ZSensor:
             try:
                 candidate = MCP3008(channel=self.adc_channel)
                 _ = candidate.raw_value  # probe once to confirm the ADC responds
+
+                # Check if signal is floating (no sensor connected)
+                if self._detect_floating_signal(candidate):
+                    if candidate is not None:
+                        try:
+                            candidate.close()  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    raise RuntimeError(
+                        f"MCP3008 on channel {self.adc_channel} appears to have a floating signal "
+                        f"(no sensor connected). This robot may not have a Z sensor installed."
+                    )
+            except RuntimeError:
+                raise  # Re-raise our floating signal error
             except Exception as exc:
                 if candidate is not None:
                     try:
@@ -86,8 +100,6 @@ class ZSensor:
                         pass
                 raise RuntimeError(f"Failed to initialize MCP3008 on channel {self.adc_channel}.") from exc
             self._adc = candidate
-            print(f"MCP3008 connected on channel {self.adc_channel}")
-            print(f"MCP3008 raw_value: {candidate.raw_value}")
 
     def disconnect(self) -> None:
         if self._adc is not None:
@@ -125,6 +137,46 @@ class ZSensor:
 
     def read_position_m100_100(self) -> float:
         return self.raw_to_pos_m100_100(self.read_raw().raw)
+
+    def _detect_floating_signal(self, adc: "MCP3008", num_samples: int = 20, max_variance: float = 1.0) -> bool:
+        """
+        Detect if the ADC signal is floating (unconnected).
+
+        A floating signal typically:
+        - Has very high variance (unstable readings)
+        - Or is stuck at extremes (0, 1023) or mid-range (512)
+
+        Returns True if signal appears to be floating.
+        """
+        samples = []
+        for _ in range(num_samples):
+            try:
+                samples.append(float(adc.raw_value))
+            except Exception:
+                return True  # If we can't read, assume floating
+
+        if len(samples) < num_samples:
+            return True
+
+        # Calculate variance
+        mean = sum(samples) / len(samples)
+        variance = sum((x - mean) ** 2 for x in samples) / len(samples)
+
+        # High variance suggests floating/unstable signal
+        if variance > max_variance * 100:  # Very unstable
+            return True
+
+        # Check if stuck at common floating values
+        # Floating signals often read near 0, 512 (mid), or 1023
+        stuck_threshold = 5  # Allow small noise
+        if all(abs(s - 0) < stuck_threshold for s in samples):
+            return True  # Stuck near 0
+        if all(abs(s - 512) < stuck_threshold for s in samples):
+            return True  # Stuck near mid-range
+        if all(abs(s - 1023) < stuck_threshold for s in samples):
+            return True  # Stuck near max
+
+        return False
 
     ############################################################
     # Conversion Functions
