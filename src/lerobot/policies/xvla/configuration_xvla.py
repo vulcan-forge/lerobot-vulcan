@@ -147,6 +147,41 @@ class XVLAConfig(PreTrainedConfig):
             raise ValueError("XVLA requires at least one visual feature in the inputs.")
         if self.use_proprio and self.robot_state_feature is None:
             raise ValueError("`use_proprio=True` requires a proprioceptive state feature.")
+
+        # Train-time stitching support (no dataset rewrite).
+        #
+        # Sourccey datasets often include two front cameras: `front_left` + `front_right`.
+        # If the user explicitly requests exactly 3 views (stitched front + 2 wrists),
+        # collapse the input feature contract here and rely on the XVLA preprocessor
+        # to stitch tensors at runtime.
+        if self.num_image_views == 3 and self.input_features:
+            left_key = f"{OBS_IMAGES}.front_left"
+            right_key = f"{OBS_IMAGES}.front_right"
+            out_key = f"{OBS_IMAGES}.front"
+
+            if (
+                left_key in self.input_features
+                and right_key in self.input_features
+                and out_key not in self.input_features
+            ):
+                left_ft = self.input_features[left_key]
+                right_ft = self.input_features[right_key]
+                if left_ft.type is FeatureType.VISUAL and right_ft.type is FeatureType.VISUAL:
+                    c_l, h_l, w_l = left_ft.shape
+                    c_r, h_r, w_r = right_ft.shape
+                    if c_l != 3 or c_r != 3:
+                        raise ValueError(
+                            f"Expected 3-channel images for stitching, got {left_ft.shape=} and {right_ft.shape=}."
+                        )
+
+                    # Remove the two front cameras and replace with a single stitched feature.
+                    # If heights differ, the runtime processor will resize to match.
+                    self.input_features.pop(left_key, None)
+                    self.input_features.pop(right_key, None)
+                    self.input_features[out_key] = PolicyFeature(
+                        type=FeatureType.VISUAL,
+                        shape=(3, h_l if h_l > 0 else h_r, w_l + w_r),
+                    )
         if self.num_image_views is None:
             self.num_image_views = len(self.image_features) + self.empty_cameras
         else:

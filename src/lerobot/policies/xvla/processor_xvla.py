@@ -19,8 +19,9 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
+from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
 from lerobot.datasets.factory import IMAGENET_STATS
 from lerobot.policies.xvla.configuration_xvla import XVLAConfig
 from lerobot.policies.xvla.utils import rotate6d_to_axis_angle
@@ -69,6 +70,8 @@ def make_xvla_pre_post_processors(
             padding=config.pad_language_to,
             padding_side=config.tokenizer_padding_side,
         ),
+        # Only stitch when the user explicitly requests 3 views (stitched front + 2 wrists).
+        XVLACameraStitchProcessorStep(enabled=(config.num_image_views == 3)),
         XVLAImageToFloatProcessorStep(),
         XVLAImageNetNormalizeProcessorStep(),
         XVLAAddDomainIdProcessorStep(),
@@ -101,6 +104,107 @@ def make_xvla_pre_post_processors(
 
 
 # Custom XVLA processor steps
+
+@dataclass
+@ProcessorStepRegistry.register(name="xvla_stitch_front_cameras")
+class XVLACameraStitchProcessorStep(ProcessorStep):
+    """Stitch two front cameras into a single view at train-time.
+
+    Intended for datasets (e.g. Sourccey) that provide `front_left` + `front_right` images,
+    while XVLA is configured for exactly 3 views (stitched front + 2 wrists).
+
+    By default, we stitch into `observation.images.empty_camera_0` so we can reuse
+    the XVLA base config (which commonly declares `empty_camera_0`, `image`, `image2`)
+    without requiring users to rewrite the policy's `input_features`.
+    """
+
+    left_key: str = f"{OBS_IMAGES}.front_left"
+    right_key: str = f"{OBS_IMAGES}.front_right"
+    # Note: the base XVLA configs often expect an `empty_camera_0` slot. We repurpose it
+    # as "stitched front" when the dataset provides two front cameras.
+    out_key: str = f"{OBS_IMAGES}.empty_camera_0"
+    delete_inputs: bool = True
+    resize_if_needed: bool = True
+    enabled: bool = True
+
+    def __call__(self, transition: EnvTransition) -> EnvTransition:
+        if not self.enabled:
+            return transition
+        new_transition = transition.copy()
+        obs = new_transition.get(TransitionKey.OBSERVATION, {})
+        if obs is None:
+            return new_transition
+
+        obs = obs.copy()
+
+        # No-op if already stitched or missing inputs.
+        if self.out_key in obs or self.left_key not in obs or self.right_key not in obs:
+            new_transition[TransitionKey.OBSERVATION] = obs
+            return new_transition
+
+        left = obs[self.left_key]
+        right = obs[self.right_key]
+        if not isinstance(left, torch.Tensor) or not isinstance(right, torch.Tensor):
+            new_transition[TransitionKey.OBSERVATION] = obs
+            return new_transition
+
+        # Ensure batched tensors. We support BCHW and BTCHW (history).
+        if left.ndim == 3:
+            left = left.unsqueeze(0)
+        if right.ndim == 3:
+            right = right.unsqueeze(0)
+
+        if left.ndim not in (4, 5) or right.ndim not in (4, 5):
+            raise ValueError(
+                f"Expected image tensors with shape (B,C,H,W) or (B,T,C,H,W), got {left.shape=} and {right.shape=}."
+            )
+
+        # Resize right to match left if needed.
+        if self.resize_if_needed and left.shape[-2:] != right.shape[-2:]:
+            target_hw = left.shape[-2:]
+            if right.ndim == 4:
+                # interpolate doesn't support uint8; cast only for resizing
+                right = F.interpolate(right.float(), size=target_hw, mode="bilinear", align_corners=False).to(
+                    dtype=left.dtype
+                )
+            else:
+                b, t, c, h, w = right.shape
+                right_flat = right.reshape(b * t, c, h, w)
+                right_flat = F.interpolate(
+                    right_flat.float(), size=target_hw, mode="bilinear", align_corners=False
+                ).to(dtype=left.dtype)
+                right = right_flat.reshape(b, t, c, target_hw[0], target_hw[1])
+
+        stitched = torch.cat([left, right], dim=-1)  # concat along width
+        obs[self.out_key] = stitched
+
+        if self.delete_inputs:
+            obs.pop(self.left_key, None)
+            obs.pop(self.right_key, None)
+
+        new_transition[TransitionKey.OBSERVATION] = obs
+        return new_transition
+
+    def transform_features(
+        self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
+    ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
+        out: dict[PipelineFeatureType, dict[str, PolicyFeature]] = {k: v.copy() for k, v in features.items()}
+        for _, bucket in out.items():
+            if self.left_key in bucket and self.right_key in bucket and self.out_key not in bucket:
+                left_ft = bucket[self.left_key]
+                right_ft = bucket[self.right_key]
+                if left_ft.type is FeatureType.VISUAL and right_ft.type is FeatureType.VISUAL:
+                    c_l, h_l, w_l = left_ft.shape
+                    c_r, h_r, w_r = right_ft.shape
+                    if c_l == 3 and c_r == 3:
+                        bucket.pop(self.left_key, None)
+                        bucket.pop(self.right_key, None)
+                        bucket[self.out_key] = PolicyFeature(
+                            type=FeatureType.VISUAL,
+                            shape=(3, h_l if h_l > 0 else h_r, w_l + w_r),
+                        )
+        return out
+
 @dataclass
 class LiberoProcessorStep(ObservationProcessorStep):
     """

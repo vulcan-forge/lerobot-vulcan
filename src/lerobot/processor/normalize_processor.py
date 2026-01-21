@@ -331,6 +331,33 @@ class _NormalizationMixin:
                 )
 
             mean, std = stats["mean"], stats["std"]
+            
+            # Handle dimension mismatch: if tensor has more dims than stats, trim to match stats
+            # This can happen with XVLA models that output padded actions (e.g., 20D) but stats are for real dims (e.g., 16D)
+            tensor_dim = tensor.shape[-1]
+            # Get stats dimension - handle both tensor and scalar cases
+            if mean.ndim > 0:
+                stats_dim = mean.shape[-1]
+            else:
+                stats_dim = mean.numel() if mean.numel() > 0 else 1
+            
+            # If dimensions don't match, trim tensor to match stats (stats represent the actual data dimensions)
+            if tensor_dim > stats_dim:
+                tensor = tensor[..., :stats_dim]
+            elif tensor_dim < stats_dim:
+                # If tensor has fewer dims, trim stats to match tensor
+                mean = mean.flatten()[:tensor_dim]
+                std = std.flatten()[:tensor_dim]
+            
+            # Ensure stats are properly shaped for broadcasting
+            if mean.ndim == 0:
+                mean = mean.unsqueeze(-1)
+            if std.ndim == 0:
+                std = std.unsqueeze(-1)
+            # Ensure stats match tensor device and dtype
+            mean = mean.to(tensor.device, dtype=tensor.dtype)
+            std = std.to(tensor.device, dtype=tensor.dtype)
+            
             # Avoid division by zero by adding a small epsilon.
             denom = std + self.eps
             if inverse:
@@ -346,6 +373,32 @@ class _NormalizationMixin:
                 )
 
             min_val, max_val = stats["min"], stats["max"]
+            
+            # Handle dimension mismatch: if tensor has more dims than stats, trim to match stats
+            tensor_dim = tensor.shape[-1]
+            # Get stats dimension - handle both tensor and scalar cases
+            if min_val.ndim > 0:
+                stats_dim = min_val.shape[-1]
+            else:
+                stats_dim = min_val.numel() if min_val.numel() > 0 else 1
+            
+            # If dimensions don't match, trim tensor to match stats (stats represent the actual data dimensions)
+            if tensor_dim > stats_dim:
+                tensor = tensor[..., :stats_dim]
+            elif tensor_dim < stats_dim:
+                # If tensor has fewer dims, trim stats to match tensor
+                min_val = min_val.flatten()[:tensor_dim]
+                max_val = max_val.flatten()[:tensor_dim]
+            
+            # Ensure stats are properly shaped for broadcasting
+            if min_val.ndim == 0:
+                min_val = min_val.unsqueeze(-1)
+            if max_val.ndim == 0:
+                max_val = max_val.unsqueeze(-1)
+            # Ensure stats match tensor device and dtype
+            min_val = min_val.to(tensor.device, dtype=tensor.dtype)
+            max_val = max_val.to(tensor.device, dtype=tensor.dtype)
+            
             denom = max_val - min_val
             # When min_val == max_val, substitute the denominator with a small epsilon
             # to prevent division by zero. This consistently maps an input equal to
@@ -367,6 +420,33 @@ class _NormalizationMixin:
                     "QUANTILES normalization mode requires q01 and q99 stats, please update the dataset with the correct stats using the `augment_dataset_quantile_stats.py` script"
                 )
 
+            q01, q99 = stats["q01"], stats["q99"]
+            
+            # Handle dimension mismatch: if tensor has more dims than stats, trim to match stats
+            tensor_dim = tensor.shape[-1]
+            # Get stats dimension - handle both tensor and scalar cases
+            if q01.ndim > 0:
+                stats_dim = q01.shape[-1]
+            else:
+                stats_dim = q01.numel() if q01.numel() > 0 else 1
+            
+            # If dimensions don't match, trim tensor to match stats (stats represent the actual data dimensions)
+            if tensor_dim > stats_dim:
+                tensor = tensor[..., :stats_dim]
+            elif tensor_dim < stats_dim:
+                # If tensor has fewer dims, trim stats to match tensor
+                q01 = q01.flatten()[:tensor_dim]
+                q99 = q99.flatten()[:tensor_dim]
+            
+            # Ensure stats are properly shaped for broadcasting
+            if q01.ndim == 0:
+                q01 = q01.unsqueeze(-1)
+            if q99.ndim == 0:
+                q99 = q99.unsqueeze(-1)
+            # Ensure stats match tensor device and dtype
+            q01 = q01.to(tensor.device, dtype=tensor.dtype)
+            q99 = q99.to(tensor.device, dtype=tensor.dtype)
+
             denom = q99 - q01
             # Avoid division by zero by adding epsilon when quantiles are identical
             denom = torch.where(
@@ -383,6 +463,33 @@ class _NormalizationMixin:
                 raise ValueError(
                     "QUANTILE10 normalization mode requires q10 and q90 stats, please update the dataset with the correct stats using the `augment_dataset_quantile_stats.py` script"
                 )
+
+            q10, q90 = stats["q10"], stats["q90"]
+            
+            # Handle dimension mismatch: if tensor has more dims than stats, trim to match stats
+            tensor_dim = tensor.shape[-1]
+            # Get stats dimension - handle both tensor and scalar cases
+            if q10.ndim > 0:
+                stats_dim = q10.shape[-1]
+            else:
+                stats_dim = q10.numel() if q10.numel() > 0 else 1
+            
+            # If dimensions don't match, trim tensor to match stats (stats represent the actual data dimensions)
+            if tensor_dim > stats_dim:
+                tensor = tensor[..., :stats_dim]
+            elif tensor_dim < stats_dim:
+                # If tensor has fewer dims, trim stats to match tensor
+                q10 = q10.flatten()[:tensor_dim]
+                q90 = q90.flatten()[:tensor_dim]
+            
+            # Ensure stats are properly shaped for broadcasting
+            if q10.ndim == 0:
+                q10 = q10.unsqueeze(-1)
+            if q90.ndim == 0:
+                q90 = q90.unsqueeze(-1)
+            # Ensure stats match tensor device and dtype
+            q10 = q10.to(tensor.device, dtype=tensor.dtype)
+            q90 = q90.to(tensor.device, dtype=tensor.dtype)
 
             denom = q90 - q10
             # Avoid division by zero by adding epsilon when quantiles are identical

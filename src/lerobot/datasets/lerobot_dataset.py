@@ -16,6 +16,7 @@
 import concurrent.futures
 import contextlib
 import logging
+import os
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -31,7 +32,7 @@ import pyarrow.parquet as pq
 import torch
 import torch.utils
 from huggingface_hub import HfApi, snapshot_download
-from huggingface_hub.errors import RevisionNotFoundError
+from huggingface_hub.errors import OfflineModeIsEnabled, RevisionNotFoundError
 
 from lerobot.datasets.compute_stats import aggregate_stats, compute_episode_stats
 from lerobot.datasets.image_writer import AsyncImageWriter, write_image
@@ -103,8 +104,27 @@ class LeRobotDatasetMetadata:
                 raise FileNotFoundError
             self.load_metadata()
         except (FileNotFoundError, NotADirectoryError):
+            # Check if we're in offline mode
+            is_offline = os.getenv("HF_HUB_OFFLINE", "0") == "1"
+            
+            if is_offline:
+                raise FileNotFoundError(
+                    f"Dataset metadata not found locally at {self.root / 'meta' / 'info.json'}. "
+                    f"Since HF_HUB_OFFLINE=1 is set, the dataset cannot be downloaded from the Hub. "
+                    f"Please download the dataset first by running without HF_HUB_OFFLINE=1, "
+                    f"or ensure the dataset is already cached at: {self.root}"
+                )
+            
             if is_valid_version(self.revision):
-                self.revision = get_safe_version(self.repo_id, self.revision)
+                try:
+                    self.revision = get_safe_version(self.repo_id, self.revision)
+                except OfflineModeIsEnabled:
+                    raise FileNotFoundError(
+                        f"Dataset metadata not found locally at {self.root / 'meta' / 'info.json'}. "
+                        f"Since offline mode is enabled, the dataset cannot be downloaded from the Hub. "
+                        f"Please download the dataset first by running without HF_HUB_OFFLINE=1, "
+                        f"or ensure the dataset is already cached at: {self.root}"
+                    ) from None
 
             (self.root / "meta").mkdir(exist_ok=True, parents=True)
             self.pull_from_repo(allow_patterns="meta/")

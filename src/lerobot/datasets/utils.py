@@ -34,7 +34,7 @@ import torch
 from datasets import Dataset
 from datasets.table import embed_table_storage
 from huggingface_hub import DatasetCard, DatasetCardData, HfApi
-from huggingface_hub.errors import RevisionNotFoundError
+from huggingface_hub.errors import OfflineModeIsEnabled, RevisionNotFoundError
 from PIL import Image as PILImage
 from torchvision import transforms
 
@@ -493,9 +493,18 @@ def get_repo_versions(repo_id: str) -> list[packaging.version.Version]:
 
     Returns:
         list[packaging.version.Version]: A list of valid versions found.
+
+    Raises:
+        OfflineModeIsEnabled: If offline mode is enabled and the repo cannot be queried.
     """
     api = HfApi()
-    repo_refs = api.list_repo_refs(repo_id, repo_type="dataset")
+    try:
+        repo_refs = api.list_repo_refs(repo_id, repo_type="dataset")
+    except OfflineModeIsEnabled:
+        raise OfflineModeIsEnabled(
+            f"Cannot query repository versions for {repo_id} because offline mode is enabled. "
+            f"Please ensure the dataset is already downloaded locally or disable offline mode."
+        ) from None
     repo_refs = [b.name for b in repo_refs.branches + repo_refs.tags]
     repo_versions = []
     for ref in repo_refs:

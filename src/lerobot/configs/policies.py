@@ -67,7 +67,9 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
     # Whether the policy employed PEFT for training.
     use_peft: bool = False
 
-    push_to_hub: bool = True  # type: ignore[assignment] # TODO: use a different name to avoid override
+    # Default to NOT pushing to the Hugging Face Hub.
+    # Users can explicitly opt-in by passing `--policy.push_to_hub=true` (and setting `--policy.repo_id`).
+    push_to_hub: bool = False  # type: ignore[assignment] # TODO: use a different name to avoid override
     repo_id: str | None = None
 
     # Upload on private repository on the Hugging Face hub.

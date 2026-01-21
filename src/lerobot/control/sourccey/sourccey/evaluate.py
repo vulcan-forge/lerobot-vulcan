@@ -1,8 +1,8 @@
 from dataclasses import dataclass, field
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
-from lerobot.policies.act.modeling_act import ACTPolicy
-from lerobot.policies.factory import make_pre_post_processors
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 from lerobot.processor import make_default_processors
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
 from lerobot.utils.control_utils import init_keyboard_listener
@@ -36,8 +36,12 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
     robot = SourcceyClient(robot_config)
 
+    # Load config to determine policy type
+    policy_config = PreTrainedConfig.from_pretrained(cfg.model_path)
+    # Get the correct policy class based on config type
+    policy_cls = get_policy_class(policy_config.type)
     # Create policy
-    policy = ACTPolicy.from_pretrained(cfg.model_path)
+    policy = policy_cls.from_pretrained(cfg.model_path)
 
     # Configure the dataset features
     action_features = hw_to_dataset_features(robot.action_features, "action")
