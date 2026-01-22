@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
 import time
+import os
+import sys
 
 # gpiozero is only available on target hardware (e.g., Raspberry Pi).
 # Make it optional so this module can be imported on dev machines.
@@ -9,7 +11,10 @@ try:
 except Exception:  # pragma: no cover
     MCP3008 = None  # type: ignore
 
+from lerobot.utils.spi_lock import spi_device_lock
+
 # ADC Configuration
+# Default to CH0
 ADC_CHANNEL = 0
 
 # Measure this with a multimeter if you can for better accuracy
@@ -84,14 +89,16 @@ def _get_adc() -> "MCP3008":
 def get_battery_voltage() -> float:
     """Return filtered battery voltage (fast; no slope computation)."""
     global _filtered_voltage
-    adc = _get_adc()
-    total = 0.0
-
-    for _ in range(AVERAGE_SAMPLES):
-        raw = adc.raw_value
-        adc_voltage = (raw / 1023.0) * VREF
-        battery_voltage = adc_voltage / VOLTAGE_DIVIDER_RATIO
-        total += battery_voltage
+    # Guard with a cross-process lock because the robot process may also be
+    # reading MCP3008 (e.g. Z actuator loop) at the same time.
+    with spi_device_lock():
+        adc = _get_adc()
+        total = 0.0
+        for _ in range(AVERAGE_SAMPLES):
+            raw = adc.raw_value
+            adc_voltage = (raw / 1023.0) * VREF
+            battery_voltage = adc_voltage / VOLTAGE_DIVIDER_RATIO
+            total += battery_voltage
 
     instant_voltage = total / AVERAGE_SAMPLES
 

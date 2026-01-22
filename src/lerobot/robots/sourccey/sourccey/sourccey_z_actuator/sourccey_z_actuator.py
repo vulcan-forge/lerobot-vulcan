@@ -10,6 +10,7 @@ from typing import Optional, Protocol
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator import SourcceyZCalibrator
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 from lerobot.utils.robot_utils import precise_sleep
+from lerobot.utils.spi_lock import spi_device_lock
 
 
 try:
@@ -77,7 +78,10 @@ class ZSensor:
             candidate = None
             try:
                 candidate = MCP3008(channel=self.adc_channel)
-                _ = candidate.raw_value  # probe once to confirm the ADC responds
+                # Probe once to confirm the ADC responds. Guard with lock because other
+                # processes (e.g. battery.py spawned by Tauri) may also use MCP3008.
+                with spi_device_lock():
+                    _ = candidate.raw_value
             except RuntimeError:
                 raise
             except Exception as exc:
@@ -118,9 +122,12 @@ class ZSensor:
             self.connect()
         assert self._adc is not None
 
-        total = 0.0
-        for _ in range(self.average_samples):
-            total += float(self._adc.raw_value)
+        # Guard with a cross-process lock because battery.py may run concurrently
+        # and access the same MCP3008 over SPI.
+        with spi_device_lock():
+            total = 0.0
+            for _ in range(self.average_samples):
+                total += float(self._adc.raw_value)
         raw = int(round(total / self.average_samples))
         voltage = (raw / 1023.0) * self.vref
         return ZActuatorReading(raw=raw, voltage=voltage)
@@ -203,7 +210,7 @@ class SourcceyZActuator:
         self._prev_err_valid: bool = False
 
         # Debugging
-        self._debug_mode = True
+        self._debug_mode = False
         self._first_cmd_print_t = 0.0
         self._last_cmd_print_t = 0.0
 
