@@ -78,21 +78,8 @@ class ZSensor:
             try:
                 candidate = MCP3008(channel=self.adc_channel)
                 _ = candidate.raw_value  # probe once to confirm the ADC responds
-
-                # Check if signal is floating (no sensor connected)
-                if self._detect_floating_signal(candidate):
-                    if candidate is not None:
-                        try:
-                            candidate.close()  # type: ignore[attr-defined]
-                        except Exception:
-                            pass
-                    print(
-                        f"MCP3008 on channel {self.adc_channel} appears to have a floating signal "
-                        f"(no sensor connected). This robot may not have a Z sensor installed."
-                    )
-                    return
             except RuntimeError:
-                raise  # Re-raise our floating signal error
+                raise
             except Exception as exc:
                 if candidate is not None:
                     try:
@@ -140,66 +127,6 @@ class ZSensor:
 
     def read_position_m100_100(self) -> float:
         return self.raw_to_pos_m100_100(self.read_raw().raw)
-
-    def _detect_floating_signal(self, adc: "MCP3008", num_samples: int = 100) -> bool:
-        """
-        Detect if the ADC signal is floating (unconnected).
-
-        A floating signal typically:
-        - Has very high variance (unstable readings)
-        - Or is stuck at mid-range (512)
-        - Or oscillates between a few values
-
-        Returns True if signal appears to be floating.
-        """
-        samples = []
-        for _ in range(num_samples):
-            try:
-                samples.append(float(adc.raw_value))
-            except Exception:
-                return True  # If we can't read, assume floating
-
-        if len(samples) < num_samples:
-            return True
-
-        # Calculate statistics
-        mean = sum(samples) / len(samples)
-        variance = sum((x - mean) ** 2 for x in samples) / len(samples)
-        std_dev = variance ** 0.5
-        min_val = min(samples)
-        max_val = max(samples)
-        value_range = max_val - min_val
-
-        # Check 1: Very high variance (unstable floating signal)
-        # Lower threshold - floating signals often have std_dev > 50-100
-        if std_dev > 50.0:
-            return True
-
-        # Check 2: Very low variance but stuck at a common floating value (mid-scale).
-        #
-        # Important: being "stuck" near endpoints (0 or 1023) can be *normal* for a connected
-        # potentiometer when the actuator is sitting at a hard endstop. Treat endpoints as valid.
-        stuck_threshold = 10  # Allow some noise
-        near_mid = sum(1 for s in samples if abs(s - 512) < stuck_threshold)
-        if near_mid / len(samples) > 0.8:
-            return True  # 80%+ stuck near mid-range
-
-        # Check 3: Very narrow range (stuck at a single value with small noise) can mean either:
-        # - connected sensor that isn't moving (especially at an endpoint), OR
-        # - floating input that happens to be stable on this board.
-        #
-        # Only consider this "floating" if the stable value is in the middle-ish range.
-        if value_range < 20 and std_dev < 5.0:
-            if 50.0 < mean < 973.0:
-                return True
-
-        # Check 4: Moderate variance but oscillating between few values
-        # Count unique values - floating signals often have few distinct values
-        unique_values = len(set(round(s) for s in samples))
-        if unique_values < 10 and std_dev > 10.0:
-            return True  # Few unique values with some variance - likely floating
-
-        return False
 
     ############################################################
     # Conversion Functions
