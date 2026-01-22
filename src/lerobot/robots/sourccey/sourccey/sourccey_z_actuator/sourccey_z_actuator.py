@@ -277,7 +277,8 @@ class SourcceyZActuator:
         self._prev_err_valid: bool = False
 
         # Debugging
-        self._debug_mode = False
+        self._debug_mode = True
+        self._first_cmd_print_t = 0.0
         self._last_cmd_print_t = 0.0
 
         # Calibration
@@ -319,6 +320,18 @@ class SourcceyZActuator:
         pos = float(self.read_position())
         target = float(self._target_pos_m100_100)
         err = target - pos
+
+        # --- debug: print once per second ---
+        now = time.monotonic()
+        if self._debug_mode and now - self._first_cmd_print_t >= 1.0:
+            self._first_cmd_print_t = now
+            print(
+                {
+                    "pos": round(float(pos), 2),
+                    "target": round(float(target), 2),
+                    "err": round(float(err), 2),
+                }
+            )
 
         # Keep the existing deadband behavior for normal targets, but when commanding extreme
         # endpoints, tighten the deadband so we actually reach +/-100 instead of stopping short.
