@@ -78,12 +78,9 @@ class ZSensor:
             candidate = None
             try:
                 candidate = MCP3008(channel=self.adc_channel)
-                # Probe once to confirm the ADC responds. Guard with lock because other
-                # processes (e.g. battery.py spawned by Tauri) may also use MCP3008.
-                with spi_device_lock():
-                    _ = candidate.raw_value
+                _ = candidate.raw_value  # probe once to confirm the ADC responds
             except RuntimeError:
-                raise
+                raise  # Re-raise our floating signal error
             except Exception as exc:
                 if candidate is not None:
                     try:
@@ -91,7 +88,6 @@ class ZSensor:
                     except Exception:
                         pass
                 print(f"Failed to initialize MCP3008 on channel {self.adc_channel}. {exc}")
-                return
 
             self._adc = candidate
 
