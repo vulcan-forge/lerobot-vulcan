@@ -1,0 +1,43 @@
+```
+python src/lerobot/control/sourccey/sourccey/teleoperate.py \
+ --id="sourccey" \
+ --remote_ip="192.168.1.210" \
+ --left_arm_port="COM14" \
+ --right_arm_port="COM15" \
+ --keyboard_port="keyboard" \
+ --fps=30 \
+ --reverse=True
+```
+
+```
+python src/lerobot/control/sourccey/sourccey/record.py \
+ --id="sourccey" \
+ --remote_ip="192.168.1.210" \
+ --left_arm_port="/dev/ttyACM1" \
+ --right_arm_port="/dev/ttyACM0" \
+ --reverse=True \
+ --dataset.repo_id="sourccey-009/sourccey-009__pick-up-circle-a__set000__nickm" \
+ --dataset.num_episodes=10 \
+ --dataset.episode_time_s=300 \
+ --dataset.reset_time_s=5 \
+ --dataset.task="Pick up the circle" \
+ --dataset.fps=30 \
+ --dataset.push_to_hub=false
+```
+
+```
+python src/lerobot/control/sourccey/sourccey/record.py \
+ --id="sourccey" \
+ --remote_ip="192.168.1.210" \
+ --left_arm_port="/dev/ttyACM1" \
+ --right_arm_port="/dev/ttyACM0" \
+ --reverse=True \
+ --dataset.repo_id="sourccey-009/sourccey-009__pick-up-plus-a__set000__nickm" \
+ --dataset.num_episodes=10 \
+ --dataset.episode_time_s=300 \
+ --dataset.reset_time_s=5 \
+ --dataset.task="Pick up the plus" \
+ --dataset.fps=30 \
+ --dataset.push_to_hub=false
+```
+
