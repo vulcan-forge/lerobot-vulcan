@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Iterable
 from functools import partial
 from typing import Final
@@ -38,6 +39,11 @@ def _to_2tuple(x) -> tuple:
 
 def _has_sdp_attention() -> bool:
     """Check if we can use PyTorch fused scaled_dot_product_attention."""
+    # Workaround for rare CUDA "illegal memory access" issues observed with
+    # fused SDPA/Flash attention kernels in some driver + torch combinations.
+    # Set LEROBOT_DISABLE_SDPA=1 to force the safe (math) attention path.
+    if os.getenv("LEROBOT_DISABLE_SDPA", "0") == "1":
+        return False
     return hasattr(functional, "scaled_dot_product_attention")
 
 
