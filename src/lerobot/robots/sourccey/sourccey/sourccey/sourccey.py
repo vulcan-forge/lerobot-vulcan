@@ -260,7 +260,7 @@ class Sourccey(Robot):
 
             # Z actuator position (best-effort; keep schema stable)
             try:
-                if self.z_actuator is not None and self.z_actuator.is_connected:
+                if self.z_actuator is not None and self.z_actuator.is_connected and self.z_actuator.use_z_actuator:
                     obs_dict["z.pos"] = float(self.z_actuator.read_position())
                 else:
                     obs_dict["z.pos"] = 100.0
@@ -316,7 +316,7 @@ class Sourccey(Robot):
             )
 
             # Z actuator is position-controlled; drive toward the latest z.pos target (non-blocking).
-            if "z.pos" in base_goal_pos:
+            if "z.pos" in base_goal_pos and self.z_actuator.use_z_actuator:
                 try:
                     self.z_actuator.move_to_position(float(base_goal_pos.get("z.pos", 100.0)), hz=30.0, instant=True)
                 except Exception as e:

@@ -10,6 +10,7 @@ from typing import Optional, Protocol
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator import SourcceyZCalibrator
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 from lerobot.utils.robot_utils import precise_sleep
+from lerobot.utils.spi_lock import spi_device_lock
 
 
 try:
@@ -74,7 +75,21 @@ class ZSensor:
         if MCP3008 is None:
             raise RuntimeError("gpiozero is not installed; MCP3008 is unavailable on this machine.")
         if self._adc is None:
-            self._adc = MCP3008(channel=self.adc_channel)
+            candidate = None
+            try:
+                candidate = MCP3008(channel=self.adc_channel)
+                _ = candidate.raw_value  # probe once to confirm the ADC responds
+            except RuntimeError:
+                raise  # Re-raise our floating signal error
+            except Exception as exc:
+                if candidate is not None:
+                    try:
+                        candidate.close()  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                print(f"Failed to initialize MCP3008 on channel {self.adc_channel}. {exc}")
+
+            self._adc = candidate
 
     def disconnect(self) -> None:
         if self._adc is not None:
@@ -103,9 +118,12 @@ class ZSensor:
             self.connect()
         assert self._adc is not None
 
-        total = 0.0
-        for _ in range(self.average_samples):
-            total += float(self._adc.raw_value)
+        # Guard with a cross-process lock because battery.py may run concurrently
+        # and access the same MCP3008 over SPI.
+        with spi_device_lock():
+            total = 0.0
+            for _ in range(self.average_samples):
+                total += float(self._adc.raw_value)
         raw = int(round(total / self.average_samples))
         voltage = (raw / 1023.0) * self.vref
         return ZActuatorReading(raw=raw, voltage=voltage)
@@ -162,6 +180,7 @@ class SourcceyZActuator:
         self.sensor = sensor
         self.driver = driver
         self.motor = motor
+        self.use_z_actuator = False
 
         # Position target (public API is position-only; motor command is internal).
         self._target_pos_m100_100: float = 0.0
@@ -188,6 +207,7 @@ class SourcceyZActuator:
 
         # Debugging
         self._debug_mode = False
+        self._first_cmd_print_t = 0.0
         self._last_cmd_print_t = 0.0
 
         # Calibration
@@ -215,6 +235,7 @@ class SourcceyZActuator:
 
     def connect(self) -> None:
         self.sensor.connect()
+        self.use_z_actuator = True if self.sensor.is_connected else False
 
     def disconnect(self) -> None:
         # Ensure no background thread is still calling update() while we disconnect the ADC.
@@ -228,6 +249,18 @@ class SourcceyZActuator:
         pos = float(self.read_position())
         target = float(self._target_pos_m100_100)
         err = target - pos
+
+        # --- debug: print once per second ---
+        now = time.monotonic()
+        if self._debug_mode and now - self._first_cmd_print_t >= 1.0:
+            self._first_cmd_print_t = now
+            print(
+                {
+                    "pos": round(float(pos), 2),
+                    "target": round(float(target), 2),
+                    "err": round(float(err), 2),
+                }
+            )
 
         # Keep the existing deadband behavior for normal targets, but when commanding extreme
         # endpoints, tighten the deadband so we actually reach +/-100 instead of stopping short.

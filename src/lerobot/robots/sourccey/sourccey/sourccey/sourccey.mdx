@@ -38,7 +38,7 @@ pipx install uv### Setting Up the Environment
 1. **Create a virtual environment:**h
    uv venv
 2. **Install LeRobot with Sourccey dependencies:**
-   uv pip install -e ".[sourccey]"This installs the project in editable mode with all required extras for the Sourccey robot.
+   uv pip install -e ".[feetech,smolvla,sourccey]"This installs the project in editable mode with all required extras for the Sourccey robot.
 
 3. **Compile Sourccey protobuf files:**sh
    uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.pyAlternatively, you can use the function import method:h
@@ -87,9 +87,12 @@ Then Calibrate the bi-manual teleoperator (leader arms):
 python src/lerobot/scripts/sourccey/auto_calibrate.py \
  --teleop.type=bi_sourccey_leader \
  --teleop.id=bisd_sourccey_leader \
- --teleop.left_arm_port="COM14" \
- --teleop.right_arm_port="COM15"
+ --teleop.left_arm_port="/dev/ttyACM1" \
+ --teleop.right_arm_port="/dev/ttyACM0"
 ```
+
+python src/lerobot/control/sourccey/sourccey/teleoperate.py  --id="sourccey"  --remote_ip="192.168.1.211"  --left_arm_port="/dev/ttyACM1"  --right_arm_port="/dev/ttyACM0"  --keyboard_port="keyboard"  --fps=30  --reverse=True
+
 
 For single-arm teleoperator:
 
@@ -145,9 +148,9 @@ source .venv/Scripts/activate
 ```
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.211" \
- --left_arm_port="COM14" \
- --right_arm_port="COM15" \
+ --remote_ip="192.168.1.210" \
+ --left_arm_port="/dev/ttyACM1" \
+ --right_arm_port="/dev/ttyACM0" \
  --keyboard_port="keyboard" \
  --fps=30 \
  --reverse=True
@@ -177,11 +180,11 @@ python src/lerobot/control/sourccey/sourccey/record.py \
  --left_arm_port="/dev/ttyACM1" \
  --right_arm_port="/dev/ttyACM0" \
  --reverse=True \
- --dataset.repo_id="sourccey-009/sourccey-009__arm-left-a__set000__nick" \
- --dataset.num_episodes=10 \
- --dataset.episode_time_s=30 \
- --dataset.reset_time_s=3 \
- --dataset.task="Lift your shoulder" \
+ --dataset.repo_id="sourccey-009/sourccey-009__shirt-fold-a__set019__nickm" \
+ --dataset.num_episodes=3 \
+ --dataset.episode_time_s=200 \
+ --dataset.reset_time_s=5 \
+ --dataset.task="Fold the shirt" \
  --dataset.fps=30 \
  --dataset.push_to_hub=false
 ```
@@ -232,27 +235,6 @@ accelerate launch \
   --wandb.enable=false \
   --policy.push_to_hub=false
 ```
-
-
-### Multi-GPU Training on xvla
-
-accelerate launch \
-  --multi_gpu \
-  --num_processes=2 \
-  $(which lerobot-train) \
-  --dataset.repo_id=local/sourccey-012__shirtfold-1-a__cmb__chris \
-  --policy.path="lerobot/xvla-base" \
-  --policy.dtype=bfloat16 \
-  --output_dir=outputs/train/xvla__sourccey-012__shirtfold-1-a__cmb__chris \
-  --job_name=xvla__sourccey-012__shirtfold-1-a__cmb__chris \
-  --steps=100000 \
-  --save_freq=10000 \
-  --batch_size=32 \
-  --wandb.enable=false \
-  --policy.push_to_hub=false \
-  --rename_map='{"observation.images.front_left": "observation.images.image", "observation.images.front_right": "observation.images.image2", "observation.images.wrist_left": "observation.images.empty_camera_0"}'
-
-###
 
 ### Training on Pretrained Models
 

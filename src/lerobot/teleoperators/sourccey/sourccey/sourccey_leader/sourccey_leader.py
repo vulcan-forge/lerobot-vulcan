@@ -63,12 +63,14 @@ class SourcceyLeader(Teleoperator):
 
         # Connection
         self.leader_connected = False
+        self.using_arm = False
 
         # Initialize calibrator for automatic calibration
         self.calibrator = SourcceyLeaderCalibrator(self)
 
         # Load default action file
         self._default_action = self._load_default_action()
+        self._default_active_action = self._load_default_active_action()
 
         # Track last warning time for throttling
         self._last_warning_time = 0.0
@@ -87,6 +89,21 @@ class SourcceyLeader(Teleoperator):
                 return json.load(f)
         else:
             logger.warning(f"Default action file not found: {action_file}. Using zero positions.")
+            # Fallback to zero positions if file doesn't exist
+            return {f"{motor}.pos": 0.0 for motor in self.bus.motors}
+
+    def _load_default_active_action(self) -> dict[str, float]:
+        """Load default active action from JSON file."""
+        current_dir = Path(__file__).parent
+        if self.config.orientation == "right":
+            action_file = current_dir / "defaults" / "right_arm_default_active_action.json"
+        else:
+            action_file = current_dir / "defaults" / "left_arm_default_active_action.json"
+        if action_file.exists():
+            with open(action_file, "r") as f:
+                return json.load(f)
+        else:
+            logger.warning(f"Default active action file not found: {action_file}. Using zero positions.")
             # Fallback to zero positions if file doesn't exist
             return {f"{motor}.pos": 0.0 for motor in self.bus.motors}
 
@@ -113,6 +130,7 @@ class SourcceyLeader(Teleoperator):
         self.configure()
 
         self.leader_connected = True
+        self.using_arm = True
         logger.info(f"{self} connected.")
 
     def disconnect(self) -> None:
@@ -187,7 +205,7 @@ class SourcceyLeader(Teleoperator):
 
     def get_action(self) -> dict[str, float]:
         if not self.is_connected:
-            return self._default_action
+            return self._default_active_action if self.using_arm else self._default_action
 
         try:
             action = self.bus.sync_read("Present_Position")
@@ -199,7 +217,7 @@ class SourcceyLeader(Teleoperator):
             if current_time - self._last_warning_time >= self._warning_throttle_interval:
                 logger.warning(f"Status packet error in {self}: {e}. Returning default action.")
                 self._last_warning_time = current_time
-            return self._default_action
+            return self._default_active_action if self.using_arm else self._default_action
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
         raise NotImplementedError
