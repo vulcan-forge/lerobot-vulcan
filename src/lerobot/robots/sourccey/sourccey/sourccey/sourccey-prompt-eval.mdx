@@ -68,3 +68,29 @@ python src/lerobot/scripts/sourccey/combine_datasets.py \
  --output_path="sourccey-009/sourccey-009__pick-up-circle-plus-a__cmb000__nickm"
 ```
 
+```
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 
+```
+
+LEROBOT_DISABLE_SDPA=1 accelerate launch \
+  --multi_gpu --num_processes=2 --mixed_precision=no \
+  $(which lerobot-train) \
+  --dataset.repo_id=sourccey-009/sourccey-009__pick-up-circle-plus-a__cmb000__nickm \
+  --dataset.video_backend=pyav \
+  --output_dir=outputs/train/xvla__sourccey-009__pick-up-circle-plus-a__cmb000__nickm \
+  --job_name=xvla__sourccey-009__pick-up-circle-plus-a__cmb000__nickm \
+  --rename_map='{"observation.images.wrist_left":"observation.images.image","observation.images.wrist_right":"observation.images.image2"}' \
+  --policy.path="lerobot/xvla-base" \
+  --policy.dtype=float32 \
+  --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
+  --policy.freeze_vision_encoder=false \
+  --policy.freeze_language_encoder=false \
+  --policy.train_policy_transformer=true \
+  --policy.train_soft_prompts=true \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --steps=50000 \
+  --save_freq=10000 \
+  --batch_size=4 \
+  --wandb.enable=false
