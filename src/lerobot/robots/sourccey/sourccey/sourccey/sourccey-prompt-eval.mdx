@@ -69,9 +69,10 @@ python src/lerobot/scripts/sourccey/combine_datasets.py \
 ```
 
 ```
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1
 ```
 
+```
 LEROBOT_DISABLE_SDPA=1 accelerate launch \
   --multi_gpu --num_processes=2 --mixed_precision=no \
   $(which lerobot-train) \
@@ -94,3 +95,18 @@ LEROBOT_DISABLE_SDPA=1 accelerate launch \
   --save_freq=10000 \
   --batch_size=4 \
   --wandb.enable=false
+```
+
+```
+python src/lerobot/control/sourccey/sourccey/evaluate.py \
+ --id="sourccey" \
+ --remote_ip="192.168.1.210" \
+ --model_path="outputs/train/xvla__sourccey-009__pick-up-circle-plus-a__cmb000__nickm/checkpoints/050000/pretrained_model" \
+ --dataset.repo_id="sourccey-009/eval_xvla__sourccey-009__pick-up-circle-plus-a__cmb000__nickm" \
+ --dataset.num_episodes=1 \
+ --dataset.episode_time_s=60 \
+ --dataset.reset_time_s=5 \
+ --dataset.task="Pick up the circle" \
+ --dataset.fps=30
+```
+
