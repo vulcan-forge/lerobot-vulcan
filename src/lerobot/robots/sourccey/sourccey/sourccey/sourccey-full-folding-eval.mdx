@@ -1,0 +1,126 @@
+```
+python src/lerobot/control/sourccey/sourccey/teleoperate.py \
+ --id="sourccey" \
+ --remote_ip="192.168.1.210" \
+ --left_arm_port="/dev/ttyACM1" \
+ --right_arm_port="/dev/ttyACM0" \
+ --keyboard_port="keyboard" \
+ --fps=30 \
+ --reverse=True
+```
+
+```
+python src/lerobot/control/sourccey/sourccey/record.py \
+ --id="sourccey" \
+ --remote_ip="192.168.1.210" \
+ --left_arm_port="/dev/ttyACM1" \
+ --right_arm_port="/dev/ttyACM0" \
+ --reverse=True \
+ --dataset.repo_id="sourccey-009/sourccey-009__shirt-fold-c__set001__nickm" \
+ --dataset.num_episodes=1 \
+ --dataset.episode_time_s=900 \
+ --dataset.reset_time_s=10 \
+ --dataset.task="Fold the shirt" \
+ --dataset.fps=30 \
+ --dataset.push_to_hub=false
+```
+
+
+```
+python src/lerobot/scripts/sourccey/combine_datasets.py \
+ --dataset_paths='[
+"sourccey-009/sourccey-009__shirt-fold-a__set000__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set001__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set002__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set003__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set004__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set005__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set006__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set007__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set008__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set009__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set010__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set011__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set012__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set013__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set014__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set015__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set016__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set017__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set018__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set019__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set020__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set021__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set022__nickm"
+]' \
+ --output_path="sourccey-009/sourccey-009__shirt-fold-a__cmb000__nickm"
+
+```
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1
+
+  --dataset.video_backend=pyav \
+```
+
+```
+LEROBOT_DISABLE_SDPA=1 accelerate launch \
+  --multi_gpu --num_processes=2 --mixed_precision=no \
+  $(which lerobot-train) \
+  --dataset.repo_id=sourccey-009/sourccey-009__shirt-fold-a__cmb000__nickm \
+  --output_dir=outputs/train/xvla__sourccey-009__shirt-fold-a__cmb000__nickm \
+  --job_name=xvla__sourccey-009__shirt-fold-a__cmb000__nickm \
+  --rename_map='{"observation.images.wrist_left":"observation.images.image","observation.images.wrist_right":"observation.images.image2"}' \
+  --policy.path="lerobot/xvla-base" \
+  --policy.dtype=float32 \
+  --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
+  --policy.freeze_vision_encoder=false \
+  --policy.freeze_language_encoder=false \
+  --policy.train_policy_transformer=true \
+  --policy.train_soft_prompts=true \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --steps=50000 \
+  --save_freq=10000 \
+  --batch_size=4 \
+  --wandb.enable=false
+```
+
+```
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 accelerate launch \
+  --multi_gpu --num_processes=2 --mixed_precision=no \
+  $(which lerobot-train) \
+  --dataset.repo_id=sourccey-009/sourccey-009__shirt-fold-a__cmb000__nickm \
+  --output_dir=outputs/train/xvla__sourccey-009__shirt-fold-a__cmb000__nickm \
+  --job_name=xvla__sourccey-009__shirt-fold-a__cmb000__nickm \
+  --rename_map='{"observation.images.wrist_left":"observation.images.image","observation.images.wrist_right":"observation.images.image2"}' \
+  --policy.type=xvla \
+  --policy.dtype=float32 \
+  --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
+  --policy.freeze_vision_encoder=false \
+  --policy.freeze_language_encoder=false \
+  --policy.train_policy_transformer=true \
+  --policy.train_soft_prompts=true \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --steps=100000 \
+  --save_freq=10000 \
+  --batch_size=4 \
+  --wandb.enable=false \
+  --config_path=outputs/train/xvla__sourccey-009__shirt-fold-a__cmb000__nickm/checkpoints/050000/pretrained_model/train_config.json \
+  --resume=true
+```
+
+```
+python src/lerobot/control/sourccey/sourccey/evaluate.py \
+ --id="sourccey" \
+ --remote_ip="192.168.1.210" \
+ --model_path="outputs/train/xvla__sourccey-009__pick-up-circle-a__cmb000__nickm/checkpoints/050000/pretrained_model" \
+ --dataset.repo_id="sourccey-009/eval_xvla__sourccey-009__pick-up-circle-a__cmb000__nickm" \
+ --dataset.num_episodes=1 \
+ --dataset.episode_time_s=60 \
+ --dataset.reset_time_s=5 \
+ --dataset.task="Pick up the circle" \
+ --dataset.fps=30
+```
+
