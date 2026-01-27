@@ -16,7 +16,7 @@ python src/lerobot/control/sourccey/sourccey/record.py \
  --left_arm_port="/dev/ttyACM1" \
  --right_arm_port="/dev/ttyACM0" \
  --reverse=True \
- --dataset.repo_id="sourccey-009/sourccey-009__shirt-fold-ca__set000__nickm" \
+ --dataset.repo_id="sourccey-009/sourccey-009__shirt-fold-a__set000__nickm" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=900 \
  --dataset.reset_time_s=10 \
@@ -115,12 +115,12 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 accelerate launch
 python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.210" \
- --model_path="outputs/train/xvla__sourccey-009__pick-up-circle-a__cmb000__nickm/checkpoints/050000/pretrained_model" \
- --dataset.repo_id="sourccey-009/eval_xvla__sourccey-009__pick-up-circle-a__cmb000__nickm" \
+ --model_path="outputs/train/xvla__sourccey-009__shirt-fold-a__cmb000__nickm/checkpoints/100000/pretrained_model" \
+ --dataset.repo_id="sourccey-009/eval_xvla__sourccey-009__shirt-fold-a__cmb000__nickm" \
  --dataset.num_episodes=1 \
- --dataset.episode_time_s=60 \
- --dataset.reset_time_s=5 \
- --dataset.task="Pick up the circle" \
+ --dataset.episode_time_s=300 \
+ --dataset.reset_time_s=10 \
+ --dataset.task="Fold the shirt" \
  --dataset.fps=30
 ```
 
