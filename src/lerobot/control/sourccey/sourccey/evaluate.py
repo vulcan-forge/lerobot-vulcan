@@ -36,8 +36,12 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
     robot = SourcceyClient(robot_config)
 
+    # Load config to determine policy type
+    policy_config = PreTrainedConfig.from_pretrained(cfg.model_path)
+    # Get the correct policy class based on config type
+    policy_cls = get_policy_class(policy_config.type)
     # Create policy
-    policy = ACTPolicy.from_pretrained(cfg.model_path)
+    policy = policy_cls.from_pretrained(cfg.model_path)
 
     # Configure the dataset features
     action_features = hw_to_dataset_features(robot.action_features, "action")
