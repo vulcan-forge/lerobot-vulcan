@@ -69,7 +69,9 @@ class ZSensor:
 
     @property
     def is_connected(self) -> bool:
-        return self._adc is not None
+
+        # Temporary disable Z actuator 1/26/2026. Turn this back on when the robots all have z actuators
+        return False #self._adc is not None
 
     def connect(self) -> None:
         if MCP3008 is None:
