@@ -16,11 +16,11 @@ python src/lerobot/control/sourccey/sourccey/record.py \
  --left_arm_port="/dev/ttyACM1" \
  --right_arm_port="/dev/ttyACM0" \
  --reverse=True \
- --dataset.repo_id="sourccey-009/sourccey-009__shirt-fold-a__set022__mylesr" \
+ --dataset.repo_id="sourccey-009/sourccey-009__shorts-fold-a__set001__mylesr" \
  --dataset.num_episodes=3 \
- --dataset.episode_time_s=900 \
- --dataset.reset_time_s=10 \
- --dataset.task="Fold the shirt" \
+ --dataset.episode_time_s=300 \
+ --dataset.reset_time_s=5 \
+ --dataset.task="Fold the shorts" \
  --dataset.fps=30 \
  --dataset.push_to_hub=false
 ```
@@ -51,9 +51,31 @@ python src/lerobot/scripts/sourccey/combine_datasets.py \
 "sourccey-009/sourccey-009__shirt-fold-a__set019__nickm",
 "sourccey-009/sourccey-009__shirt-fold-a__set020__nickm",
 "sourccey-009/sourccey-009__shirt-fold-a__set021__nickm",
-"sourccey-009/sourccey-009__shirt-fold-a__set022__nickm"
+"sourccey-009/sourccey-009__shirt-fold-a__set022__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set023__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set024__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set025__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set026__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set027__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set028__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set029__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set030__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set031__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set032__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set033__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set034__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set035__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set036__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set037__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set038__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set039__nickm",
+"sourccey-009/sourccey-009__shirt-fold-a__set030__mylesr",
+"sourccey-009/sourccey-009__shirt-fold-a__set031__mylesr",
+"sourccey-009/sourccey-009__shirt-fold-a__set032__mylesr",
+"sourccey-009/sourccey-009__shirt-fold-a__set033__mylesr",
+"sourccey-009/sourccey-009__shirt-fold-a__set034__mylesr"
 ]' \
- --output_path="sourccey-009/sourccey-009__shirt-fold-a__cmb000__nickm"
+ --output_path="sourccey-009/sourccey-009__shirt-fold-a__cmb001__nickm-mylesr"
 
 ```
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1
@@ -65,8 +87,8 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1
 LEROBOT_DISABLE_SDPA=1 accelerate launch \
   --multi_gpu --num_processes=2 --mixed_precision=no \
   $(which lerobot-train) \
-  --dataset.repo_id=sourccey-009/sourccey-009__shirt-fold-a__cmb000__nickm \
-  --output_dir=outputs/train/xvla__sourccey-009__shirt-fold-a__cmb000__nickm \
+  --dataset.repo_id=sourccey-009/sourccey-009__shirt-fold-a__cmb001__nickm \
+  --output_dir=outputs/train/xvla__sourccey-009__shirt-fold-a__cmb001__nickm \
   --job_name=xvla__sourccey-009__shirt-fold-a__cmb000__nickm \
   --policy.path="lerobot/xvla-base" \
   --policy.dtype=float32 \
@@ -89,10 +111,9 @@ LEROBOT_DISABLE_SDPA=1 accelerate launch \
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 accelerate launch \
   --multi_gpu --num_processes=2 --mixed_precision=no \
   $(which lerobot-train) \
-  --dataset.repo_id=sourccey-009/sourccey-009__shirt-fold-a__cmb000__nickm \
-  --output_dir=outputs/train/xvla__sourccey-009__shirt-fold-a__cmb000__nickm \
-  --job_name=xvla__sourccey-009__shirt-fold-a__cmb000__nickm \
-  --rename_map='{"observation.images.wrist_left":"observation.images.image","observation.images.wrist_right":"observation.images.image2"}' \
+  --dataset.repo_id=sourccey-009/sourccey-009__shirt-fold-a__cmb001__nickm-mylesr \
+  --output_dir=outputs/train/xvla__sourccey-009__shirt-fold-a__cmb001__nickm-mylesr \
+  --job_name=xvla__sourccey-009__shirt-fold-a__cmb001__nickm-mylesr \
   --policy.type=xvla \
   --policy.dtype=float32 \
   --policy.action_mode=auto \
@@ -103,11 +124,12 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 accelerate launch
   --policy.train_soft_prompts=true \
   --policy.device=cuda \
   --policy.push_to_hub=false \
-  --steps=100000 \
-  --save_freq=10000 \
-  --batch_size=4 \
+  --policy.input_features=null \
+  --steps=120000 \
+  --save_freq=20000 \
+  --batch_size=2 \
   --wandb.enable=false \
-  --config_path=outputs/train/xvla__sourccey-009__shirt-fold-a__cmb000__nickm/checkpoints/050000/pretrained_model/train_config.json \
+  --config_path=outputs/train/xvla__sourccey-009__shirt-fold-a__cmb001__nickm/checkpoints/100000/pretrained_model/train_config.json \
   --resume=true
 ```
 
@@ -115,8 +137,8 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 accelerate launch
 python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.210" \
- --model_path="outputs/train/xvla__sourccey-009__shirt-fold-a__cmb000__nickm/checkpoints/100000/pretrained_model" \
- --dataset.repo_id="sourccey-009/eval_xvla__sourccey-009__shirt-fold-a__cmb000__nickm" \
+ --model_path="outputs/train/xvla__sourccey-009__shirt-fold-a__cmb001__nickm/checkpoints/100000/pretrained_model" \
+ --dataset.repo_id="sourccey-009/eval_xvla__sourccey-009__shirt-fold-a__cmb000__set002__nickm" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=10 \
