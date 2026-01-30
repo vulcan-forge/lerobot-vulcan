@@ -91,6 +91,8 @@ class XVLAConfig(PreTrainedConfig):
     resize_imgs_with_padding: tuple[int, int] | None = None
     num_image_views: int | None = None
     empty_cameras: int = 0
+    # Enable gradient checkpointing in the vision tower to reduce peak GPU memory (trades compute for memory).
+    vision_gradient_checkpointing: bool = False
 
     # Freezing options for VLM components
     # By default, VLM encoders are frozen and only policy transformer + soft prompts train
@@ -139,6 +141,10 @@ class XVLAConfig(PreTrainedConfig):
 
             if "text_config" not in config_dict or config_dict["text_config"] is None:
                 raise ValueError("text_config is required")
+            # Apply vision_gradient_checkpointing override (reduces peak GPU memory).
+            vc = dict(config_dict["vision_config"])
+            vc["enable_checkpoint"] = self.vision_gradient_checkpointing
+            config_dict["vision_config"] = vc
             self._florence_config_obj = Florence2Config(**config_dict)
         return self._florence_config_obj
 

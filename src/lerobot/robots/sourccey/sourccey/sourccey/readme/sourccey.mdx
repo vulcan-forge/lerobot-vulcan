@@ -238,6 +238,25 @@ accelerate launch \
 
 ### Training on Pretrained Models
 
+XVLA single-GPU training (use `--batch_size=4` to fit in 32GB VRAM):
+
+```
+LEROBOT_DISABLE_SDPA=1 python src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id=sourccey-012/sourccey-012__shirt-fold__cmb__0003__chrism \
+  --policy.path="lerobot/xvla-base" \
+  --output_dir=outputs/train/xvla__sourccey-012__shirt-fold__cmb__0003__chrism_puregray \
+  --job_name=xvla__sourccey-012__shirt-fold__cmb__0003__chrism_puregray \
+  --policy.device=cuda \
+  --policy.input_features=null \
+  --policy.num_image_views=4 \
+  --policy.empty_cameras=0 \
+  --wandb.enable=false \
+  --steps=100000 \
+  --save_freq=10000 \
+  --policy.push_to_hub=false \
+  --batch_size=4
+```
+
 ## Evaluation
 
 Evaluate a trained model on the robot:
