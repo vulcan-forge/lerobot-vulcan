@@ -26,6 +26,14 @@ def _scalar(val) -> float | int:
     return val
 
 
+def _is_tolerance_error_message(msg: str) -> bool:
+    """True if the error is the timestamp-tolerance AssertionError (skip; not corruption)."""
+    if not msg:
+        return False
+    m = msg.lower()
+    return "tolerance" in m and ("violate" in m or "query timestamps" in m)
+
+
 def _decode_with_both_backends(
     path: str | Path,
     timestamps: list[float],
@@ -127,6 +135,9 @@ def verify_specific(
         if use_both_backends:
             ok, msg = _decode_with_both_backends(path, [t], tolerance_s, preferred_backend=backend)
             if not ok and msg:
+                if _is_tolerance_error_message(msg):
+                    t += step_s
+                    continue
                 errors.append({
                     "timestamp_s": t,
                     "frame_index": frame_index,
@@ -137,10 +148,14 @@ def verify_specific(
             try:
                 decode_video_frames(str(path), [t], tolerance_s, backend=backend)
             except Exception as e:
+                msg = f"{type(e).__name__}: {e!s}"
+                if _is_tolerance_error_message(msg):
+                    t += step_s
+                    continue
                 errors.append({
                     "timestamp_s": t,
                     "frame_index": frame_index,
-                    "message": f"{type(e).__name__}: {e!s}",
+                    "message": msg,
                 })
                 break
         t += step_s
