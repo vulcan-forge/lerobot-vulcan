@@ -132,6 +132,7 @@ def verify_specific(
                     "frame_index": frame_index,
                     "message": msg,
                 })
+                break
         else:
             try:
                 decode_video_frames(str(path), [t], tolerance_s, backend=backend)
@@ -141,6 +142,7 @@ def verify_specific(
                     "frame_index": frame_index,
                     "message": f"{type(e).__name__}: {e!s}",
                 })
+                break
         t += step_s
 
     return errors
