@@ -47,7 +47,7 @@ def _decode_with_both_backends(
             if backend == primary:
                 return True, None
             # Fallback succeeded but primary failed - report primary failure so user knows training would fail
-            return False, (errors[0] if errors else "unknown")
+            return False, f"{primary}: {errors[0]}" if errors else "unknown"
         except Exception as e:
             errors.append(f"{backend}: {type(e).__name__}: {e!s}")
     return False, " ; ".join(errors)
@@ -121,6 +121,8 @@ def verify_specific(
     errors: list[dict] = []
     t = start_s
     while t <= end_s:
+        if abs(t - round(t)) < 1e-9:
+            logging.info("Checking %.1f s ...", t)
         frame_index = int(round(t * fps))
         if use_both_backends:
             ok, msg = _decode_with_both_backends(path, [t], tolerance_s, preferred_backend=backend)
