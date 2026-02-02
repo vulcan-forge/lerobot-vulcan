@@ -26,10 +26,31 @@ def _scalar(val) -> float | int:
     return val
 
 
-def _is_tolerance_error(exc: BaseException) -> bool:
-    """True if the exception is the timestamp-tolerance AssertionError from decode_video_frames."""
-    msg = str(exc).lower()
-    return "tolerance" in msg and ("violate" in msg or "query timestamps" in msg)
+def _decode_with_both_backends(
+    path: str | Path,
+    timestamps: list[float],
+    tolerance_s: float,
+    preferred_backend: str | None,
+) -> tuple[bool, str | None]:
+    """
+    Try preferred backend (or torchcodec), then fallback (pyav). Return (success, error_message).
+    Mirrors training: both backends must succeed or we report the failure(s).
+    """
+    primary = preferred_backend or get_safe_default_codec()
+    fallback = "pyav" if primary == "torchcodec" else "torchcodec"
+    errors: list[str] = []
+    for backend in (primary, fallback):
+        try:
+            decode_video_frames(str(path), timestamps, tolerance_s, backend=backend)
+            # This backend succeeded; if we had a previous failure, the frame is still bad for training
+            # which uses primary then fallback. So we only report success if primary succeeded.
+            if backend == primary:
+                return True, None
+            # Fallback succeeded but primary failed - report primary failure so user knows training would fail
+            return False, (errors[0] if errors else "unknown")
+        except Exception as e:
+            errors.append(f"{backend}: {type(e).__name__}: {e!s}")
+    return False, " ; ".join(errors)
 
 
 def _find_video_file_path(
@@ -69,40 +90,55 @@ def verify_specific(
     file_index: int,
     start_s: float,
     end_s: float,
-    step_s: float = 1.0,
+    step_s: float = 0.5,
     root: Path | None = None,
     tolerance_s: float = 1e-4,
     backend: str | None = None,
+    video_path: Path | None = None,
+    fps_override: float | None = None,
 ) -> list[dict]:
     """
     Decode frames in [start_s, end_s] for the given video file. Return list of errors.
+    Tries torchcodec then pyav (like training) so corrupt frames are guaranteed to be found.
     """
     root_base = root or HF_LEROBOT_HOME
     dataset_root = root_base / repo_id / dataset_folder
     dataset_name = f"{repo_id}/{dataset_folder}"
 
-    meta = LeRobotDatasetMetadata(repo_id=dataset_name, root=dataset_root)
-    fps = meta.fps
-    backend = backend or get_safe_default_codec()
+    if video_path is not None:
+        path = Path(video_path)
+        if not path.exists():
+            return [{"error": "file_not_found", "video_key": video_key, "file_index": file_index}]
+        fps = fps_override if fps_override is not None else 30.0
+    else:
+        meta = LeRobotDatasetMetadata(repo_id=dataset_name, root=dataset_root)
+        fps = meta.fps
+        path = _find_video_file_path(meta, video_key, file_index)
+        if path is None:
+            return [{"error": "file_not_found", "video_key": video_key, "file_index": file_index}]
 
-    path = _find_video_file_path(meta, video_key, file_index)
-    if path is None:
-        return [{"error": "file_not_found", "video_key": video_key, "file_index": file_index}]
-
+    use_both_backends = backend is None
     errors: list[dict] = []
     t = start_s
     while t <= end_s:
         frame_index = int(round(t * fps))
-        try:
-            decode_video_frames(str(path), [t], tolerance_s, backend=backend)
-        except Exception as e:
-            if _is_tolerance_error(e):
-                continue
-            errors.append({
-                "timestamp_s": t,
-                "frame_index": frame_index,
-                "message": f"{type(e).__name__}: {e!s}",
-            })
+        if use_both_backends:
+            ok, msg = _decode_with_both_backends(path, [t], tolerance_s, preferred_backend=backend)
+            if not ok and msg:
+                errors.append({
+                    "timestamp_s": t,
+                    "frame_index": frame_index,
+                    "message": msg,
+                })
+        else:
+            try:
+                decode_video_frames(str(path), [t], tolerance_s, backend=backend)
+            except Exception as e:
+                errors.append({
+                    "timestamp_s": t,
+                    "frame_index": frame_index,
+                    "message": f"{type(e).__name__}: {e!s}",
+                })
         t += step_s
 
     return errors
@@ -151,8 +187,20 @@ def main() -> None:
     parser.add_argument(
         "--step_s",
         type=float,
-        default=1.0,
-        help="Step between checked timestamps in seconds (default: 1.0). Use 1/30 for every frame at 30fps.",
+        default=0.5,
+        help="Step between checked timestamps in seconds (default: 0.5). Use 1/30 for every frame at 30fps.",
+    )
+    parser.add_argument(
+        "--video_path",
+        type=str,
+        default=None,
+        help="Direct path to the .mp4 file (overrides repo_id/dataset path resolution). Use when path layout differs (e.g. combine/0008/...).",
+    )
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=None,
+        help="FPS when using --video_path (default: 30). Ignored when resolving path from dataset.",
     )
     parser.add_argument(
         "--root",
@@ -178,6 +226,7 @@ def main() -> None:
     init_logging()
 
     root_path = Path(args.root) if args.root else None
+    video_path = Path(args.video_path) if args.video_path else None
     errors = verify_specific(
         repo_id=args.repo_id,
         dataset_folder=args.dataset,
@@ -189,6 +238,8 @@ def main() -> None:
         root=root_path,
         tolerance_s=args.tolerance_s,
         backend=args.backend,
+        video_path=video_path,
+        fps_override=args.fps,
     )
 
     if errors and errors[0].get("error") == "file_not_found":

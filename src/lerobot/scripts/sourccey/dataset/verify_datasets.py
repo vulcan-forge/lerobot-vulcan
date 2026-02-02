@@ -43,6 +43,30 @@ class FrameError:
 TEMP_FOLDER_PREFIXES = ("tmp", "temp")
 
 
+def _decode_with_both_backends(
+    path: str | Path,
+    timestamps: list[float],
+    tolerance_s: float,
+    preferred_backend: str | None,
+) -> tuple[bool, str | None]:
+    """
+    Try preferred backend (or torchcodec), then fallback (pyav). Return (success, error_message).
+    Mirrors training: both backends must succeed or we report the failure(s).
+    """
+    primary = preferred_backend or get_safe_default_codec()
+    fallback = "pyav" if primary == "torchcodec" else "torchcodec"
+    errors: list[str] = []
+    for backend in (primary, fallback):
+        try:
+            decode_video_frames(str(path), timestamps, tolerance_s, backend=backend)
+            if backend == primary:
+                return True, None
+            return False, (errors[0] if errors else "unknown")
+        except Exception as e:
+            errors.append(f"{backend}: {type(e).__name__}: {e!s}")
+    return False, " ; ".join(errors)
+
+
 def _find_temp_folders(dataset_root: Path) -> list[Path]:
     """Return immediate children of dataset_root that look like temp/tmp folders."""
     if not dataset_root.exists() or not dataset_root.is_dir():
@@ -59,24 +83,38 @@ def _verify_temp_folder_videos(
     temp_dir: Path,
     tolerance_s: float,
     fps: int,
-    backend: str,
+    backend: str | None,
 ) -> list[FrameError]:
     """Try to decode first frame of each .mp4 in a temp folder; return errors for failures."""
     errors: list[FrameError] = []
     for mp4_path in temp_dir.rglob("*.mp4"):
-        try:
-            decode_video_frames(str(mp4_path), [0.0], tolerance_s, backend=backend)
-        except Exception as e:
-            errors.append(
-                FrameError(
-                    dataset_name=dataset_name,
-                    file_name=mp4_path.name,
-                    video_key=f"(temp folder: {temp_dir.name})",
-                    timestamp_s=0.0,
-                    frame_index=0,
-                    message=f"{type(e).__name__}: {e!s}",
+        if backend is None:
+            ok, msg = _decode_with_both_backends(mp4_path, [0.0], tolerance_s, preferred_backend=None)
+            if not ok and msg:
+                errors.append(
+                    FrameError(
+                        dataset_name=dataset_name,
+                        file_name=mp4_path.name,
+                        video_key=f"(temp folder: {temp_dir.name})",
+                        timestamp_s=0.0,
+                        frame_index=0,
+                        message=msg,
+                    )
                 )
-            )
+        else:
+            try:
+                decode_video_frames(str(mp4_path), [0.0], tolerance_s, backend=backend)
+            except Exception as e:
+                errors.append(
+                    FrameError(
+                        dataset_name=dataset_name,
+                        file_name=mp4_path.name,
+                        video_key=f"(temp folder: {temp_dir.name})",
+                        timestamp_s=0.0,
+                        frame_index=0,
+                        message=f"{type(e).__name__}: {e!s}",
+                    )
+                )
     return errors
 
 
@@ -179,7 +217,7 @@ def _verify_one_file(
     timestamps: list[float],
     tolerance_s: float,
     fps: int,
-    backend: str,
+    backend: str | None,
 ) -> list[FrameError]:
     """Decode sample frames at the given timestamps. Return list of errors (one per failed frame)."""
     errors: list[FrameError] = []
@@ -188,6 +226,22 @@ def _verify_one_file(
 
     for i, ts in enumerate(timestamps):
         frame_index = int(round(ts * fps))
+        if backend is None:
+            ok, msg = _decode_with_both_backends(
+                rel_path_str, [ts], tolerance_s, preferred_backend=None
+            )
+            if not ok and msg:
+                errors.append(
+                    FrameError(
+                        dataset_name=dataset_name,
+                        file_name=file_name,
+                        video_key=video_key,
+                        timestamp_s=ts,
+                        frame_index=frame_index,
+                        message=msg,
+                    )
+                )
+            continue
         try:
             frames = decode_video_frames(
                 rel_path_str,
