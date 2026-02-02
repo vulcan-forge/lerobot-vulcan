@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import shlex
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -242,17 +243,22 @@ def _verify_one_file(
     tolerance_s: float,
     fps: int,
     backend: str | None,
+    decode_batch_size: int = 1,
 ) -> list[FrameError]:
     """Decode sample frames at the given timestamps. Return list of errors (one per failed frame)."""
     errors: list[FrameError] = []
     file_name = file_path.name
     rel_path_str = str(file_path)
+    batch_size = max(1, decode_batch_size)
 
-    for i, ts in enumerate(timestamps):
-        frame_index = int(round(ts * fps))
+    for chunk_start in range(0, len(timestamps), batch_size):
+        chunk = timestamps[chunk_start : chunk_start + batch_size]
+        first_ts = chunk[0]
+        frame_index = int(round(first_ts * fps))
+
         if backend is None:
             ok, msg = _decode_with_both_backends(
-                rel_path_str, [ts], tolerance_s, preferred_backend=None
+                rel_path_str, chunk, tolerance_s, preferred_backend=None
             )
             if not ok and msg:
                 if _is_tolerance_error_message(msg):
@@ -262,7 +268,7 @@ def _verify_one_file(
                         dataset_name=dataset_name,
                         file_name=file_name,
                         video_key=video_key,
-                        timestamp_s=ts,
+                        timestamp_s=first_ts,
                         frame_index=frame_index,
                         message=msg,
                     )
@@ -272,7 +278,7 @@ def _verify_one_file(
         try:
             frames = decode_video_frames(
                 rel_path_str,
-                [ts],
+                chunk,
                 tolerance_s,
                 backend=backend,
             )
@@ -282,7 +288,7 @@ def _verify_one_file(
                         dataset_name=dataset_name,
                         file_name=file_name,
                         video_key=video_key,
-                        timestamp_s=ts,
+                        timestamp_s=first_ts,
                         frame_index=frame_index,
                         message="Decode returned empty or null frames",
                     )
@@ -294,7 +300,7 @@ def _verify_one_file(
                         dataset_name=dataset_name,
                         file_name=file_name,
                         video_key=video_key,
-                        timestamp_s=ts,
+                        timestamp_s=first_ts,
                         frame_index=frame_index,
                         message=f"Invalid frame shape: {frames.shape}",
                     )
@@ -309,7 +315,7 @@ def _verify_one_file(
                     dataset_name=dataset_name,
                     file_name=file_name,
                     video_key=video_key,
-                    timestamp_s=ts,
+                    timestamp_s=first_ts,
                     frame_index=frame_index,
                     message=msg,
                 )
@@ -324,7 +330,7 @@ def _verify_one_file(
                     dataset_name=dataset_name,
                     file_name=file_name,
                     video_key=video_key,
-                    timestamp_s=ts,
+                    timestamp_s=first_ts,
                     frame_index=frame_index,
                     message=msg,
                 )
@@ -334,6 +340,32 @@ def _verify_one_file(
     return errors
 
 
+def _verify_one_file_worker(
+    args: tuple,
+) -> list[FrameError]:
+    """Picklable worker for ProcessPoolExecutor."""
+    (
+        dataset_name,
+        video_key,
+        file_path,
+        timestamps,
+        tolerance_s,
+        fps,
+        backend,
+        decode_batch_size,
+    ) = args
+    return _verify_one_file(
+        dataset_name=dataset_name,
+        video_key=video_key,
+        file_path=Path(file_path) if isinstance(file_path, str) else file_path,
+        timestamps=timestamps,
+        tolerance_s=tolerance_s,
+        fps=fps,
+        backend=backend,
+        decode_batch_size=decode_batch_size,
+    )
+
+
 def verify_datasets(
     datasets: list[str],
     root: Path | None = None,
@@ -341,6 +373,8 @@ def verify_datasets(
     video_backend: str | None = None,
     num_sample_frames: int = 5,
     step_s: float | None = None,
+    decode_batch_size: int = 1,
+    workers: int = 1,
 ) -> list[FrameError]:
     """
     Verify video frames for LeRobot datasets under the HuggingFace LeRobot cache.
@@ -355,6 +389,8 @@ def verify_datasets(
         video_backend: Decoder backend ('torchcodec' or 'pyav'). Default: auto.
         num_sample_frames: Number of sample timestamps per file when step_s is not set.
         step_s: If set, sample at this step in seconds (file_from_ts, +step_s, ...). Overrides num_sample_frames.
+        decode_batch_size: Timestamps per decode call (larger = faster, approximate error location).
+        workers: Number of files to verify in parallel.
 
     Returns:
         List of FrameError for every broken frame found.
@@ -419,20 +455,64 @@ def verify_datasets(
             if temp_errs:
                 return all_errors
 
-        for video_key, file_path, timestamps in files_with_ts:
-            logging.info("\nAnalyzing video: %s (%s)", file_path, video_key)
-            errs = _verify_one_file(
-                dataset_name=dataset_name,
-                video_key=video_key,
-                file_path=file_path,
-                timestamps=timestamps,
-                tolerance_s=tolerance_s,
-                fps=fps,
-                backend=video_backend,
+        file_tasks = [
+            (
+                dataset_name,
+                video_key,
+                str(file_path),
+                timestamps,
+                tolerance_s,
+                fps,
+                video_backend,
+                decode_batch_size,
             )
-            all_errors.extend(errs)
-            if errs:
-                return all_errors
+            for video_key, file_path, timestamps in files_with_ts
+        ]
+
+        if workers <= 1:
+            for (video_key, file_path, timestamps), task in zip(
+                files_with_ts, file_tasks, strict=True
+            ):
+                logging.info("\nAnalyzing video: %s (%s)", file_path, video_key)
+                errs = _verify_one_file(
+                    dataset_name=task[0],
+                    video_key=task[1],
+                    file_path=Path(task[2]),
+                    timestamps=task[3],
+                    tolerance_s=task[4],
+                    fps=task[5],
+                    backend=task[6],
+                    decode_batch_size=task[7],
+                )
+                all_errors.extend(errs)
+                if errs:
+                    return all_errors
+        else:
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                future_to_task = {
+                    executor.submit(_verify_one_file_worker, task): task
+                    for task in file_tasks
+                }
+                for future in as_completed(future_to_task):
+                    task = future_to_task[future]
+                    try:
+                        errs = future.result()
+                    except Exception as e:
+                        logging.exception("Worker failed for %s: %s", task[2], e)
+                        all_errors.append(
+                            FrameError(
+                                dataset_name=task[0],
+                                file_name=Path(task[2]).name,
+                                video_key=task[1],
+                                timestamp_s=0.0,
+                                frame_index=0,
+                                message=f"Worker failed: {e!s}",
+                            )
+                        )
+                        return all_errors
+                    if errs:
+                        all_errors.extend(errs)
+                        return all_errors
 
     return all_errors
 
@@ -477,7 +557,24 @@ def main() -> None:
         "--step_s",
         type=float,
         default=None,
-        help="Step in seconds between checked timestamps per file (e.g. 0.5, 1.0). When set, overrides --num_sample_frames.",
+        help="Step in seconds between checked timestamps per file. When set, overrides --num_sample_frames.",
+    )
+    parser.add_argument(
+        "--corruption_check",
+        action="store_true",
+        help="Use step-based sampling for corruption detection (step_s=0.01 if --step_s not set).",
+    )
+    parser.add_argument(
+        "--decode_batch_size",
+        type=int,
+        default=1,
+        help="Decode this many timestamps per call (default: 1). Larger values are faster but report approximate error location.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of files to verify in parallel (default: 1).",
     )
     parser.add_argument(
         "--output",
@@ -495,13 +592,18 @@ def main() -> None:
         return
 
     root = Path(args.root) if args.root else None
+    step_s = args.step_s
+    if args.corruption_check and step_s is None:
+        step_s = 0.01
     errors = verify_datasets(
         datasets=datasets_list,
         root=root,
         tolerance_s=args.tolerance_s,
         video_backend=args.video_backend or None,
         num_sample_frames=args.num_sample_frames,
-        step_s=args.step_s,
+        step_s=step_s,
+        decode_batch_size=args.decode_batch_size,
+        workers=args.workers,
     )
 
     for err in errors:

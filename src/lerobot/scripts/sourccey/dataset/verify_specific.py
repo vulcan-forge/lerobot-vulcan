@@ -98,7 +98,7 @@ def verify_specific(
     file_index: int,
     start_s: float,
     end_s: float,
-    step_s: float = 0.5,
+    step_s: float = 0.01,
     root: Path | None = None,
     tolerance_s: float = 1e-4,
     backend: str | None = None,
@@ -206,8 +206,8 @@ def main() -> None:
     parser.add_argument(
         "--step_s",
         type=float,
-        default=0.5,
-        help="Step between checked timestamps in seconds (default: 0.5). Use 1/30 for every frame at 30fps.",
+        default=0.01,
+        help="Step between checked timestamps in seconds (default: 0.1). For corruption detection use 0.1 or finer (0.01, 0.001); coarser steps may miss narrow corrupt regions.",
     )
     parser.add_argument(
         "--video_path",
