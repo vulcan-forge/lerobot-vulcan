@@ -420,7 +420,7 @@ def verify_datasets(
                 return all_errors
 
         for video_key, file_path, timestamps in files_with_ts:
-            logging.info("Analyzing video: %s (%s)", file_path, video_key)
+            logging.info("\nAnalyzing video: %s (%s)", file_path, video_key)
             errs = _verify_one_file(
                 dataset_name=dataset_name,
                 video_key=video_key,
