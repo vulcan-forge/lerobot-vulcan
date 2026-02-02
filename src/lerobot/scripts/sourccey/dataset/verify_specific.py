@@ -137,8 +137,8 @@ def main() -> None:
     parser.add_argument(
         "--end_s",
         type=float,
-        default=335.0,
-        help="End time in seconds (default: 335 = 5m35s).",
+        default=340.0,
+        help="End time in seconds (default: 340 = 5m40s).",
     )
     parser.add_argument(
         "--step_s",
