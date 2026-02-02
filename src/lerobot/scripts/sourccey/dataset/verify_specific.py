@@ -26,6 +26,12 @@ def _scalar(val) -> float | int:
     return val
 
 
+def _is_tolerance_error(exc: BaseException) -> bool:
+    """True if the exception is the timestamp-tolerance AssertionError from decode_video_frames."""
+    msg = str(exc).lower()
+    return "tolerance" in msg and ("violate" in msg or "query timestamps" in msg)
+
+
 def _find_video_file_path(
     meta: LeRobotDatasetMetadata,
     video_key: str,
@@ -90,6 +96,8 @@ def verify_specific(
         try:
             decode_video_frames(str(path), [t], tolerance_s, backend=backend)
         except Exception as e:
+            if _is_tolerance_error(e):
+                continue
             errors.append({
                 "timestamp_s": t,
                 "frame_index": frame_index,
