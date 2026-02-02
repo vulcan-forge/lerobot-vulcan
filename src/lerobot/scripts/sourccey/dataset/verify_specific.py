@@ -12,10 +12,7 @@ from pathlib import Path
 
 from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
 from lerobot.datasets.utils import load_episodes
-from lerobot.datasets.video_utils import (
-    decode_video_frames,
-    get_safe_default_codec,
-)
+from lerobot.datasets.video_utils import decode_video_frames
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.utils import init_logging
 
@@ -32,33 +29,6 @@ def _is_tolerance_error_message(msg: str) -> bool:
         return False
     m = msg.lower()
     return "tolerance" in m and ("violate" in m or "query timestamps" in m)
-
-
-def _decode_with_both_backends(
-    path: str | Path,
-    timestamps: list[float],
-    tolerance_s: float,
-    preferred_backend: str | None,
-) -> tuple[bool, str | None]:
-    """
-    Try preferred backend (or torchcodec), then fallback (pyav). Return (success, error_message).
-    Mirrors training: both backends must succeed or we report the failure(s).
-    """
-    primary = preferred_backend or get_safe_default_codec()
-    fallback = "pyav" if primary == "torchcodec" else "torchcodec"
-    errors: list[str] = []
-    for backend in (primary, fallback):
-        try:
-            decode_video_frames(str(path), timestamps, tolerance_s, backend=backend)
-            # This backend succeeded; if we had a previous failure, the frame is still bad for training
-            # which uses primary then fallback. So we only report success if primary succeeded.
-            if backend == primary:
-                return True, None
-            # Fallback succeeded but primary failed - report primary failure so user knows training would fail
-            return False, f"{primary}: {errors[0]}" if errors else "unknown"
-        except Exception as e:
-            errors.append(f"{backend}: {type(e).__name__}: {e!s}")
-    return False, " ; ".join(errors)
 
 
 def _find_video_file_path(
@@ -107,11 +77,12 @@ def verify_specific(
 ) -> list[dict]:
     """
     Decode frames in [start_s, end_s] for the given video file. Return list of errors.
-    Tries torchcodec then pyav (like training) so corrupt frames are guaranteed to be found.
+    Uses torchcodec only (no pyav).
     """
     root_base = root or HF_LEROBOT_HOME
     dataset_root = root_base / repo_id / dataset_folder
     dataset_name = f"{repo_id}/{dataset_folder}"
+    backend_actual = backend if backend is not None else "torchcodec"
 
     if video_path is not None:
         path = Path(video_path)
@@ -125,39 +96,25 @@ def verify_specific(
         if path is None:
             return [{"error": "file_not_found", "video_key": video_key, "file_index": file_index}]
 
-    use_both_backends = backend is None
     errors: list[dict] = []
     t = start_s
     while t <= end_s:
         if abs(t - round(t)) < 1e-9:
             logging.info("Checking %.1f s ...", t)
         frame_index = int(round(t * fps))
-        if use_both_backends:
-            ok, msg = _decode_with_both_backends(path, [t], tolerance_s, preferred_backend=backend)
-            if not ok and msg:
-                if _is_tolerance_error_message(msg):
-                    t += step_s
-                    continue
-                errors.append({
-                    "timestamp_s": t,
-                    "frame_index": frame_index,
-                    "message": msg,
-                })
-                break
-        else:
-            try:
-                decode_video_frames(str(path), [t], tolerance_s, backend=backend)
-            except Exception as e:
-                msg = f"{type(e).__name__}: {e!s}"
-                if _is_tolerance_error_message(msg):
-                    t += step_s
-                    continue
-                errors.append({
-                    "timestamp_s": t,
-                    "frame_index": frame_index,
-                    "message": msg,
-                })
-                break
+        try:
+            decode_video_frames(str(path), [t], tolerance_s, backend=backend_actual)
+        except Exception as e:
+            msg = f"{type(e).__name__}: {e!s}"
+            if _is_tolerance_error_message(msg):
+                t += step_s
+                continue
+            errors.append({
+                "timestamp_s": t,
+                "frame_index": frame_index,
+                "message": msg,
+            })
+            break
         t += step_s
 
     return errors
@@ -238,7 +195,7 @@ def main() -> None:
         type=str,
         default=None,
         choices=["torchcodec", "pyav", "video_reader"],
-        help="Video decoder backend (default: auto).",
+        help="Video decoder backend (default: torchcodec). No pyav fallback.",
     )
 
     args = parser.parse_args()

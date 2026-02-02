@@ -13,17 +13,17 @@ frames so they can be fixed or excluded before training fails.
 import argparse
 import json
 import logging
+import re
 import shlex
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
+import multiprocessing
+
 from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
 from lerobot.datasets.utils import load_episodes
-from lerobot.datasets.video_utils import (
-    decode_video_frames,
-    get_safe_default_codec,
-)
+from lerobot.datasets.video_utils import decode_video_frames
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.utils import init_logging
 
@@ -44,28 +44,13 @@ class FrameError:
 TEMP_FOLDER_PREFIXES = ("tmp", "temp")
 
 
-def _decode_with_both_backends(
-    path: str | Path,
-    timestamps: list[float],
-    tolerance_s: float,
-    preferred_backend: str | None,
-) -> tuple[bool, str | None]:
-    """
-    Try preferred backend (or torchcodec), then fallback (pyav). Return (success, error_message).
-    Mirrors training: both backends must succeed or we report the failure(s).
-    """
-    primary = preferred_backend or get_safe_default_codec()
-    fallback = "pyav" if primary == "torchcodec" else "torchcodec"
-    errors: list[str] = []
-    for backend in (primary, fallback):
-        try:
-            decode_video_frames(str(path), timestamps, tolerance_s, backend=backend)
-            if backend == primary:
-                return True, None
-            return False, (errors[0] if errors else "unknown")
-        except Exception as e:
-            errors.append(f"{backend}: {type(e).__name__}: {e!s}")
-    return False, " ; ".join(errors)
+def _worker_label() -> str:
+    """Return a short label for the current process (e.g. 'worker 1') for logging."""
+    name = multiprocessing.current_process().name
+    m = re.search(r"(\d+)$", name)
+    if m:
+        return f"worker {m.group(1)}"
+    return "worker 0" if name == "MainProcess" else name
 
 
 def _is_tolerance_error_message(msg: str) -> bool:
@@ -74,6 +59,28 @@ def _is_tolerance_error_message(msg: str) -> bool:
         return False
     m = msg.lower()
     return "tolerance" in m and ("violate" in m or "query timestamps" in m)
+
+
+def _is_end_of_stream_error(msg: str) -> bool:
+    """True if the error is from requesting a frame past the end of the video (metadata boundary)."""
+    if not msg:
+        return False
+    m = msg.lower()
+    return (
+        "no more frames" in m
+        or ("invalid frame index" in m and "must be less than" in m)
+    )
+
+
+def _is_invalid_packet_error(msg: str) -> bool:
+    """True if the error is decoder 'invalid data' packet (skip; not necessarily corruption)."""
+    if not msg:
+        return False
+    m = msg.lower()
+    return (
+        "invalid data found when processing input" in m
+        or "could not push packet to decoder" in m
+    )
 
 
 def _find_temp_folders(dataset_root: Path) -> list[Path]:
@@ -92,43 +99,27 @@ def _verify_temp_folder_videos(
     temp_dir: Path,
     tolerance_s: float,
     fps: int,
-    backend: str | None,
+    backend: str,
 ) -> list[FrameError]:
     """Try to decode first frame of each .mp4 in a temp folder; return errors for failures."""
     errors: list[FrameError] = []
     for mp4_path in temp_dir.rglob("*.mp4"):
-        if backend is None:
-            ok, msg = _decode_with_both_backends(mp4_path, [0.0], tolerance_s, preferred_backend=None)
-            if not ok and msg:
-                if _is_tolerance_error_message(msg):
-                    continue
-                errors.append(
-                    FrameError(
-                        dataset_name=dataset_name,
-                        file_name=mp4_path.name,
-                        video_key=f"(temp folder: {temp_dir.name})",
-                        timestamp_s=0.0,
-                        frame_index=0,
-                        message=msg,
-                    )
+        try:
+            decode_video_frames(str(mp4_path), [0.0], tolerance_s, backend=backend)
+        except Exception as e:
+            msg = f"{type(e).__name__}: {e!s}"
+            if _is_tolerance_error_message(msg):
+                continue
+            errors.append(
+                FrameError(
+                    dataset_name=dataset_name,
+                    file_name=mp4_path.name,
+                    video_key=f"(temp folder: {temp_dir.name})",
+                    timestamp_s=0.0,
+                    frame_index=0,
+                    message=msg,
                 )
-        else:
-            try:
-                decode_video_frames(str(mp4_path), [0.0], tolerance_s, backend=backend)
-            except Exception as e:
-                msg = f"{type(e).__name__}: {e!s}"
-                if _is_tolerance_error_message(msg):
-                    continue
-                errors.append(
-                    FrameError(
-                        dataset_name=dataset_name,
-                        file_name=mp4_path.name,
-                        video_key=f"(temp folder: {temp_dir.name})",
-                        timestamp_s=0.0,
-                        frame_index=0,
-                        message=msg,
-                    )
-                )
+            )
     return errors
 
 
@@ -210,11 +201,24 @@ def _get_unique_video_files_with_timestamps(
         duration = file_to_ts - file_from_ts
         fps = meta.fps
         if step_s is not None and step_s > 0:
-            # Sample at file_from_ts, file_from_ts + step_s, ... until <= file_to_ts
+            # Sample at file_from_ts, file_from_ts + step_s, ... but never at/past last frame (0-based).
+            # Use an exclusive upper bound so we never request a frame that doesn't exist when the
+            # actual file has fewer frames than metadata (avoids "no more frames" / "Invalid frame index").
+            # Cap at 2 seconds before file_to_ts so we never sample near the end.
+            num_frames_from_meta = int(duration * fps)
+            num_frames = max(1, num_frames_from_meta - 2)
+            last_valid_from_frames = file_from_ts + (num_frames - 1) / fps
+            last_valid_from_end = file_to_ts - 2.0  # 2 seconds before metadata end
+            # Exclusive upper bound: we add t only when t < last_valid_ts (never include boundary).
+            last_valid_ts = max(
+                file_from_ts,
+                min(last_valid_from_frames, last_valid_from_end),
+            )
             timestamps = []
             t = file_from_ts
             while t <= file_to_ts:
-                timestamps.append(t)
+                if t < last_valid_ts:
+                    timestamps.append(t)
                 t += step_s
             if not timestamps:
                 timestamps = [file_from_ts]
@@ -242,7 +246,7 @@ def _verify_one_file(
     timestamps: list[float],
     tolerance_s: float,
     fps: int,
-    backend: str | None,
+    backend: str,
     decode_batch_size: int = 1,
 ) -> list[FrameError]:
     """Decode sample frames at the given timestamps. Return list of errors (one per failed frame)."""
@@ -256,25 +260,6 @@ def _verify_one_file(
         first_ts = chunk[0]
         frame_index = int(round(first_ts * fps))
 
-        if backend is None:
-            ok, msg = _decode_with_both_backends(
-                rel_path_str, chunk, tolerance_s, preferred_backend=None
-            )
-            if not ok and msg:
-                if _is_tolerance_error_message(msg):
-                    continue
-                errors.append(
-                    FrameError(
-                        dataset_name=dataset_name,
-                        file_name=file_name,
-                        video_key=video_key,
-                        timestamp_s=first_ts,
-                        frame_index=frame_index,
-                        message=msg,
-                    )
-                )
-                break
-            continue
         try:
             frames = decode_video_frames(
                 rel_path_str,
@@ -325,6 +310,22 @@ def _verify_one_file(
             msg = f"{type(e).__name__}: {e!s}"
             if _is_tolerance_error_message(msg):
                 continue
+            if _is_end_of_stream_error(msg):
+                # Metadata said we had more frames than the file; skip this chunk, not a data error.
+                logging.debug(
+                    "Skipping chunk at ts=%.2f (end-of-stream): %s",
+                    first_ts,
+                    msg[:80],
+                )
+                continue
+            if _is_invalid_packet_error(msg):
+                # Decoder rejected a packet; often a decoder quirk, not real corruption.
+                logging.debug(
+                    "Skipping chunk at ts=%.2f (invalid packet): %s",
+                    first_ts,
+                    msg[:80],
+                )
+                continue
             errors.append(
                 FrameError(
                     dataset_name=dataset_name,
@@ -338,6 +339,11 @@ def _verify_one_file(
             break
 
     return errors
+
+
+def _init_worker_logging() -> None:
+    """Initialize logging in each pool worker so INFO logs from workers are visible."""
+    init_logging()
 
 
 def _verify_one_file_worker(
@@ -354,6 +360,8 @@ def _verify_one_file_worker(
         backend,
         decode_batch_size,
     ) = args
+    file_name = Path(file_path).name if isinstance(file_path, str) else Path(file_path).name
+    logging.info("[%s] Analyzing video: %s (%s)", _worker_label(), file_name, video_key)
     return _verify_one_file(
         dataset_name=dataset_name,
         video_key=video_key,
@@ -375,6 +383,7 @@ def verify_datasets(
     step_s: float | None = None,
     decode_batch_size: int = 1,
     workers: int = 1,
+    stop_on_first_error: bool = True,
 ) -> list[FrameError]:
     """
     Verify video frames for LeRobot datasets under the HuggingFace LeRobot cache.
@@ -386,11 +395,12 @@ def verify_datasets(
         datasets: List of "repo_id/name" (e.g. ["sourccey-012/ds1", "sourccey-012/ds2"]).
         root: Cache root (default: HF_LEROBOT_HOME).
         tolerance_s: Timestamp tolerance in seconds (same as training).
-        video_backend: Decoder backend ('torchcodec' or 'pyav'). Default: auto.
+        video_backend: Decoder backend (default: torchcodec). No pyav fallback.
         num_sample_frames: Number of sample timestamps per file when step_s is not set.
         step_s: If set, sample at this step in seconds (file_from_ts, +step_s, ...). Overrides num_sample_frames.
         decode_batch_size: Timestamps per decode call (larger = faster, approximate error location).
         workers: Number of files to verify in parallel.
+        stop_on_first_error: If True, return as soon as any error is found. If False, collect all errors.
 
     Returns:
         List of FrameError for every broken frame found.
@@ -431,6 +441,7 @@ def verify_datasets(
             logging.info("Dataset %s has no video keys, skipping.", dataset_name)
             continue
 
+        backend = video_backend if video_backend is not None else "torchcodec"
         fps = meta.fps
         files_with_ts = _get_unique_video_files_with_timestamps(
             meta, num_sample_frames=num_sample_frames, step_s=step_s
@@ -449,10 +460,10 @@ def verify_datasets(
                 )
             )
             temp_errs = _verify_temp_folder_videos(
-                dataset_name, temp_dir, tolerance_s, fps, video_backend
+                dataset_name, temp_dir, tolerance_s, fps, backend
             )
             all_errors.extend(temp_errs)
-            if temp_errs:
+            if temp_errs and stop_on_first_error:
                 return all_errors
 
         file_tasks = [
@@ -463,7 +474,7 @@ def verify_datasets(
                 timestamps,
                 tolerance_s,
                 fps,
-                video_backend,
+                backend,
                 decode_batch_size,
             )
             for video_key, file_path, timestamps in files_with_ts
@@ -473,7 +484,12 @@ def verify_datasets(
             for (video_key, file_path, timestamps), task in zip(
                 files_with_ts, file_tasks, strict=True
             ):
-                logging.info("\nAnalyzing video: %s (%s)", file_path, video_key)
+                logging.info(
+                    "[%s] Analyzing video: %s (%s)",
+                    _worker_label(),
+                    file_path.name,
+                    video_key,
+                )
                 errs = _verify_one_file(
                     dataset_name=task[0],
                     video_key=task[1],
@@ -485,10 +501,13 @@ def verify_datasets(
                     decode_batch_size=task[7],
                 )
                 all_errors.extend(errs)
-                if errs:
+                if errs and stop_on_first_error:
                     return all_errors
         else:
-            with ProcessPoolExecutor(max_workers=workers) as executor:
+            with ProcessPoolExecutor(
+                max_workers=workers,
+                initializer=_init_worker_logging,
+            ) as executor:
                 future_to_task = {
                     executor.submit(_verify_one_file_worker, task): task
                     for task in file_tasks
@@ -509,10 +528,12 @@ def verify_datasets(
                                 message=f"Worker failed: {e!s}",
                             )
                         )
-                        return all_errors
+                        if stop_on_first_error:
+                            return all_errors
                     if errs:
                         all_errors.extend(errs)
-                        return all_errors
+                        if stop_on_first_error:
+                            return all_errors
 
     return all_errors
 
@@ -545,7 +566,7 @@ def main() -> None:
         type=str,
         default=None,
         choices=["torchcodec", "pyav", "video_reader"],
-        help="Video decoder backend (default: auto).",
+        help="Video decoder backend (default: torchcodec). No pyav fallback.",
     )
     parser.add_argument(
         "--num_sample_frames",
@@ -562,7 +583,7 @@ def main() -> None:
     parser.add_argument(
         "--corruption_check",
         action="store_true",
-        help="Use step-based sampling for corruption detection (step_s=0.01 if --step_s not set).",
+        help="Use step-based sampling for corruption detection (step_s=1.0s if --step_s not set).",
     )
     parser.add_argument(
         "--decode_batch_size",
@@ -582,6 +603,11 @@ def main() -> None:
         default=None,
         help="Optional path to write errors as JSON (one object per line).",
     )
+    parser.add_argument(
+        "--no-stop-on-first-error",
+        action="store_true",
+        help="Collect and report all errors instead of stopping after the first.",
+    )
 
     args = parser.parse_args()
     init_logging()
@@ -594,7 +620,7 @@ def main() -> None:
     root = Path(args.root) if args.root else None
     step_s = args.step_s
     if args.corruption_check and step_s is None:
-        step_s = 0.01
+        step_s = 1.0
     errors = verify_datasets(
         datasets=datasets_list,
         root=root,
@@ -604,6 +630,7 @@ def main() -> None:
         step_s=step_s,
         decode_batch_size=args.decode_batch_size,
         workers=args.workers,
+        stop_on_first_error=not args.no_stop_on_first_error,
     )
 
     for err in errors:
