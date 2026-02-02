@@ -67,6 +67,14 @@ def _decode_with_both_backends(
     return False, " ; ".join(errors)
 
 
+def _is_tolerance_error_message(msg: str) -> bool:
+    """True if the error is the timestamp-tolerance AssertionError (skip; not corruption)."""
+    if not msg:
+        return False
+    m = msg.lower()
+    return "tolerance" in m and ("violate" in m or "query timestamps" in m)
+
+
 def _find_temp_folders(dataset_root: Path) -> list[Path]:
     """Return immediate children of dataset_root that look like temp/tmp folders."""
     if not dataset_root.exists() or not dataset_root.is_dir():
@@ -91,6 +99,8 @@ def _verify_temp_folder_videos(
         if backend is None:
             ok, msg = _decode_with_both_backends(mp4_path, [0.0], tolerance_s, preferred_backend=None)
             if not ok and msg:
+                if _is_tolerance_error_message(msg):
+                    continue
                 errors.append(
                     FrameError(
                         dataset_name=dataset_name,
@@ -105,6 +115,9 @@ def _verify_temp_folder_videos(
             try:
                 decode_video_frames(str(mp4_path), [0.0], tolerance_s, backend=backend)
             except Exception as e:
+                msg = f"{type(e).__name__}: {e!s}"
+                if _is_tolerance_error_message(msg):
+                    continue
                 errors.append(
                     FrameError(
                         dataset_name=dataset_name,
@@ -112,7 +125,7 @@ def _verify_temp_folder_videos(
                         video_key=f"(temp folder: {temp_dir.name})",
                         timestamp_s=0.0,
                         frame_index=0,
-                        message=f"{type(e).__name__}: {e!s}",
+                        message=msg,
                     )
                 )
     return errors
@@ -145,12 +158,13 @@ def _scalar(val) -> float | int:
 def _get_unique_video_files_with_timestamps(
     meta: LeRobotDatasetMetadata,
     num_sample_frames: int = 5,
+    step_s: float | None = None,
 ) -> list[tuple[str, Path, list[float]]]:
     """
     For a dataset, return list of (video_key, absolute_path, list of timestamps to check).
 
-    Timestamps are frame-aligned (file_from_ts + frame_index/fps) so decode checks match
-    training and avoid false tolerance/out-of-range errors.
+    When step_s is set, timestamps are file_from_ts, file_from_ts + step_s, ... until file_to_ts.
+    Otherwise timestamps are frame-aligned (file_from_ts + frame_index/fps) using num_sample_frames.
     """
     if not meta.video_keys or meta.video_path is None:
         return []
@@ -194,17 +208,27 @@ def _get_unique_video_files_with_timestamps(
             continue
         duration = file_to_ts - file_from_ts
         fps = meta.fps
-        # Number of frames in this file (floor so we stay in range)
-        num_frames = int(duration * fps)
-        if num_frames <= 0:
-            timestamps = [file_from_ts]
+        if step_s is not None and step_s > 0:
+            # Sample at file_from_ts, file_from_ts + step_s, ... until <= file_to_ts
+            timestamps = []
+            t = file_from_ts
+            while t <= file_to_ts:
+                timestamps.append(t)
+                t += step_s
+            if not timestamps:
+                timestamps = [file_from_ts]
         else:
-            # Sample frame indices 0, ..., num_frames-1 (never num_frames → avoids IndexError)
-            step = max(1, (num_frames - 1) // max(1, num_sample_frames - 1))
-            frame_indices = [min(i * step, num_frames - 1) for i in range(num_sample_frames)]
-            frame_indices = sorted(set(frame_indices))  # unique, sorted
-            # Frame-aligned timestamps (same grid training uses)
-            timestamps = [file_from_ts + idx / fps for idx in frame_indices]
+            # Number of frames in this file (floor so we stay in range)
+            num_frames = int(duration * fps)
+            if num_frames <= 0:
+                timestamps = [file_from_ts]
+            else:
+                # Sample frame indices 0, ..., num_frames-1 (never num_frames → avoids IndexError)
+                step = max(1, (num_frames - 1) // max(1, num_sample_frames - 1))
+                frame_indices = [min(i * step, num_frames - 1) for i in range(num_sample_frames)]
+                frame_indices = sorted(set(frame_indices))  # unique, sorted
+                # Frame-aligned timestamps (same grid training uses)
+                timestamps = [file_from_ts + idx / fps for idx in frame_indices]
         result.append((video_key, abs_path, timestamps))
 
     return result
@@ -231,6 +255,8 @@ def _verify_one_file(
                 rel_path_str, [ts], tolerance_s, preferred_backend=None
             )
             if not ok and msg:
+                if _is_tolerance_error_message(msg):
+                    continue
                 errors.append(
                     FrameError(
                         dataset_name=dataset_name,
@@ -241,6 +267,7 @@ def _verify_one_file(
                         message=msg,
                     )
                 )
+                break
             continue
         try:
             frames = decode_video_frames(
@@ -260,7 +287,7 @@ def _verify_one_file(
                         message="Decode returned empty or null frames",
                     )
                 )
-                continue
+                break
             if not frames.shape or len(frames.shape) < 3:
                 errors.append(
                     FrameError(
@@ -272,7 +299,11 @@ def _verify_one_file(
                         message=f"Invalid frame shape: {frames.shape}",
                     )
                 )
+                break
         except AssertionError as e:
+            msg = f"AssertionError: {e!s}"
+            if _is_tolerance_error_message(msg):
+                continue
             errors.append(
                 FrameError(
                     dataset_name=dataset_name,
@@ -280,10 +311,14 @@ def _verify_one_file(
                     video_key=video_key,
                     timestamp_s=ts,
                     frame_index=frame_index,
-                    message=f"AssertionError: {e!s}",
+                    message=msg,
                 )
             )
+            break
         except Exception as e:
+            msg = f"{type(e).__name__}: {e!s}"
+            if _is_tolerance_error_message(msg):
+                continue
             errors.append(
                 FrameError(
                     dataset_name=dataset_name,
@@ -291,9 +326,10 @@ def _verify_one_file(
                     video_key=video_key,
                     timestamp_s=ts,
                     frame_index=frame_index,
-                    message=f"{type(e).__name__}: {e!s}",
+                    message=msg,
                 )
             )
+            break
 
     return errors
 
@@ -304,6 +340,7 @@ def verify_datasets(
     tolerance_s: float = 1e-4,
     video_backend: str | None = None,
     num_sample_frames: int = 5,
+    step_s: float | None = None,
 ) -> list[FrameError]:
     """
     Verify video frames for LeRobot datasets under the HuggingFace LeRobot cache.
@@ -316,13 +353,13 @@ def verify_datasets(
         root: Cache root (default: HF_LEROBOT_HOME).
         tolerance_s: Timestamp tolerance in seconds (same as training).
         video_backend: Decoder backend ('torchcodec' or 'pyav'). Default: auto.
-        num_sample_frames: Number of sample timestamps to check per video file.
+        num_sample_frames: Number of sample timestamps per file when step_s is not set.
+        step_s: If set, sample at this step in seconds (file_from_ts, +step_s, ...). Overrides num_sample_frames.
 
     Returns:
         List of FrameError for every broken frame found.
     """
     all_errors: list[FrameError] = []
-    backend = video_backend or get_safe_default_codec()
     root_base = root or HF_LEROBOT_HOME
 
     for spec in datasets:
@@ -359,7 +396,9 @@ def verify_datasets(
             continue
 
         fps = meta.fps
-        files_with_ts = _get_unique_video_files_with_timestamps(meta, num_sample_frames)
+        files_with_ts = _get_unique_video_files_with_timestamps(
+            meta, num_sample_frames=num_sample_frames, step_s=step_s
+        )
 
         # Check for temp/tmp folders (should not be present; often contain broken videos)
         for temp_dir in _find_temp_folders(dataset_root):
@@ -373,13 +412,15 @@ def verify_datasets(
                     message=f"Dataset contains temp/tmp folder: {temp_dir.name}",
                 )
             )
-            all_errors.extend(
-                _verify_temp_folder_videos(
-                    dataset_name, temp_dir, tolerance_s, fps, backend
-                )
+            temp_errs = _verify_temp_folder_videos(
+                dataset_name, temp_dir, tolerance_s, fps, video_backend
             )
+            all_errors.extend(temp_errs)
+            if temp_errs:
+                return all_errors
 
         for video_key, file_path, timestamps in files_with_ts:
+            logging.info("Analyzing video: %s (%s)", file_path, video_key)
             errs = _verify_one_file(
                 dataset_name=dataset_name,
                 video_key=video_key,
@@ -387,9 +428,11 @@ def verify_datasets(
                 timestamps=timestamps,
                 tolerance_s=tolerance_s,
                 fps=fps,
-                backend=backend,
+                backend=video_backend,
             )
             all_errors.extend(errs)
+            if errs:
+                return all_errors
 
     return all_errors
 
@@ -428,7 +471,13 @@ def main() -> None:
         "--num_sample_frames",
         type=int,
         default=5,
-        help="Number of sample frames to check per video file (default: 5).",
+        help="Number of sample frames to check per video file when --step_s is not set (default: 5).",
+    )
+    parser.add_argument(
+        "--step_s",
+        type=float,
+        default=None,
+        help="Step in seconds between checked timestamps per file (e.g. 0.5, 1.0). When set, overrides --num_sample_frames.",
     )
     parser.add_argument(
         "--output",
@@ -452,6 +501,7 @@ def main() -> None:
         tolerance_s=args.tolerance_s,
         video_backend=args.video_backend or None,
         num_sample_frames=args.num_sample_frames,
+        step_s=args.step_s,
     )
 
     for err in errors:
