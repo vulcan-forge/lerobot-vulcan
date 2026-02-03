@@ -127,17 +127,17 @@ class SourcceyZCalibrator:
         invert = self.actuator.invert
 
         # Phase 1: UP -> top
-        self._drive(self.up_cmd)
-        raw_top = self._wait_until_stable(self.up_cmd)
+        self._drive()
+        raw_top = self._wait_until_stable()
         self.actuator.stop()
         time.sleep(0.25)
 
         # Phase 2: DOWN -> bottom
         # The linear actuator can get stuck at the bottom without a hardware block,
         # So we wait for 5 seconds until we have a hardware stop
-        self._drive(self.down_cmd)
+        self._drive()
         # raw_bottom = self._wait_for_seconds(self.down_cmd, 5.0)
-        raw_bottom = self._wait_until_stable(self.down_cmd)
+        raw_bottom = self._wait_until_stable()
         self.actuator.stop()
         time.sleep(0.25)
 
