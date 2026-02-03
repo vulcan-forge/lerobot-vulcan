@@ -30,9 +30,9 @@ class SourcceyZCalibrator:
         self,
         actuator,  # SourcceyZActuator
         *,
-        stable_s: float = 1.0,
+        stable_s: float = 0.25,
         sample_hz: float = 30.0,
-        stable_eps_pos: float = 0.75,
+        stable_eps_pos: float = 0.25,
         max_phase_s: float = 30.0,
         down_cmd: float = -1.0,
         up_cmd: float = 1.0,
@@ -60,31 +60,39 @@ class SourcceyZCalibrator:
         """Read native MCP3008 units (0..1023)."""
         return int(self.actuator.sensor.read_raw().raw)
 
-    def _wait_until_stable(self, cmd: float) -> int:
+    def _wait_until_stable(self) -> int:
+        """
+        Wait until position change stays within epsilon for stable_s.
+        Returns the raw value (0..1023) at the moment stability is achieved.
+        """
         period = 1.0 / max(1.0, self.sample_hz)
         t_deadline = time.monotonic() + self.max_phase_s
-        last_pos = None
-        stable_start = None
+
+        last_pos: Optional[float] = None
+        stable_start: Optional[float] = None
 
         while True:
             now = time.monotonic()
             if now >= t_deadline:
                 raise TimeoutError("Z calibrator timed out waiting for stability (end stop not detected).")
-        if last_pos is None:
-            last_pos = pos
-            stable_start = None
-        else:
-            if abs(pos - last_pos) <= self.stable_eps_pos:
-                if stable_start is None:
-                    stable_start = now
-                elif (now - stable_start) >= self.stable_s:
-                    return self._read_raw()
-            else:
+
+            pos = self._read_pos()
+
+            if last_pos is None:
+                last_pos = pos
                 stable_start = None
+            else:
+                if abs(pos - last_pos) <= self.stable_eps_pos:
+                    if stable_start is None:
+                        stable_start = now
+                    elif (now - stable_start) >= self.stable_s:
+                        return self._read_raw()
+                else:
+                    stable_start = None
 
-            last_pos = pos
+                last_pos = pos
 
-        time.sleep(period)
+            time.sleep(period)
 
     def _wait_for_seconds(self, cmd: float, seconds: float) -> int:
         """
@@ -127,7 +135,7 @@ class SourcceyZCalibrator:
         invert = self.actuator.invert
 
         # Phase 1: UP -> top
-        self._drive()
+        self._drive(self.up_cmd)
         raw_top = self._wait_until_stable()
         self.actuator.stop()
         time.sleep(0.25)
@@ -135,7 +143,7 @@ class SourcceyZCalibrator:
         # Phase 2: DOWN -> bottom
         # The linear actuator can get stuck at the bottom without a hardware block,
         # So we wait for 5 seconds until we have a hardware stop
-        self._drive()
+        self._drive(self.down_cmd)
         # raw_bottom = self._wait_for_seconds(self.down_cmd, 5.0)
         raw_bottom = self._wait_until_stable()
         self.actuator.stop()
