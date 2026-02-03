@@ -32,7 +32,7 @@ class SourcceyZCalibrator:
         *,
         stable_s: float = 0.25,
         sample_hz: float = 30.0,
-        stable_eps_pos: float = 0.75,
+        stable_eps_pos: float = 1.0,
         max_phase_s: float = 30.0,
         down_cmd: float = -1.0,
         up_cmd: float = 1.0,
