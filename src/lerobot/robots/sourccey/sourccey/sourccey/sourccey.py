@@ -208,16 +208,16 @@ class Sourccey(Robot):
                 kwargs={"reverse": True, "full_reset": full_reset}
             )
 
-            # # Start left arm immediately
-            # left_thread.start()
+            # Start left arm immediately
+            left_thread.start()
 
-            # # Wait 3 seconds before starting right arm
-            # time.sleep(3)
-            # right_thread.start()
+            # Wait 3 seconds before starting right arm
+            time.sleep(3)
+            right_thread.start()
 
-            # # Wait for both threads to complete
-            # left_thread.join()
-            # right_thread.join()
+            # Wait for both threads to complete
+            left_thread.join()
+            right_thread.join()
 
             # Calibrate the z actuator
             self.z_actuator.calibrator.auto_calibrate()
