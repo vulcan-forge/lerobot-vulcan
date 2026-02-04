@@ -27,7 +27,7 @@ from lerobot.robots.robot import Robot
 from lerobot.robots.sourccey.sourccey.protobuf.sourccey_protobuf import SourcceyProtobuf
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower import SourcceyFollower
-from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import SourcceyZActuator, ZSensor
+# from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import SourcceyZActuator, ZSensor
 from .config_sourccey import SourcceyConfig
 
 logger = logging.getLogger(__name__)
@@ -80,13 +80,14 @@ class Sourccey(Robot):
             config=self.config.dc_motors_config,
         )
 
-         # Z Actuator Code
-        self.z_sensor = ZSensor(adc_channel=1, vref=3.30, average_samples=50)
-        self.z_actuator = SourcceyZActuator(
-            sensor=self.z_sensor,
-            driver=self.dc_motors_controller,
-            motor="linear_actuator",
-        )
+        # Z Actuator Code (disabled for legacy robot without linear actuator encoder)
+        # self.z_sensor = ZSensor(adc_channel=1, vref=3.30, average_samples=50)
+        # self.z_actuator = SourcceyZActuator(
+        #     sensor=self.z_sensor,
+        #     driver=self.dc_motors_controller,
+        #     motor="linear_actuator",
+        # )
+        self.z_actuator = None
 
         # Initialize protobuf converter
         self.protobuf_converter = SourcceyProtobuf()
@@ -145,7 +146,7 @@ class Sourccey(Robot):
         self.right_arm.connect(calibrate)
 
         self.dc_motors_controller.connect()
-        self.z_actuator.connect()
+        # self.z_actuator.connect()
 
         # Connect only target cameras
         self._connected_cameras.clear()
@@ -167,8 +168,9 @@ class Sourccey(Robot):
         self.stop_base()
         self.dc_motors_controller.disconnect()
 
-        self.z_actuator.stop()
-        self.z_actuator.disconnect()
+        # if self.z_actuator is not None:
+        #     self.z_actuator.stop()
+        #     self.z_actuator.disconnect()
 
         # Disconnect only those we connected
         for cam_key in list(self._connected_cameras):
@@ -219,8 +221,8 @@ class Sourccey(Robot):
             left_thread.join()
             right_thread.join()
 
-            # Calibrate the z actuator
-            self.z_actuator.calibrator.auto_calibrate()
+            # Calibrate the z actuator (disabled for legacy robot without linear actuator encoder)
+            # self.z_actuator.calibrator.auto_calibrate()
 
         elif arm == "left":
             self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)
@@ -259,13 +261,8 @@ class Sourccey(Robot):
             obs_dict.update(base_vel)
 
             # Z actuator position (best-effort; keep schema stable)
-            try:
-                if self.z_actuator is not None and self.z_actuator.is_connected and self.z_actuator.use_z_actuator:
-                    obs_dict["z.pos"] = float(self.z_actuator.read_position())
-                else:
-                    obs_dict["z.pos"] = 100.0
-            except Exception:
-                obs_dict["z.pos"] = 100.0
+            # Legacy robot has no linear actuator encoder; keep schema stable with a fixed value.
+            obs_dict["z.pos"] = 100.0
 
             for cam_key in self.cameras.keys():
                 try:
@@ -316,11 +313,11 @@ class Sourccey(Robot):
             )
 
             # Z actuator is position-controlled; drive toward the latest z.pos target (non-blocking).
-            if "z.pos" in base_goal_pos and self.z_actuator.use_z_actuator:
-                try:
-                    self.z_actuator.move_to_position(float(base_goal_pos.get("z.pos", 100.0)), hz=30.0, instant=True)
-                except Exception as e:
-                    logger.warning(f"Failed to command z actuator: {e}")
+            # if "z.pos" in base_goal_pos and self.z_actuator.use_z_actuator:
+            #     try:
+            #         self.z_actuator.move_to_position(float(base_goal_pos.get("z.pos", 100.0)), hz=30.0, instant=True)
+            #     except Exception as e:
+            #         logger.warning(f"Failed to command z actuator: {e}")
 
             dc_motors_action = {**wheel_action }
             self.dc_motors_controller.set_velocities(dc_motors_action)
