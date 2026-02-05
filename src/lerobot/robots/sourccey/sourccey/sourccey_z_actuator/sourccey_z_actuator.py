@@ -69,9 +69,7 @@ class ZSensor:
 
     @property
     def is_connected(self) -> bool:
-
-        # Temporary disable Z actuator 1/26/2026. Turn this back on when the robots all have z actuators
-        return False #self._adc is not None
+        return self._adc is not None
 
     def connect(self) -> None:
         if MCP3008 is None:
@@ -233,7 +231,7 @@ class SourcceyZActuator:
 
     @property
     def is_connected(self) -> bool:
-        return False #self.sensor.is_connected
+        return self.sensor.is_connected
 
     def connect(self) -> None:
         self.sensor.connect()
@@ -245,8 +243,6 @@ class SourcceyZActuator:
         self.sensor.disconnect()
 
     def update(self, dt_s: float, *, instant: bool = True) -> None:
-        return None
-
         if self.driver is None:
             raise RuntimeError("No driver provided. Pass `driver=...` (e.g. Sourccey.dc_motors_controller).")
 

@@ -59,7 +59,7 @@ Before using the robot, you need to calibrate both the robot and the teleoperato
 Calibrate the robot arms on the Raspberry Pi:
 
 ```
-uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
+uv run src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
  --robot.type=sourccey \
  --robot.id=sourccey
 ```
@@ -67,7 +67,7 @@ uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
 For a hard reset (re-detects mechanical limits):
 
 ```
-uv run src/lerobot/scripts/sourccey/auto_calibrate.py \
+uv run src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
  --robot.type=sourccey \
  --robot.id=sourccey \
  --full_reset=True
