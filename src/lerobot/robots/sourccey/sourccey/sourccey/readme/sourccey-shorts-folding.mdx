@@ -218,6 +218,58 @@ python src/lerobot/scripts/lerobot_train.py \
  --policy.push_to_hub=false
 ```
 
+```
+python src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id=sourccey-012/combine/jeans/0006/sourccey-012__jeans-fold-2__cmb__0002__chrism \
+  --policy.path="lerobot/xvla-base" \
+  --output_dir=outputs/train/xvla__sourccey-012__jeans-fold__cmb__0006__chrism \
+  --job_name=xvla__sourccey-012__jeans-fold__cmb__0006__chrism \
+  --policy.device=cuda \
+  --policy.train_soft_prompts=true \
+  --policy.dtype=float32 \
+  --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
+  --policy.freeze_vision_encoder=false \
+  --policy.freeze_language_encoder=false \
+  --policy.train_policy_transformer=true \
+  --policy.input_features=null \
+  --policy.num_image_views=4 \
+  --policy.empty_cameras=0 \
+  --policy.push_to_hub=false \
+  --wandb.enable=false \
+  --steps=500000 \
+  --save_freq=20000 \
+  --policy.push_to_hub=false \
+  --batch_size=4
+  ```
+
+
+
+### Resume command Single GPU Training
+```
+python src/lerobot/scripts/lerobot_train.py \
+ --resume=true \
+ --config_path=outputs/train/xact__sourccey-009__arm-left-a__set000__nick/checkpoints/last/pretrained_model/train_config.json \
+ --dataset.repo_id=sourccey-009/sourccey-009__arm-left-a__set000__nick \
+ --policy.path="lerobot/xvla-base" \
+ --output_dir=outputs/train/xvla__sourccey-012__shirt-fold__cmb__0013__chrism \
+ --job_name=xvla__sourccey-012__shirt-fold__cmb__0013__chrism \
+ --policy.device=cuda \
+ --policy.train_soft_prompts=true \
+ --policy.dtype=float32 \
+ --policy.action_mode=auto \
+ --policy.max_action_dim=20 \
+ --policy.input_features=null \
+ --policy.num_image_views=4 \
+ --policy.empty_cameras=0 \
+ --policy.push_to_hub=false \
+ --wandb.enable=false \
+ --steps=300000 \
+ --save_freq=20000 \
+ --policy.push_to_hub=false \
+ --batch_size=4
+```
+
 ### Multi-GPU Training
 
 ```
@@ -230,6 +282,7 @@ accelerate launch \
   --output_dir=outputs/train/act__sourccey-008__counter-a__set000__name \
   --job_name=act_multi_gpu \
   --steps=100000 \
+  
   --save_freq=10000 \
   --batch_size=128 \
   --wandb.enable=false \
