@@ -241,7 +241,7 @@ accelerate launch \
 XVLA single-GPU training (use `--batch_size=4` to fit in 32GB VRAM):
 
 ```
-CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
+CUDA_VISIBLE_DEVICES=0 python src/lerobot/scripts/lerobot_train.py \
   --dataset.repo_id=sourccey-012/sourccey-012__shorts-fold-c__cmb__000__mylesr \
   --policy.path="lerobot/xvla-base" \
   --output_dir=outputs/train/xvla__sourccey-012__shorts-fold-c__cmb__000__mylesr \
