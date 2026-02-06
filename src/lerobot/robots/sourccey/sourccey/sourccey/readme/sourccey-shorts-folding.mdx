@@ -270,6 +270,33 @@ python src/lerobot/scripts/lerobot_train.py \
  --batch_size=4
 ```
 
+
+### Adding-New-Data command Single GPU Training
+```
+python src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id=sourccey-012/combine/jeans/0007/sourccey-012__jeans-fold-2__cmb__0003__chrism \
+  --policy.path="outputs/train/xvla__sourccey-012__jeans-fold__cmb__0006__chrism/checkpoints/200000/pretrained_model" \
+  --output_dir=outputs/train/xvla__sourccey-012__jeans-fold__cmb__0007__chrism \
+  --job_name=xvla__sourccey-012__jeans-fold__cmb__0007__chrism \
+  --policy.device=cuda \
+  --policy.train_soft_prompts=true \
+  --policy.dtype=float32 \
+  --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
+  --policy.freeze_vision_encoder=false \
+  --policy.freeze_language_encoder=false \
+  --policy.train_policy_transformer=true \
+  --policy.input_features=null \
+  --policy.num_image_views=4 \
+  --policy.empty_cameras=0 \
+  --policy.push_to_hub=false \
+  --wandb.enable=false \
+  --steps=500000 \
+  --save_freq=20000 \
+  --batch_size=4
+```
+
+
 ### Multi-GPU Training
 
 ```
