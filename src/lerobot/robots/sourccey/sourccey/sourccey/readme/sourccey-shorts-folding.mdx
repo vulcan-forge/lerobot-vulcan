@@ -84,11 +84,11 @@ python src/lerobot/scripts/lerobot_find_port.py
 Then Calibrate the bi-manual teleoperator (leader arms):
 
 ```
-python src/lerobot/scripts/sourccey/auto_calibrate.py \
+python src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
  --teleop.type=bi_sourccey_leader \
  --teleop.id=bisd_sourccey_leader \
- --teleop.left_arm_port="/dev/ttyACM1" \
- --teleop.right_arm_port="/dev/ttyACM0"
+ --teleop.left_arm_port="COM20" \
+ --teleop.right_arm_port="COM19"
 ```
 
 python src/lerobot/control/sourccey/sourccey/teleoperate.py  --id="sourccey"  --remote_ip="192.168.1.211"  --left_arm_port="/dev/ttyACM1"  --right_arm_port="/dev/ttyACM0"  --keyboard_port="keyboard"  --fps=30  --reverse=True
