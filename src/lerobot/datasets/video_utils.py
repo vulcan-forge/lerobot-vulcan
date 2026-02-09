@@ -16,6 +16,7 @@
 import glob
 import importlib
 import logging
+import os
 import shutil
 import tempfile
 import warnings
@@ -177,6 +178,7 @@ class VideoDecoderCache:
     def __init__(self):
         self._cache: dict[str, tuple[Any, Any]] = {}
         self._lock = Lock()
+        self._pid = os.getpid()
 
     def get_decoder(self, video_path: str):
         """Get a cached decoder or create a new one."""
@@ -188,6 +190,13 @@ class VideoDecoderCache:
         video_path = str(video_path)
 
         with self._lock:
+            # After a fork, clear inherited cache to avoid using parent file handles.
+            if os.getpid() != self._pid:
+                self._pid = os.getpid()
+                for _, file_handle in self._cache.values():
+                    file_handle.close()
+                self._cache.clear()
+
             if video_path not in self._cache:
                 file_handle = fsspec.open(video_path).__enter__()
                 decoder = VideoDecoder(file_handle, seek_mode="approximate")

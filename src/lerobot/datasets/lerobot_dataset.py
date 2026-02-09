@@ -16,6 +16,7 @@
 import concurrent.futures
 import contextlib
 import logging
+import os
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -1027,7 +1028,25 @@ class LeRobotDataset(torch.utils.data.Dataset):
             shifted_query_ts = [from_timestamp + ts for ts in query_ts]
 
             video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)
-            frames = decode_video_frames(video_path, shifted_query_ts, self.tolerance_s, self.video_backend)
+            try:
+                frames = decode_video_frames(video_path, shifted_query_ts, self.tolerance_s, self.video_backend)
+            except Exception:
+                logging.exception(
+                    "[video-decode-failed] pid=%s ep_idx=%s vid_key=%s video_path=%s "
+                    "from_ts=%.6f tol=%.6f backend=%s query_len=%s "
+                    "query_ts=%s shifted_ts=%s",
+                    os.getpid(),
+                    ep_idx,
+                    vid_key,
+                    video_path,
+                    float(from_timestamp),
+                    float(self.tolerance_s),
+                    self.video_backend,
+                    len(query_ts),
+                    query_ts,
+                    shifted_query_ts,
+                )
+                raise
             item[vid_key] = frames.squeeze(0)
 
         return item

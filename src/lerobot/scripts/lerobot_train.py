@@ -16,6 +16,7 @@
 import dataclasses
 import logging
 import time
+from pathlib import Path
 from contextlib import nullcontext
 from pprint import pformat
 from typing import Any
@@ -184,7 +185,19 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             cpu=force_cpu,
         )
 
-    init_logging(accelerator=accelerator)
+    # Send all logs to a file in the output directory for post-mortem debugging.
+    output_dir = Path(cfg.output_dir) if cfg.output_dir is not None else None
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    log_file = output_dir / "train.log" if output_dir is not None else None
+    # Reduce log noise: keep only errors in console and file.
+    init_logging(
+        log_file=log_file,
+        display_pid=True,
+        console_level="ERROR",
+        file_level="ERROR",
+        accelerator=accelerator,
+    )
 
     # Determine if this is the main process (for logging and checkpointing)
     # When using accelerate, only the main process should log to avoid duplicate outputs
