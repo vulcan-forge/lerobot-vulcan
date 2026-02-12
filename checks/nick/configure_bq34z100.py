@@ -100,6 +100,19 @@ def _read_block(bus: SMBus, subclass: int, block: int) -> list[int]:
     return list(data)
 
 
+def _read_block_retry(bus: SMBus, subclass: int, block: int, retries: int = 3) -> list[int]:
+    last_err = None
+    for _ in range(retries):
+        try:
+            return _read_block(bus, subclass, block)
+        except OSError as err:
+            last_err = err
+            time.sleep(0.05)
+    if last_err:
+        raise last_err
+    return []
+
+
 def _write_block(bus: SMBus, subclass: int, block: int, data: list[int]) -> None:
     _set_dataflash_class_block(bus, subclass, block)
     for i, b in enumerate(data):
@@ -143,13 +156,13 @@ def _get_u2(data: list[int], offset: int) -> int:
 
 def _read_u1_field(bus: SMBus, subclass: int, offset: int) -> int:
     block, in_block = _get_block_offset(offset)
-    data = _read_block(bus, subclass, block)
+    data = _read_block_retry(bus, subclass, block)
     return data[in_block]
 
 
 def _read_u2_field(bus: SMBus, subclass: int, offset: int) -> int:
     block, in_block = _get_block_offset(offset)
-    data = _read_block(bus, subclass, block)
+    data = _read_block_retry(bus, subclass, block)
     return _get_u2(data, in_block)
 
 
