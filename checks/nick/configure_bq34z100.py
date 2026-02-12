@@ -178,35 +178,36 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
     if cfg.cell_charge_mV is not None:
         print(f"  Cell Charge Voltage (mV): {cfg.cell_charge_mV}")
 
-    # Configuration Data (subclass 48)
-    for name, (subclass, offset, size), value in [
-        ("Design Voltage (mV/cell)", DF_DESIGN_VOLTAGE, cfg.design_voltage_mV),
-        ("Design Capacity (mAh)", DF_DESIGN_CAPACITY, cfg.design_capacity_mAh),
-        ("Design Energy (cWh)", DF_DESIGN_ENERGY, cfg.design_energy_cWh),
-    ]:
+    # Collect per-block edits to avoid overwriting earlier changes in the same block.
+    block_edits: dict[tuple[int, int], list[tuple[str, int, int, str]]] = {}
+
+    def add_u2(name: str, subclass: int, offset: int, value: int) -> None:
         block, in_block = _get_block_offset(offset)
         data = _read_block(bus, subclass, block)
         old = _get_u2(data, in_block)
         if old != value:
             updates.append((name, old, value, subclass))
-            if not dry_run:
-                _set_u2(data, in_block, value)
-                _write_block_retry(bus, subclass, block, data)
+            block_edits.setdefault((subclass, block), [])
+            block_edits[(subclass, block)].append(("u2", in_block, value, name))
+
+    def add_u1(name: str, subclass: int, offset: int, value: int) -> None:
+        block, in_block = _get_block_offset(offset)
+        data = _read_block(bus, subclass, block)
+        old = data[in_block]
+        if old != value:
+            updates.append((name, old, value, subclass))
+            block_edits.setdefault((subclass, block), [])
+            block_edits[(subclass, block)].append(("u1", in_block, value, name))
+
+    # Configuration Data (subclass 48)
+    add_u2("Design Voltage (mV/cell)", 48, 0, cfg.design_voltage_mV)
+    add_u2("Design Capacity (mAh)", 48, 11, cfg.design_capacity_mAh)
+    add_u2("Design Energy (cWh)", 48, 13, cfg.design_energy_cWh)
 
     if cfg.cell_charge_mV is not None:
-        for name, (subclass, offset, size), value in [
-            ("Cell Chg V T1-T2 (mV)", DF_CELL_CHG_V_T1T2, cfg.cell_charge_mV),
-            ("Cell Chg V T2-T3 (mV)", DF_CELL_CHG_V_T2T3, cfg.cell_charge_mV),
-            ("Cell Chg V T3-T4 (mV)", DF_CELL_CHG_V_T3T4, cfg.cell_charge_mV),
-        ]:
-            block, in_block = _get_block_offset(offset)
-            data = _read_block(bus, subclass, block)
-            old = _get_u2(data, in_block)
-            if old != value:
-                updates.append((name, old, value, subclass))
-                if not dry_run:
-                    _set_u2(data, in_block, value)
-                    _write_block_retry(bus, subclass, block, data)
+        add_u2("Cell Chg V T1-T2 (mV)", 48, 17, cfg.cell_charge_mV)
+        add_u2("Cell Chg V T2-T3 (mV)", 48, 19, cfg.cell_charge_mV)
+        add_u2("Cell Chg V T3-T4 (mV)", 48, 21, cfg.cell_charge_mV)
 
     # Configuration Registers (subclass 64)
     # Pack Configuration: set VOLTSEL bit (bit 3 of MSB)
@@ -219,37 +220,32 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
         new_pack_cfg = old_pack_cfg | (1 << 11)  # bit 3 of MSB
     if new_pack_cfg != old_pack_cfg:
         updates.append(("Pack Config (VOLTSEL)", old_pack_cfg, new_pack_cfg, subclass))
-        if not dry_run:
-            _set_u2(data, in_block, new_pack_cfg)
-            _write_block_retry(bus, subclass, block, data)
+        block_edits.setdefault((subclass, block), [])
+        block_edits[(subclass, block)].append(("u2", in_block, new_pack_cfg, "Pack Config (VOLTSEL)"))
 
     # Number of series cells
-    subclass, offset, _size = DF_NUM_SERIES_CELLS
-    block, in_block = _get_block_offset(offset)
-    data = _read_block(bus, subclass, block)
-    old_cells = data[in_block]
-    if old_cells != cfg.series_cells:
-        updates.append(("Series Cells", old_cells, cfg.series_cells, subclass))
-        if not dry_run:
-            _set_u1(data, in_block, cfg.series_cells)
-            _write_block_retry(bus, subclass, block, data)
+    add_u1("Series Cells", 64, 7, cfg.series_cells)
 
     # Calibration Data (subclass 104): Voltage Divider
-    subclass, offset, _size = DF_VOLTAGE_DIVIDER
-    block, in_block = _get_block_offset(offset)
-    data = _read_block(bus, subclass, block)
-    old_div = _get_u2(data, in_block)
-    if old_div != cfg.voltage_divider_value:
-        updates.append(("Voltage Divider", old_div, cfg.voltage_divider_value, subclass))
-        if not dry_run:
-            _set_u2(data, in_block, cfg.voltage_divider_value)
-            _write_block_retry(bus, subclass, block, data)
+    add_u2("Voltage Divider", 104, 14, cfg.voltage_divider_value)
 
     print("Planned changes:")
     if not updates:
         print("  (no changes needed)")
     for name, old, new, subclass in updates:
         print(f"  - {name}: {old} -> {new} (subclass {subclass})")
+
+    if dry_run or not updates:
+        return
+
+    for (subclass, block), edits in block_edits.items():
+        data = _read_block(bus, subclass, block)
+        for kind, in_block, value, _name in edits:
+            if kind == "u2":
+                _set_u2(data, in_block, value)
+            else:
+                _set_u1(data, in_block, value)
+        _write_block_retry(bus, subclass, block, data)
 
 
 def _dump_block(bus: SMBus, subclass: int, block: int) -> None:
