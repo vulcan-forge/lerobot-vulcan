@@ -97,6 +97,14 @@ def read_battery() -> BatteryStatus:
         if DEBUG:
             temp_b0, temp_b1 = _read_word_raw(bus, CMD_TEMPERATURE)
             curr_b0, curr_b1 = _read_word_raw(bus, CMD_AVG_CURRENT)
+            soc_le = _word_from_bytes(soc_b0, soc_b1, "little")
+            soc_be = _word_from_bytes(soc_b0, soc_b1, "big")
+            volt_le = _word_from_bytes(volt_b0, volt_b1, "little")
+            volt_be = _word_from_bytes(volt_b0, volt_b1, "big")
+            temp_le = _word_from_bytes(temp_b0, temp_b1, "little")
+            temp_be = _word_from_bytes(temp_b0, temp_b1, "big")
+            curr_le = _word_from_bytes(curr_b0, curr_b1, "little")
+            curr_be = _word_from_bytes(curr_b0, curr_b1, "big")
             print("DEBUG raw bytes:")
             print(f"  SOC: 0x{soc_b0:02X} 0x{soc_b1:02X}")
             print(f"  VOLT: 0x{volt_b0:02X} 0x{volt_b1:02X}")
@@ -105,6 +113,8 @@ def read_battery() -> BatteryStatus:
             print("DEBUG endian check (SOC/VOLT):")
             print(f"  SOC LE/BE: {soc_le} / {soc_be}")
             print(f"  VOLT LE/BE: {volt_le} / {volt_be}")
+            print(f"  TEMP LE/BE: {temp_le} / {temp_be}")
+            print(f"  CURR LE/BE: {curr_le} / {curr_be}")
             print(f"  Byteorder chosen: {byteorder}")
 
         return BatteryStatus(
