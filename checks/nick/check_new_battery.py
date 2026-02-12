@@ -57,36 +57,17 @@ class BatteryStatus:
     temperature_C: float
 
 
-def _choose_byteorder(soc_b0: int, soc_b1: int, volt_b0: int, volt_b1: int) -> str:
-    soc_le = _word_from_bytes(soc_b0, soc_b1, "little")
-    soc_be = _word_from_bytes(soc_b0, soc_b1, "big")
-    volt_le = _word_from_bytes(volt_b0, volt_b1, "little")
-    volt_be = _word_from_bytes(volt_b0, volt_b1, "big")
-
-    score_le = 0
-    score_be = 0
-    if 0 <= soc_le <= 100:
-        score_le += 1
-    if 0 <= soc_be <= 100:
-        score_be += 1
-    if 1000 <= volt_le <= 20000:
-        score_le += 1
-    if 1000 <= volt_be <= 20000:
-        score_be += 1
-
-    return "big" if score_be > score_le else "little"
-
-
 def read_battery() -> BatteryStatus:
     with SMBus(I2C_BUS) as bus:
         soc_b0, soc_b1 = _read_word_raw(bus, CMD_SOC)
         volt_b0, volt_b1 = _read_word_raw(bus, CMD_VOLTAGE)
-        byteorder = _choose_byteorder(soc_b0, soc_b1, volt_b0, volt_b1)
+        byteorder = "little"
 
         volt_scale = _read_byte(bus, CMD_VOLT_SCALE) or 1
         curr_scale = _read_byte(bus, CMD_CURR_SCALE) or 1
 
-        soc = _read_word(bus, CMD_SOC, byteorder)
+        soc_raw = _read_word(bus, CMD_SOC, byteorder)
+        soc = soc_raw / 256.0 if soc_raw > 1000 else float(soc_raw)
         remaining = _read_word(bus, CMD_REMAINING_CAP, byteorder) * curr_scale
         full = _read_word(bus, CMD_FULL_CAP, byteorder) * curr_scale
         voltage = _read_word(bus, CMD_VOLTAGE, byteorder) * volt_scale
@@ -116,6 +97,8 @@ def read_battery() -> BatteryStatus:
             print(f"  TEMP LE/BE: {temp_le} / {temp_be}")
             print(f"  CURR LE/BE: {curr_le} / {curr_be}")
             print(f"  Byteorder chosen: {byteorder}")
+            print(f"  VoltScale: {volt_scale}")
+            print(f"  CurrScale: {curr_scale}")
 
         return BatteryStatus(
             soc_percent=float(soc),
