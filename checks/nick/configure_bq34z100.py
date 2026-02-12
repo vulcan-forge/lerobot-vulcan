@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from dataclasses import dataclass
 from smbus2 import SMBus
 
@@ -79,6 +80,7 @@ def _unseal(bus: SMBus) -> None:
     msw = (key >> 16) & 0xFFFF
     _write_control_word(bus, lsw)
     _write_control_word(bus, msw)
+    time.sleep(0.02)
 
 
 def _seal(bus: SMBus) -> None:
@@ -89,6 +91,7 @@ def _set_dataflash_class_block(bus: SMBus, subclass: int, block: int) -> None:
     bus.write_byte_data(BQ_ADDR, CMD_BLOCK_DATA_CONTROL, 0x00)
     bus.write_byte_data(BQ_ADDR, CMD_DATA_FLASH_CLASS, subclass)
     bus.write_byte_data(BQ_ADDR, CMD_DATA_FLASH_BLOCK, block)
+    time.sleep(0.01)
 
 
 def _read_block(bus: SMBus, subclass: int, block: int) -> list[int]:
@@ -103,6 +106,20 @@ def _write_block(bus: SMBus, subclass: int, block: int, data: list[int]) -> None
         bus.write_byte_data(BQ_ADDR, CMD_BLOCK_DATA + i, b & 0xFF)
     checksum = (255 - (sum(data) & 0xFF)) & 0xFF
     bus.write_byte_data(BQ_ADDR, CMD_BLOCK_DATA_CHECKSUM, checksum)
+    time.sleep(0.01)
+
+
+def _write_block_retry(bus: SMBus, subclass: int, block: int, data: list[int], retries: int = 3) -> None:
+    last_err = None
+    for _ in range(retries):
+        try:
+            _write_block(bus, subclass, block, data)
+            return
+        except OSError as err:
+            last_err = err
+            time.sleep(0.05)
+    if last_err:
+        raise last_err
 
 
 def _get_block_offset(offset: int) -> tuple[int, int]:
@@ -149,7 +166,7 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
             updates.append((name, old, value, subclass))
             if not dry_run:
                 _set_u2(data, in_block, value)
-                _write_block(bus, subclass, block, data)
+                _write_block_retry(bus, subclass, block, data)
 
     if cfg.cell_charge_mV is not None:
         for name, (subclass, offset, size), value in [
@@ -164,7 +181,7 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
                 updates.append((name, old, value, subclass))
                 if not dry_run:
                     _set_u2(data, in_block, value)
-                    _write_block(bus, subclass, block, data)
+                    _write_block_retry(bus, subclass, block, data)
 
     # Configuration Registers (subclass 64)
     # Pack Configuration: set VOLTSEL bit (bit 3 of MSB)
@@ -178,8 +195,8 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
     if new_pack_cfg != old_pack_cfg:
         updates.append(("Pack Config (VOLTSEL)", old_pack_cfg, new_pack_cfg, subclass))
         if not dry_run:
-            _set_u2(data, in_block, new_pack_cfg)
-            _write_block(bus, subclass, block, data)
+        _set_u2(data, in_block, new_pack_cfg)
+        _write_block_retry(bus, subclass, block, data)
 
     # Number of series cells
     subclass, offset, _size = DF_NUM_SERIES_CELLS
@@ -190,7 +207,7 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
         updates.append(("Series Cells", old_cells, cfg.series_cells, subclass))
         if not dry_run:
             _set_u1(data, in_block, cfg.series_cells)
-            _write_block(bus, subclass, block, data)
+            _write_block_retry(bus, subclass, block, data)
 
     # Calibration Data (subclass 104): Voltage Divider
     subclass, offset, _size = DF_VOLTAGE_DIVIDER
@@ -200,8 +217,8 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
     if old_div != cfg.voltage_divider_value:
         updates.append(("Voltage Divider", old_div, cfg.voltage_divider_value, subclass))
         if not dry_run:
-            _set_u2(data, in_block, cfg.voltage_divider_value)
-            _write_block(bus, subclass, block, data)
+        _set_u2(data, in_block, cfg.voltage_divider_value)
+        _write_block_retry(bus, subclass, block, data)
 
     print("Planned changes:")
     if not updates:
@@ -264,12 +281,19 @@ def main() -> None:
     )
 
     with SMBus(I2C_BUS) as bus:
-        _read_control_word(bus, SUBCMD_CONTROL_STATUS)
+        status = _read_control_word(bus, SUBCMD_CONTROL_STATUS)
+        sealed = bool(status & (1 << 13))
+        if sealed:
+            print("Gauge appears SEALED. Attempting unseal.")
         if args.dump:
             _dump_known_fields(bus)
             return
         if args.write:
             _unseal(bus)
+            status_after = _read_control_word(bus, SUBCMD_CONTROL_STATUS)
+            sealed_after = bool(status_after & (1 << 13))
+            if sealed_after:
+                raise RuntimeError("Unseal failed. Check unseal key or security settings.")
         _apply_pack_config(cfg, bus, dry_run=not args.write)
         if args.write:
             _write_control_word(bus, SUBCMD_RESET)
