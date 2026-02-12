@@ -201,9 +201,25 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
         print(f"  - {name}: {old} -> {new} (subclass {subclass})")
 
 
+def _dump_block(bus: SMBus, subclass: int, block: int) -> None:
+    data = _read_block(bus, subclass, block)
+    hex_bytes = " ".join(f"{b:02X}" for b in data)
+    print(f"Subclass {subclass} Block {block} (offset {block * 32:03d}):")
+    print(f"  {hex_bytes}")
+
+
+def _dump_known_fields(bus: SMBus) -> None:
+    print("Dumping raw data blocks for verification.")
+    for subclass in [48, 64, 104]:
+        _dump_block(bus, subclass, 0)
+        _dump_block(bus, subclass, 1)
+    print("Note: offsets are firmware-dependent. We will validate mapping before writes.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Configure BQ34Z100-R2 data flash over I2C.")
     parser.add_argument("--write", action="store_true", help="Perform writes (default is dry-run).")
+    parser.add_argument("--dump", action="store_true", help="Dump raw data flash blocks (no writes).")
     parser.add_argument("--seal", action="store_true", help="Seal after writing.")
     parser.add_argument("--series", type=int, default=4, help="Number of series cells (e.g., 4).")
     parser.add_argument("--capacity-mAh", type=int, default=10000, help="Design capacity in mAh.")
@@ -239,6 +255,9 @@ def main() -> None:
 
     with SMBus(I2C_BUS) as bus:
         _read_control_word(bus, SUBCMD_CONTROL_STATUS)
+        if args.dump:
+            _dump_known_fields(bus)
+            return
         if args.write:
             _unseal(bus)
         _apply_pack_config(cfg, bus, dry_run=not args.write)
