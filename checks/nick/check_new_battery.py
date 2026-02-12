@@ -15,7 +15,7 @@ V_DIV_RATIO = R_BOTTOM_OHMS / (R_TOP_OHMS + R_BOTTOM_OHMS)
 
 # Pack / gauge expectations (for warnings only; does not configure the gauge)
 CHEMISTRY = "LiFePO4 4S"
-EXPECTED_CAPACITY_MAH = None  # set to your pack capacity, e.g. 10000
+EXPECTED_CAPACITY_MAH = 10000
 SHUNT_MILLIOHMS = 12.5
 
 # Command codes (standard + extended)
