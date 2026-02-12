@@ -2,6 +2,7 @@
 # Requires: pip install smbus2
 
 from dataclasses import dataclass
+import time
 from smbus2 import SMBus
 
 I2C_BUS = 1
@@ -35,6 +36,22 @@ def _read_word_raw(bus: SMBus, cmd: int) -> tuple[int, int]:
     return b[0], b[1]
 
 
+def _read_word_raw_retry(bus: SMBus, cmd: int, retries: int = 5) -> tuple[int, int]:
+    last_err = None
+    for _ in range(retries):
+        try:
+            b0, b1 = _read_word_raw(bus, cmd)
+            if b0 == 0xFF and b1 == 0xFF:
+                raise OSError("read returned 0xFFFF")
+            return b0, b1
+        except OSError as err:
+            last_err = err
+            time.sleep(0.02)
+    if last_err:
+        raise last_err
+    return 0, 0
+
+
 def _word_from_bytes(b0: int, b1: int, byteorder: str) -> int:
     if byteorder == "little":
         return b0 | (b1 << 8)
@@ -44,7 +61,7 @@ def _word_from_bytes(b0: int, b1: int, byteorder: str) -> int:
 
 
 def _read_word(bus: SMBus, cmd: int, byteorder: str) -> int:
-    b0, b1 = _read_word_raw(bus, cmd)
+    b0, b1 = _read_word_raw_retry(bus, cmd)
     return _word_from_bytes(b0, b1, byteorder)
 
 
@@ -70,8 +87,8 @@ class BatteryStatus:
 
 def read_battery() -> BatteryStatus:
     with SMBus(I2C_BUS) as bus:
-        soc_b0, soc_b1 = _read_word_raw(bus, CMD_SOC)
-        volt_b0, volt_b1 = _read_word_raw(bus, CMD_VOLTAGE)
+        soc_b0, soc_b1 = _read_word_raw_retry(bus, CMD_SOC)
+        volt_b0, volt_b1 = _read_word_raw_retry(bus, CMD_VOLTAGE)
         byteorder = "little"
 
         volt_scale = _read_byte(bus, CMD_VOLT_SCALE) or 1
@@ -88,8 +105,8 @@ def read_battery() -> BatteryStatus:
         temp_c = (temp_dK / 10.0) - 273.15
 
         if DEBUG:
-            temp_b0, temp_b1 = _read_word_raw(bus, CMD_TEMPERATURE)
-            curr_b0, curr_b1 = _read_word_raw(bus, CMD_AVG_CURRENT)
+            temp_b0, temp_b1 = _read_word_raw_retry(bus, CMD_TEMPERATURE)
+            curr_b0, curr_b1 = _read_word_raw_retry(bus, CMD_AVG_CURRENT)
             soc_le = _word_from_bytes(soc_b0, soc_b1, "little")
             soc_be = _word_from_bytes(soc_b0, soc_b1, "big")
             volt_le = _word_from_bytes(volt_b0, volt_b1, "little")
