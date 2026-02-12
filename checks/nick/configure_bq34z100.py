@@ -236,12 +236,13 @@ def main() -> None:
     parser.add_argument(
         "--cell-charge-mV",
         type=int,
-        default=None,
+        default=3600,
         help="Set cell charge voltage (mV) for all temperature ranges.",
     )
     parser.add_argument("--divider-top-ohms", type=float, default=249_000.0)
     parser.add_argument("--divider-bottom-ohms", type=float, default=16_500.0)
     parser.add_argument("--set-voltsel", action="store_true", help="Set VOLTSEL bit for external divider.")
+    parser.set_defaults(set_voltsel=True)
     args = parser.parse_args()
 
     # Compute divider value: ratio * 1000 (e.g., 5:1 internal -> 5000)
