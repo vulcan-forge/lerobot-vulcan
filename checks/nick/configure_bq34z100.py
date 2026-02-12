@@ -141,6 +141,31 @@ def _get_u2(data: list[int], offset: int) -> int:
     return data[offset] | (data[offset + 1] << 8)
 
 
+def _read_u1_field(bus: SMBus, subclass: int, offset: int) -> int:
+    block, in_block = _get_block_offset(offset)
+    data = _read_block(bus, subclass, block)
+    return data[in_block]
+
+
+def _read_u2_field(bus: SMBus, subclass: int, offset: int) -> int:
+    block, in_block = _get_block_offset(offset)
+    data = _read_block(bus, subclass, block)
+    return _get_u2(data, in_block)
+
+
+def _print_current_values(bus: SMBus) -> None:
+    print("Current values:")
+    print(f"  Design Voltage (mV/cell): {_read_u2_field(bus, 48, 0)}")
+    print(f"  Design Capacity (mAh): {_read_u2_field(bus, 48, 11)}")
+    print(f"  Design Energy (cWh): {_read_u2_field(bus, 48, 13)}")
+    print(f"  Cell Chg V T1-T2 (mV): {_read_u2_field(bus, 48, 17)}")
+    print(f"  Cell Chg V T2-T3 (mV): {_read_u2_field(bus, 48, 19)}")
+    print(f"  Cell Chg V T3-T4 (mV): {_read_u2_field(bus, 48, 21)}")
+    print(f"  Pack Config (VOLTSEL bit): {bool(_read_u2_field(bus, 64, 0) & (1 << 11))}")
+    print(f"  Series Cells: {_read_u1_field(bus, 64, 7)}")
+    print(f"  Voltage Divider (ratio*1000): {_read_u2_field(bus, 104, 14)}")
+
+
 def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
     updates: list[tuple[str, int, int, int]] = []
     print("Target values:")
@@ -285,6 +310,7 @@ def main() -> None:
         sealed = bool(status & (1 << 13))
         if sealed:
             print("Gauge appears SEALED. Attempting unseal.")
+        _print_current_values(bus)
         if args.dump:
             _dump_known_fields(bus)
             return
@@ -297,6 +323,8 @@ def main() -> None:
         _apply_pack_config(cfg, bus, dry_run=not args.write)
         if args.write:
             _write_control_word(bus, SUBCMD_RESET)
+            time.sleep(0.2)
+            _print_current_values(bus)
             if args.seal:
                 _seal(bus)
 
