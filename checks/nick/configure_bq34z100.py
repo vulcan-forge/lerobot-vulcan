@@ -195,8 +195,8 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
     if new_pack_cfg != old_pack_cfg:
         updates.append(("Pack Config (VOLTSEL)", old_pack_cfg, new_pack_cfg, subclass))
         if not dry_run:
-        _set_u2(data, in_block, new_pack_cfg)
-        _write_block_retry(bus, subclass, block, data)
+            _set_u2(data, in_block, new_pack_cfg)
+            _write_block_retry(bus, subclass, block, data)
 
     # Number of series cells
     subclass, offset, _size = DF_NUM_SERIES_CELLS
@@ -217,8 +217,8 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
     if old_div != cfg.voltage_divider_value:
         updates.append(("Voltage Divider", old_div, cfg.voltage_divider_value, subclass))
         if not dry_run:
-        _set_u2(data, in_block, cfg.voltage_divider_value)
-        _write_block_retry(bus, subclass, block, data)
+            _set_u2(data, in_block, cfg.voltage_divider_value)
+            _write_block_retry(bus, subclass, block, data)
 
     print("Planned changes:")
     if not updates:
