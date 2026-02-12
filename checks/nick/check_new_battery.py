@@ -8,6 +8,11 @@ I2C_BUS = 1
 BQ_ADDR = 0x55  # 7-bit address
 DEBUG = True
 
+# Voltage divider: top to pack+, bottom to GND, BAT pin at the midpoint.
+R_TOP_OHMS = 249_000.0
+R_BOTTOM_OHMS = 16_500.0
+V_DIV_RATIO = R_BOTTOM_OHMS / (R_TOP_OHMS + R_BOTTOM_OHMS)
+
 # Command codes (standard + extended)
 CMD_SOC = 0x02
 CMD_REMAINING_CAP = 0x04
@@ -53,6 +58,7 @@ class BatteryStatus:
     remaining_mAh: float
     full_mAh: float
     voltage_mV: float
+    pack_voltage_V: float
     avg_current_mA: float
     temperature_C: float
 
@@ -70,7 +76,8 @@ def read_battery() -> BatteryStatus:
         soc = soc_raw / 256.0 if soc_raw > 1000 else float(soc_raw)
         remaining = _read_word(bus, CMD_REMAINING_CAP, byteorder) * curr_scale
         full = _read_word(bus, CMD_FULL_CAP, byteorder) * curr_scale
-        voltage = _read_word(bus, CMD_VOLTAGE, byteorder) * volt_scale
+        bat_mV = _read_word(bus, CMD_VOLTAGE, byteorder) * volt_scale
+        pack_voltage_V = (bat_mV / 1000.0) / V_DIV_RATIO
         avg_current = _read_sword(bus, CMD_AVG_CURRENT, byteorder) * curr_scale
         temp_dK = _read_word(bus, CMD_TEMPERATURE, byteorder)  # 0.1 K
         temp_c = (temp_dK / 10.0) - 273.15
@@ -104,7 +111,8 @@ def read_battery() -> BatteryStatus:
             soc_percent=float(soc),
             remaining_mAh=float(remaining),
             full_mAh=float(full),
-            voltage_mV=float(voltage),
+            voltage_mV=float(bat_mV),
+            pack_voltage_V=float(pack_voltage_V),
             avg_current_mA=float(avg_current),
             temperature_C=float(temp_c),
         )
@@ -115,6 +123,7 @@ if __name__ == "__main__":
     print(f"SOC: {status.soc_percent:.1f}%")
     print(f"Remaining: {status.remaining_mAh:.0f} mAh")
     print(f"Full: {status.full_mAh:.0f} mAh")
-    print(f"Voltage: {status.voltage_mV:.0f} mV")
+    print(f"BAT pin: {status.voltage_mV:.0f} mV")
+    print(f"Pack: {status.pack_voltage_V:.2f} V")
     print(f"Avg Current: {status.avg_current_mA:.0f} mA")
     print(f"Temp: {status.temperature_C:.1f} C")
