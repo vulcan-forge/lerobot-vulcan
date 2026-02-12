@@ -126,6 +126,15 @@ def _get_u2(data: list[int], offset: int) -> int:
 
 def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
     updates: list[tuple[str, int, int, int]] = []
+    print("Target values:")
+    print(f"  Series Cells: {cfg.series_cells}")
+    print(f"  Design Capacity (mAh): {cfg.design_capacity_mAh}")
+    print(f"  Design Voltage (mV/cell): {cfg.design_voltage_mV}")
+    print(f"  Design Energy (cWh): {cfg.design_energy_cWh}")
+    print(f"  Voltage Divider (ratio*1000): {cfg.voltage_divider_value}")
+    print(f"  Set VOLTSEL: {cfg.set_voltsel}")
+    if cfg.cell_charge_mV is not None:
+        print(f"  Cell Charge Voltage (mV): {cfg.cell_charge_mV}")
 
     # Configuration Data (subclass 48)
     for name, (subclass, offset, size), value in [
