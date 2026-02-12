@@ -32,17 +32,24 @@ CMD_CURR_SCALE = 0x21
 
 
 def _read_word_raw(bus: SMBus, cmd: int) -> tuple[int, int]:
+    # Use SMBus "read word" style: write command, short delay, then read 2 bytes.
+    bus.write_byte(BQ_ADDR, cmd)
+    time.sleep(0.005)
     b = bus.read_i2c_block_data(BQ_ADDR, cmd, 2)
     return b[0], b[1]
 
 
-def _read_word_raw_retry(bus: SMBus, cmd: int, retries: int = 5) -> tuple[int, int]:
+def _read_word_raw_retry(bus: SMBus, cmd: int, retries: int = 6) -> tuple[int, int]:
     last_err = None
     for _ in range(retries):
         try:
             b0, b1 = _read_word_raw(bus, cmd)
             if b0 == 0xFF and b1 == 0xFF:
                 raise OSError("read returned 0xFFFF")
+            # read twice and require a consistent value
+            b0_2, b1_2 = _read_word_raw(bus, cmd)
+            if (b0_2, b1_2) != (b0, b1):
+                raise OSError("read mismatch")
             return b0, b1
         except OSError as err:
             last_err = err
