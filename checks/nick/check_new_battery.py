@@ -6,6 +6,7 @@ from smbus2 import SMBus
 
 I2C_BUS = 1
 BQ_ADDR = 0x55  # 7-bit address
+DEBUG = True
 
 # Command codes (standard + extended)
 CMD_SOC = 0x02
@@ -92,6 +93,19 @@ def read_battery() -> BatteryStatus:
         avg_current = _read_sword(bus, CMD_AVG_CURRENT, byteorder) * curr_scale
         temp_dK = _read_word(bus, CMD_TEMPERATURE, byteorder)  # 0.1 K
         temp_c = (temp_dK / 10.0) - 273.15
+
+        if DEBUG:
+            temp_b0, temp_b1 = _read_word_raw(bus, CMD_TEMPERATURE)
+            curr_b0, curr_b1 = _read_word_raw(bus, CMD_AVG_CURRENT)
+            print("DEBUG raw bytes:")
+            print(f"  SOC: 0x{soc_b0:02X} 0x{soc_b1:02X}")
+            print(f"  VOLT: 0x{volt_b0:02X} 0x{volt_b1:02X}")
+            print(f"  TEMP: 0x{temp_b0:02X} 0x{temp_b1:02X}")
+            print(f"  CURR: 0x{curr_b0:02X} 0x{curr_b1:02X}")
+            print("DEBUG endian check (SOC/VOLT):")
+            print(f"  SOC LE/BE: {soc_le} / {soc_be}")
+            print(f"  VOLT LE/BE: {volt_le} / {volt_be}")
+            print(f"  Byteorder chosen: {byteorder}")
 
         return BatteryStatus(
             soc_percent=float(soc),
