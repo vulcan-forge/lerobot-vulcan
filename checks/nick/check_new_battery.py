@@ -13,6 +13,11 @@ R_TOP_OHMS = 249_000.0
 R_BOTTOM_OHMS = 16_500.0
 V_DIV_RATIO = R_BOTTOM_OHMS / (R_TOP_OHMS + R_BOTTOM_OHMS)
 
+# Pack / gauge expectations (for warnings only; does not configure the gauge)
+CHEMISTRY = "LiFePO4 4S"
+EXPECTED_CAPACITY_MAH = None  # set to your pack capacity, e.g. 10000
+SHUNT_MILLIOHMS = 12.5
+
 # Command codes (standard + extended)
 CMD_SOC = 0x02
 CMD_REMAINING_CAP = 0x04
@@ -125,5 +130,12 @@ if __name__ == "__main__":
     print(f"Full: {status.full_mAh:.0f} mAh")
     print(f"BAT pin: {status.voltage_mV:.0f} mV")
     print(f"Pack: {status.pack_voltage_V:.2f} V")
-    print(f"Avg Current: {status.avg_current_mA:.0f} mA")
+    direction = "charging" if status.avg_current_mA > 0 else "discharging"
+    print(f"Avg Current: {status.avg_current_mA:.0f} mA ({direction})")
     print(f"Temp: {status.temperature_C:.1f} C")
+    if EXPECTED_CAPACITY_MAH:
+        if abs(status.full_mAh - EXPECTED_CAPACITY_MAH) > (0.2 * EXPECTED_CAPACITY_MAH):
+            print(
+                "WARN: Full capacity differs from expected. Gauge likely needs configuration "
+                f"(expected ~{EXPECTED_CAPACITY_MAH} mAh)."
+            )
