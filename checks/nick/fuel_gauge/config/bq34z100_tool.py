@@ -71,6 +71,19 @@ FIELDS: List[Field] = [
     Field("Number of series cell", 64, 7, "U1", "cells"),
 ]
 
+# --- Add near the top of the file (constants section) ---
+
+SBS_CMDS = {
+    "Temperature": 0x08,        # 0.1 K
+    "Voltage": 0x09,            # mV
+    "Current": 0x0A,            # mA (signed)
+    "AverageCurrent": 0x0B,     # mA (signed)
+    "StateOfCharge": 0x0D,      # %
+    "RemainingCapacity": 0x0F,  # mAh
+    "FullChargeCapacity": 0x10, # mAh
+    "Flags": 0x16,              # bitfield
+}
+
 def _safe_pow2(exp: int) -> float:
     # double can handle about 2**1023; anything beyond is effectively inf
     if exp > 1023 or exp < -1074:   # -1074 covers denormals
@@ -307,6 +320,40 @@ class BQ34Z100:
             self.df_write_block(subclass, block_index, bytes(block), verify=verify)
             i += take
 
+    # --- Add inside your BQ34Z100 class ---
+
+    def sbs_read_u16(self, cmd: int) -> int:
+        """
+        SMBus Read Word. Returns unsigned 16-bit.
+        Handles byte swap for Raspberry Pi SMBus behavior.
+        """
+        w = self.bus.read_word_data(self.addr, cmd)
+        return ((w & 0xFF) << 8) | ((w >> 8) & 0xFF)
+
+    def sbs_read_i16(self, cmd: int) -> int:
+        """
+        SMBus Read Word. Returns signed 16-bit.
+        """
+        v = self.sbs_read_u16(cmd)
+        return v - 0x10000 if v & 0x8000 else v
+
+    def sbs_snapshot(self) -> dict:
+        out = {}
+
+        out["Voltage_mV"] = self.sbs_read_u16(SBS_CMDS["Voltage"])
+        out["RemainingCapacity_mAh"] = self.sbs_read_u16(SBS_CMDS["RemainingCapacity"])
+        out["FullChargeCapacity_mAh"] = self.sbs_read_u16(SBS_CMDS["FullChargeCapacity"])
+        out["StateOfCharge_pct"] = self.sbs_read_u16(SBS_CMDS["StateOfCharge"])
+        out["Flags"] = f"0x{self.sbs_read_u16(SBS_CMDS['Flags']):04x}"
+
+        out["Current_mA"] = self.sbs_read_i16(SBS_CMDS["Current"])
+        out["AverageCurrent_mA"] = self.sbs_read_i16(SBS_CMDS["AverageCurrent"])
+
+        t_dK = self.sbs_read_u16(SBS_CMDS["Temperature"])
+        out["Temperature_C"] = (t_dK / 10.0) - 273.15
+
+        return out
+
 
 def decode_field(g: BQ34Z100, f: Field) -> Any:
     if f.ftype in ("U1", "I1"):
@@ -384,6 +431,11 @@ def main():
         action="append",
         help="Peek 4 bytes and print candidate decodes: subclass:offset (e.g. 104:0)"
     )
+    ap.add_argument(
+        "--read-sbs",
+        action="store_true",
+        help="Read SBS (Smart Battery System) standard registers"
+    )
 
     args = ap.parse_args()
 
@@ -452,6 +504,15 @@ def main():
                     "candidates": try_f4_candidates(raw),
                 })
             out["peek_f4_candidates"] = cands
+
+        if args.read_sbs:
+            snap = g.sbs_snapshot()
+            if args.json:
+                out["sbs"] = snap
+            else:
+                print("\nSBS snapshot:")
+                for k, v in snap.items():
+                    print(f"  - {k}: {v}")
 
         # Apply writes
         if args.write:
