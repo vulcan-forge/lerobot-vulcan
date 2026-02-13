@@ -128,74 +128,92 @@ def try_f4_candidates(raw4: bytes) -> dict:
 
 def ti_f4_decode(raw4: bytes) -> float:
     """
-    Decode TI gauge 'F4' floating format (bq34z100 family).
-    Stored MSByte first.
-    Format:
-      byte0: exponent (signed 8-bit)
-      byte1..byte3: mantissa (signed 24-bit)
-    Value = mantissa * 2^exponent
+    Decode bq34z100 'F4' using TI Host Calibration method format (SLUA640B).
+
+    Encoding per TI (floating2Byte):
+      raw[0] = exp + 128
+      raw[1] = byte2 (MSB is sign)
+      raw[2] = byte1
+      raw[3] = byte0
+
+    Reconstruction:
+      exp = raw0 - 128
+      sign = raw1 bit7
+      frac = (byte2_no_sign) + byte1/256 + byte0/65536
+      mod_val = (frac + 128) / 2^(8 - exp)
+      value = +/- mod_val
     """
     if len(raw4) != 4:
         raise ValueError("F4 requires exactly 4 bytes")
 
-    exp = raw4[0]
-    if exp & 0x80:
-        exp -= 0x100  # signed 8-bit
+    r0, r1, r2, r3 = raw4
+    exp = int(r0) - 128
 
-    mant = (raw4[1] << 16) | (raw4[2] << 8) | raw4[3]
-    if mant & 0x800000:
-        mant -= 0x1000000  # signed 24-bit
+    neg = (r1 & 0x80) != 0
+    byte2 = r1 & 0x7F  # clear sign bit for magnitude
 
-    return float(mant) * (2.0 ** exp)
+    frac = float(byte2) + (float(r2) / 256.0) + (float(r3) / 65536.0)
+
+    # denominator = 2^(8 - exp)
+    p = 8 - exp
+    # guard extreme exponents (shouldn't normally happen)
+    if p > 1023:
+        mag = 0.0
+    elif p < -1074:
+        mag = float("inf")
+    else:
+        mag = (frac + 128.0) / (2.0 ** p)
+
+    return -mag if neg else mag
 
 
 def ti_f4_encode(value: float) -> bytes:
     """
-    Encode TI gauge 'F4' floating format (bq34z100 family).
-    This produces 1-byte exponent + 3-byte signed mantissa, MSByte first.
-
-    We choose an exponent so mantissa fits in signed 24-bit range.
+    Encode bq34z100 'F4' using TI Host Calibration method format (SLUA640B).
     """
     if value == 0.0:
-        return bytes([0x00, 0x00, 0x00, 0x00])
+        return bytes([0x80, 0x00, 0x00, 0x00])  # exp=0, mant=0 (safe)
+
+    val = float(value)
+    mod_val = -val if val < 0 else val
 
     exp = 0
-    mant = float(value)
+    tmp = mod_val
 
-    # Scale mantissa until it fits signed 24-bit integer
-    # Prefer keeping mantissa as integer with exp adjustment.
-    # We adjust exp so that mantissa is within [-8388608, 8388607].
-    while abs(mant) < 1.0 and exp > -128:
-        mant *= 2.0
-        exp -= 1
+    # TI adds (1 + 2^-25) before normalization
+    tmp = tmp * (1.0 + (2.0 ** -25))
 
-    while abs(mant) > 8388607.0 and exp < 127:
-        mant /= 2.0
-        exp += 1
-
-    mant_i = int(round(mant))
-
-    # Clamp just in case
-    if mant_i > 8388607:
-        mant_i = 8388607
-    if mant_i < -8388608:
-        mant_i = -8388608
-
-    # Convert to unsigned 24-bit two's complement
-    if mant_i < 0:
-        mant_u = (mant_i + 0x1000000) & 0xFFFFFF
+    if tmp < 0.5:
+        while tmp < 0.5:
+            tmp *= 2.0
+            exp -= 1
     else:
-        mant_u = mant_i & 0xFFFFFF
+        # note: TI code uses "else if (tmpVal <= 1.0) { while (tmpVal >= 1.0) ... }"
+        # The inner loop condition is what matters: while tmp >= 1.0, divide and exp++
+        while tmp >= 1.0:
+            tmp /= 2.0
+            exp += 1
 
-    # Exponent to unsigned byte
-    exp_u = exp & 0xFF
+    if exp > 127:
+        exp = 127
+    elif exp < -128:
+        exp = -128
 
-    return bytes([
-        exp_u,
-        (mant_u >> 16) & 0xFF,
-        (mant_u >> 8) & 0xFF,
-        mant_u & 0xFF,
-    ])
+    tmp = (2.0 ** (8 - exp)) * mod_val - 128.0
+    byte2 = int(math.floor(tmp))
+    tmp = (2.0 ** 8) * (tmp - float(byte2))
+    byte1 = int(math.floor(tmp))
+    tmp = (2.0 ** 8) * (tmp - float(byte1))
+    byte0 = int(math.floor(tmp))
+
+    if val < 0:
+        byte2 = byte2 | 0x80
+
+    raw0 = (exp + 128) & 0xFF
+    raw1 = byte2 & 0xFF
+    raw2 = byte1 & 0xFF
+    raw3 = byte0 & 0xFF
+    return bytes([raw0, raw1, raw2, raw3])
 
 def _u16_be(b: bytes) -> int:
     return (b[0] << 8) | b[1]
