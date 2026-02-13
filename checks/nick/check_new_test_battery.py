@@ -3,6 +3,7 @@
 
 from smbus2 import SMBus
 import time
+import statistics
 
 I2C_BUS = 1
 BQ_ADDR = 0x55
@@ -66,5 +67,37 @@ def main() -> None:
     print(f"Pack: {pack_V:.2f} V")
 
 
+def sample_voltage(samples: int = 25, delay_s: float = 0.2) -> None:
+    good_pack = []
+    good_bat = []
+    bad = 0
+    for _ in range(samples):
+        try:
+            b0, b1 = read_voltage_bytes()
+            raw_be = (b0 << 8) | b1
+            if raw_be == 0xFFFF or raw_be >= 60000:
+                bad += 1
+            else:
+                if 2000 <= raw_be <= 20000:
+                    good_pack.append(raw_be / 1000.0)
+                else:
+                    good_bat.append(raw_be / 1000.0)
+        except OSError:
+            bad += 1
+        time.sleep(delay_s)
+
+    print(f"Samples: {samples}, bad: {bad}")
+    if good_pack:
+        med = statistics.median(good_pack)
+        print(f"Pack median: {med:.2f} V (n={len(good_pack)})")
+        print(f"BAT est: {med * V_DIV_RATIO * 1000:.0f} mV")
+    if good_bat:
+        med = statistics.median(good_bat)
+        print(f"BAT median: {med * 1000:.0f} mV (n={len(good_bat)})")
+        print(f"Pack est: {med / V_DIV_RATIO:.2f} V")
+
+
 if __name__ == "__main__":
     main()
+    print("")
+    sample_voltage()
