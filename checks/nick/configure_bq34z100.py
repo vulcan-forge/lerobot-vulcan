@@ -406,6 +406,11 @@ def main() -> None:
         choices=["default", "custom", "trial-capacity", "trial-voltage"],
         help="Restore a built-in preset (default or custom).",
     )
+    parser.add_argument(
+        "--apply",
+        choices=["voltage"],
+        help="Apply a single in-place fix without restoring full presets.",
+    )
     parser.add_argument("--seal", action="store_true", help="Seal after writing.")
     parser.add_argument("--series", type=int, default=4, help="Number of series cells (e.g., 4).")
     parser.add_argument("--capacity-mAh", type=int, default=10000, help="Design capacity in mAh.")
@@ -472,6 +477,27 @@ def main() -> None:
                 if args.write:
                     _write_control_word(bus, SUBCMD_RESET)
                     time.sleep(0.2)
+            return
+        if args.apply == "voltage":
+            _unseal(bus)
+            if not args.write:
+                print("Would set VOLTSEL and Voltage Divider in-place.")
+                return
+            # Set VOLTSEL bit in Pack Config (class 64, offset 0)
+            subclass, offset, _size = DF_PACK_CONFIG
+            block, in_block = _get_block_offset(offset)
+            data = _read_block_retry(bus, subclass, block)
+            pack_cfg = _get_u2(data, in_block) | (1 << 11)
+            _set_u2(data, in_block, pack_cfg)
+            _write_block_retry(bus, subclass, block, data)
+            # Set Voltage Divider (class 104, offset 14)
+            subclass, offset, _size = DF_VOLTAGE_DIVIDER
+            block, in_block = _get_block_offset(offset)
+            data = _read_block_retry(bus, subclass, block)
+            _set_u2(data, in_block, 16091)
+            _write_block_retry(bus, subclass, block, data)
+            _write_control_word(bus, SUBCMD_RESET)
+            time.sleep(0.2)
             return
         if args.write:
             _unseal(bus)
