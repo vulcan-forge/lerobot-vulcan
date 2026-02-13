@@ -231,6 +231,8 @@ def main():
                           "Examples: --write 'Design Capacity=10000' OR --write '48:11:I2=10000'"))
     ap.add_argument("--dry-run", action="store_true", help="Show what would be written, but do not write")
     ap.add_argument("--no-verify", action="store_true", help="Skip readback verification after writes")
+    ap.add_argument("--peek", action="append", help="Peek raw bytes: subclass:offset:length (e.g. --peek 48:11:2)")
+
 
     args = ap.parse_args()
 
@@ -259,6 +261,17 @@ def main():
 
         if args.suggest:
             out["suggested"] = suggest_for_pack(args.series, args.capacity_ah, args.nominal_v)
+
+        if args.peek:
+            peeks = []
+            for p in args.peek:
+                sc_s, off_s, ln_s = [x.strip() for x in p.split(":")]
+                sc = int(sc_s, 0)
+                off = int(off_s, 0)
+                ln = int(ln_s, 0)
+                b = g.df_read_bytes(sc, off, ln)
+                peeks.append({"subclass": sc, "offset": off, "length": ln, "hex": b.hex()})
+            out["peek"] = peeks
 
         # Apply writes
         if args.write:
@@ -333,6 +346,11 @@ def main():
                 print("\nSuggested updates for your pack:")
                 for k, info in out["suggested"].items():
                     print(f"  - {k}: {info['recommended']} {info['unit']}")
+
+            if "peek" in out:
+                print("\nPeek:")
+                for p in out["peek"]:
+                    print(f"  - subclass {p['subclass']} offset {p['offset']} len {p['length']}: {p['hex']}")
 
             if "writes" in out:
                 print("\nWrites:")
