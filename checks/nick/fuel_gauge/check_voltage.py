@@ -71,9 +71,12 @@ def main() -> None:
             continue
         pack_v = _pack_from_raw(raw, "pack")
         bat_v = raw / 1000.0
-        pack_from_bat = _pack_from_raw(raw, "bat")
         print(f"{label} as PACK: {pack_v:.2f} V")
-        print(f"{label} as BAT:  {bat_v:.3f} V  -> Pack {pack_from_bat:.2f} V")
+        if 0.1 <= bat_v <= 2.0:
+            pack_from_bat = _pack_from_raw(raw, "bat")
+            print(f"{label} as BAT:  {bat_v:.3f} V  -> Pack {pack_from_bat:.2f} V")
+        else:
+            print(f"{label} as BAT:  {bat_v:.3f} V (out of BAT range)")
 
 
 if __name__ == "__main__":
