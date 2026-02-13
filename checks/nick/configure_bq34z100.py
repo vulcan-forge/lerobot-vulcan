@@ -197,7 +197,7 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
 
     def add_u2(name: str, subclass: int, offset: int, value: int) -> None:
         block, in_block = _get_block_offset(offset)
-        data = _read_block(bus, subclass, block)
+        data = _read_block_retry(bus, subclass, block)
         old = _get_u2(data, in_block)
         if old != value:
             updates.append((name, old, value, subclass))
@@ -206,7 +206,7 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
 
     def add_u1(name: str, subclass: int, offset: int, value: int) -> None:
         block, in_block = _get_block_offset(offset)
-        data = _read_block(bus, subclass, block)
+        data = _read_block_retry(bus, subclass, block)
         old = data[in_block]
         if old != value:
             updates.append((name, old, value, subclass))
@@ -227,7 +227,7 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
     # Pack Configuration: set VOLTSEL bit (bit 3 of MSB)
     subclass, offset, _size = DF_PACK_CONFIG
     block, in_block = _get_block_offset(offset)
-    data = _read_block(bus, subclass, block)
+    data = _read_block_retry(bus, subclass, block)
     old_pack_cfg = _get_u2(data, in_block)
     new_pack_cfg = old_pack_cfg
     if cfg.set_voltsel:
@@ -253,7 +253,7 @@ def _apply_pack_config(cfg: PackConfig, bus: SMBus, dry_run: bool) -> None:
         return
 
     for (subclass, block), edits in block_edits.items():
-        data = _read_block(bus, subclass, block)
+        data = _read_block_retry(bus, subclass, block)
         for kind, in_block, value, _name in edits:
             if kind == "u2":
                 _set_u2(data, in_block, value)
@@ -352,6 +352,45 @@ def _preset_default() -> dict[int, dict[int, list[int]]]:
             ],
         },
     }
+
+
+def _preset_custom(cfg: PackConfig) -> dict[int, dict[int, list[int]]]:
+    # Start from the captured default blocks and apply only the known custom fields.
+    preset = _preset_default()
+    data48 = preset[48][0][:]
+    # Design Voltage (offset 0, U2)
+    data48[0] = cfg.design_voltage_mV & 0xFF
+    data48[1] = (cfg.design_voltage_mV >> 8) & 0xFF
+    # Design Capacity (offset 11, U2)
+    data48[11] = cfg.design_capacity_mAh & 0xFF
+    data48[12] = (cfg.design_capacity_mAh >> 8) & 0xFF
+    # Design Energy (offset 13, U2)
+    data48[13] = cfg.design_energy_cWh & 0xFF
+    data48[14] = (cfg.design_energy_cWh >> 8) & 0xFF
+    # Cell charge voltages (offsets 17, 19, 21)
+    if cfg.cell_charge_mV is not None:
+        for off in (17, 19, 21):
+            data48[off] = cfg.cell_charge_mV & 0xFF
+            data48[off + 1] = (cfg.cell_charge_mV >> 8) & 0xFF
+    preset[48][0] = data48
+
+    # Pack Config (offset 0, U2) and Series Cells (offset 7)
+    data64 = preset[64][0][:]
+    pack_cfg = data64[0] | (data64[1] << 8)
+    if cfg.set_voltsel:
+        pack_cfg |= (1 << 11)
+    data64[0] = pack_cfg & 0xFF
+    data64[1] = (pack_cfg >> 8) & 0xFF
+    data64[7] = cfg.series_cells & 0xFF
+    preset[64][0] = data64
+
+    # Voltage Divider (offset 14, U2)
+    data104 = preset[104][0][:]
+    data104[14] = cfg.voltage_divider_value & 0xFF
+    data104[15] = (cfg.voltage_divider_value >> 8) & 0xFF
+    preset[104][0] = data104
+
+    return preset
 
 
 def _apply_preset(bus: SMBus, preset: dict[int, dict[int, list[int]]], dry_run: bool) -> None:
@@ -490,12 +529,10 @@ def main() -> None:
         if args.repair_custom:
             _unseal(bus)
             if not args.write:
-                print("Would restore baseline subclasses: 64, 104")
-                _apply_preset_subset(bus, _preset_default(), {64, 104}, dry_run=True)
-                _apply_pack_config(cfg, bus, dry_run=True)
+                print("Would restore full custom preset from baseline defaults.")
+                _apply_preset(bus, _preset_custom(cfg), dry_run=True)
                 return
-            _apply_preset_subset(bus, _preset_default(), {64, 104}, dry_run=False)
-            _apply_pack_config(cfg, bus, dry_run=False)
+            _apply_preset(bus, _preset_custom(cfg), dry_run=False)
             _write_control_word(bus, SUBCMD_RESET)
             time.sleep(0.2)
             _print_current_values(bus)
@@ -509,7 +546,7 @@ def main() -> None:
             elif args.preset == "trial-voltage":
                 _apply_preset(bus, _preset_trial_voltage(), dry_run=not args.write)
             else:
-                _apply_pack_config(cfg, bus, dry_run=not args.write)
+                _apply_preset(bus, _preset_custom(cfg), dry_run=not args.write)
                 if args.write:
                     _write_control_word(bus, SUBCMD_RESET)
                     time.sleep(0.2)
