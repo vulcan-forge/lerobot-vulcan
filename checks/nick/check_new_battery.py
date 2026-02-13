@@ -111,11 +111,35 @@ def read_battery() -> BatteryStatus:
         remaining = _read_word(bus, CMD_REMAINING_CAP, byteorder) * curr_scale
         full = _read_word(bus, CMD_FULL_CAP, byteorder) * curr_scale
         if voltage_ok:
-            bat_mV = _read_word(bus, CMD_VOLTAGE, byteorder) * volt_scale
-            pack_voltage_V = (bat_mV / 1000.0) / V_DIV_RATIO
+            # Voltage can appear as either BAT-pin mV or already scaled pack mV,
+            # and byte order can differ. Choose the most plausible interpretation.
+            volt_le = _word_from_bytes(volt_b0, volt_b1, "little") * volt_scale
+            volt_be = _word_from_bytes(volt_b0, volt_b1, "big") * volt_scale
+
+            def _score(voltage_mV: int) -> int:
+                # Prefer values that look like a pack voltage (2V–20V), then BAT pin (0.2V–2V).
+                if 2000 <= voltage_mV <= 20000:
+                    return 2
+                if 200 <= voltage_mV <= 2000:
+                    return 1
+                return 0
+
+            le_score = _score(volt_le)
+            be_score = _score(volt_be)
+            voltage_mV = volt_be if be_score > le_score else volt_le
+
+            if 2000 <= voltage_mV <= 20000:
+                pack_voltage_V = voltage_mV / 1000.0
+                bat_mV = voltage_mV * V_DIV_RATIO
+                voltage_mode = "pack"
+            else:
+                bat_mV = float(voltage_mV)
+                pack_voltage_V = (bat_mV / 1000.0) / V_DIV_RATIO
+                voltage_mode = "bat"
         else:
             bat_mV = float("nan")
             pack_voltage_V = float("nan")
+            voltage_mode = "unknown"
         avg_current = _read_sword(bus, CMD_AVG_CURRENT, byteorder) * curr_scale
         temp_dK = _read_word(bus, CMD_TEMPERATURE, byteorder)  # 0.1 K
         temp_c = (temp_dK / 10.0) - 273.15
@@ -138,7 +162,7 @@ def read_battery() -> BatteryStatus:
             print(f"  CURR: 0x{curr_b0:02X} 0x{curr_b1:02X}")
             print("DEBUG endian check (SOC/VOLT):")
             print(f"  SOC LE/BE: {soc_le} / {soc_be}")
-            print(f"  VOLT LE/BE: {volt_le} / {volt_be} (valid={voltage_ok})")
+            print(f"  VOLT LE/BE: {volt_le} / {volt_be} (valid={voltage_ok}, mode={voltage_mode})")
             print(f"  TEMP LE/BE: {temp_le} / {temp_be}")
             print(f"  CURR LE/BE: {curr_le} / {curr_be}")
             print(f"  Byteorder chosen: {byteorder}")
