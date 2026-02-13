@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import time
+import json
 from dataclasses import dataclass
 from smbus2 import SMBus
 
@@ -276,10 +277,41 @@ def _dump_known_fields(bus: SMBus) -> None:
     print("Note: offsets are firmware-dependent. We will validate mapping before writes.")
 
 
+def _backup_to_file(bus: SMBus, path: str) -> None:
+    payload = {"subclasses": {}}
+    for subclass in [48, 64, 104]:
+        payload["subclasses"][str(subclass)] = {}
+        for block in [0, 1]:
+            data = _read_block_retry(bus, subclass, block)
+            payload["subclasses"][str(subclass)][str(block)] = data
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    print(f"Backup saved to {path}")
+
+
+def _restore_from_file(bus: SMBus, path: str, dry_run: bool) -> None:
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    subclasses = payload.get("subclasses", {})
+    for subclass_str, blocks in subclasses.items():
+        subclass = int(subclass_str)
+        for block_str, data in blocks.items():
+            block = int(block_str)
+            if len(data) != 32:
+                raise ValueError(f"Invalid block length for subclass {subclass} block {block}")
+            if dry_run:
+                print(f"Would restore subclass {subclass} block {block}")
+            else:
+                _write_block_retry(bus, subclass, block, list(data))
+                print(f"Restored subclass {subclass} block {block}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Configure BQ34Z100-R2 data flash over I2C.")
     parser.add_argument("--write", action="store_true", help="Perform writes (default is dry-run).")
     parser.add_argument("--dump", action="store_true", help="Dump raw data flash blocks (no writes).")
+    parser.add_argument("--backup", type=str, help="Backup data flash blocks to a JSON file.")
+    parser.add_argument("--restore", type=str, help="Restore data flash blocks from a JSON file.")
     parser.add_argument("--seal", action="store_true", help="Seal after writing.")
     parser.add_argument("--series", type=int, default=4, help="Number of series cells (e.g., 4).")
     parser.add_argument("--capacity-mAh", type=int, default=10000, help="Design capacity in mAh.")
@@ -322,6 +354,16 @@ def main() -> None:
         _print_current_values(bus)
         if args.dump:
             _dump_known_fields(bus)
+            return
+        if args.backup:
+            _backup_to_file(bus, args.backup)
+            return
+        if args.restore:
+            _unseal(bus)
+            _restore_from_file(bus, args.restore, dry_run=not args.write)
+            if args.write:
+                _write_control_word(bus, SUBCMD_RESET)
+                time.sleep(0.2)
             return
         if args.write:
             _unseal(bus)
