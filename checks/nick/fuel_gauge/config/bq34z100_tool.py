@@ -69,6 +69,76 @@ FIELDS: List[Field] = [
     Field("Number of series cell", 64, 7, "U1", "cells"),
 ]
 
+def ti_f4_decode(raw4: bytes) -> float:
+    """
+    Decode TI gauge 'F4' floating format (bq34z100 family).
+    Stored MSByte first.
+    Format:
+      byte0: exponent (signed 8-bit)
+      byte1..byte3: mantissa (signed 24-bit)
+    Value = mantissa * 2^exponent
+    """
+    if len(raw4) != 4:
+        raise ValueError("F4 requires exactly 4 bytes")
+
+    exp = raw4[0]
+    if exp & 0x80:
+        exp -= 0x100  # signed 8-bit
+
+    mant = (raw4[1] << 16) | (raw4[2] << 8) | raw4[3]
+    if mant & 0x800000:
+        mant -= 0x1000000  # signed 24-bit
+
+    return float(mant) * (2.0 ** exp)
+
+
+def ti_f4_encode(value: float) -> bytes:
+    """
+    Encode TI gauge 'F4' floating format (bq34z100 family).
+    This produces 1-byte exponent + 3-byte signed mantissa, MSByte first.
+
+    We choose an exponent so mantissa fits in signed 24-bit range.
+    """
+    if value == 0.0:
+        return bytes([0x00, 0x00, 0x00, 0x00])
+
+    exp = 0
+    mant = float(value)
+
+    # Scale mantissa until it fits signed 24-bit integer
+    # Prefer keeping mantissa as integer with exp adjustment.
+    # We adjust exp so that mantissa is within [-8388608, 8388607].
+    while abs(mant) < 1.0 and exp > -128:
+        mant *= 2.0
+        exp -= 1
+
+    while abs(mant) > 8388607.0 and exp < 127:
+        mant /= 2.0
+        exp += 1
+
+    mant_i = int(round(mant))
+
+    # Clamp just in case
+    if mant_i > 8388607:
+        mant_i = 8388607
+    if mant_i < -8388608:
+        mant_i = -8388608
+
+    # Convert to unsigned 24-bit two's complement
+    if mant_i < 0:
+        mant_u = (mant_i + 0x1000000) & 0xFFFFFF
+    else:
+        mant_u = mant_i & 0xFFFFFF
+
+    # Exponent to unsigned byte
+    exp_u = exp & 0xFF
+
+    return bytes([
+        exp_u,
+        (mant_u >> 16) & 0xFF,
+        (mant_u >> 8) & 0xFF,
+        mant_u & 0xFF,
+    ])
 
 def _u16_be(b: bytes) -> int:
     return (b[0] << 8) | b[1]
@@ -232,7 +302,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="Show what would be written, but do not write")
     ap.add_argument("--no-verify", action="store_true", help="Skip readback verification after writes")
     ap.add_argument("--peek", action="append", help="Peek raw bytes: subclass:offset:length (e.g. --peek 48:11:2)")
-
+    ap.add_argument("--peek-f4", action="append", help="Peek a TI F4 float: subclass:offset (reads 4 bytes). Example: --peek-f4 104:0")
 
     args = ap.parse_args()
 
@@ -273,6 +343,21 @@ def main():
                 peeks.append({"subclass": sc, "offset": off, "length": ln, "hex": b.hex()})
             out["peek"] = peeks
 
+        if args.peek_f4:
+            pf = []
+            for item in args.peek_f4:
+                sc_s, off_s = [x.strip() for x in item.split(":")]
+                sc = int(sc_s, 0)
+                off = int(off_s, 0)
+                b = g.df_read_bytes(sc, off, 4)
+                pf.append({
+                    "subclass": sc,
+                    "offset": off,
+                    "raw_hex": b.hex(),
+                    "value": ti_f4_decode(b),
+                })
+            out["peek_f4"] = pf
+
         # Apply writes
         if args.write:
             by_name = {f.name: f for f in FIELDS}
@@ -311,6 +396,10 @@ def main():
                     ln = int(f.ftype[1:])
                     s = rhs.encode("ascii", errors="replace")[:ln]
                     b = s + b"\x00" * (ln - len(s))
+
+                elif f.ftype == "F4":
+                    v = float(rhs)
+                    b = ti_f4_encode(v)
 
                 else:
                     raise ValueError(f"Unsupported type for writing: {f.ftype}")
@@ -351,6 +440,11 @@ def main():
                 print("\nPeek:")
                 for p in out["peek"]:
                     print(f"  - subclass {p['subclass']} offset {p['offset']} len {p['length']}: {p['hex']}")
+
+            if "peek_f4" in out:
+                print("\nPeek F4:")
+                for p in out["peek_f4"]:
+                    print(f"  - subclass {p['subclass']} offset {p['offset']}: raw={p['raw_hex']} value={p['value']}")
 
             if "writes" in out:
                 print("\nWrites:")
