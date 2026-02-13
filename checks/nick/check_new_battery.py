@@ -95,7 +95,12 @@ class BatteryStatus:
 def read_battery() -> BatteryStatus:
     with SMBus(I2C_BUS) as bus:
         soc_b0, soc_b1 = _read_word_raw_retry(bus, CMD_SOC)
-        volt_b0, volt_b1 = _read_word_raw_retry(bus, CMD_VOLTAGE)
+        try:
+            volt_b0, volt_b1 = _read_word_raw_retry(bus, CMD_VOLTAGE)
+            voltage_ok = True
+        except OSError:
+            volt_b0, volt_b1 = 0xFF, 0xFF
+            voltage_ok = False
         byteorder = "little"
 
         volt_scale = _read_byte(bus, CMD_VOLT_SCALE) or 1
@@ -105,8 +110,12 @@ def read_battery() -> BatteryStatus:
         soc = soc_raw / 256.0 if soc_raw > 1000 else float(soc_raw)
         remaining = _read_word(bus, CMD_REMAINING_CAP, byteorder) * curr_scale
         full = _read_word(bus, CMD_FULL_CAP, byteorder) * curr_scale
-        bat_mV = _read_word(bus, CMD_VOLTAGE, byteorder) * volt_scale
-        pack_voltage_V = (bat_mV / 1000.0) / V_DIV_RATIO
+        if voltage_ok:
+            bat_mV = _read_word(bus, CMD_VOLTAGE, byteorder) * volt_scale
+            pack_voltage_V = (bat_mV / 1000.0) / V_DIV_RATIO
+        else:
+            bat_mV = float("nan")
+            pack_voltage_V = float("nan")
         avg_current = _read_sword(bus, CMD_AVG_CURRENT, byteorder) * curr_scale
         temp_dK = _read_word(bus, CMD_TEMPERATURE, byteorder)  # 0.1 K
         temp_c = (temp_dK / 10.0) - 273.15
@@ -129,7 +138,7 @@ def read_battery() -> BatteryStatus:
             print(f"  CURR: 0x{curr_b0:02X} 0x{curr_b1:02X}")
             print("DEBUG endian check (SOC/VOLT):")
             print(f"  SOC LE/BE: {soc_le} / {soc_be}")
-            print(f"  VOLT LE/BE: {volt_le} / {volt_be}")
+            print(f"  VOLT LE/BE: {volt_le} / {volt_be} (valid={voltage_ok})")
             print(f"  TEMP LE/BE: {temp_le} / {temp_be}")
             print(f"  CURR LE/BE: {curr_le} / {curr_be}")
             print(f"  Byteorder chosen: {byteorder}")
@@ -152,8 +161,12 @@ if __name__ == "__main__":
     print(f"SOC: {status.soc_percent:.1f}%")
     print(f"Remaining: {status.remaining_mAh:.0f} mAh")
     print(f"Full: {status.full_mAh:.0f} mAh")
-    print(f"BAT pin: {status.voltage_mV:.0f} mV")
-    print(f"Pack: {status.pack_voltage_V:.2f} V")
+    if status.voltage_mV == status.voltage_mV:
+        print(f"BAT pin: {status.voltage_mV:.0f} mV")
+        print(f"Pack: {status.pack_voltage_V:.2f} V")
+    else:
+        print("BAT pin: n/a (voltage read failed)")
+        print("Pack: n/a (voltage read failed)")
     direction = "charging" if status.avg_current_mA > 0 else "discharging"
     print(f"Avg Current: {status.avg_current_mA:.0f} mA ({direction})")
     print(f"Temp: {status.temperature_C:.1f} C")
