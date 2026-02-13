@@ -49,8 +49,8 @@ class Field:
 FIELDS: List[Field] = [
     Field("Design Capacity", 48, 11, "I2", "mAh"),
     Field("Design Energy", 48, 13, "I2", "cWh"),
-    Field("Cell Charge Voltage T1-T2", 48, 17, "U2", "mV"),
-    Field("Cell Charge Voltage T2-T3", 48, 19, "U2", "mV"),
+    Field("Cell Charge Voltage T1-T2", 48, 16, "U2", "mV"),
+    Field("Cell Charge Voltage T2-T3", 48, 18, "U2", "mV"),
     Field("Volt Scale", 48, 60, "I1", "scale"),
     Field("Curr Scale", 48, 61, "I1", "scale"),
     Field("Energy Scale", 48, 62, "I1", "scale"),
