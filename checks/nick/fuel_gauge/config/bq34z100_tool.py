@@ -71,6 +71,18 @@ FIELDS: List[Field] = [
     Field("Number of series cell", 64, 7, "U1", "cells"),
 ]
 
+def _safe_pow2(exp: int) -> float:
+    # double can handle about 2**1023; anything beyond is effectively inf
+    if exp > 1023 or exp < -1074:   # -1074 covers denormals
+        return float("nan")
+    return 2.0 ** exp
+
+def _safe_pow10(exp: int) -> float:
+    # 10**308 is near float max
+    if exp > 308 or exp < -324:
+        return float("nan")
+    return 10.0 ** exp
+
 def _s8(x): return x-256 if x & 0x80 else x
 def _s16_be(b):
     v = (b[0]<<8) | b[1]
@@ -96,21 +108,21 @@ def try_f4_candidates(raw4: bytes) -> dict:
 
     # exp8 + mant24 variants
     exp = _s8(b0); mant = _s24_be(bytes([b1,b2,b3]))
-    out["exp8_mant24_be"] = float(mant) * (2.0 ** exp)
+    out["exp8_mant24_be"] = float(mant) * _safe_pow2(exp)
 
     exp = _s8(b3); mant = _s24_be(bytes([b0,b1,b2]))
-    out["mant24_be_exp8_last"] = float(mant) * (2.0 ** exp)
+    out["mant24_be_exp8_last"] = float(mant) * _safe_pow2(exp)
 
     # s16 + s16 base-2
     e_be = _s16_be(bytes([b0,b1])); m_be = _s16_be(bytes([b2,b3]))
-    out["s16e_be_s16m_be_pow2"] = float(m_be) * (2.0 ** e_be)
+    out["s16e_be_s16m_be_pow2"] = float(m_be) * _safe_pow2(e_be)
 
     e_le = _s16_le(bytes([b0,b1])); m_le = _s16_le(bytes([b2,b3]))
-    out["s16e_le_s16m_le_pow2"] = float(m_le) * (2.0 ** e_le)
+    out["s16e_le_s16m_le_pow2"] = float(m_le) * _safe_pow2(e_le)
 
     # s16 + s16 base-10
-    out["s16e_be_s16m_be_pow10"] = float(m_be) * (10.0 ** e_be) if -50 <= e_be <= 50 else float("nan")
-    out["s16e_le_s16m_le_pow10"] = float(m_le) * (10.0 ** e_le) if -50 <= e_le <= 50 else float("nan")
+    out["s16e_be_s16m_be_pow10"] = float(m_be) * _safe_pow10(e_be)
+    out["s16e_le_s16m_le_pow10"] = float(m_le) * _safe_pow10(e_le)
 
     return out
 
