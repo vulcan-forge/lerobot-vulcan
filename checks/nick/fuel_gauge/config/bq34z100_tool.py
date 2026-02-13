@@ -19,6 +19,8 @@ import json
 import sys
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Any
+import struct
+import math
 
 try:
     from smbus2 import SMBus, i2c_msg
@@ -68,6 +70,49 @@ FIELDS: List[Field] = [
 
     Field("Number of series cell", 64, 7, "U1", "cells"),
 ]
+
+def _s8(x): return x-256 if x & 0x80 else x
+def _s16_be(b):
+    v = (b[0]<<8) | b[1]
+    return v-65536 if v & 0x8000 else v
+def _s16_le(b):
+    v = b[0] | (b[1]<<8)
+    return v-65536 if v & 0x8000 else v
+def _s24_be(b):
+    v = (b[0]<<16) | (b[1]<<8) | b[2]
+    return v-0x1000000 if v & 0x800000 else v
+
+def f32_le(b): return struct.unpack("<f", b)[0]
+def f32_be(b): return struct.unpack(">f", b)[0]
+
+def try_f4_candidates(raw4: bytes) -> dict:
+    b0,b1,b2,b3 = raw4
+    out = {}
+
+    # IEEE-754
+    out["ieee_f32_be"] = f32_be(raw4)
+    out["ieee_f32_le"] = f32_le(raw4)
+    out["ieee_f32_wordswap"] = f32_le(bytes([b2,b3,b0,b1]))
+
+    # exp8 + mant24 variants
+    exp = _s8(b0); mant = _s24_be(bytes([b1,b2,b3]))
+    out["exp8_mant24_be"] = float(mant) * (2.0 ** exp)
+
+    exp = _s8(b3); mant = _s24_be(bytes([b0,b1,b2]))
+    out["mant24_be_exp8_last"] = float(mant) * (2.0 ** exp)
+
+    # s16 + s16 base-2
+    e_be = _s16_be(bytes([b0,b1])); m_be = _s16_be(bytes([b2,b3]))
+    out["s16e_be_s16m_be_pow2"] = float(m_be) * (2.0 ** e_be)
+
+    e_le = _s16_le(bytes([b0,b1])); m_le = _s16_le(bytes([b2,b3]))
+    out["s16e_le_s16m_le_pow2"] = float(m_le) * (2.0 ** e_le)
+
+    # s16 + s16 base-10
+    out["s16e_be_s16m_be_pow10"] = float(m_be) * (10.0 ** e_be) if -50 <= e_be <= 50 else float("nan")
+    out["s16e_le_s16m_le_pow10"] = float(m_le) * (10.0 ** e_le) if -50 <= e_le <= 50 else float("nan")
+
+    return out
 
 def ti_f4_decode(raw4: bytes) -> float:
     """
@@ -303,6 +348,7 @@ def main():
     ap.add_argument("--no-verify", action="store_true", help="Skip readback verification after writes")
     ap.add_argument("--peek", action="append", help="Peek raw bytes: subclass:offset:length (e.g. --peek 48:11:2)")
     ap.add_argument("--peek-f4", action="append", help="Peek a TI F4 float: subclass:offset (reads 4 bytes). Example: --peek-f4 104:0")
+    ap.add_argument("--peek-f4-candidates", action="append", help="Peek 4 bytes and print candidate decodes: subclass:offset (e.g. 104:0)")
 
     args = ap.parse_args()
 
@@ -357,6 +403,20 @@ def main():
                     "value": ti_f4_decode(b),
                 })
             out["peek_f4"] = pf
+
+        if args.peek_f4_candidates:
+            cands = []
+            for item in args.peek_f4_candidates:
+                sc_s, off_s = [x.strip() for x in item.split(":")]
+                sc = int(sc_s, 0); off = int(off_s, 0)
+                raw = g.df_read_bytes(sc, off, 4)
+                cands.append({
+                    "subclass": sc,
+                    "offset": off,
+                    "raw_hex": raw.hex(),
+                    "candidates": try_f4_candidates(raw),
+                })
+            out["peek_f4_candidates"] = cands
 
         # Apply writes
         if args.write:
