@@ -47,9 +47,8 @@ def main() -> None:
             return 1
         return 0
 
-    le_score = _score(raw_le)
-    be_score = _score(raw_be)
-    voltage_mV = raw_be if be_score > le_score else raw_le
+    # Force big-endian for voltage to match observed behavior on this setup.
+    voltage_mV = raw_be
     mode = "pack" if 2000 <= voltage_mV <= 20000 else "bat"
 
     if mode == "pack":
