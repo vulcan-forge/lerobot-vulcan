@@ -442,6 +442,8 @@ def main():
         action="store_true",
         help="Read SBS (Smart Battery System) standard registers"
     )
+    ap.add_argument("--backup-file", help="Save full DF dump (subclasses 0x40-0x55, block 0) to JSON.")
+    ap.add_argument("--restore-file", help="Restore DF dump JSON created by --backup-file.")
 
     args = ap.parse_args()
 
@@ -458,6 +460,31 @@ def main():
                     blocks.append({"block": bi, "checksum": f"0x{cks:02x}", "data_hex": blk.hex()})
                 dumps[str(sc)] = blocks
             out["subclass_dumps"] = dumps
+
+        if args.backup_file:
+            dumps = {}
+            for sc in range(0x40, 0x56):
+                blk, cks = g.df_read_block(sc, 0)
+                dumps[str(sc)] = [{"block": 0, "checksum": f"0x{cks:02x}", "data_hex": blk.hex()}]
+            out["backup"] = dumps
+            with open(args.backup_file, "w", encoding="utf-8") as f:
+                json.dump(out, f, indent=2, sort_keys=True)
+            print(f"Saved backup to {args.backup_file}")
+            return
+
+        if args.restore_file:
+            with open(args.restore_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            dumps = data.get("backup") or data.get("subclass_dumps") or {}
+            if not dumps:
+                raise ValueError("Backup file missing 'backup' or 'subclass_dumps' content.")
+            for sc_s, blocks in dumps.items():
+                sc = int(sc_s, 0)
+                for b in blocks:
+                    blk = bytes.fromhex(b["data_hex"])
+                    g.df_write_block(sc, b.get("block", 0), blk, verify=not args.no_verify)
+            print(f"Restored backup from {args.restore_file}")
+            return
 
         values: Dict[str, Any] = {}
         if args.read_fields:
