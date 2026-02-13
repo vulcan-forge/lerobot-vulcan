@@ -360,7 +360,12 @@ def main():
     ap.add_argument("--no-verify", action="store_true", help="Skip readback verification after writes")
     ap.add_argument("--peek", action="append", help="Peek raw bytes: subclass:offset:length (e.g. --peek 48:11:2)")
     ap.add_argument("--peek-f4", action="append", help="Peek a TI F4 float: subclass:offset (reads 4 bytes). Example: --peek-f4 104:0")
-    ap.add_argument("--peek-f4-candidates", action="append", help="Peek 4 bytes and print candidate decodes: subclass:offset (e.g. 104:0)")
+    ap.add_argument(
+        "--peek-f4-candidates",
+        dest="peek_f4_candidates",
+        action="append",
+        help="Peek 4 bytes and print candidate decodes: subclass:offset (e.g. 104:0)"
+    )
 
     args = ap.parse_args()
 
