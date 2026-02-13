@@ -324,16 +324,22 @@ class BQ34Z100:
 
     def sbs_read_u16(self, cmd: int) -> int:
         """
-        SMBus Read Word. Returns unsigned 16-bit.
-        Handles byte swap for Raspberry Pi SMBus behavior.
+        Read a 16-bit SBS register using an I2C block read (more compatible than SMBus read_word_data).
+        SBS words are little-endian on the wire: [LSB, MSB].
         """
-        w = self.bus.read_word_data(self.addr, cmd)
-        return ((w & 0xFF) << 8) | ((w >> 8) & 0xFF)
+        # Some adapters want the command written first
+        try:
+            self.bus.write_byte(self.addr, cmd)
+            b = self.bus.read_i2c_block_data(self.addr, cmd, 2)
+        except Exception:
+            # Fallback: some smbus2 setups don't like the extra write_byte
+            b = self.bus.read_i2c_block_data(self.addr, cmd, 2)
+
+        lsb = b[0] & 0xFF
+        msb = b[1] & 0xFF
+        return (msb << 8) | lsb
 
     def sbs_read_i16(self, cmd: int) -> int:
-        """
-        SMBus Read Word. Returns signed 16-bit.
-        """
         v = self.sbs_read_u16(cmd)
         return v - 0x10000 if v & 0x8000 else v
 
