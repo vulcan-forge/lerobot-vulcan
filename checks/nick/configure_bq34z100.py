@@ -366,6 +366,17 @@ def _apply_preset(bus: SMBus, preset: dict[int, dict[int, list[int]]], dry_run: 
                 print(f"Restored subclass {subclass} block {block}")
 
 
+def _preset_trial_capacity() -> dict[int, dict[int, list[int]]]:
+    # Start from the "default" preset and change only Design Capacity to 10000 mAh.
+    preset = _preset_default()
+    data = preset[48][0][:]
+    # Design Capacity offset 11 (U2), little-endian.
+    data[11] = 0x10
+    data[12] = 0x27
+    preset[48][0] = data
+    return preset
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Configure BQ34Z100-R2 data flash over I2C.")
     parser.add_argument("--write", action="store_true", help="Perform writes (default is dry-run).")
@@ -374,7 +385,7 @@ def main() -> None:
     parser.add_argument("--restore", type=str, help="Restore data flash blocks from a JSON file.")
     parser.add_argument(
         "--preset",
-        choices=["default", "custom"],
+        choices=["default", "custom", "trial-capacity"],
         help="Restore a built-in preset (default or custom).",
     )
     parser.add_argument("--seal", action="store_true", help="Seal after writing.")
@@ -434,6 +445,8 @@ def main() -> None:
             _unseal(bus)
             if args.preset == "default":
                 _apply_preset(bus, _preset_default(), dry_run=not args.write)
+            elif args.preset == "trial-capacity":
+                _apply_preset(bus, _preset_trial_capacity(), dry_run=not args.write)
             else:
                 _apply_pack_config(cfg, bus, dry_run=not args.write)
                 if args.write:
