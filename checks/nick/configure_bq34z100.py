@@ -377,6 +377,24 @@ def _preset_trial_capacity() -> dict[int, dict[int, list[int]]]:
     return preset
 
 
+def _preset_trial_voltage() -> dict[int, dict[int, list[int]]]:
+    # Start from the "default" preset and change only voltage divider + VOLTSEL.
+    preset = _preset_default()
+    # Set VOLTSEL bit in Pack Config (class 64, block 0, offset 0, U2).
+    data64 = preset[64][0][:]
+    pack_cfg = data64[0] | (data64[1] << 8)
+    pack_cfg |= (1 << 11)
+    data64[0] = pack_cfg & 0xFF
+    data64[1] = (pack_cfg >> 8) & 0xFF
+    preset[64][0] = data64
+    # Voltage Divider in class 104, block 0, offset 14 (U2) = 16091 (0x3EDB).
+    data104 = preset[104][0][:]
+    data104[14] = 0xDB
+    data104[15] = 0x3E
+    preset[104][0] = data104
+    return preset
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Configure BQ34Z100-R2 data flash over I2C.")
     parser.add_argument("--write", action="store_true", help="Perform writes (default is dry-run).")
@@ -385,7 +403,7 @@ def main() -> None:
     parser.add_argument("--restore", type=str, help="Restore data flash blocks from a JSON file.")
     parser.add_argument(
         "--preset",
-        choices=["default", "custom", "trial-capacity"],
+        choices=["default", "custom", "trial-capacity", "trial-voltage"],
         help="Restore a built-in preset (default or custom).",
     )
     parser.add_argument("--seal", action="store_true", help="Seal after writing.")
@@ -447,6 +465,8 @@ def main() -> None:
                 _apply_preset(bus, _preset_default(), dry_run=not args.write)
             elif args.preset == "trial-capacity":
                 _apply_preset(bus, _preset_trial_capacity(), dry_run=not args.write)
+            elif args.preset == "trial-voltage":
+                _apply_preset(bus, _preset_trial_voltage(), dry_run=not args.write)
             else:
                 _apply_pack_config(cfg, bus, dry_run=not args.write)
                 if args.write:
