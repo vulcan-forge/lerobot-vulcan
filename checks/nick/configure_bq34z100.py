@@ -366,6 +366,24 @@ def _apply_preset(bus: SMBus, preset: dict[int, dict[int, list[int]]], dry_run: 
                 print(f"Restored subclass {subclass} block {block}")
 
 
+def _apply_preset_subset(
+    bus: SMBus,
+    preset: dict[int, dict[int, list[int]]],
+    subclasses: set[int],
+    dry_run: bool,
+) -> None:
+    for subclass in subclasses:
+        blocks = preset.get(subclass, {})
+        for block, data in blocks.items():
+            if len(data) != 32:
+                raise ValueError(f"Invalid block length for subclass {subclass} block {block}")
+            if dry_run:
+                print(f"Would restore subclass {subclass} block {block}")
+            else:
+                _write_block_retry(bus, subclass, block, list(data))
+                print(f"Restored subclass {subclass} block {block}")
+
+
 def _preset_trial_capacity() -> dict[int, dict[int, list[int]]]:
     # Start from the "default" preset and change only Design Capacity to 10000 mAh.
     preset = _preset_default()
@@ -401,6 +419,11 @@ def main() -> None:
     parser.add_argument("--dump", action="store_true", help="Dump raw data flash blocks (no writes).")
     parser.add_argument("--backup", type=str, help="Backup data flash blocks to a JSON file.")
     parser.add_argument("--restore", type=str, help="Restore data flash blocks from a JSON file.")
+    parser.add_argument(
+        "--repair-custom",
+        action="store_true",
+        help="Restore baseline config (subclasses 64/104) then apply custom values.",
+    )
     parser.add_argument(
         "--preset",
         choices=["default", "custom", "trial-capacity", "trial-voltage"],
@@ -463,6 +486,19 @@ def main() -> None:
             if args.write:
                 _write_control_word(bus, SUBCMD_RESET)
                 time.sleep(0.2)
+            return
+        if args.repair_custom:
+            _unseal(bus)
+            if not args.write:
+                print("Would restore baseline subclasses: 64, 104")
+                _apply_preset_subset(bus, _preset_default(), {64, 104}, dry_run=True)
+                _apply_pack_config(cfg, bus, dry_run=True)
+                return
+            _apply_preset_subset(bus, _preset_default(), {64, 104}, dry_run=False)
+            _apply_pack_config(cfg, bus, dry_run=False)
+            _write_control_word(bus, SUBCMD_RESET)
+            time.sleep(0.2)
+            _print_current_values(bus)
             return
         if args.preset:
             _unseal(bus)

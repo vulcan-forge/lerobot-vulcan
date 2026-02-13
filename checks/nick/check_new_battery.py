@@ -9,6 +9,10 @@ I2C_BUS = 1
 BQ_ADDR = 0x55  # 7-bit address
 DEBUG = True
 
+# Overrides for debugging unstable gauge configs
+FORCE_VOLTAGE_MODE = None  # "pack", "bat", or None
+FORCE_CURR_SCALE = None  # e.g., 1 to ignore gauge scaling
+
 # Voltage divider: top to pack+, bottom to GND, BAT pin at the midpoint.
 R_TOP_OHMS = 249_000.0
 R_BOTTOM_OHMS = 16_500.0
@@ -105,6 +109,8 @@ def read_battery() -> BatteryStatus:
 
         volt_scale = _read_byte(bus, CMD_VOLT_SCALE) or 1
         curr_scale = _read_byte(bus, CMD_CURR_SCALE) or 1
+        if FORCE_CURR_SCALE is not None:
+            curr_scale = FORCE_CURR_SCALE
 
         soc_raw = _read_word(bus, CMD_SOC, byteorder)
         soc = soc_raw / 256.0 if soc_raw > 1000 else float(soc_raw)
@@ -128,14 +134,28 @@ def read_battery() -> BatteryStatus:
             be_score = _score(volt_be)
             voltage_mV = volt_be if be_score > le_score else volt_le
 
-            if 2000 <= voltage_mV <= 20000:
+            if FORCE_VOLTAGE_MODE == "pack":
+                # Choose the value that looks most like a pack voltage.
+                candidates = [(volt_le, _score(volt_le)), (volt_be, _score(volt_be))]
+                voltage_mV = max(candidates, key=lambda v: v[1])[0]
                 pack_voltage_V = voltage_mV / 1000.0
                 bat_mV = voltage_mV * V_DIV_RATIO
-                voltage_mode = "pack"
-            else:
+                voltage_mode = "pack-forced"
+            elif FORCE_VOLTAGE_MODE == "bat":
+                candidates = [(volt_le, _score(volt_le)), (volt_be, _score(volt_be))]
+                voltage_mV = min(candidates, key=lambda v: v[1])[0]
                 bat_mV = float(voltage_mV)
                 pack_voltage_V = (bat_mV / 1000.0) / V_DIV_RATIO
-                voltage_mode = "bat"
+                voltage_mode = "bat-forced"
+            else:
+                if 2000 <= voltage_mV <= 20000:
+                    pack_voltage_V = voltage_mV / 1000.0
+                    bat_mV = voltage_mV * V_DIV_RATIO
+                    voltage_mode = "pack"
+                else:
+                    bat_mV = float(voltage_mV)
+                    pack_voltage_V = (bat_mV / 1000.0) / V_DIV_RATIO
+                    voltage_mode = "bat"
         else:
             bat_mV = float("nan")
             pack_voltage_V = float("nan")
@@ -168,6 +188,9 @@ def read_battery() -> BatteryStatus:
             print(f"  Byteorder chosen: {byteorder}")
             print(f"  VoltScale: {volt_scale}")
             print(f"  CurrScale: {curr_scale}")
+            if FORCE_VOLTAGE_MODE or FORCE_CURR_SCALE is not None:
+                print(f"  ForceVoltageMode: {FORCE_VOLTAGE_MODE}")
+                print(f"  ForceCurrScale: {FORCE_CURR_SCALE}")
 
         return BatteryStatus(
             soc_percent=float(soc),
