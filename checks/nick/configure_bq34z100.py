@@ -306,12 +306,77 @@ def _restore_from_file(bus: SMBus, path: str, dry_run: bool) -> None:
                 print(f"Restored subclass {subclass} block {block}")
 
 
+def _preset_default() -> dict[int, dict[int, list[int]]]:
+    # Captured from initial dump before modifications.
+    return {
+        48: {
+            0: [
+                0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x03,
+                0x84, 0x64, 0x03, 0xE8, 0x15, 0x18, 0xFE, 0x70,
+                0x10, 0x68, 0x10, 0x68, 0x10, 0x04, 0x0A, 0x32,
+                0x1E, 0x00, 0x0A, 0x2D, 0x37, 0x01, 0x01, 0xA0,
+            ],
+            1: [
+                0x0B, 0x62, 0x71, 0x33, 0x34, 0x7A, 0x31, 0x30,
+                0x30, 0x2D, 0x47, 0x31, 0x0B, 0x54, 0x65, 0x78,
+                0x61, 0x73, 0x20, 0x49, 0x6E, 0x73, 0x74, 0x2E,
+                0x04, 0x4C, 0x49, 0x4F, 0x4E, 0x00, 0x00, 0xD7,
+            ],
+        },
+        64: {
+            0: [
+                0xD9, 0xAF, 0x37, 0x00, 0x00, 0x00, 0x01, 0x00,
+                0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xEA,
+            ],
+            1: [
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF,
+            ],
+        },
+        104: {
+            0: [
+                0x71, 0x20, 0x5C, 0x94, 0x08, 0x98, 0xC0, 0xFB,
+                0x50, 0x00, 0x00, 0x00, 0x00, 0x13, 0x88, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xB9,
+            ],
+            1: [
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF,
+            ],
+        },
+    }
+
+
+def _apply_preset(bus: SMBus, preset: dict[int, dict[int, list[int]]], dry_run: bool) -> None:
+    for subclass, blocks in preset.items():
+        for block, data in blocks.items():
+            if len(data) != 32:
+                raise ValueError(f"Invalid block length for subclass {subclass} block {block}")
+            if dry_run:
+                print(f"Would restore subclass {subclass} block {block}")
+            else:
+                _write_block_retry(bus, subclass, block, list(data))
+                print(f"Restored subclass {subclass} block {block}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Configure BQ34Z100-R2 data flash over I2C.")
     parser.add_argument("--write", action="store_true", help="Perform writes (default is dry-run).")
     parser.add_argument("--dump", action="store_true", help="Dump raw data flash blocks (no writes).")
     parser.add_argument("--backup", type=str, help="Backup data flash blocks to a JSON file.")
     parser.add_argument("--restore", type=str, help="Restore data flash blocks from a JSON file.")
+    parser.add_argument(
+        "--preset",
+        choices=["default", "custom"],
+        help="Restore a built-in preset (default or custom).",
+    )
     parser.add_argument("--seal", action="store_true", help="Seal after writing.")
     parser.add_argument("--series", type=int, default=4, help="Number of series cells (e.g., 4).")
     parser.add_argument("--capacity-mAh", type=int, default=10000, help="Design capacity in mAh.")
@@ -364,6 +429,16 @@ def main() -> None:
             if args.write:
                 _write_control_word(bus, SUBCMD_RESET)
                 time.sleep(0.2)
+            return
+        if args.preset:
+            _unseal(bus)
+            if args.preset == "default":
+                _apply_preset(bus, _preset_default(), dry_run=not args.write)
+            else:
+                _apply_pack_config(cfg, bus, dry_run=not args.write)
+                if args.write:
+                    _write_control_word(bus, SUBCMD_RESET)
+                    time.sleep(0.2)
             return
         if args.write:
             _unseal(bus)
