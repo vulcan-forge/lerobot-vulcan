@@ -135,6 +135,7 @@ def main() -> None:
     ap.add_argument("--samples", type=int, default=10, help="Average current samples.")
     ap.add_argument("--delay", type=float, default=0.1, help="Delay between samples (s).")
     ap.add_argument("--write", action="store_true", help="Apply changes to the device.")
+    ap.add_argument("--no-verify", action="store_true", help="Skip read-back verification.")
     args = ap.parse_args()
 
     global BQ_ADDR
@@ -187,14 +188,15 @@ def main() -> None:
             return
 
         _df_write_block(bus, CAL_SUBCLASS, CAL_BLOCK, bytes(new_block))
-        time.sleep(0.05)
-        verify = _df_read_block(bus, CAL_SUBCLASS, CAL_BLOCK)
-        if verify[CC_GAIN_OFFSET:CC_GAIN_OFFSET + 4] != new_block[CC_GAIN_OFFSET:CC_GAIN_OFFSET + 4]:
-            print("Verify failed: CC Gain bytes differ.")
-            sys.exit(1)
-        if verify[CC_DELTA_OFFSET:CC_DELTA_OFFSET + 4] != new_block[CC_DELTA_OFFSET:CC_DELTA_OFFSET + 4]:
-            print("Verify failed: CC Delta bytes differ.")
-            sys.exit(1)
+        if not args.no_verify:
+            time.sleep(0.05)
+            verify = _df_read_block(bus, CAL_SUBCLASS, CAL_BLOCK)
+            if verify[CC_GAIN_OFFSET:CC_GAIN_OFFSET + 4] != new_block[CC_GAIN_OFFSET:CC_GAIN_OFFSET + 4]:
+                print("Verify failed: CC Gain bytes differ.")
+                sys.exit(1)
+            if verify[CC_DELTA_OFFSET:CC_DELTA_OFFSET + 4] != new_block[CC_DELTA_OFFSET:CC_DELTA_OFFSET + 4]:
+                print("Verify failed: CC Delta bytes differ.")
+                sys.exit(1)
 
         # Exit calibration mode
         _write_control(bus, SUB_EXIT_CAL)
