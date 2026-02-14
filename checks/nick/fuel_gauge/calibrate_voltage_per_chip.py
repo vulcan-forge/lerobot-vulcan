@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # Per-chip voltage calibration for BQ34Z100 by updating Voltage Divider.
-# Formula from TI support:
-#   newDivider = oldDivider * (forcedVoltage / rawVoltage)
-# where rawVoltage is the gauge's current voltage reading (pack).
-# If the voltage register returns BAT (mV) instead of pack, we convert:
-#   rawPack = rawBat * (oldDivider / 1000)
+# If the voltage register returns BAT (mV), compute directly:
+#   newDivider = (measuredPack / measuredBat) * 1000
+# If the voltage register returns PACK (mV), use:
+#   newDivider = oldDivider * (measuredPack / rawPack)
 #
 # Dry-run by default. Use --write to apply.
 
@@ -84,6 +83,12 @@ def main() -> None:
     )
     ap.add_argument("--samples", type=int, default=8, help="Number of samples to average.")
     ap.add_argument("--delay", type=float, default=0.1, help="Delay between samples (s).")
+    ap.add_argument(
+        "--mode",
+        choices=["auto", "bat", "pack"],
+        default="auto",
+        help="Interpret raw voltage as BAT or PACK. 'auto' uses raw<2V as BAT.",
+    )
     ap.add_argument("--write", action="store_true", help="Apply changes to the device.")
     args = ap.parse_args()
 
@@ -114,19 +119,27 @@ def main() -> None:
         raw_v = raw_mv / 1000.0
         print(f"Raw voltage (avg): {raw_mv:.0f} mV")
 
-        # Interpret raw voltage: if under 2V, treat as BAT; else pack.
-        if raw_v < 2.0:
-            raw_pack = raw_v * (cur / 1000.0)
-            print(f"Interpreting raw as BAT: {raw_v:.3f} V -> raw pack {raw_pack:.3f} V")
+        # Interpret raw voltage
+        if args.mode == "auto":
+            mode = "bat" if raw_v < 2.0 else "pack"
+        else:
+            mode = args.mode
+
+        if mode == "bat":
+            if raw_v <= 0.0 or raw_v > 2.0:
+                print(f"Raw BAT voltage out of expected range: {raw_v:.3f} V")
+                return
+            raw_bat = raw_v
+            new_div = int(round((args.measured_pack / raw_bat) * 1000.0))
+            print(f"Interpreting raw as BAT: {raw_bat:.3f} V -> new divider {new_div}")
         else:
             raw_pack = raw_v
-            print(f"Interpreting raw as PACK: {raw_pack:.3f} V")
+            if raw_pack <= 0.0:
+                print("Invalid raw pack voltage.")
+                return
+            new_div = int(round(cur * (args.measured_pack / raw_pack)))
+            print(f"Interpreting raw as PACK: {raw_pack:.3f} V -> new divider {new_div}")
 
-        if raw_pack <= 0.0:
-            print("Invalid raw pack voltage.")
-            return
-
-        new_div = int(round(cur * (args.measured_pack / raw_pack)))
         if new_div < 1 or new_div > 65535:
             print(f"Computed divider out of range: {new_div}")
             return
@@ -145,6 +158,8 @@ def main() -> None:
             return
 
         _write_block(bus, DIV_SUBCLASS, DIV_BLOCK, bytes(new_block))
+        # Read back with a short delay to avoid transient 0s
+        time.sleep(0.05)
         verify_block, _ = _read_block(bus, DIV_SUBCLASS, DIV_BLOCK)
         verify = _u16_le(verify_block, DIV_OFFSET)
         if verify != new_div:
