@@ -10,15 +10,15 @@ from smbus2 import SMBus, i2c_msg
 I2C_BUS_DEFAULT = 1
 BQ_ADDR_DEFAULT = 0x55
 
-# Commands (based on your prior reads + SBS defaults)
+# Standard commands (per TI datasheet)
+CMD_SOC = 0x02
+CMD_REMAINING = 0x04
+CMD_FULL = 0x06
 CMD_VOLTAGE = 0x08
+CMD_AVG_CURRENT = 0x0A
 CMD_TEMPERATURE = 0x0C
-CMD_CURRENT = 0x0A
-CMD_AVG_CURRENT = 0x0B
-CMD_SOC_ALT = 0x02   # you previously read SOC here
-CMD_SOC = 0x0D       # SBS Relative State of Charge
-CMD_REMAINING = 0x0F
-CMD_FULL = 0x10
+CMD_FLAGS = 0x0E
+CMD_CURRENT = 0x10
 
 
 def _read_word(bus: SMBus, cmd: int) -> int:
@@ -47,19 +47,24 @@ def main() -> None:
         temp_dK = _read_word(bus, CMD_TEMPERATURE)
         curr_ma = _s16(_read_word(bus, CMD_CURRENT))
         avg_ma = _s16(_read_word(bus, CMD_AVG_CURRENT))
-        soc_alt = _read_word(bus, CMD_SOC_ALT)
         soc = _read_word(bus, CMD_SOC)
         rem_mah = _read_word(bus, CMD_REMAINING)
         full_mah = _read_word(bus, CMD_FULL)
+        flags = _read_word(bus, CMD_FLAGS)
 
-    print(f"Voltage: {voltage_mv} mV")
+    # If the voltage looks like BAT (< 2 V), estimate pack using divider.
+    if voltage_mv < 2000:
+        pack_v = (voltage_mv / 1000.0) / V_DIV_RATIO
+        print(f"Voltage: {voltage_mv} mV (BAT) -> Pack ~ {pack_v:.2f} V")
+    else:
+        print(f"Voltage: {voltage_mv} mV (PACK)")
     print(f"Temperature: {temp_dK/10.0 - 273.15:.1f} C ({temp_dK} in 0.1K)")
     print(f"Current: {curr_ma} mA")
     print(f"Avg Current: {avg_ma} mA")
-    print(f"SOC (0x02): {soc_alt}")
-    print(f"SOC (0x0D): {soc}")
+    print(f"SOC: {soc} %")
     print(f"Remaining Capacity: {rem_mah} mAh")
     print(f"Full Charge Capacity: {full_mah} mAh")
+    print(f"Flags: 0x{flags:04X}")
 
 
 if __name__ == "__main__":
