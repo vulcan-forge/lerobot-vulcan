@@ -10,6 +10,11 @@ from smbus2 import SMBus, i2c_msg
 I2C_BUS_DEFAULT = 1
 BQ_ADDR_DEFAULT = 0x55
 
+# Divider (board values)
+R_TOP_OHMS = 249_000.0
+R_BOTTOM_OHMS = 16_500.0
+V_DIV_RATIO = R_BOTTOM_OHMS / (R_TOP_OHMS + R_BOTTOM_OHMS)
+
 # Standard commands (per TI datasheet)
 CMD_SOC = 0x02
 CMD_REMAINING = 0x04
@@ -37,6 +42,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Read charge metrics from BQ34Z100.")
     ap.add_argument("--bus", type=int, default=I2C_BUS_DEFAULT)
     ap.add_argument("--addr", type=lambda x: int(x, 0), default=BQ_ADDR_DEFAULT)
+    ap.add_argument("--no-temp", action="store_true", help="Skip temperature read/output.")
     args = ap.parse_args()
 
     global BQ_ADDR
@@ -44,7 +50,7 @@ def main() -> None:
 
     with SMBus(args.bus) as bus:
         voltage_mv = _read_word(bus, CMD_VOLTAGE)
-        temp_dK = _read_word(bus, CMD_TEMPERATURE)
+        temp_dK = None if args.no_temp else _read_word(bus, CMD_TEMPERATURE)
         curr_ma = _s16(_read_word(bus, CMD_CURRENT))
         avg_ma = _s16(_read_word(bus, CMD_AVG_CURRENT))
         soc = _read_word(bus, CMD_SOC)
@@ -58,7 +64,8 @@ def main() -> None:
         print(f"Voltage: {voltage_mv} mV (BAT) -> Pack ~ {pack_v:.2f} V")
     else:
         print(f"Voltage: {voltage_mv} mV (PACK)")
-    print(f"Temperature: {temp_dK/10.0 - 273.15:.1f} C ({temp_dK} in 0.1K)")
+    if temp_dK is not None:
+        print(f"Temperature: {temp_dK/10.0 - 273.15:.1f} C ({temp_dK} in 0.1K)")
     print(f"Current: {curr_ma} mA")
     print(f"Avg Current: {avg_ma} mA")
     print(f"SOC: {soc} %")
