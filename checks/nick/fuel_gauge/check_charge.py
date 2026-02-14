@@ -38,14 +38,6 @@ def _s16(x: int) -> int:
     return x - 0x10000 if x & 0x8000 else x
 
 
-def _swap16(x: int) -> int:
-    return ((x & 0xFF) << 8) | (x >> 8)
-
-
-def _read_word_swapped(bus: SMBus, cmd: int) -> int:
-    return _swap16(_read_word(bus, cmd))
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description="Read charge metrics from BQ34Z100.")
     ap.add_argument("--bus", type=int, default=I2C_BUS_DEFAULT)
@@ -61,10 +53,10 @@ def main() -> None:
         temp_dK = None if args.no_temp else _read_word(bus, CMD_TEMPERATURE)
         curr_ma = _s16(_read_word(bus, CMD_CURRENT))
         avg_ma = _s16(_read_word(bus, CMD_AVG_CURRENT))
-        soc = _read_word_swapped(bus, CMD_SOC)
-        rem_mah = _read_word_swapped(bus, CMD_REMAINING)
-        full_mah = _read_word_swapped(bus, CMD_FULL)
-        flags = _read_word_swapped(bus, CMD_FLAGS)
+        soc = _read_word(bus, CMD_SOC)
+        rem_mah = _read_word(bus, CMD_REMAINING)
+        full_mah = _read_word(bus, CMD_FULL)
+        flags = _read_word(bus, CMD_FLAGS)
 
     # If the voltage looks like BAT (< 2 V), estimate pack using divider.
     if voltage_mv < 2000:
