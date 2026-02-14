@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-# Set BQ34Z100 voltage divider ratio (ratio*1000) in data flash.
-# For 249k/16.5k: ratio = (Rtop+Rbottom)/Rbottom = 16.091 -> 16091
-#
-# Default behavior is dry-run. Use --write to apply.
+# Set BQ34Z100 Voltage Divider (ratio*1000) in Data Flash.
+# (Calibration Data subclass 104, offset 14). Default behavior is dry-run.
 
 from __future__ import annotations
 
@@ -57,10 +55,17 @@ def _set_u16_le(b: bytearray, offset: int, value: int) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Set BQ34Z100 voltage divider ratio (ratio*1000).")
+    ap = argparse.ArgumentParser(
+        description="Set BQ34Z100 Voltage Divider (ratio*1000)."
+    )
     ap.add_argument("--bus", type=int, default=I2C_BUS_DEFAULT)
     ap.add_argument("--addr", type=lambda x: int(x, 0), default=BQ_ADDR_DEFAULT)
-    ap.add_argument("--value", type=int, default=16091, help="Divider ratio * 1000 (default 16091).")
+    ap.add_argument(
+        "--value",
+        type=int,
+        default=16091,
+        help="Divider ratio * 1000 (default 16091 for 249k/16.5k).",
+    )
     ap.add_argument("--write", action="store_true", help="Apply changes to the device.")
     args = ap.parse_args()
 
@@ -68,21 +73,22 @@ def main() -> None:
     BQ_ADDR = args.addr
 
     with SMBus(args.bus) as bus:
+        # Read current divider
         block, cksum = _read_block(bus, DIV_SUBCLASS, DIV_BLOCK)
         cur = _u16_le(block, DIV_OFFSET)
         print(f"Current divider (ratio*1000): {cur}")
         print(f"Block checksum: 0x{cksum:02X}")
 
-        if cur == args.value:
-            print("No change needed.")
-            return
+        new_div = args.value
 
         new_block = bytearray(block)
-        _set_u16_le(new_block, DIV_OFFSET, args.value)
+        _set_u16_le(new_block, DIV_OFFSET, new_div)
 
-        print(f"Planned update: {cur} -> {args.value}")
-        print(f"Bytes @ offset 0x{DIV_OFFSET:02X}: {block[DIV_OFFSET]:02X} {block[DIV_OFFSET+1]:02X} -> "
-              f"{new_block[DIV_OFFSET]:02X} {new_block[DIV_OFFSET+1]:02X}")
+        print(f"Planned update: {cur} -> {new_div}")
+        print(
+            f"Bytes @ offset 0x{DIV_OFFSET:02X}: {block[DIV_OFFSET]:02X} {block[DIV_OFFSET+1]:02X} -> "
+            f"{new_block[DIV_OFFSET]:02X} {new_block[DIV_OFFSET+1]:02X}"
+        )
 
         if not args.write:
             print("Dry-run only. Re-run with --write to apply.")
@@ -91,7 +97,7 @@ def main() -> None:
         _write_block(bus, DIV_SUBCLASS, DIV_BLOCK, bytes(new_block))
         verify_block, _ = _read_block(bus, DIV_SUBCLASS, DIV_BLOCK)
         verify = _u16_le(verify_block, DIV_OFFSET)
-        if verify != args.value:
+        if verify != new_div:
             print(f"Verify failed: read back {verify}")
             sys.exit(1)
         print("Write complete and verified.")
