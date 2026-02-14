@@ -38,6 +38,20 @@ def _s16(x: int) -> int:
     return x - 0x10000 if x & 0x8000 else x
 
 
+def _swap16(x: int) -> int:
+    return ((x & 0xFF) << 8) | (x >> 8)
+
+
+def _fix_soc(raw: int) -> int:
+    # SOC should be 0-100. If out of range, try byte swap.
+    if 0 <= raw <= 100:
+        return raw
+    swapped = _swap16(raw)
+    if 0 <= swapped <= 100:
+        return swapped
+    return raw
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Read charge metrics from BQ34Z100.")
     ap.add_argument("--bus", type=int, default=I2C_BUS_DEFAULT)
@@ -53,7 +67,7 @@ def main() -> None:
         temp_dK = None if args.no_temp else _read_word(bus, CMD_TEMPERATURE)
         curr_ma = _s16(_read_word(bus, CMD_CURRENT))
         avg_ma = _s16(_read_word(bus, CMD_AVG_CURRENT))
-        soc = _read_word(bus, CMD_SOC)
+        soc_raw = _read_word(bus, CMD_SOC)
         rem_mah = _read_word(bus, CMD_REMAINING)
         full_mah = _read_word(bus, CMD_FULL)
         flags = _read_word(bus, CMD_FLAGS)
@@ -68,7 +82,11 @@ def main() -> None:
         print(f"Temperature: {temp_dK/10.0 - 273.15:.1f} C ({temp_dK} in 0.1K)")
     print(f"Current: {curr_ma} mA")
     print(f"Avg Current: {avg_ma} mA")
-    print(f"SOC: {soc} %")
+    soc = _fix_soc(soc_raw)
+    if soc != soc_raw:
+        print(f"SOC: {soc} % (raw 0x{soc_raw:04X} swapped)")
+    else:
+        print(f"SOC: {soc} %")
     print(f"Remaining Capacity: {rem_mah} mAh")
     print(f"Full Charge Capacity: {full_mah} mAh")
     print(f"Flags: 0x{flags:04X}")
