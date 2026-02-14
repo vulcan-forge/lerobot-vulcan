@@ -25,6 +25,9 @@ REG_BLOCKDATA_CTRL = 0x61
 # Calibration Data subclass (TI datasheet)
 CAL_SUBCLASS = 104
 
+# Design Data subclass (contains Design Capacity)
+DESIGN_SUBCLASS = 48
+
 # Standard commands (per TI datasheet)
 CMD_SOC = 0x02
 CMD_REMAINING = 0x04
@@ -95,6 +98,9 @@ def main() -> None:
         full_mah = _read_word(bus, CMD_FULL)
         flags = _read_word(bus, CMD_FLAGS)
 
+        design_cap_raw = _df_read_bytes(bus, DESIGN_SUBCLASS, 11, 2)
+        design_cap = int.from_bytes(design_cap_raw, "big", signed=False)
+
         if args.cal:
             cc_gain_raw = _df_read_bytes(bus, CAL_SUBCLASS, 0, 4)
             cc_delta_raw = _df_read_bytes(bus, CAL_SUBCLASS, 4, 4)
@@ -121,6 +127,7 @@ def main() -> None:
     print(f"SOC: {soc} %")
     print(f"Remaining Capacity: {rem_mah} mAh")
     print(f"Full Charge Capacity: {full_mah} mAh")
+    print(f"Design Capacity (DF): {design_cap} mAh")
     print(f"Flags: 0x{flags:04X}")
 
     if args.cal:
