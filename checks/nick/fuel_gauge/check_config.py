@@ -48,6 +48,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Check BQ34Z100 key config values.")
     ap.add_argument("--bus", type=int, default=I2C_BUS_DEFAULT)
     ap.add_argument("--addr", type=lambda x: int(x, 0), default=BQ_ADDR_DEFAULT)
+    ap.add_argument("--dump-pack", action="store_true", help="Dump raw Pack subclass blocks.")
     args = ap.parse_args()
 
     global BQ_ADDR
@@ -64,6 +65,9 @@ def main() -> None:
         pack_cfg = _u16_be(_df_read_bytes(bus, PACK_SUBCLASS, 0, 2))
 
         vdiv = _u16_le(_df_read_bytes(bus, CAL_SUBCLASS, 14, 2))
+        if args.dump_pack:
+            pack_block0 = _read_block(bus, PACK_SUBCLASS, 0)
+            pack_block1 = _read_block(bus, PACK_SUBCLASS, 1)
 
     print("Design Data (subclass 48):")
     print(f"  Design Capacity: {design_cap} mAh")
@@ -74,6 +78,9 @@ def main() -> None:
     print("Pack Data (subclass 64):")
     print(f"  Series Cells: {series_cells}")
     print(f"  Pack Config: 0x{pack_cfg:04X}")
+    if args.dump_pack:
+        print(f"  Pack block0: {pack_block0.hex()}")
+        print(f"  Pack block1: {pack_block1.hex()}")
     print("Calibration Data (subclass 104):")
     print(f"  Voltage Divider (ratio*1000): {vdiv}")
 
