@@ -121,6 +121,16 @@ def main() -> None:
     ap.add_argument("--cfgupdate", action="store_true", help="Toggle CAL_ENABLE around writes.")
     ap.add_argument("--reset", action="store_true", help="Send RESET after sweep.")
     ap.add_argument("--force", action="store_true", help="Proceed even if VOLTSEL is set.")
+    ap.add_argument(
+        "--clear-voltsel",
+        action="store_true",
+        help="Temporarily clear VOLTSEL (PACK->BAT) before sweep.",
+    )
+    ap.add_argument(
+        "--restore-voltsel",
+        action="store_true",
+        help="Restore original VOLTSEL state after sweep (only if --clear-voltsel).",
+    )
     ap.add_argument("--write", action="store_true", help="Actually write divider values.")
     args = ap.parse_args()
 
@@ -142,11 +152,24 @@ def main() -> None:
         return
 
     with SMBus(args.bus) as bus:
-        pack_cfg = _read_pack_cfg(bus)
+        pack_block = bytearray(_read_block(bus, PACK_SUBCLASS, PACK_BLOCK))
+        pack_cfg = (pack_block[PACK_CFG_OFFSET] << 8) | pack_block[PACK_CFG_OFFSET + 1]
+        original_pack_cfg = pack_cfg
+
+        if args.clear_voltsel and (pack_cfg & VOLTSEL_MASK):
+            if args.cfgupdate:
+                _write_control(bus, SUB_CAL_ENABLE)
+            pack_cfg &= ~VOLTSEL_MASK
+            pack_block[PACK_CFG_OFFSET] = (pack_cfg >> 8) & 0xFF
+            pack_block[PACK_CFG_OFFSET + 1] = pack_cfg & 0xFF
+            _write_block_diff(bus, PACK_SUBCLASS, PACK_BLOCK, _read_block(bus, PACK_SUBCLASS, PACK_BLOCK), bytes(pack_block))
+            time.sleep(0.05)
+            print(f"Cleared VOLTSEL: Pack Config now 0x{pack_cfg:04X}")
+
         if (pack_cfg & VOLTSEL_MASK):
             if target_label == "BAT" and not args.force:
                 print(f"Pack Config: 0x{pack_cfg:04X} (VOLTSEL set). 0x08 reports PACK, not BAT.")
-                print("Clear VOLTSEL or re-run with --force if you really want to sweep anyway.")
+                print("Use --clear-voltsel or re-run with --force if you really want to sweep anyway.")
                 return
         else:
             if target_label == "PACK" and not args.force:
@@ -193,6 +216,13 @@ def main() -> None:
 
         if args.cfgupdate:
             _write_control(bus, SUB_CAL_ENABLE)
+        if args.clear_voltsel and args.restore_voltsel and (original_pack_cfg != pack_cfg):
+            pack_block = bytearray(_read_block(bus, PACK_SUBCLASS, PACK_BLOCK))
+            pack_block[PACK_CFG_OFFSET] = (original_pack_cfg >> 8) & 0xFF
+            pack_block[PACK_CFG_OFFSET + 1] = original_pack_cfg & 0xFF
+            _write_block_diff(bus, PACK_SUBCLASS, PACK_BLOCK, _read_block(bus, PACK_SUBCLASS, PACK_BLOCK), bytes(pack_block))
+            time.sleep(0.05)
+            print(f"Restored VOLTSEL: Pack Config back to 0x{original_pack_cfg:04X}")
         if args.reset:
             _write_control(bus, SUB_RESET)
             time.sleep(0.1)
