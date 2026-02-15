@@ -28,15 +28,31 @@ CAL_SUBCLASS = 104
 # Design Data subclass (contains Design Capacity)
 DESIGN_SUBCLASS = 48
 
-# Standard commands (SBS command map for BQ34Z100)
-CMD_TEMPERATURE = 0x08
-CMD_VOLTAGE = 0x09
-CMD_CURRENT = 0x0A
-CMD_AVG_CURRENT = 0x0B
-CMD_SOC = 0x0D
-CMD_REMAINING = 0x0F
-CMD_FULL = 0x10
-CMD_FLAGS = 0x16
+# Standard command maps seen on BQ34Z100 variants.
+# "ti" matches the original map used in this repo (and gives sane V/T on your board).
+# "sbs" is the SBS map used by the legacy tool.
+CMD_MAPS: dict[str, dict[str, int]] = {
+    "ti": {
+        "soc": 0x02,
+        "remaining": 0x04,
+        "full": 0x06,
+        "voltage": 0x08,
+        "avg_current": 0x0A,
+        "temperature": 0x0C,
+        "flags": 0x0E,
+        "current": 0x10,
+    },
+    "sbs": {
+        "temperature": 0x08,
+        "voltage": 0x09,
+        "current": 0x0A,
+        "avg_current": 0x0B,
+        "soc": 0x0D,
+        "remaining": 0x0F,
+        "full": 0x10,
+        "flags": 0x16,
+    },
+}
 
 
 def _read_word(bus: SMBus, cmd: int) -> int:
@@ -81,6 +97,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Read charge metrics from BQ34Z100.")
     ap.add_argument("--bus", type=int, default=I2C_BUS_DEFAULT)
     ap.add_argument("--addr", type=lambda x: int(x, 0), default=BQ_ADDR_DEFAULT)
+    ap.add_argument(
+        "--map",
+        choices=sorted(CMD_MAPS.keys()),
+        default="ti",
+        help="Command map to use (default: ti).",
+    )
     ap.add_argument("--no-temp", action="store_true", help="Skip temperature read/output.")
     ap.add_argument("--cal", action="store_true", help="Dump calibration fields (subclass 104).")
     args = ap.parse_args()
@@ -88,16 +110,18 @@ def main() -> None:
     global BQ_ADDR
     BQ_ADDR = args.addr
 
+    cmds = CMD_MAPS[args.map]
+
     with SMBus(args.bus) as bus:
-        voltage_mv = _read_word(bus, CMD_VOLTAGE)
-        temp_dK = None if args.no_temp else _read_word(bus, CMD_TEMPERATURE)
-        curr_ma = _s16(_read_word(bus, CMD_CURRENT))
-        avg_ma = _s16(_read_word(bus, CMD_AVG_CURRENT))
-        soc = _read_word(bus, CMD_SOC)
-        rem_mah = _read_word(bus, CMD_REMAINING)
-        full_mah = _read_word(bus, CMD_FULL)
+        voltage_mv = _read_word(bus, cmds["voltage"])
+        temp_dK = None if args.no_temp else _read_word(bus, cmds["temperature"])
+        curr_ma = _s16(_read_word(bus, cmds["current"]))
+        avg_ma = _s16(_read_word(bus, cmds["avg_current"]))
+        soc_raw = _read_word(bus, cmds["soc"])
+        rem_raw = _read_word(bus, cmds["remaining"])
+        full_raw = _read_word(bus, cmds["full"])
         try:
-            flags = _read_word(bus, CMD_FLAGS)
+            flags = _read_word(bus, cmds["flags"])
         except OSError:
             flags = None
 
@@ -127,9 +151,31 @@ def main() -> None:
         print(f"Temperature: {temp_dK/10.0 - 273.15:.1f} C ({temp_dK} in 0.1K)")
     print(f"Current: {curr_ma} mA")
     print(f"Avg Current: {avg_ma} mA")
-    print(f"SOC: {soc} %")
-    print(f"Remaining Capacity: {rem_mah} mAh")
-    print(f"Full Charge Capacity: {full_mah} mAh")
+
+    # SOC can show up as Q8.8 on some firmwares. If it looks too large, show Q8.8.
+    soc_note = ""
+    soc_pct = float(soc_raw)
+    if soc_raw > 200:
+        soc_pct = soc_raw / 256.0
+        soc_note = f" (raw {soc_raw}, Q8.8)"
+    print(f"SOC: {soc_pct:.2f} %{soc_note}")
+
+    # Capacity scaling heuristics for the TI map: some firmwares report in 10 mAh units.
+    cap_scale = 1
+    cap_note = ""
+    if args.map == "ti" and design_cap >= 5000 and full_raw < 2000:
+        cap_scale = 10
+        cap_note = f" (raw {rem_raw}/{full_raw}, x{cap_scale})"
+    rem_mah = rem_raw * cap_scale
+    full_mah = full_raw * cap_scale
+
+    if cap_scale != 1:
+        print(f"Remaining Capacity: {rem_mah} mAh{cap_note}")
+        print(f"Full Charge Capacity: {full_mah} mAh{cap_note}")
+    else:
+        print(f"Remaining Capacity: {rem_mah} mAh")
+        print(f"Full Charge Capacity: {full_mah} mAh")
+
     print(f"Design Capacity (DF): {design_cap} mAh")
     if flags is None:
         print("Flags: <read failed>")
