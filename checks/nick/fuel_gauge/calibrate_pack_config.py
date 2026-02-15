@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from smbus2 import SMBus
 
 I2C_BUS_DEFAULT = 1
@@ -33,6 +34,14 @@ POWER_SUBCLASS = 68
 CMD_CONTROL = 0x00
 SUB_CAL_ENABLE = 0x002D
 SUB_CONTROL_STATUS = 0x0000
+SUB_ENTER_CAL = 0x0081
+SUB_EXIT_CAL = 0x0080
+SUB_RESET = 0x0041
+
+# CONTROL_STATUS bits (Table 2-3, TRM)
+FAS_BIT = 0x4000
+SS_BIT = 0x2000
+CALEN_BIT = 0x1000
 
 
 def _checksum(block: bytes) -> int:
@@ -54,6 +63,18 @@ def _write_block(bus: SMBus, subclass: int, block_index: int, new_block: bytes) 
     bus.write_byte_data(BQ_ADDR, REG_BLOCKDATA_CKSUM, _checksum(new_block))
 
 
+def _write_block_diff(
+    bus: SMBus, subclass: int, block_index: int, old_block: bytes, new_block: bytes
+) -> None:
+    bus.write_byte_data(BQ_ADDR, REG_BLOCKDATA_CTRL, 0x00)
+    bus.write_byte_data(BQ_ADDR, REG_DF_CLASS, subclass)
+    bus.write_byte_data(BQ_ADDR, REG_DF_BLOCK, block_index & 0xFF)
+    for i, (old_b, new_b) in enumerate(zip(old_block, new_block)):
+        if old_b != new_b:
+            bus.write_byte_data(BQ_ADDR, REG_BLOCKDATA_START + i, new_b)
+    bus.write_byte_data(BQ_ADDR, REG_BLOCKDATA_CKSUM, _checksum(new_block))
+
+
 def _write_control(bus: SMBus, subcmd: int) -> None:
     lo = subcmd & 0xFF
     hi = (subcmd >> 8) & 0xFF
@@ -69,13 +90,37 @@ def _read_control_status(bus: SMBus) -> int:
 
 def _is_sealed(status: int) -> bool:
     # CONTROL_STATUS high byte bit 5 (0x2000) is SS per TRM
-    return (status & 0x2000) != 0
+    return (status & SS_BIT) != 0
+
+
+def _has_full_access(status: int) -> bool:
+    # FULL ACCESS when both FAS and SS are cleared
+    return (status & (FAS_BIT | SS_BIT)) == 0
+
+
+def _is_calen(status: int) -> bool:
+    return (status & CALEN_BIT) != 0
 
 
 def _unseal(bus: SMBus, key0: int, key1: int) -> None:
     # Keys are written LSB first (per TRM note)
     bus.write_i2c_block_data(BQ_ADDR, CMD_CONTROL, [key0 & 0xFF, (key0 >> 8) & 0xFF])
     bus.write_i2c_block_data(BQ_ADDR, CMD_CONTROL, [key1 & 0xFF, (key1 >> 8) & 0xFF])
+    time.sleep(0.1)
+
+
+def _ensure_cal_enabled(bus: SMBus, enable: bool) -> int:
+    status = _read_control_status(bus)
+    calen = _is_calen(status)
+    if enable and not calen:
+        _write_control(bus, SUB_CAL_ENABLE)
+        time.sleep(0.02)
+        status = _read_control_status(bus)
+    elif not enable and calen:
+        _write_control(bus, SUB_CAL_ENABLE)
+        time.sleep(0.02)
+        status = _read_control_status(bus)
+    return status
 
 
 def _u16_be(b: bytes, offset: int) -> int:
@@ -113,6 +158,12 @@ def main() -> None:
     )
     ap.add_argument("--unseal-key0", type=lambda x: int(x, 0), default=None, help="Unseal key word 0 (e.g. 0x0414).")
     ap.add_argument("--unseal-key1", type=lambda x: int(x, 0), default=None, help="Unseal key word 1 (e.g. 0x3672).")
+    ap.add_argument(
+        "--cfgupdate",
+        action="store_true",
+        help="Enter/exit calibration-enable mode (CAL_ENABLE) around writes to bypass Flash Update OK limits.",
+    )
+    ap.add_argument("--reset", action="store_true", help="Send RESET (0x0041) after writing data flash.")
     ap.add_argument("--write", action="store_true", help="Apply changes to the device.")
     ap.add_argument("--no-verify", action="store_true", help="Skip read-back verification.")
     args = ap.parse_args()
@@ -135,6 +186,8 @@ def main() -> None:
                 return
         else:
             print(f"CONTROL_STATUS: 0x{status:04X} (UNSEALED)")
+        if _has_full_access(status):
+            print("CONTROL_STATUS: FULL ACCESS (FAS/SS cleared)")
 
         design_block = bytearray(_read_block(bus, DESIGN_SUBCLASS, 0))
         pack_block = bytearray(_read_block(bus, PACK_SUBCLASS, 0))
@@ -183,11 +236,22 @@ def main() -> None:
 
         if args.cal_enable:
             _write_control(bus, SUB_CAL_ENABLE)
+        if args.cfgupdate:
+            status = _ensure_cal_enabled(bus, True)
+            print(f"CAL_ENABLE status: 0x{status:04X} (CALEN={'1' if _is_calen(status) else '0'})")
 
-        _write_block(bus, DESIGN_SUBCLASS, 0, bytes(design_block))
-        _write_block(bus, PACK_SUBCLASS, 0, bytes(pack_block))
+        _write_block_diff(bus, DESIGN_SUBCLASS, 0, _read_block(bus, DESIGN_SUBCLASS, 0), bytes(design_block))
+        _write_block_diff(bus, PACK_SUBCLASS, 0, _read_block(bus, PACK_SUBCLASS, 0), bytes(pack_block))
         if args.flash_update_ok_mv is not None:
-            _write_block(bus, POWER_SUBCLASS, 0, bytes(power_block))
+            _write_block_diff(bus, POWER_SUBCLASS, 0, _read_block(bus, POWER_SUBCLASS, 0), bytes(power_block))
+
+        if args.cfgupdate:
+            status = _ensure_cal_enabled(bus, False)
+            print(f"CAL_ENABLE cleared: 0x{status:04X} (CALEN={'1' if _is_calen(status) else '0'})")
+
+        if args.reset:
+            _write_control(bus, SUB_RESET)
+            time.sleep(0.1)
 
         if not args.no_verify:
             # Verify
