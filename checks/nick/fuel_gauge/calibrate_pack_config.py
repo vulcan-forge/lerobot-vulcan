@@ -71,6 +71,7 @@ def main() -> None:
         help="Byte offset for Series Cells in subclass 64 block 0 (default 7).",
     )
     ap.add_argument("--write", action="store_true", help="Apply changes to the device.")
+    ap.add_argument("--no-verify", action="store_true", help="Skip read-back verification.")
     args = ap.parse_args()
 
     global BQ_ADDR
@@ -118,22 +119,25 @@ def main() -> None:
         _write_block(bus, DESIGN_SUBCLASS, 0, bytes(design_block))
         _write_block(bus, PACK_SUBCLASS, 0, bytes(pack_block))
 
-        # Verify
-        v_design = _read_block(bus, DESIGN_SUBCLASS, 0)
-        v_pack = _read_block(bus, PACK_SUBCLASS, 0)
-        v_energy = _u16_be(v_design, 13)
-        v_chg1 = _u16_be(v_design, 16)
-        v_series = v_pack[args.series_offset]
-        v_pack_cfg = _u16_be(v_pack, 0)
-        if (
-            v_energy != args.design_energy
-            or v_chg1 != args.cell_charge_mv
-            or v_series != args.series_cells
-            or (v_pack_cfg & 0x0800) == 0
-        ):
-            print("Verify failed: values did not match.")
-            sys.exit(1)
-        print("Write complete and verified.")
+        if not args.no_verify:
+            # Verify
+            v_design = _read_block(bus, DESIGN_SUBCLASS, 0)
+            v_pack = _read_block(bus, PACK_SUBCLASS, 0)
+            v_energy = _u16_be(v_design, 13)
+            v_chg1 = _u16_be(v_design, 16)
+            v_series = v_pack[args.series_offset]
+            v_pack_cfg = _u16_be(v_pack, 0)
+            if (
+                v_energy != args.design_energy
+                or v_chg1 != args.cell_charge_mv
+                or v_series != args.series_cells
+                or (v_pack_cfg & 0x0800) == 0
+            ):
+                print("Verify failed: values did not match.")
+                sys.exit(1)
+            print("Write complete and verified.")
+        else:
+            print("Write complete (verification skipped).")
 
 
 if __name__ == "__main__":
