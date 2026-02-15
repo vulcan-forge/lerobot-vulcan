@@ -28,15 +28,15 @@ CAL_SUBCLASS = 104
 # Design Data subclass (contains Design Capacity)
 DESIGN_SUBCLASS = 48
 
-# Standard commands (per TI datasheet)
-CMD_SOC = 0x02
-CMD_REMAINING = 0x04
-CMD_FULL = 0x06
-CMD_VOLTAGE = 0x08
-CMD_AVG_CURRENT = 0x0A
-CMD_TEMPERATURE = 0x0C
-CMD_FLAGS = 0x0E
-CMD_CURRENT = 0x10
+# Standard commands (SBS command map for BQ34Z100)
+CMD_TEMPERATURE = 0x08
+CMD_VOLTAGE = 0x09
+CMD_CURRENT = 0x0A
+CMD_AVG_CURRENT = 0x0B
+CMD_SOC = 0x0D
+CMD_REMAINING = 0x0F
+CMD_FULL = 0x10
+CMD_FLAGS = 0x16
 
 
 def _read_word(bus: SMBus, cmd: int) -> int:
