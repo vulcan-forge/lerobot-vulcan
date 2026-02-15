@@ -78,6 +78,7 @@ def main() -> None:
         cur_chg1 = _u16_be(design_block, 16)
         cur_chg2 = _u16_be(design_block, 18)
         cur_chg3 = _u16_be(design_block, 20)
+        cur_pack_cfg = _u16_be(pack_block, 0)
         cur_series = pack_block[7]
 
         print("Current values:")
@@ -86,17 +87,22 @@ def main() -> None:
         print(f"  Cell Chg V T2-T3: {cur_chg2} mV")
         print(f"  Cell Chg V T3-T4: {cur_chg3} mV")
         print(f"  Series Cells: {cur_series}")
+        print(f"  Pack Config: 0x{cur_pack_cfg:04X}")
 
         _set_u16_be(design_block, 13, args.design_energy)
         _set_u16_be(design_block, 16, args.cell_charge_mv)
         _set_u16_be(design_block, 18, args.cell_charge_mv)
         _set_u16_be(design_block, 20, args.cell_charge_mv)
         pack_block[7] = args.series_cells & 0xFF
+        # Set VOLTSEL bit (0x0800) so series cells are used.
+        pack_cfg = cur_pack_cfg | 0x0800
+        _set_u16_be(pack_block, 0, pack_cfg)
 
         print("Planned updates:")
         print(f"  Design Energy: {cur_energy} -> {args.design_energy} cWh")
         print(f"  Cell Charge Voltage: {cur_chg1}/{cur_chg2}/{cur_chg3} -> {args.cell_charge_mv} mV")
         print(f"  Series Cells: {cur_series} -> {args.series_cells}")
+        print(f"  Pack Config: 0x{cur_pack_cfg:04X} -> 0x{pack_cfg:04X}")
 
         if not args.write:
             print("Dry-run only. Re-run with --write to apply.")
@@ -111,7 +117,13 @@ def main() -> None:
         v_energy = _u16_be(v_design, 13)
         v_chg1 = _u16_be(v_design, 16)
         v_series = v_pack[7]
-        if v_energy != args.design_energy or v_chg1 != args.cell_charge_mv or v_series != args.series_cells:
+        v_pack_cfg = _u16_be(v_pack, 0)
+        if (
+            v_energy != args.design_energy
+            or v_chg1 != args.cell_charge_mv
+            or v_series != args.series_cells
+            or (v_pack_cfg & 0x0800) == 0
+        ):
             print("Verify failed: values did not match.")
             sys.exit(1)
         print("Write complete and verified.")
