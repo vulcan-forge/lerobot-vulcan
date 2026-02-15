@@ -9,6 +9,7 @@ from smbus2 import SMBus, i2c_msg
 
 I2C_BUS_DEFAULT = 1
 BQ_ADDR_DEFAULT = 0x55
+CURRENT_SIGN_DEFAULT = -1  # flip sign so charging reads positive if desired
 
 # Divider (board values)
 R_TOP_OHMS = 249_000.0
@@ -191,6 +192,13 @@ def main() -> None:
         default="auto",
         help="Command map to use (default: auto).",
     )
+    ap.add_argument(
+        "--current-sign",
+        type=int,
+        choices=[-1, 1],
+        default=CURRENT_SIGN_DEFAULT,
+        help="Multiply current by this sign (default: -1).",
+    )
     ap.add_argument("--no-temp", action="store_true", help="Skip temperature read/output.")
     ap.add_argument("--cal", action="store_true", help="Dump calibration fields (subclass 104).")
     args = ap.parse_args()
@@ -219,6 +227,10 @@ def main() -> None:
         temp_dK = snap["temperature"]
         curr_ma = _s16(snap["current"]) if snap["current"] is not None else None
         avg_ma = _s16(snap["avg_current"]) if snap["avg_current"] is not None else None
+        if curr_ma is not None:
+            curr_ma *= args.current_sign
+        if avg_ma is not None:
+            avg_ma *= args.current_sign
         soc_raw = snap["soc"]
         rem_raw = snap["remaining"]
         full_raw = snap["full"]
