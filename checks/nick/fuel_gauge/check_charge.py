@@ -96,7 +96,10 @@ def main() -> None:
         soc = _read_word(bus, CMD_SOC)
         rem_mah = _read_word(bus, CMD_REMAINING)
         full_mah = _read_word(bus, CMD_FULL)
-        flags = _read_word(bus, CMD_FLAGS)
+        try:
+            flags = _read_word(bus, CMD_FLAGS)
+        except OSError:
+            flags = None
 
         design_cap_raw = _df_read_bytes(bus, DESIGN_SUBCLASS, 11, 2)
         design_cap = int.from_bytes(design_cap_raw, "big", signed=False)
@@ -128,7 +131,10 @@ def main() -> None:
     print(f"Remaining Capacity: {rem_mah} mAh")
     print(f"Full Charge Capacity: {full_mah} mAh")
     print(f"Design Capacity (DF): {design_cap} mAh")
-    print(f"Flags: 0x{flags:04X}")
+    if flags is None:
+        print("Flags: <read failed>")
+    else:
+        print(f"Flags: 0x{flags:04X}")
 
     if args.cal:
         print("Calibration (DF subclass 104):")
