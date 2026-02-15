@@ -102,8 +102,8 @@ def main() -> None:
         _set_u16_be(design_block, 18, args.cell_charge_mv)
         _set_u16_be(design_block, 20, args.cell_charge_mv)
         pack_block[args.series_offset] = args.series_cells & 0xFF
-        # Set VOLTSEL bit (0x0800) so series cells are used.
-        pack_cfg = cur_pack_cfg | 0x0800
+        # Set CAL_EN (0x4000) and VOLTSEL (0x0800) so series cells are used.
+        pack_cfg = cur_pack_cfg | 0x4000 | 0x0800
         _set_u16_be(pack_block, 0, pack_cfg)
 
         print("Planned updates:")
