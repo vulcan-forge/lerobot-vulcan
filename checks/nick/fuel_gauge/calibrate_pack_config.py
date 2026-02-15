@@ -32,6 +32,7 @@ POWER_SUBCLASS = 68
 # Control() register and subcommand
 CMD_CONTROL = 0x00
 SUB_CAL_ENABLE = 0x002D
+SUB_CONTROL_STATUS = 0x0000
 
 
 def _checksum(block: bytes) -> int:
@@ -57,6 +58,24 @@ def _write_control(bus: SMBus, subcmd: int) -> None:
     lo = subcmd & 0xFF
     hi = (subcmd >> 8) & 0xFF
     bus.write_i2c_block_data(BQ_ADDR, CMD_CONTROL, [lo, hi])
+
+
+def _read_control_status(bus: SMBus) -> int:
+    # Issue CONTROL_STATUS (0x0000) then read 2 bytes
+    bus.write_i2c_block_data(BQ_ADDR, CMD_CONTROL, [0x00, 0x00])
+    data = bus.read_i2c_block_data(BQ_ADDR, CMD_CONTROL, 2)
+    return data[0] | (data[1] << 8)
+
+
+def _is_sealed(status: int) -> bool:
+    # CONTROL_STATUS high byte bit 5 (0x2000) is SS per TRM
+    return (status & 0x2000) != 0
+
+
+def _unseal(bus: SMBus, key0: int, key1: int) -> None:
+    # Keys are written LSB first (per TRM note)
+    bus.write_i2c_block_data(BQ_ADDR, CMD_CONTROL, [key0 & 0xFF, (key0 >> 8) & 0xFF])
+    bus.write_i2c_block_data(BQ_ADDR, CMD_CONTROL, [key1 & 0xFF, (key1 >> 8) & 0xFF])
 
 
 def _u16_be(b: bytes, offset: int) -> int:
@@ -92,6 +111,8 @@ def main() -> None:
         default=None,
         help="Optional Flash Update OK Cell Voltage (mV) to write (subclass 68 offset 0).",
     )
+    ap.add_argument("--unseal-key0", type=lambda x: int(x, 0), default=None, help="Unseal key word 0 (e.g. 0x0414).")
+    ap.add_argument("--unseal-key1", type=lambda x: int(x, 0), default=None, help="Unseal key word 1 (e.g. 0x3672).")
     ap.add_argument("--write", action="store_true", help="Apply changes to the device.")
     ap.add_argument("--no-verify", action="store_true", help="Skip read-back verification.")
     args = ap.parse_args()
@@ -100,6 +121,21 @@ def main() -> None:
     BQ_ADDR = args.addr
 
     with SMBus(args.bus) as bus:
+        status = _read_control_status(bus)
+        if _is_sealed(status):
+            print(f"CONTROL_STATUS: 0x{status:04X} (SEALED)")
+            if args.unseal_key0 is None or args.unseal_key1 is None:
+                print("Device is sealed. Provide --unseal-key0 and --unseal-key1 to proceed.")
+                return
+            _unseal(bus, args.unseal_key0, args.unseal_key1)
+            status = _read_control_status(bus)
+            print(f"CONTROL_STATUS after unseal: 0x{status:04X}")
+            if _is_sealed(status):
+                print("Unseal failed; still sealed.")
+                return
+        else:
+            print(f"CONTROL_STATUS: 0x{status:04X} (UNSEALED)")
+
         design_block = bytearray(_read_block(bus, DESIGN_SUBCLASS, 0))
         pack_block = bytearray(_read_block(bus, PACK_SUBCLASS, 0))
         power_block = bytearray(_read_block(bus, POWER_SUBCLASS, 0))
