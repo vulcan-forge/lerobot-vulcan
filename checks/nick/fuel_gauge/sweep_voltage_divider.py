@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Sweep the BQ34Z100 Voltage Divider value to match a target BAT voltage.
+# Sweep the BQ34Z100 Voltage Divider value to match a target BAT or PACK voltage.
 # WARNING: This writes Data Flash repeatedly; use sparingly.
 
 from __future__ import annotations
@@ -111,7 +111,8 @@ def main() -> None:
     ap.add_argument("--step", type=int, default=1, help="Step size per iteration.")
     ap.add_argument("--min", dest="min_value", type=int, default=0, help="Minimum divider value.")
     ap.add_argument("--max-steps", type=int, default=500, help="Maximum steps to try.")
-    ap.add_argument("--target-bat", type=float, required=True, help="Target BAT voltage in volts (e.g. 0.808).")
+    ap.add_argument("--target-bat", type=float, default=None, help="Target BAT voltage in volts (e.g. 0.808).")
+    ap.add_argument("--target-pack", type=float, default=None, help="Target PACK voltage in volts (e.g. 13.0).")
     ap.add_argument("--tolerance-mv", type=int, default=5, help="Acceptable BAT error in mV.")
     ap.add_argument("--samples", type=int, default=3, help="Samples per step (median).")
     ap.add_argument("--sample-delay", type=float, default=0.02, help="Delay between samples in seconds.")
@@ -123,10 +124,18 @@ def main() -> None:
     ap.add_argument("--write", action="store_true", help="Actually write divider values.")
     args = ap.parse_args()
 
+    if (args.target_bat is None) == (args.target_pack is None):
+        ap.error("Specify exactly one of --target-bat or --target-pack.")
+
     global BQ_ADDR
     BQ_ADDR = args.addr
 
-    target_mv = int(round(args.target_bat * 1000.0))
+    if args.target_bat is not None:
+        target_mv = int(round(args.target_bat * 1000.0))
+        target_label = "BAT"
+    else:
+        target_mv = int(round(args.target_pack * 1000.0))
+        target_label = "PACK"
 
     if not args.write:
         print("Dry-run only. Re-run with --write to apply sweep.")
@@ -134,10 +143,16 @@ def main() -> None:
 
     with SMBus(args.bus) as bus:
         pack_cfg = _read_pack_cfg(bus)
-        if (pack_cfg & VOLTSEL_MASK) and not args.force:
-            print(f"Pack Config: 0x{pack_cfg:04X} (VOLTSEL set). 0x08 reports PACK, not BAT.")
-            print("Clear VOLTSEL or re-run with --force if you really want to sweep anyway.")
-            return
+        if (pack_cfg & VOLTSEL_MASK):
+            if target_label == "BAT" and not args.force:
+                print(f"Pack Config: 0x{pack_cfg:04X} (VOLTSEL set). 0x08 reports PACK, not BAT.")
+                print("Clear VOLTSEL or re-run with --force if you really want to sweep anyway.")
+                return
+        else:
+            if target_label == "PACK" and not args.force:
+                print(f"Pack Config: 0x{pack_cfg:04X} (VOLTSEL clear). 0x08 reports BAT, not PACK.")
+                print("Set VOLTSEL or re-run with --force if you really want to sweep anyway.")
+                return
 
         block = _read_block(bus, DIV_SUBCLASS, DIV_BLOCK)
         current = _u16_le(block, DIV_OFFSET)
@@ -147,7 +162,7 @@ def main() -> None:
         direction = -1 if args.direction == "down" else 1
 
         print(f"Starting divider: {start} (current {current})")
-        print(f"Target BAT: {target_mv} mV  tolerance: ±{args.tolerance_mv} mV")
+        print(f"Target {target_label}: {target_mv} mV  tolerance: ±{args.tolerance_mv} mV")
 
         if args.cfgupdate:
             _write_control(bus, SUB_CAL_ENABLE)
@@ -166,7 +181,7 @@ def main() -> None:
                 print(f"[{i}] divider={value} -> read invalid")
             else:
                 err = mv - target_mv
-                print(f"[{i}] divider={value} -> BAT={mv} mV (err {err:+d} mV)")
+                print(f"[{i}] divider={value} -> {target_label}={mv} mV (err {err:+d} mV)")
                 if abs(err) <= args.tolerance_mv:
                     print("Target reached.")
                     break
