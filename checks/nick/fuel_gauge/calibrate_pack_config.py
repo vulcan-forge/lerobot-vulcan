@@ -27,6 +27,11 @@ REG_BLOCKDATA_CTRL = 0x61
 
 DESIGN_SUBCLASS = 48
 PACK_SUBCLASS = 64
+POWER_SUBCLASS = 68
+
+# Control() register and subcommand
+CMD_CONTROL = 0x00
+SUB_CAL_ENABLE = 0x002D
 
 
 def _checksum(block: bytes) -> int:
@@ -46,6 +51,12 @@ def _write_block(bus: SMBus, subclass: int, block_index: int, new_block: bytes) 
     bus.write_byte_data(BQ_ADDR, REG_DF_BLOCK, block_index & 0xFF)
     bus.write_i2c_block_data(BQ_ADDR, REG_BLOCKDATA_START, list(new_block))
     bus.write_byte_data(BQ_ADDR, REG_BLOCKDATA_CKSUM, _checksum(new_block))
+
+
+def _write_control(bus: SMBus, subcmd: int) -> None:
+    lo = subcmd & 0xFF
+    hi = (subcmd >> 8) & 0xFF
+    bus.write_i2c_block_data(BQ_ADDR, CMD_CONTROL, [lo, hi])
 
 
 def _u16_be(b: bytes, offset: int) -> int:
@@ -70,6 +81,17 @@ def main() -> None:
         default=7,
         help="Byte offset for Series Cells in subclass 64 block 0 (default 7).",
     )
+    ap.add_argument(
+        "--cal-enable",
+        action="store_true",
+        help="Send CAL_ENABLE (0x002D) before writing to bypass Flash Update OK voltage.",
+    )
+    ap.add_argument(
+        "--flash-update-ok-mv",
+        type=int,
+        default=None,
+        help="Optional Flash Update OK Cell Voltage (mV) to write (subclass 68 offset 0).",
+    )
     ap.add_argument("--write", action="store_true", help="Apply changes to the device.")
     ap.add_argument("--no-verify", action="store_true", help="Skip read-back verification.")
     args = ap.parse_args()
@@ -80,6 +102,7 @@ def main() -> None:
     with SMBus(args.bus) as bus:
         design_block = bytearray(_read_block(bus, DESIGN_SUBCLASS, 0))
         pack_block = bytearray(_read_block(bus, PACK_SUBCLASS, 0))
+        power_block = bytearray(_read_block(bus, POWER_SUBCLASS, 0))
 
         cur_energy = _u16_be(design_block, 13)
         cur_chg1 = _u16_be(design_block, 16)
@@ -87,6 +110,7 @@ def main() -> None:
         cur_chg3 = _u16_be(design_block, 20)
         cur_pack_cfg = _u16_be(pack_block, 0)
         cur_series = pack_block[args.series_offset]
+        cur_update_ok = _u16_be(power_block, 0)
 
         print("Current values:")
         print(f"  Design Energy: {cur_energy} cWh")
@@ -96,6 +120,7 @@ def main() -> None:
         print(f"  Series Cells: {cur_series} (offset {args.series_offset})")
         print(f"  Pack Config: 0x{cur_pack_cfg:04X}")
         print(f"  Pack block[0:16]: {pack_block[:16].hex()}")
+        print(f"  Flash Update OK Cell Volt: {cur_update_ok} mV")
 
         _set_u16_be(design_block, 13, args.design_energy)
         _set_u16_be(design_block, 16, args.cell_charge_mv)
@@ -105,19 +130,28 @@ def main() -> None:
         # Set CAL_EN (0x4000) and VOLTSEL (0x0800) so series cells are used.
         pack_cfg = cur_pack_cfg | 0x4000 | 0x0800
         _set_u16_be(pack_block, 0, pack_cfg)
+        if args.flash_update_ok_mv is not None:
+            _set_u16_be(power_block, 0, args.flash_update_ok_mv)
 
         print("Planned updates:")
         print(f"  Design Energy: {cur_energy} -> {args.design_energy} cWh")
         print(f"  Cell Charge Voltage: {cur_chg1}/{cur_chg2}/{cur_chg3} -> {args.cell_charge_mv} mV")
         print(f"  Series Cells: {cur_series} -> {args.series_cells} (offset {args.series_offset})")
         print(f"  Pack Config: 0x{cur_pack_cfg:04X} -> 0x{pack_cfg:04X}")
+        if args.flash_update_ok_mv is not None:
+            print(f"  Flash Update OK Cell Volt: {cur_update_ok} -> {args.flash_update_ok_mv} mV")
 
         if not args.write:
             print("Dry-run only. Re-run with --write to apply.")
             return
 
+        if args.cal_enable:
+            _write_control(bus, SUB_CAL_ENABLE)
+
         _write_block(bus, DESIGN_SUBCLASS, 0, bytes(design_block))
         _write_block(bus, PACK_SUBCLASS, 0, bytes(pack_block))
+        if args.flash_update_ok_mv is not None:
+            _write_block(bus, POWER_SUBCLASS, 0, bytes(power_block))
 
         if not args.no_verify:
             # Verify
