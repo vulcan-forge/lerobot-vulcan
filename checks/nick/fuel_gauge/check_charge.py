@@ -9,7 +9,7 @@ from smbus2 import SMBus, i2c_msg
 
 I2C_BUS_DEFAULT = 1
 BQ_ADDR_DEFAULT = 0x55
-CURRENT_SIGN_DEFAULT = -1  # flip sign so charging reads positive if desired
+CURRENT_SIGN_DEFAULT = 1
 
 # Divider (board values)
 R_TOP_OHMS = 249_000.0
