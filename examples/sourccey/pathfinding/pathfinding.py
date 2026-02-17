@@ -1,5 +1,7 @@
 import time
+import json
 import heapq
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -8,6 +10,25 @@ from lerobot.utils.robot_utils import precise_sleep
 
 GridPos = Tuple[int, int]  # (x, y)
 Direction = str  # "N", "E", "S", "W"
+
+
+def _load_default_arm_actions() -> dict[str, float]:
+    """Load default arm actions from teleop JSONs (arms at side)."""
+    try:
+        from lerobot.teleoperators.sourccey.sourccey.sourccey_leader import sourccey_leader
+
+        base_dir = Path(sourccey_leader.__file__).parent / "defaults"
+        left_path = base_dir / "left_arm_default_action.json"
+        right_path = base_dir / "right_arm_default_action.json"
+
+        left = json.loads(left_path.read_text(encoding="utf-8")) if left_path.exists() else {}
+        right = json.loads(right_path.read_text(encoding="utf-8")) if right_path.exists() else {}
+
+        action = {f"left_{k}": float(v) for k, v in left.items()}
+        action.update({f"right_{k}": float(v) for k, v in right.items()})
+        return action
+    except Exception:
+        return {}
 
 
 @dataclass
@@ -117,17 +138,20 @@ def send_action_for_duration(
     action: Dict[str, float],
     duration_s: float,
     fps: int,
+    arm_action: Optional[Dict[str, float]] = None,
 ):
     t0 = time.perf_counter()
     while True:
-        robot.send_action(action)
+        merged = {**(arm_action or {}), **action}
+        robot.send_action(merged)
         precise_sleep(max(1.0 / fps - (time.perf_counter() - t0), 0.0))
         if time.perf_counter() - t0 >= duration_s:
             break
 
 
-def stop_base(robot: SourcceyClient, fps: int):
-    robot.send_action({"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0})
+def stop_base(robot: SourcceyClient, fps: int, arm_action: Optional[Dict[str, float]] = None):
+    merged = {**(arm_action or {}), **{"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}}
+    robot.send_action(merged)
     precise_sleep(1.0 / fps)
 
 
@@ -136,6 +160,7 @@ def execute_path_open_loop(
     path: List[GridPos],
     start_dir: Direction,
     cfg: PathfindingConfig,
+    arm_action: Optional[Dict[str, float]] = None,
 ):
     if not path:
         print("No path found.")
@@ -156,8 +181,9 @@ def execute_path_open_loop(
                 {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": theta},
                 cfg.turn_time_s,
                 cfg.fps,
+                arm_action=arm_action,
             )
-            stop_base(robot, cfg.fps)
+            stop_base(robot, cfg.fps, arm_action=arm_action)
 
         cur_dir = step_dir
 
@@ -167,8 +193,9 @@ def execute_path_open_loop(
             {"x.vel": cfg.move_speed, "y.vel": 0.0, "theta.vel": 0.0},
             cfg.move_time_s,
             cfg.fps,
+            arm_action=arm_action,
         )
-        stop_base(robot, cfg.fps)
+        stop_base(robot, cfg.fps, arm_action=arm_action)
 
 
 def run_pathfinding(
@@ -184,12 +211,14 @@ def run_pathfinding(
     path = dijkstra_path(start, goal, obstacles, cfg)
     print(f"Path: {path}")
 
+    arm_action = _load_default_arm_actions()
+
     robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.robot_id, reverse=cfg.reverse)
     robot = SourcceyClient(robot_config)
     robot.connect()
 
     try:
-        execute_path_open_loop(robot, path, start_dir, cfg)
+        execute_path_open_loop(robot, path, start_dir, cfg, arm_action=arm_action)
     finally:
-        stop_base(robot, cfg.fps)
+        stop_base(robot, cfg.fps, arm_action=arm_action)
         robot.disconnect()
