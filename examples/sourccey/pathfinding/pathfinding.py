@@ -12,7 +12,7 @@ Direction = str  # "N", "E", "S", "W"
 
 @dataclass
 class PathfindingConfig:
-    remote_ip: str = "192.168.1.210"
+    remote_ip: str = "192.168.1.237"
     robot_id: str = "sourccey"
     reverse: bool = False
     fps: int = 30
