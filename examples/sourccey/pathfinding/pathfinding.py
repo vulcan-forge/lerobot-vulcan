@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
 from lerobot.utils.robot_utils import precise_sleep
+from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 GridPos = Tuple[int, int]  # (x, y)
 Direction = str  # "N", "E", "S", "W"
@@ -139,11 +140,18 @@ def send_action_for_duration(
     duration_s: float,
     fps: int,
     arm_action: Optional[Dict[str, float]] = None,
+    log_rerun: bool = False,
 ):
     t0 = time.perf_counter()
     while True:
         merged = {**(arm_action or {}), **action}
         robot.send_action(merged)
+        if log_rerun:
+            try:
+                observation = robot.get_observation()
+            except Exception:
+                observation = None
+            log_rerun_data(observation, merged, compress_images=True)
         precise_sleep(max(1.0 / fps - (time.perf_counter() - t0), 0.0))
         if time.perf_counter() - t0 >= duration_s:
             break
@@ -161,6 +169,7 @@ def execute_path_open_loop(
     start_dir: Direction,
     cfg: PathfindingConfig,
     arm_action: Optional[Dict[str, float]] = None,
+    log_rerun: bool = False,
 ):
     if not path:
         print("No path found.")
@@ -182,6 +191,7 @@ def execute_path_open_loop(
                 cfg.turn_time_s,
                 cfg.fps,
                 arm_action=arm_action,
+                log_rerun=log_rerun,
             )
             stop_base(robot, cfg.fps, arm_action=arm_action)
 
@@ -194,6 +204,7 @@ def execute_path_open_loop(
             cfg.move_time_s,
             cfg.fps,
             arm_action=arm_action,
+            log_rerun=log_rerun,
         )
         stop_base(robot, cfg.fps, arm_action=arm_action)
 
@@ -204,6 +215,7 @@ def run_pathfinding(
     goal: GridPos,
     obstacles: Optional[set[GridPos]] = None,
     cfg: Optional[PathfindingConfig] = None,
+    log_rerun: bool = True,
 ):
     if cfg is None:
         cfg = PathfindingConfig()
@@ -213,12 +225,15 @@ def run_pathfinding(
 
     arm_action = _load_default_arm_actions()
 
+    if log_rerun:
+        init_rerun(session_name="sourccey_pathfinding")
+
     robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.robot_id, reverse=cfg.reverse)
     robot = SourcceyClient(robot_config)
     robot.connect()
 
     try:
-        execute_path_open_loop(robot, path, start_dir, cfg, arm_action=arm_action)
+        execute_path_open_loop(robot, path, start_dir, cfg, arm_action=arm_action, log_rerun=log_rerun)
     finally:
         stop_base(robot, cfg.fps, arm_action=arm_action)
         robot.disconnect()
