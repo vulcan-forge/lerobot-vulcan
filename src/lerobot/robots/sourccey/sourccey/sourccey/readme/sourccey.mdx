@@ -257,6 +257,22 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --batch_size=4
 ```
 
+## Inference
+
+Evaluate a trained model on the robot without saving the run's recording:
+
+```
+python src/lerobot/control/sourccey/sourccey/inference.py \
+  --id="sourccey" \
+  --remote_ip="192.168.1.214" \
+  --model_path="outputs/train/xvla__sourccey-009-012__shorts-fold__cmb__000__mylesr/checkpoints/100000/pretrained_model" \
+  --dataset.num_episodes=1 \
+  --dataset.episode_time_s=60 \
+  --dataset.reset_time_s=5 \
+  --dataset.task="Fold the shorts" \
+  --dataset.fps=30
+```
+
 ## Evaluation
 
 Evaluate a trained model on the robot:
