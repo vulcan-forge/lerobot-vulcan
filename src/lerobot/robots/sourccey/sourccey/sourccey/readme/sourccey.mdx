@@ -84,7 +84,7 @@ python src/lerobot/scripts/lerobot_find_port.py
 Then Calibrate the bi-manual teleoperator (leader arms):
 
 ```
-python src/lerobot/scripts/sourccey/auto_calibrate.py \
+python src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
  --teleop.type=bi_sourccey_leader \
  --teleop.id=bisd_sourccey_leader \
  --teleop.left_arm_port="/dev/ttyACM1" \
@@ -322,7 +322,7 @@ Combine multiple datasets into one:
 
 ```
 
-python src/lerobot/scripts/sourccey/combine_datasets.py \
+python src/lerobot/scripts/sourccey/dataset/combine_datasets.py \
  --dataset_paths='[
 "sourccey-012/sourccey-012__shorts-fold-b__set000__mylesr",
 "sourccey-012/sourccey-012__shorts-fold-b__set001__mylesr",
