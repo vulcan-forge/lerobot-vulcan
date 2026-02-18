@@ -30,9 +30,9 @@ class SourcceyZCalibrator:
         self,
         actuator,  # SourcceyZActuator
         *,
-        stable_s: float = 0.25,
+        stable_s: float = 2.0,
         sample_hz: float = 30.0,
-        stable_eps_pos: float = 0.25,
+        stable_eps_pos: float = 1.0,
         max_phase_s: float = 30.0,
         down_cmd: float = -1.0,
         up_cmd: float = 1.0,
@@ -60,21 +60,20 @@ class SourcceyZCalibrator:
         """Read native MCP3008 units (0..1023)."""
         return int(self.actuator.sensor.read_raw().raw)
 
-    def _wait_until_stable(self) -> int:
-        """
-        Wait until position change stays within epsilon for stable_s.
-        Returns the raw value (0..1023) at the moment stability is achieved.
-        """
+    def _wait_until_stable(self, cmd: float) -> int:
         period = 1.0 / max(1.0, self.sample_hz)
         t_deadline = time.monotonic() + self.max_phase_s
 
-        last_pos: Optional[float] = None
-        stable_start: Optional[float] = None
+        last_pos = None
+        stable_start = None
 
         while True:
             now = time.monotonic()
             if now >= t_deadline:
                 raise TimeoutError("Z calibrator timed out waiting for stability (end stop not detected).")
+
+            # KEEP MOTOR ALIVE (important for watchdog-style drivers)
+            self._drive(cmd)
 
             pos = self._read_pos()
 
@@ -87,9 +86,10 @@ class SourcceyZCalibrator:
                         stable_start = now
                     elif (now - stable_start) >= self.stable_s:
                         return self._read_raw()
+
                 else:
                     stable_start = None
-
+                
                 last_pos = pos
 
             time.sleep(period)
@@ -136,7 +136,7 @@ class SourcceyZCalibrator:
 
         # Phase 1: UP -> top
         self._drive(self.up_cmd)
-        raw_top = self._wait_until_stable()
+        raw_top = self._wait_until_stable(self.up_cmd)
         self.actuator.stop()
         time.sleep(0.25)
 
@@ -145,7 +145,7 @@ class SourcceyZCalibrator:
         # So we wait for 5 seconds until we have a hardware stop
         self._drive(self.down_cmd)
         # raw_bottom = self._wait_for_seconds(self.down_cmd, 5.0)
-        raw_bottom = self._wait_until_stable()
+        raw_bottom = self._wait_until_stable(self.down_cmd)
         self.actuator.stop()
         time.sleep(0.25)
 

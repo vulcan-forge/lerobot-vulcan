@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
@@ -10,6 +9,18 @@ from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
 from lerobot.scripts.lerobot_record import record_loop
 from lerobot.configs import parser
+
+
+class NoOpDataset:
+    def __init__(self, fps: int, features: dict):
+        self.fps = fps
+        self.features = features
+        self.image_writer = None
+
+    def add_frame(self, frame: dict) -> None:
+        # Intentionally no-op: keep record_loop behavior without writing data.
+        return
+
 
 @dataclass
 class DatasetEvaluateConfig:
@@ -23,14 +34,14 @@ class DatasetEvaluateConfig:
     private: bool = False
 
 @dataclass
-class SourcceyEvaluateConfig:
+class SourcceyInferenceConfig:
     id: str = "sourccey"
     remote_ip: str = "192.168.1.243"
     model_path: str = "outputs/train/act__sourccey-003__myles__large-towel-fold-a-001-010/checkpoints/200000/pretrained_model"
     dataset: DatasetEvaluateConfig = field(default_factory=DatasetEvaluateConfig)
 
 @parser.wrap()
-def evaluate(cfg: SourcceyEvaluateConfig):
+def inference(cfg: SourcceyInferenceConfig):
 
     # Create the robot and teleoperator configurations
     robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
@@ -47,22 +58,13 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     action_features = hw_to_dataset_features(robot.action_features, "action")
     obs_features = hw_to_dataset_features(robot.observation_features, "observation")
     dataset_features = {**action_features, **obs_features}
-
-    # Create the dataset
-    dataset = LeRobotDataset.create(
-        repo_id=cfg.dataset.repo_id,
-        fps=cfg.dataset.fps,
-        features=dataset_features,
-        robot_type=robot.name,
-        use_videos=True,
-        image_writer_threads=4,
-    )
+    noop_dataset = NoOpDataset(fps=cfg.dataset.fps, features=dataset_features)
 
     # Build Policy Processors
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=policy,
         pretrained_path=cfg.model_path,
-        dataset_stats=dataset.meta.stats,
+        dataset_stats=None,
         # The inference device is automatically set to match the detected hardware, overriding any previous device settings from training to ensure compatibility.
         preprocessor_overrides={"device_processor": {"device": str(policy.config.device)}},
     )
@@ -91,7 +93,7 @@ def evaluate(cfg: SourcceyEvaluateConfig):
             policy=policy,
             preprocessor=preprocessor,
             postprocessor=postprocessor,
-            dataset=dataset,
+            dataset=noop_dataset,
             control_time_s=cfg.dataset.episode_time_s,
             single_task=cfg.dataset.task,
             display_data=True,
@@ -121,10 +123,8 @@ def evaluate(cfg: SourcceyEvaluateConfig):
             log_say("Re-record episode")
             events["rerecord_episode"] = False
             events["exit_early"] = False
-            dataset.clear_episode_buffer()
             continue
 
-        dataset.save_episode()
         recorded_episodes += 1
 
     # Upload to hub and clean up
@@ -134,7 +134,7 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     listener.stop()
 
 def main():
-    evaluate()
+    inference()
 
 if __name__ == "__main__":
     main()

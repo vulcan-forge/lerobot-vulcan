@@ -45,8 +45,7 @@ from lerobot.robots import (  # noqa: F401
     koch_follower,
     lekiwi,
     make_robot_from_config,
-    so100_follower,
-    so101_follower,
+    so_follower,
     sourccey,
 )
 from lerobot.teleoperators import (  # noqa: F401
@@ -55,8 +54,7 @@ from lerobot.teleoperators import (  # noqa: F401
     homunculus,
     koch_leader,
     make_teleoperator_from_config,
-    so100_leader,
-    so101_leader,
+    so_leader,
     sourccey,
 )
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader

@@ -130,7 +130,7 @@ sourccey = [
 sourccey-desktop = [
     "torch>=2.9.1",
     "torchvision>=0.24.1",
-    "torchcodec>=0.9.1",
+    "torchcodec==0.9.1",
 
     # Audio
     # Pin known-good CUDA/cuDNN stack for Windows GPU Whisper.
