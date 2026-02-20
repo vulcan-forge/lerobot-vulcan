@@ -61,6 +61,17 @@ class SourcceyFollowerConfig(RobotConfig):
     # `max_current_calibration_threshold` is the maximum current threshold for calibration purposes.
     max_current_calibration_threshold: int = 75
 
+    # Gripper force control settings
+    # When enabled, the gripper will stop closing when it detects resistance (object contact)
+    # instead of just going to the commanded position.
+    gripper_force_control_enabled: bool = True
+    # Current threshold (mA) to detect object contact - when exceeded, gripper stops closing
+    gripper_contact_current_threshold: int = 150
+    # Current threshold (mA) for grip force - gripper will try to maintain this grip strength
+    gripper_grip_current_threshold: int = 250
+    # Position deadband - minimum position change to consider gripper "closing" (in normalized units)
+    gripper_closing_deadband: float = 1.0
+
     # cameras
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
 

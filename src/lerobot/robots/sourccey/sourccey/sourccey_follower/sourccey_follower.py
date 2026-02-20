@@ -66,6 +66,10 @@ class SourcceyFollower(Robot):
         self._last_write_warning_time = 0.0
         self._write_warning_throttle_interval = 60.0  # seconds
 
+        # Gripper force control state
+        self._gripper_contact_detected = False  # True when gripper has contacted an object
+        self._gripper_hold_position: float | None = None  # Position to hold when contact detected
+
     def __del__(self):
         if (self.is_connected):
             self.disconnect()
@@ -229,6 +233,9 @@ class SourcceyFollower(Robot):
         `max_relative_target`. In this case, the action sent differs from original action.
         Thus, this function always returns the action actually sent.
 
+        For the gripper, force control is applied when enabled: the gripper will stop closing
+        when it detects object contact (current exceeds threshold) and hold at that position.
+
         Raises:
             RobotDeviceNotConnectedError: if robot is not connected.
 
@@ -253,6 +260,10 @@ class SourcceyFollower(Robot):
                 goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
                 goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
+            # Apply gripper force control if enabled
+            if self.config.gripper_force_control_enabled and "gripper" in goal_pos:
+                goal_pos = self._apply_gripper_force_control(goal_pos, present_pos)
+
             # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)
             return {f"{motor}.pos": val for motor, val in goal_pos.items()}
@@ -265,6 +276,84 @@ class SourcceyFollower(Robot):
                 self._last_write_warning_time = current_time
             # Return present position instead of goal position when write fails
             return {f"{motor}.pos": val for motor, val in present_pos.items()}
+
+    ###################################################################
+    # Gripper Force Control
+    ###################################################################
+    def _apply_gripper_force_control(
+        self,
+        goal_pos: dict[str, float],
+        present_pos: dict[str, float],
+    ) -> dict[str, float]:
+        """Apply force control to the gripper motor.
+
+        When the gripper is closing and detects object contact (current spike),
+        it will hold at the contact position instead of continuing to close.
+        When the gripper is commanded to open, the contact state is reset.
+
+        Args:
+            goal_pos: Dictionary of goal positions (motor_name: position)
+            present_pos: Dictionary of present positions (motor_name: position)
+
+        Returns:
+            Modified goal_pos with gripper position adjusted for force control
+        """
+        gripper_goal = goal_pos.get("gripper")
+        gripper_present = present_pos.get("gripper")
+
+        if gripper_goal is None or gripper_present is None:
+            return goal_pos
+
+        # Determine if gripper is closing (goal < present in 0-100 range where 0 = closed)
+        is_closing = gripper_goal < (gripper_present - self.config.gripper_closing_deadband)
+        # Determine if gripper is opening
+        is_opening = gripper_goal > (gripper_present + self.config.gripper_closing_deadband)
+
+        # If opening, reset contact detection state
+        if is_opening:
+            if self._gripper_contact_detected:
+                logger.debug("Gripper opening - resetting contact detection state")
+            self._gripper_contact_detected = False
+            self._gripper_hold_position = None
+            return goal_pos
+
+        # If closing, check for contact
+        if is_closing:
+            # Read current for gripper motor only
+            try:
+                gripper_current = self.bus.read("Present_Current", "gripper")
+            except Exception as e:
+                logger.warning(f"Failed to read gripper current: {e}")
+                return goal_pos
+
+            # Check if we've made contact (current exceeds threshold)
+            if not self._gripper_contact_detected:
+                if gripper_current > self.config.gripper_contact_current_threshold:
+                    self._gripper_contact_detected = True
+                    self._gripper_hold_position = gripper_present
+                    logger.info(
+                        f"Gripper contact detected at position {gripper_present:.1f} "
+                        f"(current: {gripper_current}mA > {self.config.gripper_contact_current_threshold}mA)"
+                    )
+
+            # If contact detected, hold at the contact position
+            if self._gripper_contact_detected and self._gripper_hold_position is not None:
+                # Check if we should grip harder (current below grip threshold)
+                if gripper_current < self.config.gripper_grip_current_threshold:
+                    # Allow small movement toward closed to maintain grip
+                    # Move hold position slightly more closed (decrease by small amount)
+                    self._gripper_hold_position = max(0, self._gripper_hold_position - 0.5)
+                    logger.debug(
+                        f"Gripper adjusting grip: position={self._gripper_hold_position:.1f}, "
+                        f"current={gripper_current}mA"
+                    )
+
+                # Use hold position instead of commanded goal
+                modified_goal = goal_pos.copy()
+                modified_goal["gripper"] = self._gripper_hold_position
+                return modified_goal
+
+        return goal_pos
 
     ###################################################################
     # Safety Functions (Must be used after extremely extensive testing
