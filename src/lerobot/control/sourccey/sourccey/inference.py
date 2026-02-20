@@ -11,8 +11,81 @@ from lerobot.utils.control_utils import init_keyboard_listener, predict_action
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import get_safe_torch_device, log_say
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
-from lerobot.utils.constants import OBS_STR
+from pathlib import Path
+import logging
+from lerobot.utils.constants import OBS_STR, HF_LEROBOT_HOME
 from lerobot.configs import parser
+
+
+AI_MODELS_ROOT = HF_LEROBOT_HOME / "ai_models"
+OUTPUTS_ROOT = Path("outputs")
+
+
+def _resolve_pretrained_path(candidate: Path) -> Path:
+    if not candidate.exists():
+        return candidate
+    if candidate.is_file():
+        return candidate
+
+    config_path = candidate / "config.json"
+    if config_path.exists():
+        return candidate
+
+    direct_pretrained = candidate / "pretrained_model"
+    if direct_pretrained.is_dir():
+        return direct_pretrained
+
+    checkpoints_dir = candidate / "checkpoints"
+    if not checkpoints_dir.is_dir():
+        return candidate
+
+    checkpoint_steps = []
+    for entry in checkpoints_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            step = int(entry.name)
+        except ValueError:
+            continue
+        checkpoint_steps.append((step, entry))
+
+    for _, step_dir in sorted(checkpoint_steps, key=lambda item: item[0], reverse=True):
+        pretrained_dir = step_dir / "pretrained_model"
+        if pretrained_dir.is_dir():
+            return pretrained_dir
+
+    return candidate
+
+
+def resolve_model_path(model_path: str) -> str:
+    candidate = Path(model_path)
+    if candidate.exists():
+        return str(_resolve_pretrained_path(candidate))
+
+    search_roots = [OUTPUTS_ROOT, AI_MODELS_ROOT]
+    for root in search_roots:
+        if not root.exists():
+            continue
+
+        joined = root / model_path
+        if joined.exists():
+            return str(_resolve_pretrained_path(joined))
+
+        matches = list(root.rglob(model_path))
+        if len(matches) == 1:
+            return str(_resolve_pretrained_path(matches[0]))
+        if len(matches) > 1:
+            match_list = "\n".join(str(match) for match in matches[:10])
+            raise ValueError(
+                "Multiple model paths matched. Please be more specific.\n"
+                f"Matches (first 10):\n{match_list}"
+            )
+
+    logging.warning(
+        "Model path not found in outputs or ai_models cache. "
+        "Proceeding with the original path in case it is a hub repo id."
+    )
+    return model_path
 
 
 @dataclass
@@ -97,21 +170,25 @@ def inference(cfg: SourcceyInferenceConfig):
     robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
     robot = SourcceyClient(robot_config)
 
+    resolved_model_path = resolve_model_path(cfg.model_path)
+
     # Load config to determine policy type
-    policy_config = PreTrainedConfig.from_pretrained(cfg.model_path)
+    policy_config = PreTrainedConfig.from_pretrained(resolved_model_path)
     # Get the correct policy class based on config type
     policy_cls = get_policy_class(policy_config.type)
     # Create policy
-    policy = policy_cls.from_pretrained(cfg.model_path)
+    policy = policy_cls.from_pretrained(resolved_model_path)
+
+    teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
     dataset_features = combine_feature_dicts(
         aggregate_pipeline_dataset_features(
-            pipeline=make_default_processors()[0],
+            pipeline=teleop_action_processor,
             initial_features=create_initial_features(action=robot.action_features),
             use_videos=True,
         ),
         aggregate_pipeline_dataset_features(
-            pipeline=make_default_processors()[2],
+            pipeline=robot_observation_processor,
             initial_features=create_initial_features(observation=robot.observation_features),
             use_videos=True,
         ),
@@ -120,7 +197,7 @@ def inference(cfg: SourcceyInferenceConfig):
     # Build Policy Processors
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=policy,
-        pretrained_path=cfg.model_path,
+        pretrained_path=resolved_model_path,
         dataset_stats=None,
         # The inference device is automatically set to match the detected hardware, overriding any previous device settings from training to ensure compatibility.
         preprocessor_overrides={"device_processor": {"device": str(policy.config.device)}},
@@ -129,7 +206,6 @@ def inference(cfg: SourcceyInferenceConfig):
     # Connect to the robot
     robot.connect()
 
-    teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
     listener, events = init_keyboard_listener()
     if cfg.display_data:
         init_rerun(session_name="inference", ip=cfg.display_ip, port=cfg.display_port)
