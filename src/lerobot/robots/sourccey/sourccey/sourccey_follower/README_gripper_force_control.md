@@ -8,8 +8,8 @@ This note documents the force-aware gripper behavior added to `sourccey_follower
 File: `config_sourccey_follower.py`
 
 - `gripper_force_control_enabled: bool = True`
-- `gripper_contact_current_threshold: int = 150`
-- `gripper_grip_current_threshold: int = 250`
+- `gripper_contact_current_threshold: int = 300`
+- `gripper_grip_current_threshold: int = 700`
 - `gripper_closing_deadband: float = 1.0`
 
 These parameters enable and tune current-based contact detection and grip maintenance.
@@ -49,8 +49,8 @@ Now it can detect contact and stop/hold based on motor current, which is a pract
    - `uv pip install -e ".[sourccey,smolvla,feetech]"`
    - run control scripts with `uv run ...`
 2. Keep default thresholds for first pass:
-   - contact = 150 mA
-   - grip = 250 mA
+   - contact = 300 mA
+   - grip = 700 mA
 3. Start teleop/record as usual and test with soft + rigid objects.
 
 ## Test Plan

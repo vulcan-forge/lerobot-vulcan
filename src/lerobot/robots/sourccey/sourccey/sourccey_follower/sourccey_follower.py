@@ -353,7 +353,7 @@ class SourcceyFollower(Robot):
                 if gripper_current < self.config.gripper_grip_current_threshold:
                     # Allow small movement toward closed to maintain grip
                     # Move hold position slightly more closed (decrease by small amount)
-                    self._gripper_hold_position = max(0, self._gripper_hold_position - 0.5)
+                    self._gripper_hold_position = max(0, self._gripper_hold_position - 1.0)
                     logger.debug(
                         f"Gripper adjusting grip: position={self._gripper_hold_position:.1f}, "
                         f"current={gripper_current}mA"
