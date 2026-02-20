@@ -69,6 +69,7 @@ class SourcceyFollower(Robot):
         # Gripper force control state
         self._gripper_contact_detected = False  # True when gripper has contacted an object
         self._gripper_hold_position: float | None = None  # Position to hold when contact detected
+        self._gripper_squeeze_mode_enabled = False
 
     def __del__(self):
         if (self.is_connected):
@@ -164,8 +165,8 @@ class SourcceyFollower(Robot):
                 self.bus.write("P_Coefficient", motor, 24)
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 48)
-                self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
-                self.bus.write("Protection_Current", motor, 400)  # 50% of max current to avoid burnout
+                self.bus.write("Max_Torque_Limit", motor, self.config.gripper_nominal_max_torque_limit)
+                self.bus.write("Protection_Current", motor, self.config.gripper_nominal_protection_current)
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
             elif motor == "shoulder_lift":
                 self.bus.write("P_Coefficient", motor, 12)
@@ -309,12 +310,13 @@ class SourcceyFollower(Robot):
         # Determine if gripper is opening
         is_opening = gripper_goal > (gripper_present + self.config.gripper_closing_deadband)
 
-        # If opening, reset contact detection state
+        # If opening, reset contact detection state and return to nominal limits
         if is_opening:
             if self._gripper_contact_detected:
                 logger.debug("Gripper opening - resetting contact detection state")
             self._gripper_contact_detected = False
             self._gripper_hold_position = None
+            self._set_gripper_squeeze_mode(False)
             return goal_pos
 
         # If closing, check for contact
@@ -351,9 +353,37 @@ class SourcceyFollower(Robot):
                 # Use hold position instead of commanded goal
                 modified_goal = goal_pos.copy()
                 modified_goal["gripper"] = self._gripper_hold_position
+                self._set_gripper_squeeze_mode(True)
                 return modified_goal
 
+            # Thin objects may not trigger a clean contact spike; once nearly closed,
+            # keep a gentle squeeze by holding at fully closed with slightly higher limits.
+            if (
+                self.config.gripper_post_close_squeeze_enabled
+                and gripper_present <= self.config.gripper_fully_closed_threshold
+            ):
+                modified_goal = goal_pos.copy()
+                modified_goal["gripper"] = 0.0
+                self._set_gripper_squeeze_mode(True)
+                return modified_goal
+
+        # No squeeze condition met; keep nominal limits.
+        self._set_gripper_squeeze_mode(False)
         return goal_pos
+
+    def _set_gripper_squeeze_mode(self, enable: bool) -> None:
+        """Switch gripper protection limits between nominal and squeeze modes."""
+        if enable == self._gripper_squeeze_mode_enabled:
+            return
+
+        if enable:
+            self.bus.write("Max_Torque_Limit", "gripper", self.config.gripper_squeeze_max_torque_limit)
+            self.bus.write("Protection_Current", "gripper", self.config.gripper_squeeze_protection_current)
+        else:
+            self.bus.write("Max_Torque_Limit", "gripper", self.config.gripper_nominal_max_torque_limit)
+            self.bus.write("Protection_Current", "gripper", self.config.gripper_nominal_protection_current)
+
+        self._gripper_squeeze_mode_enabled = enable
 
     ###################################################################
     # Safety Functions (Must be used after extremely extensive testing

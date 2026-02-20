@@ -71,6 +71,16 @@ class SourcceyFollowerConfig(RobotConfig):
     gripper_grip_current_threshold: int = 250
     # Position deadband - minimum position change to consider gripper "closing" (in normalized units)
     gripper_closing_deadband: float = 1.0
+    # Position threshold considered "fully closed enough" for thin-object squeeze support.
+    gripper_fully_closed_threshold: float = 2.0
+    # Enable an additional squeeze mode when gripper is near fully closed.
+    gripper_post_close_squeeze_enabled: bool = True
+    # Normal gripper safety/torque limits used during free motion.
+    gripper_nominal_max_torque_limit: int = 500
+    gripper_nominal_protection_current: int = 400
+    # Slightly stronger limits used only while squeezing near closed position.
+    gripper_squeeze_max_torque_limit: int = 700
+    gripper_squeeze_protection_current: int = 550
 
     # cameras
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
