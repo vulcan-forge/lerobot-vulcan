@@ -261,15 +261,13 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
 Evaluate a trained model on the robot without saving the run's recording:
 
 ```
-python src/lerobot/control/sourccey/sourccey/inference.py \
-  --id="sourccey" \
-  --remote_ip="192.168.1.214" \
-  --model_path="outputs/train/xvla__sourccey-009-012__shorts-fold__cmb__000__mylesr/checkpoints/100000/pretrained_model" \
-  --dataset.num_episodes=1 \
-  --dataset.episode_time_s=60 \
-  --dataset.reset_time_s=5 \
-  --dataset.task="Fold the shorts" \
-  --dataset.fps=30
+uv run python src/lerobot/control/sourccey/sourccey/inference.py \
+ --id="sourccey" \
+ --remote_ip="192.168.1.211" \
+ --model_path="xvla__sourccey-012__shorts-fold__cmb__005__mylesr/checkpoints/100000/pretrained_model" \
+ --single_task="Fold the shorts" \
+ --fps=30 \
+ --episode_time_s=60
 ```
 
 ## Evaluation
@@ -277,10 +275,10 @@ python src/lerobot/control/sourccey/sourccey/inference.py \
 Evaluate a trained model on the robot:
 
 ```
-python src/lerobot/control/sourccey/sourccey/evaluate.py \
+uv run src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.214" \
- --model_path="outputs/train/xvla__sourccey-009-012__shorts-fold__cmb__000__mylesr/checkpoints/100000/pretrained_model" \
+ --remote_ip="192.168.1.211" \
+ --model_path="outputs/train/xvla__sourccey-012__shorts-fold__cmb__005__mylesr/checkpoints/100000/pretrained_model" \
  --dataset.repo_id="sourccey-012/eval_sourccey-009-012__shorts-fold__cmb000__mylesr" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=60 \
