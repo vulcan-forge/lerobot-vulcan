@@ -335,11 +335,11 @@ class SourcceyFollower(Robot):
                 gripper_current = self.bus.read("Present_Current", "gripper")
             except Exception as e:
                 logger.warning(f"Failed to read gripper current: {e}")
-                return goal_pos
+                gripper_current = None
 
             # Check if we've made contact (current exceeds threshold)
             if not self._gripper_contact_detected:
-                if gripper_current > self.config.gripper_contact_current_threshold:
+                if gripper_current is not None and gripper_current > self.config.gripper_contact_current_threshold:
                     self._gripper_contact_detected = True
                     self._gripper_hold_position = gripper_present
                     logger.info(
@@ -350,7 +350,7 @@ class SourcceyFollower(Robot):
             # If contact detected, hold at the contact position
             if self._gripper_contact_detected and self._gripper_hold_position is not None:
                 # Check if we should grip harder (current below grip threshold)
-                if gripper_current < self.config.gripper_grip_current_threshold:
+                if gripper_current is not None and gripper_current < self.config.gripper_grip_current_threshold:
                     # Allow small movement toward closed to maintain grip
                     # Move hold position slightly more closed (decrease by small amount)
                     self._gripper_hold_position = max(0, self._gripper_hold_position - 1.0)
@@ -369,7 +369,10 @@ class SourcceyFollower(Robot):
             # keep a gentle squeeze by holding at fully closed with slightly higher limits.
             if (
                 self.config.gripper_post_close_squeeze_enabled
-                and gripper_present <= self.config.gripper_fully_closed_threshold
+                and (
+                    gripper_present <= self.config.gripper_fully_closed_threshold
+                    or gripper_goal <= self.config.gripper_fully_closed_threshold
+                )
             ):
                 modified_goal = goal_pos.copy()
                 modified_goal["gripper"] = 0.0
@@ -379,7 +382,7 @@ class SourcceyFollower(Robot):
                 # but only while current stays under a safety threshold.
                 if (
                     self.config.gripper_overclose_enabled
-                    and gripper_current < self.config.gripper_overclose_max_current_threshold
+                    and (gripper_current is None or gripper_current < self.config.gripper_overclose_max_current_threshold)
                 ):
                     raw_goal = self._get_gripper_raw_overclose_goal()
                     if raw_goal is not None:
