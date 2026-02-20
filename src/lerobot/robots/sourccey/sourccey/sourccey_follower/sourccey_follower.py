@@ -70,6 +70,7 @@ class SourcceyFollower(Robot):
         self._gripper_contact_detected = False  # True when gripper has contacted an object
         self._gripper_hold_position: float | None = None  # Position to hold when contact detected
         self._gripper_squeeze_mode_enabled = False
+        self._gripper_raw_goal_override: int | None = None
 
     def __del__(self):
         if (self.is_connected):
@@ -262,11 +263,18 @@ class SourcceyFollower(Robot):
                 goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
             # Apply gripper force control if enabled
+            self._gripper_raw_goal_override = None
             if self.config.gripper_force_control_enabled and "gripper" in goal_pos:
                 goal_pos = self._apply_gripper_force_control(goal_pos, present_pos)
 
             # Send goal position to the arm with error handling
-            self.bus.sync_write("Goal_Position", goal_pos)
+            if self._gripper_raw_goal_override is not None:
+                body_goal_pos = {k: v for k, v in goal_pos.items() if k != "gripper"}
+                if body_goal_pos:
+                    self.bus.sync_write("Goal_Position", body_goal_pos)
+                self.bus.write("Goal_Position", "gripper", self._gripper_raw_goal_override, normalize=False)
+            else:
+                self.bus.sync_write("Goal_Position", goal_pos)
             return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
         except ConnectionError as e:
@@ -316,6 +324,7 @@ class SourcceyFollower(Robot):
                 logger.debug("Gripper opening - resetting contact detection state")
             self._gripper_contact_detected = False
             self._gripper_hold_position = None
+            self._gripper_raw_goal_override = None
             self._set_gripper_squeeze_mode(False)
             return goal_pos
 
@@ -365,11 +374,36 @@ class SourcceyFollower(Robot):
                 modified_goal = goal_pos.copy()
                 modified_goal["gripper"] = 0.0
                 self._set_gripper_squeeze_mode(True)
+
+                # Optionally over-close a little in raw encoder units (past normalized closed),
+                # but only while current stays under a safety threshold.
+                if (
+                    self.config.gripper_overclose_enabled
+                    and gripper_current < self.config.gripper_overclose_max_current_threshold
+                ):
+                    raw_goal = self._get_gripper_raw_overclose_goal()
+                    if raw_goal is not None:
+                        self._gripper_raw_goal_override = raw_goal
                 return modified_goal
 
         # No squeeze condition met; keep nominal limits.
+        self._gripper_raw_goal_override = None
         self._set_gripper_squeeze_mode(False)
         return goal_pos
+
+    def _get_gripper_raw_overclose_goal(self) -> int | None:
+        """Compute a small raw over-close goal past normalized closed position."""
+        gripper_cal = self.calibration.get("gripper")
+        if gripper_cal is None:
+            return None
+
+        closed_raw = gripper_cal.range_max if gripper_cal.drive_mode else gripper_cal.range_min
+        direction = 1 if gripper_cal.drive_mode else -1
+        raw_goal = int(closed_raw + direction * self.config.gripper_overclose_steps)
+
+        model = self.bus.motors["gripper"].model
+        max_res = self.bus.model_resolution_table[model] - 1
+        return max(0, min(max_res, raw_goal))
 
     def _set_gripper_squeeze_mode(self, enable: bool) -> None:
         """Switch gripper protection limits between nominal and squeeze modes."""

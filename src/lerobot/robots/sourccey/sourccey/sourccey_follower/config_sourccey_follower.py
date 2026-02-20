@@ -81,6 +81,11 @@ class SourcceyFollowerConfig(RobotConfig):
     # Slightly stronger limits used only while squeezing near closed position.
     gripper_squeeze_max_torque_limit: int = 700
     gripper_squeeze_protection_current: int = 550
+    # Optional: command a small raw-position over-close past normalized "0"
+    # while keeping current bounded, to improve thin-fabric grip.
+    gripper_overclose_enabled: bool = True
+    gripper_overclose_steps: int = 35
+    gripper_overclose_max_current_threshold: int = 450
 
     # cameras
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
