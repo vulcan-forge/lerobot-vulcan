@@ -247,7 +247,7 @@ class SourcceyFollowerCalibrator:
                     "id": 10,
                     "drive_mode": 0,
                     "homing_offset": 1960,
-                    "range_min": 770,
+                    "range_min": 850,
                     "range_max": 3350
                 },
                 "wrist_roll": {
