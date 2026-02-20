@@ -207,9 +207,9 @@ class SourcceyFollowerCalibrator:
                 "wrist_roll": {
                     "id": 5,
                     "drive_mode": 0,
-                    "homing_offset": 975,
-                    "range_min": 0,
-                    "range_max": 4095
+                    "homing_offset": 1025,
+                    "range_min": 75,
+                    "range_max": 4020
                 },
                 "gripper": {
                     "id": 6,
