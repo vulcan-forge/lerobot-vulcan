@@ -395,14 +395,16 @@ class SourcceyFollower(Robot):
         return goal_pos
 
     def _get_gripper_raw_overclose_goal(self) -> int | None:
-        """Compute a small raw over-close goal past normalized closed position."""
+        """Compute a small raw over-travel goal past calibrated closed position."""
         gripper_cal = self.calibration.get("gripper")
         if gripper_cal is None:
             return None
 
         closed_raw = gripper_cal.range_max if gripper_cal.drive_mode else gripper_cal.range_min
         direction = 1 if gripper_cal.drive_mode else -1
-        raw_goal = int(closed_raw + direction * self.config.gripper_overclose_steps)
+        span = abs(gripper_cal.range_max - gripper_cal.range_min)
+        overtravel_steps = int(round(span * (self.config.gripper_overtravel_percent / 100.0)))
+        raw_goal = int(closed_raw + direction * overtravel_steps)
 
         model = self.bus.motors["gripper"].model
         max_res = self.bus.model_resolution_table[model] - 1

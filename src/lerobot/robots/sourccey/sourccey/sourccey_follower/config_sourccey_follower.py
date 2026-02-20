@@ -84,7 +84,8 @@ class SourcceyFollowerConfig(RobotConfig):
     # Optional: command a small raw-position over-close past normalized "0"
     # while keeping current bounded, to improve thin-fabric grip.
     gripper_overclose_enabled: bool = True
-    gripper_overclose_steps: int = 140
+    # Allow a small over-travel past the calibrated closed limit (percent of calibrated range).
+    gripper_overtravel_percent: float = 10.0
     gripper_overclose_max_current_threshold: int = 900
 
     # cameras
