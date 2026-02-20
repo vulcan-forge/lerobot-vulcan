@@ -66,26 +66,26 @@ class SourcceyFollowerConfig(RobotConfig):
     # instead of just going to the commanded position.
     gripper_force_control_enabled: bool = True
     # Current threshold (mA) to detect object contact - when exceeded, gripper stops closing
-    gripper_contact_current_threshold: int = 150
+    gripper_contact_current_threshold: int = 220
     # Current threshold (mA) for grip force - gripper will try to maintain this grip strength
-    gripper_grip_current_threshold: int = 250
+    gripper_grip_current_threshold: int = 500
     # Position deadband - minimum position change to consider gripper "closing" (in normalized units)
     gripper_closing_deadband: float = 1.0
     # Position threshold considered "fully closed enough" for thin-object squeeze support.
-    gripper_fully_closed_threshold: float = 2.0
+    gripper_fully_closed_threshold: float = 5.0
     # Enable an additional squeeze mode when gripper is near fully closed.
     gripper_post_close_squeeze_enabled: bool = True
     # Normal gripper safety/torque limits used during free motion.
-    gripper_nominal_max_torque_limit: int = 500
-    gripper_nominal_protection_current: int = 400
+    gripper_nominal_max_torque_limit: int = 700
+    gripper_nominal_protection_current: int = 550
     # Slightly stronger limits used only while squeezing near closed position.
-    gripper_squeeze_max_torque_limit: int = 700
-    gripper_squeeze_protection_current: int = 550
+    gripper_squeeze_max_torque_limit: int = 1000
+    gripper_squeeze_protection_current: int = 800
     # Optional: command a small raw-position over-close past normalized "0"
     # while keeping current bounded, to improve thin-fabric grip.
     gripper_overclose_enabled: bool = True
-    gripper_overclose_steps: int = 35
-    gripper_overclose_max_current_threshold: int = 450
+    gripper_overclose_steps: int = 90
+    gripper_overclose_max_current_threshold: int = 700
 
     # cameras
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
