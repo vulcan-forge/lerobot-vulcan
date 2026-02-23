@@ -22,7 +22,7 @@ def install_sourccey_desktop_extras(
     print_status("Installing Sourccey desktop extras with uv...")
     try:
         subprocess.run(
-            ["uv", "pip", "install", "-e", ".[sourccey-desktop]"],
+            ["uv", "pip", "install", "-e", ".[sourccey-desktop, xvla]"],
             check=True,
             cwd=project_root,
         )
