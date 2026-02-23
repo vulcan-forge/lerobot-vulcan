@@ -147,12 +147,16 @@ source .venv/Scripts/activate
 ```
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.211" \
+ --remote_ip="192.168.1.212" \
  --left_arm_port="/dev/ttyACM1" \
  --right_arm_port="/dev/ttyACM0" \
  --keyboard_port="keyboard" \
  --fps=30 \
  --reverse=True
+```
+
+```
+python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --remote_ip="192.168.1.212" --left_arm_port="/dev/ttyACM1" --right_arm_port="/dev/ttyACM0" --keyboard_port="keyboard" --fps=30 --reverse=True
 ```
 
 Add this if the wheel motors are reversed

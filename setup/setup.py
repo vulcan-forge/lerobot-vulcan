@@ -11,6 +11,7 @@ Requirements:
 - Git
 """
 
+import argparse
 import os
 import sys
 import subprocess
@@ -18,6 +19,8 @@ import platform
 import shutil
 from pathlib import Path
 from typing import Tuple, Optional
+
+from setup_modules.setup_desktop import install_sourccey_desktop_extras
 
 class Colors:
     """ANSI color codes for terminal output"""
@@ -247,6 +250,15 @@ class SetupScript:
             self.print_error(f"Failed to setup Python environment: {e}")
             return False
 
+    def setup_desktop_extras(self) -> bool:
+        """Install Sourccey desktop extras."""
+        return install_sourccey_desktop_extras(
+            project_root=self.project_root,
+            print_status=self.print_status,
+            print_success=self.print_success,
+            print_error=self.print_error,
+        )
+
     def fix_final_ownership(self) -> bool:
         """Restore project directory ownership to the normal user after setup."""
         if platform.system() == "Windows":
@@ -376,7 +388,7 @@ class SetupScript:
         print(f"{Colors.CYAN}{message.center(60)}{Colors.NC}")
         print(f"{Colors.CYAN}{'='*60}{Colors.NC}\n")
 
-    def run(self) -> bool:
+    def run(self, desktop: bool = False) -> bool:
         """Run the complete setup process"""
         self.print_header("LEROBOT VULCAN SETUP")
 
@@ -406,10 +418,10 @@ class SetupScript:
         # Setup project
         self.print_header("SETTING UP PROJECT")
 
-        setup_steps = [
-            self.setup_python_environment(),
-            self.compile_profobufs()
-        ]
+        setup_steps = [self.setup_python_environment()]
+        if desktop:
+            setup_steps.append(self.setup_desktop_extras())
+        setup_steps.append(self.compile_profobufs())
 
         if not all(setup_steps):
             self.print_error("Project setup failed.")
@@ -426,15 +438,24 @@ class SetupScript:
 ################################################################
 # Main function
 ################################################################
-def setup():
+def setup(desktop: bool = False):
     """Setup the project"""
     setup = SetupScript()
-    success = setup.run()
+    success = setup.run(desktop=desktop)
     return success
 
 def main():
     """Main entry point"""
-    success = setup()
+    parser = argparse.ArgumentParser(description="LeRobot Vulcan Setup")
+    parser.add_argument(
+        "--desktop",
+        action="store_true",
+        default=False,
+        help="Install Sourccey desktop extras (sourccey-desktop).",
+    )
+    args = parser.parse_args()
+
+    success = setup(desktop=args.desktop)
 
     if not success:
         sys.exit(1)
