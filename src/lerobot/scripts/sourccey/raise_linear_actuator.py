@@ -40,7 +40,8 @@ def main() -> int:
 
     duration_s = max(0.0, float(args.seconds))
     power = max(0.0, min(1.0, float(args.power)))
-    direction = 1.0 if args.direction == "up" else -1.0
+    # Note: wiring is inverted on this hardware; "up" needs negative direction.
+    direction = -1.0 if args.direction == "up" else 1.0
 
     controller = PWMDCMotorsController(
         config=sourccey_dc_motors_config(),
