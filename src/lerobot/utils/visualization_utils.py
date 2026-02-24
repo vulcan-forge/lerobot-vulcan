@@ -14,6 +14,7 @@
 
 import numbers
 import os
+import shutil
 
 import numpy as np
 import rerun as rr
@@ -41,7 +42,19 @@ def init_rerun(
     if ip and port:
         rr.connect_grpc(url=f"rerun+http://{ip}:{port}/proxy")
     else:
-        rr.spawn(memory_limit=memory_limit)
+        if os.getenv("LEROBOT_SKIP_RERUN", "").lower() in ("1", "true", "yes"):
+            print("Rerun viewer spawn skipped (LEROBOT_SKIP_RERUN set).")
+            return
+
+        if shutil.which("rerun") is None:
+            print("Rerun viewer not found in PATH; skipping rr.spawn().")
+            return
+
+        try:
+            rr.spawn(memory_limit=memory_limit)
+        except Exception as exc:
+            print(f"Failed to spawn Rerun viewer: {exc}. Continuing without viewer.")
+            return
 
 
 def _is_scalar(x):
