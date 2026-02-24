@@ -95,6 +95,10 @@ class Sourccey(Robot):
         self.untorque_left_prev = False
         self.untorque_right_prev = False
 
+        # Z debug (host-side)
+        self._z_debug_last_t = 0.0
+        self._z_debug_interval_s = 0.5
+
     def __del__(self):
         if (self.is_connected):
             self.disconnect()
@@ -261,11 +265,22 @@ class Sourccey(Robot):
             # Z actuator position (best-effort; keep schema stable)
             try:
                 if self.z_actuator is not None and self.z_actuator.is_connected and self.z_actuator.use_z_actuator:
-                    obs_dict["z.pos"] = float(self.z_actuator.read_position())
+                    raw = self.z_actuator.sensor.read_raw()
+                    z_pos = float(self.z_actuator.sensor.raw_to_pos_m100_100(raw.raw))
+                    obs_dict["z.pos"] = z_pos
+
+                    now = time.monotonic()
+                    if now - self._z_debug_last_t >= self._z_debug_interval_s:
+                        self._z_debug_last_t = now
+                        print(f"[z_host] raw={raw.raw} v={raw.voltage:.3f} pos={z_pos:.2f}")
                 else:
                     obs_dict["z.pos"] = 100.0
-            except Exception:
+            except Exception as e:
                 obs_dict["z.pos"] = 100.0
+                now = time.monotonic()
+                if now - self._z_debug_last_t >= self._z_debug_interval_s:
+                    self._z_debug_last_t = now
+                    print(f"[z_host] read_err={type(e).__name__}: {e}")
 
             for cam_key in self.cameras.keys():
                 try:

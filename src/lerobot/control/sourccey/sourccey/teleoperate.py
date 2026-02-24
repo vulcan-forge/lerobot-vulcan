@@ -65,6 +65,8 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
 
     debug_mode = False
     last_action_print_t = time.monotonic()
+    last_z_print_t = time.monotonic()
+    z_print_interval_s = 0.5
 
     print("Teleoperating Sourccey")
     while True:
@@ -86,6 +88,13 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
         if debug_mode and now - last_action_print_t >= 3.0:
             last_action_print_t = now
             print(action)
+
+        # Z position debug (always on, 2 Hz)
+        if now - last_z_print_t >= z_print_interval_s:
+            last_z_print_t = now
+            z_obs = observation.get("z.pos", None)
+            z_cmd = getattr(robot, "_z_pos_cmd", None)
+            print(f"[z] cmd={z_cmd} obs={z_obs}")
 
         robot.send_action(action)
         precise_sleep(max(1.0 / cfg.fps - (time.perf_counter() - t0), 0.0))
