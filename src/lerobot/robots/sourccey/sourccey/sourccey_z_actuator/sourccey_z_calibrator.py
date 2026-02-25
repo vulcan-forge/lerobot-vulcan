@@ -16,14 +16,14 @@ class SourcceyZCalibrator:
     """
     Autocalibration by stall detection:
 
-    - Drive DOWN at constant command until the sensor position stops changing for `stable_s`
-    - Drive UP at constant command until the sensor position stops changing for `stable_s`
+    - Drive DOWN at constant command until sensor raw ADC counts stop changing for `stable_s`
+    - Drive UP at constant command until sensor raw ADC counts stop changing for `stable_s`
 
     Then write calibration to the ZSensor.
 
     Notes:
     - This assumes your motor driver / mechanics can safely hit end stops (current limiting!).
-    - 'Stable' is defined as abs(pos - last_pos) <= stable_eps_pos continuously for stable_s.
+    - 'Stable' is defined as abs(raw - last_raw) <= stable_eps_raw continuously for stable_s.
     """
 
     def __init__(
@@ -33,6 +33,7 @@ class SourcceyZCalibrator:
         stable_s: float = 2.0,
         sample_hz: float = 30.0,
         stable_eps_pos: float = 1.0,
+        stable_eps_raw: int = 2,
         max_phase_s: float = 30.0,
         down_cmd: float = -1.0,
         up_cmd: float = 1.0,
@@ -40,7 +41,10 @@ class SourcceyZCalibrator:
         self.actuator = actuator
         self.stable_s = float(stable_s)
         self.sample_hz = float(sample_hz)
+        # Backward-compat field kept for callers passing this argument.
+        # Stall detection now uses native raw units via `stable_eps_raw`.
         self.stable_eps_pos = float(stable_eps_pos)
+        self.stable_eps_raw = int(stable_eps_raw)
         self.max_phase_s = float(max_phase_s)
         self.down_cmd = float(down_cmd)
         self.up_cmd = float(up_cmd)
@@ -64,7 +68,9 @@ class SourcceyZCalibrator:
         period = 1.0 / max(1.0, self.sample_hz)
         t_deadline = time.monotonic() + self.max_phase_s
 
-        last_pos = None
+        # Detect stall in raw ADC counts so calibration sensitivity is independent
+        # of any prior saved mapping.
+        last_raw = None
         stable_start = None
 
         while True:
@@ -75,22 +81,22 @@ class SourcceyZCalibrator:
             # KEEP MOTOR ALIVE (important for watchdog-style drivers)
             self._drive(cmd)
 
-            pos = self._read_pos()
+            raw = self._read_raw()
 
-            if last_pos is None:
-                last_pos = pos
+            if last_raw is None:
+                last_raw = raw
                 stable_start = None
             else:
-                if abs(pos - last_pos) <= self.stable_eps_pos:
+                if abs(raw - last_raw) <= self.stable_eps_raw:
                     if stable_start is None:
                         stable_start = now
                     elif (now - stable_start) >= self.stable_s:
-                        return self._read_raw()
+                        return raw
 
                 else:
                     stable_start = None
                 
-                last_pos = pos
+                last_raw = raw
 
             time.sleep(period)
 
