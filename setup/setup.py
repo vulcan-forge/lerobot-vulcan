@@ -17,6 +17,7 @@ import sys
 import subprocess
 import platform
 import shutil
+import stat
 from pathlib import Path
 from typing import Tuple, Optional
 
@@ -90,6 +91,22 @@ class SetupScript:
     def is_macos_or_windows(self) -> bool:
         """Return True when running on macOS or Windows."""
         return platform.system() in {"Darwin", "Windows"}
+
+    def ensure_executable(self, path: Path) -> None:
+        """Ensure a file is executable on Unix-like systems."""
+        if platform.system() == "Windows":
+            return
+        try:
+            if not path.exists():
+                self.print_warning(f"Expected executable not found at {path}")
+                return
+            mode = path.stat().st_mode
+            if mode & 0o111:
+                return
+            path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            self.print_success(f"Marked executable: {path}")
+        except Exception as e:
+            self.print_warning(f"Failed to set executable permissions for {path}: {e}")
 
     def check_python_version(self) -> bool:
         """Check if Python 3.10+ is installed"""
@@ -238,6 +255,7 @@ class SetupScript:
                 self.print_success("Virtual environment created with uv")
 
                 python_path = self.get_venv_python_path()
+                self.ensure_executable(python_path)
 
                 # Install dependencies with sourccey extras. On macOS/Windows we gracefully
                 # fall back if a stale resolver path still tries to pull vosk.
