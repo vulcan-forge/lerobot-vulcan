@@ -96,8 +96,12 @@ class Sourccey(Robot):
         self.untorque_right_prev = False
 
     def __del__(self):
-        if (self.is_connected):
-            self.disconnect()
+        # Destructors can run on partially initialized objects if __init__ raised.
+        try:
+            if hasattr(self, "left_arm") and hasattr(self, "right_arm") and self.is_connected:
+                self.disconnect()
+        except Exception:
+            pass
 
     ###################################################################
     # Properties and Attributes
