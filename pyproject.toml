@@ -123,7 +123,7 @@ sourccey = [
     "grpcio-tools==1.73.1",
 
     # Audio
-    "vosk>=0.3.45",
+    "vosk>=0.3.45 ; sys_platform != 'darwin' and sys_platform != 'win32'",
     "sounddevice>=0.4.6",
     "faster-whisper>=1.1.1",
 ]

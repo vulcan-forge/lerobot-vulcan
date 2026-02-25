@@ -87,6 +87,10 @@ class SetupScript:
         else:
             return self.project_root / ".venv" / "bin" / "python"
 
+    def is_macos_or_windows(self) -> bool:
+        """Return True when running on macOS or Windows."""
+        return platform.system() in {"Darwin", "Windows"}
+
     def check_python_version(self) -> bool:
         """Check if Python 3.10+ is installed"""
         self.print_status("Checking Python version...")
@@ -233,10 +237,39 @@ class SetupScript:
                              check=True, cwd=self.project_root)
                 self.print_success("Virtual environment created with uv")
 
-                # Install dependencies with sourccey extras
-                subprocess.run(["uv", "pip", "install", "-e", ".[sourccey]"],
-                             check=True, cwd=self.project_root)
-                self.print_success("LeRobot dependencies installed with uv")
+                python_path = self.get_venv_python_path()
+
+                # Install dependencies with sourccey extras. On macOS/Windows we gracefully
+                # fall back if a stale resolver path still tries to pull vosk.
+                install_result = subprocess.run(
+                    ["uv", "pip", "install", "--python", str(python_path), "-e", ".[sourccey]"],
+                    capture_output=True,
+                    text=True,
+                    cwd=self.project_root,
+                )
+
+                if install_result.returncode == 0:
+                    self.print_success("LeRobot sourccey dependencies installed with uv")
+                else:
+                    resolver_output = f"{install_result.stdout or ''}\n{install_result.stderr or ''}".lower()
+                    if self.is_macos_or_windows() and "vosk" in resolver_output:
+                        self.print_warning(
+                            "vosk is not supported on this platform. "
+                            "Falling back to install without sourccey extra audio dependency."
+                        )
+                        subprocess.run(
+                            ["uv", "pip", "install", "--python", str(python_path), "-e", "."],
+                            check=True,
+                            cwd=self.project_root,
+                        )
+                        self.print_success("Installed core LeRobot dependencies with uv")
+                    else:
+                        raise subprocess.CalledProcessError(
+                            install_result.returncode,
+                            ["uv", "pip", "install", "--python", str(python_path), "-e", ".[sourccey]"],
+                            output=install_result.stdout,
+                            stderr=install_result.stderr,
+                        )
 
             else:
                 self.print_error("uv not available")
@@ -248,6 +281,8 @@ class SetupScript:
 
         except subprocess.CalledProcessError as e:
             self.print_error(f"Failed to setup Python environment: {e}")
+            if getattr(e, "stderr", None):
+                self.print_error(f"Installer stderr: {e.stderr.strip()}")
             return False
 
     def setup_desktop_extras(self) -> bool:
@@ -264,20 +299,43 @@ class SetupScript:
         if platform.system() == "Windows":
             return True  # No-op on Windows
 
+        # If setup is not running with elevated privileges, ownership should already be correct.
+        sudo_user = os.environ.get("SUDO_USER")
+        is_root = hasattr(os, "geteuid") and os.geteuid() == 0
+        if not sudo_user and not is_root:
+            self.print_status("Ownership restore skipped (setup not running with sudo/root).")
+            return True
+
         self.print_status("Restoring project directory ownership to normal user...")
 
-        user = os.environ.get("SUDO_USER") or os.environ.get("USER", "sourccey")
+        user = sudo_user or os.environ.get("USER", "sourccey")
+        group = user
         project_root_str = str(self.project_root)
 
         try:
-            # Remove immutable flags that might prevent ownership changes
-            subprocess.run(["sudo", "chattr", "-i", "-R", project_root_str], check=False)
+            # Resolve user's primary group (macOS users are typically in 'staff', not '<user>').
+            group_result = subprocess.run(
+                ["id", "-gn", user],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            if group_result.returncode == 0 and group_result.stdout.strip():
+                group = group_result.stdout.strip()
+            elif platform.system() == "Darwin":
+                group = "staff"
+
+            cmd_prefix = [] if is_root else ["sudo"]
+
+            # Linux-only immutable flag cleanup
+            if platform.system() == "Linux" and shutil.which("chattr"):
+                subprocess.run(cmd_prefix + ["chattr", "-i", "-R", project_root_str], check=False)
 
             # Restore ownership
-            subprocess.run(["sudo", "chown", "-R", f"{user}:{user}", project_root_str], check=True)
+            subprocess.run(cmd_prefix + ["chown", "-R", f"{user}:{group}", project_root_str], check=True)
 
             # Restore permissions
-            subprocess.run(["sudo", "chmod", "-R", "u+rwX", project_root_str], check=True)
+            subprocess.run(cmd_prefix + ["chmod", "-R", "u+rwX", project_root_str], check=True)
 
             self.print_success(f"Ownership successfully restored to {user}.")
             return True
@@ -309,6 +367,57 @@ class SetupScript:
             self.print_warning(f"evdev cleanup had issues: {e}")
             return True  # Continue anyway
 
+    def _venv_has_module(self, module_name: str) -> bool:
+        """Check whether a module is importable in the project virtual environment."""
+        python_path = self.get_venv_python_path()
+        if not python_path.exists():
+            return False
+
+        result = subprocess.run(
+            [str(python_path), "-c", f"import {module_name}"],
+            capture_output=True,
+            text=True,
+            cwd=self.project_root,
+        )
+        return result.returncode == 0
+
+    def ensure_protobuf_dependencies(self) -> bool:
+        """Ensure protobuf compiler dependencies are available in the project venv."""
+        python_path = self.get_venv_python_path()
+        if not python_path.exists():
+            self.print_error(f"Virtual environment Python not found at {python_path}")
+            return False
+
+        if self._venv_has_module("grpc_tools"):
+            return True
+
+        self.print_status("grpc_tools not found in venv. Installing grpcio-tools...")
+        try:
+            if self.check_command_exists("uv"):
+                subprocess.run(
+                    ["uv", "pip", "install", "--python", str(python_path), "grpcio-tools"],
+                    check=True,
+                    cwd=self.project_root,
+                )
+                self.print_success("Installed grpcio-tools with uv")
+            else:
+                self.print_warning("uv not available, falling back to pip for grpcio-tools installation")
+                subprocess.run(
+                    [str(python_path), "-m", "pip", "install", "grpcio-tools"],
+                    check=True,
+                    cwd=self.project_root,
+                )
+                self.print_success("Installed grpcio-tools with pip")
+
+            if not self._venv_has_module("grpc_tools"):
+                self.print_error("grpcio-tools installed, but grpc_tools is still not importable.")
+                return False
+
+            return True
+        except subprocess.CalledProcessError as e:
+            self.print_error(f"Failed to install grpcio-tools: {e}")
+            return False
+
     def compile_profobufs(self):
         """Compile Sourccey protobuf"""
         # Clean up evdev conflicts first
@@ -337,6 +446,10 @@ class SetupScript:
 
             if not compile_script.exists():
                 self.print_error(f"Sourccey protobuf compiler not found at {compile_script}")
+                return False
+
+            if not self.ensure_protobuf_dependencies():
+                self.print_error("Missing protobuf dependencies for compilation")
                 return False
 
             self.print_status("Compiling Sourccey protobuf...")
