@@ -349,8 +349,24 @@ class SetupScript:
             if platform.system() == "Linux" and shutil.which("chattr"):
                 subprocess.run(cmd_prefix + ["chattr", "-i", "-R", project_root_str], check=False)
 
-            # Restore ownership
-            subprocess.run(cmd_prefix + ["chown", "-R", f"{user}:{group}", project_root_str], check=True)
+            # Restore ownership (macOS can error if group name is invalid)
+            chown_cmd = cmd_prefix + ["chown", "-R", f"{user}:{group}", project_root_str]
+            chown_result = subprocess.run(chown_cmd, capture_output=True, text=True)
+            if chown_result.returncode != 0:
+                stderr = (chown_result.stderr or "").strip()
+                if platform.system() == "Darwin" and "illegal group name" in stderr:
+                    fallback_group = "staff"
+                    if group != fallback_group:
+                        subprocess.run(
+                            cmd_prefix + ["chown", "-R", f"{user}:{fallback_group}", project_root_str],
+                            check=True,
+                        )
+                    else:
+                        subprocess.run(cmd_prefix + ["chown", "-R", user, project_root_str], check=True)
+                else:
+                    raise subprocess.CalledProcessError(
+                        chown_result.returncode, chown_cmd, output=chown_result.stdout, stderr=stderr
+                    )
 
             # Restore permissions
             subprocess.run(cmd_prefix + ["chmod", "-R", "u+rwX", project_root_str], check=True)
