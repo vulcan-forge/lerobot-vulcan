@@ -276,6 +276,7 @@ def _run_host_loop(stop_event: threading.Event) -> None:
     import logging
 
     from ..protobuf.generated import sourccey_pb2
+    from .camera_control_protocol import decode_camera_control_message
     from .sourccey import Sourccey
     from .config_sourccey import SourcceyConfig
     from .sourccey_host import SourcceyHost
@@ -302,12 +303,14 @@ def _run_host_loop(stop_event: threading.Event) -> None:
             loop_start_time = time.time()
             try:
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
-
-                robot_action = sourccey_pb2.SourcceyRobotAction()
-                robot_action.ParseFromString(msg_bytes)
-                data = robot.protobuf_converter.protobuf_to_action(robot_action)
-
-                _action_sent = robot.send_action(data)
+                camera_control = decode_camera_control_message(msg_bytes)
+                if camera_control is not None:
+                    robot.apply_camera_control(camera_control)
+                else:
+                    robot_action = sourccey_pb2.SourcceyRobotAction()
+                    robot_action.ParseFromString(msg_bytes)
+                    data = robot.protobuf_converter.protobuf_to_action(robot_action)
+                    _action_sent = robot.send_action(data)
                 robot.update()
 
                 last_cmd_time = time.time()

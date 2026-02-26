@@ -27,11 +27,19 @@ import zmq
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from lerobot.robots.robot import Robot
+from .camera_control_protocol import (
+    encode_camera_control_message,
+    extract_camera_control_from_action,
+    strip_camera_control_keys,
+)
 from .config_sourccey import SourcceyClientConfig
 
 # Import protobuf modules
 from ..protobuf.generated import sourccey_pb2
 from ..protobuf.sourccey_protobuf import SourcceyProtobuf
+
+CAMERA_CONTROL_RETRY_CYCLES = 3
+
 
 class SourcceyClient(Robot):
     config_class = SourcceyClientConfig
@@ -101,6 +109,10 @@ class SourcceyClient(Robot):
         # Stored target position (what we "expect" z to be at while holding keys).
         self._z_pos_cmd = 0.0
 
+        # Camera profile command retries (needed because cmd socket uses CONFLATE).
+        self._pending_camera_control: dict[str, Any] | None = None
+        self._camera_control_retry_cycles = 0
+
     ###################################################################
     # Properties and Attributes
     ###################################################################
@@ -162,6 +174,35 @@ class SourcceyClient(Robot):
         elif key_char == self.teleop_keys["speed_down"]:
             self.speed_index = max(self.speed_index - 1, 0)
             print(f"Speed index: {self.speed_index}")
+
+    def request_camera_profile(
+        self,
+        profile: str,
+        *,
+        camera_name: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        fps: int | None = None,
+        device: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {"camera.profile": profile}
+        if camera_name is not None:
+            payload["camera.name"] = camera_name
+        if width is not None:
+            payload["camera.width"] = width
+        if height is not None:
+            payload["camera.height"] = height
+        if fps is not None:
+            payload["camera.fps"] = fps
+        if device is not None:
+            payload["camera.device"] = device
+
+        control = extract_camera_control_from_action(payload)
+        if control is None:
+            raise ValueError("Camera profile request requires a non-empty profile name.")
+
+        self._pending_camera_control = control
+        self._camera_control_retry_cycles = CAMERA_CONTROL_RETRY_CYCLES
 
     ###################################################################
     # Connection Management
@@ -251,13 +292,30 @@ class SourcceyClient(Robot):
                 "ManipulatorRobot is not connected. You need to run `robot.connect()`."
             )
 
-        # Convert action to protobuf and send
-        robot_action = self.protobuf_converter.action_to_protobuf(action)
-        self.zmq_cmd_socket.send(robot_action.SerializeToString())
+        camera_control = extract_camera_control_from_action(action)
+        if camera_control is not None:
+            self._pending_camera_control = camera_control
+            self._camera_control_retry_cycles = CAMERA_CONTROL_RETRY_CYCLES
 
+        clean_action = strip_camera_control_keys(action)
+
+        # With CONFLATE enabled on command sockets, we send camera control alone for
+        # a few cycles to maximize the chance host applies it before normal actions resume.
+        if self._pending_camera_control is not None and self._camera_control_retry_cycles > 0:
+            self.zmq_cmd_socket.send(encode_camera_control_message(self._pending_camera_control))
+            self._camera_control_retry_cycles -= 1
+            if self._camera_control_retry_cycles <= 0:
+                self._pending_camera_control = None
+            return self._format_action_sent(clean_action)
+
+        # Convert action to protobuf and send
+        robot_action = self.protobuf_converter.action_to_protobuf(clean_action)
+        self.zmq_cmd_socket.send(robot_action.SerializeToString())
+        return self._format_action_sent(clean_action)
+
+    def _format_action_sent(self, action: dict[str, Any]) -> dict[str, Any]:
         # TODO(Steven): Remove the np conversion when it is possible to record a non-numpy array value
         actions = np.array([action.get(k, 0.0) for k in self._state_order], dtype=np.float32)
-
         action_sent = {key: actions[i] for i, key in enumerate(self._state_order)}
         action_sent["action"] = actions
         return action_sent
@@ -497,6 +555,13 @@ class SourcceyClient(Robot):
             if right_key and (right_key in pressed) and (right_key not in self._prev_keys):
                 self.untorque_right_active = not self.untorque_right_active
 
+            locate_key = self.teleop_keys.get("camera_locate_mode")
+            model_key = self.teleop_keys.get("camera_model_mode")
+            if locate_key and (locate_key in pressed) and (locate_key not in self._prev_keys):
+                action["camera.profile"] = "locate_single_max_res"
+            if model_key and (model_key in pressed) and (model_key not in self._prev_keys):
+                action["camera.profile"] = "default"
+
             # Always include current flags so host can enforce per-arm blocking
             action["untorque_left"] = self.untorque_left_active
             action["untorque_right"] = self.untorque_right_active
@@ -541,4 +606,3 @@ class SourcceyClient(Robot):
         if delta < -max_step:
             return current - max_step
         return target
-

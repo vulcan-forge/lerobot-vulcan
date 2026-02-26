@@ -28,7 +28,14 @@ from lerobot.robots.sourccey.sourccey.protobuf.sourccey_protobuf import Sourccey
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower import SourcceyFollower
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import SourcceyZActuator, ZSensor
-from .config_sourccey import SourcceyConfig
+from .camera_control_protocol import extract_camera_control_from_action, strip_camera_control_keys
+from .config_sourccey import (
+    DEFAULT_CAMERA_PROFILE,
+    SINGLE_MAX_RES_CAMERA_PROFILE,
+    SourcceyConfig,
+    normalize_sourccey_camera_profile,
+    resolve_sourccey_cameras_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +81,8 @@ class Sourccey(Robot):
         self.cameras = make_cameras_from_configs(config.cameras)
         # Cameras are treated as best-effort: startup should not fail if a camera fails to connect/read.
         self._connected_cameras: set[str] = set()
+        self._active_camera_profile = normalize_sourccey_camera_profile(None)
+        self._active_camera_signature = self._camera_signature(self.config.cameras)
 
         self.dc_motors_controller = PWMDCMotorsController(
             motors=self.config.dc_motors,
@@ -144,6 +153,115 @@ class Sourccey(Robot):
     ###################################################################
     # Connection Management
     ###################################################################
+    @staticmethod
+    def _camera_signature(cameras_config: dict[str, Any]) -> tuple[tuple[str, str, int, int, int, str], ...]:
+        signature: list[tuple[str, str, int, int, int, str]] = []
+        for cam_key, cam_cfg in cameras_config.items():
+            signature.append(
+                (
+                    str(cam_key),
+                    str(getattr(cam_cfg, "index_or_path", "")),
+                    int(getattr(cam_cfg, "width", 0) or 0),
+                    int(getattr(cam_cfg, "height", 0) or 0),
+                    int(getattr(cam_cfg, "fps", 0) or 0),
+                    str(getattr(cam_cfg, "type", "")),
+                )
+            )
+        return tuple(sorted(signature))
+
+    @staticmethod
+    def _coerce_positive_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed <= 0:
+            return None
+        return parsed
+
+    def apply_camera_control(self, control: dict[str, Any]) -> bool:
+        profile = str(control.get("profile", "")).strip()
+        if not profile:
+            return False
+
+        camera_name_raw = str(control.get("camera_name", "")).strip()
+        camera_name = camera_name_raw or None
+        width = self._coerce_positive_int(control.get("width"))
+        height = self._coerce_positive_int(control.get("height"))
+        fps = self._coerce_positive_int(control.get("fps"))
+        device_raw = str(control.get("device", "")).strip()
+        device = device_raw or None
+
+        return self.set_camera_profile(
+            profile=profile,
+            camera_name=camera_name,
+            width=width,
+            height=height,
+            fps=fps,
+            device=device,
+        )
+
+    def set_camera_profile(
+        self,
+        *,
+        profile: str,
+        camera_name: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        fps: int | None = None,
+        device: str | None = None,
+    ) -> bool:
+        resolved_profile = normalize_sourccey_camera_profile(profile)
+        if resolved_profile not in {DEFAULT_CAMERA_PROFILE, SINGLE_MAX_RES_CAMERA_PROFILE}:
+            logger.warning(f"Unsupported camera profile '{profile}'. Ignoring camera switch request.")
+            return False
+
+        new_camera_config = resolve_sourccey_cameras_config(
+            profile=resolved_profile,
+            camera_name=camera_name,
+            device=device,
+            width=width,
+            height=height,
+            fps=fps,
+        )
+        new_signature = self._camera_signature(new_camera_config)
+        if new_signature == self._active_camera_signature:
+            return False
+
+        # Build camera objects before teardown so malformed config does not leave us half-switched.
+        new_cameras = make_cameras_from_configs(new_camera_config)
+
+        for cam_key in list(self._connected_cameras):
+            camera = self.cameras.get(cam_key)
+            if camera is None:
+                continue
+            try:
+                camera.disconnect()
+            except Exception:
+                pass
+        self._connected_cameras.clear()
+
+        self.config.cameras = new_camera_config
+        self.cameras = new_cameras
+        self._active_camera_profile = resolved_profile
+        self._active_camera_signature = new_signature
+        self.__dict__.pop("observation_features", None)
+
+        for cam_key, camera in self.cameras.items():
+            try:
+                camera.connect()
+                self._connected_cameras.add(cam_key)
+            except Exception as e:
+                logger.warning(f"Camera '{cam_key}' failed to connect after profile switch: {e}")
+
+        logger.info(
+            f"Camera profile switched to '{resolved_profile}' "
+            f"with {len(self.cameras)} configured camera(s)."
+        )
+        return True
+
     def connect(self, calibrate: bool = True) -> None:
         self.left_arm.connect(calibrate)
         self.right_arm.connect(calibrate)
@@ -288,6 +406,13 @@ class Sourccey(Robot):
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         try:
+            camera_control = extract_camera_control_from_action(action)
+            if camera_control is not None:
+                self.apply_camera_control(camera_control)
+                action = strip_camera_control_keys(action)
+                if not action:
+                    return {}
+
             # Apply per-arm untorque flags automatically
             action = self.apply_untorque_flags(action)
 

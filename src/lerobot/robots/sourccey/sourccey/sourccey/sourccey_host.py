@@ -18,6 +18,7 @@ import time
 
 import zmq
 
+from .camera_control_protocol import decode_camera_control_message
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
 from .sourccey import Sourccey
 
@@ -76,15 +77,17 @@ def main():
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
+                camera_control = decode_camera_control_message(msg_bytes)
+                if camera_control is not None:
+                    robot.apply_camera_control(camera_control)
+                else:
+                    # Convert protobuf to action dictionary using existing method
+                    robot_action = sourccey_pb2.SourcceyRobotAction()
+                    robot_action.ParseFromString(msg_bytes)
+                    data = robot.protobuf_converter.protobuf_to_action(robot_action)
 
-                # Convert protobuf to action dictionary using existing method
-                robot_action = sourccey_pb2.SourcceyRobotAction()
-                robot_action.ParseFromString(msg_bytes)
-
-                data = robot.protobuf_converter.protobuf_to_action(robot_action)
-
-                # Send action to robot
-                _action_sent = robot.send_action(data)
+                    # Send action to robot
+                    _action_sent = robot.send_action(data)
 
                 # Update the robot
                 robot.update()
