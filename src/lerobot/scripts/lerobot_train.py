@@ -53,6 +53,10 @@ from lerobot.utils.utils import (
     has_method,
     init_logging,
 )
+try:
+    from lerobot.policies.xvla.modeling_xvla import BadBatchError
+except Exception:
+    BadBatchError = None
 
 
 def update_policy(
@@ -190,11 +194,11 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
     log_file = output_dir / "train.log" if output_dir is not None else None
-    # Reduce log noise: keep only errors in console and file.
+    # Reduce log noise: keep INFO in console, only errors in file.
     init_logging(
         log_file=log_file,
         display_pid=True,
-        console_level="ERROR",
+        console_level="INFO",
         file_level="ERROR",
         accelerator=accelerator,
     )
@@ -363,6 +367,12 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         shuffle = True
         sampler = None
 
+    def _collate_skip_none(batch):
+        batch = [b for b in batch if b is not None]
+        if len(batch) == 0:
+            return None
+        return torch.utils.data._utils.collate.default_collate(batch)
+
     dataloader = torch.utils.data.DataLoader(
         dataset,
         num_workers=cfg.num_workers,
@@ -372,6 +382,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         pin_memory=device.type == "cuda",
         drop_last=False,
         prefetch_factor=2 if cfg.num_workers > 0 else None,
+        collate_fn=_collate_skip_none if cfg.dataset.skip_bad_frames else None,
     )
 
     # Prepare everything with accelerator
@@ -410,19 +421,27 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
         batch = next(dl_iter)
+        if batch is None:
+            continue
         batch = preprocessor(batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
 
-        train_tracker, output_dict = update_policy(
-            train_tracker,
-            policy,
-            batch,
-            optimizer,
-            cfg.optimizer.grad_clip_norm,
-            accelerator=accelerator,
-            lr_scheduler=lr_scheduler,
-            rabc_weights_provider=rabc_weights,
-        )
+        try:
+            train_tracker, output_dict = update_policy(
+                train_tracker,
+                policy,
+                batch,
+                optimizer,
+                cfg.optimizer.grad_clip_norm,
+                accelerator=accelerator,
+                lr_scheduler=lr_scheduler,
+                rabc_weights_provider=rabc_weights,
+            )
+        except Exception as exc:
+            if cfg.dataset.skip_bad_frames and BadBatchError is not None and isinstance(exc, BadBatchError):
+                logging.error("[bad-batch-skip] %s", exc)
+                continue
+            raise
 
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.

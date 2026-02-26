@@ -568,6 +568,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         video_backend: str | None = None,
         batch_encoding_size: int = 1,
         vcodec: str = "libsvtav1",
+        skip_bad_frames: bool = False,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -699,6 +700,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.batch_encoding_size = batch_encoding_size
         self.episodes_since_last_encoding = 0
         self.vcodec = vcodec
+        self.skip_bad_frames = skip_bad_frames
 
         # Unused attributes
         self.image_writer = None
@@ -1083,7 +1085,12 @@ class LeRobotDataset(torch.utils.data.Dataset):
         if len(self.meta.video_keys) > 0:
             current_ts = item["timestamp"].item()
             query_timestamps = self._get_query_timestamps(current_ts, query_indices)
-            video_frames = self._query_videos(query_timestamps, ep_idx)
+            try:
+                video_frames = self._query_videos(query_timestamps, ep_idx)
+            except Exception:
+                if self.skip_bad_frames:
+                    return None
+                raise
             item = {**video_frames, **item}
 
         if self.image_transforms is not None:

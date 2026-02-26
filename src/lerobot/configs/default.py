@@ -35,6 +35,8 @@ class DatasetConfig:
     use_imagenet_stats: bool = True
     video_backend: str = field(default_factory=get_safe_default_codec)
     streaming: bool = False
+    # If True, skip samples that fail video decoding instead of crashing training.
+    skip_bad_frames: bool = True
 
 
 @dataclass
