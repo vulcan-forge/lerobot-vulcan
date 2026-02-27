@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 class SourcceyFollowerCalibrator:
     """Handles calibration operations for Sourccey robots."""
 
+    GRIPPER_RANGE_EXTENSION = 25
+
     def __init__(self, robot):
         self.robot = robot
 
@@ -128,6 +130,11 @@ class SourcceyFollowerCalibrator:
 
             range_min = range_mins[motor]
             range_max = range_maxes[motor]
+            if motor == "gripper":
+                if self.robot.config.orientation == "right":
+                    range_max += self.GRIPPER_RANGE_EXTENSION
+                else:
+                    range_min -= self.GRIPPER_RANGE_EXTENSION
             calibration[motor] = MotorCalibration(
                 id=m.id,
                 drive_mode=drive_mode,
