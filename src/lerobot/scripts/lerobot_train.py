@@ -22,6 +22,7 @@ from pprint import pformat
 from typing import Any
 
 import torch
+import torch.distributed as dist
 from accelerate import Accelerator
 from termcolor import colored
 from torch.optim import Optimizer
@@ -59,6 +60,47 @@ except Exception:
     BadBatchError = None
 
 
+def _is_dist_ready(accelerator: Accelerator) -> bool:
+    return accelerator.num_processes > 1 and dist.is_available() and dist.is_initialized()
+
+
+def _distributed_any(local_flag: bool, accelerator: Accelerator, device: torch.device) -> bool:
+    if not _is_dist_ready(accelerator):
+        return local_flag
+    flag = torch.tensor(int(local_flag), device=device, dtype=torch.int32)
+    dist.all_reduce(flag, op=dist.ReduceOp.MAX)
+    return bool(flag.item())
+
+
+def _distributed_min_max_int(local_value: int, accelerator: Accelerator, device: torch.device) -> tuple[int, int]:
+    if not _is_dist_ready(accelerator):
+        value = int(local_value)
+        return value, value
+    min_tensor = torch.tensor(int(local_value), device=device, dtype=torch.int32)
+    max_tensor = min_tensor.clone()
+    dist.all_reduce(min_tensor, op=dist.ReduceOp.MIN)
+    dist.all_reduce(max_tensor, op=dist.ReduceOp.MAX)
+    return int(min_tensor.item()), int(max_tensor.item())
+
+
+def _infer_batch_size(batch: Any) -> int:
+    if batch is None:
+        return 0
+    if isinstance(batch, torch.Tensor):
+        return int(batch.shape[0]) if batch.ndim > 0 else 1
+    if isinstance(batch, dict):
+        for value in batch.values():
+            if isinstance(value, torch.Tensor):
+                return int(value.shape[0]) if value.ndim > 0 else 1
+            if isinstance(value, (list, tuple)):
+                return len(value)
+        return 0
+    try:
+        return len(batch)
+    except TypeError:
+        return 0
+
+
 def update_policy(
     train_metrics: MetricsTracker,
     policy: PreTrainedPolicy,
@@ -69,7 +111,8 @@ def update_policy(
     lr_scheduler=None,
     lock=None,
     rabc_weights_provider=None,
-) -> tuple[MetricsTracker, dict]:
+    skip_bad_batches: bool = False,
+) -> tuple[MetricsTracker, dict, bool]:
     """
     Performs a single training step to update the policy's weights.
 
@@ -91,6 +134,7 @@ def update_policy(
         A tuple containing:
         - The updated MetricsTracker with new statistics for this step.
         - A dictionary of outputs from the policy's forward pass, for logging purposes.
+        - A boolean indicating whether this update should be skipped.
     """
     start_time = time.perf_counter()
     policy.train()
@@ -101,25 +145,40 @@ def update_policy(
     if rabc_weights_provider is not None:
         rabc_batch_weights, rabc_batch_stats = rabc_weights_provider.compute_batch_weights(batch)
 
+    bad_batch_error = None
     # Let accelerator handle mixed precision
     with accelerator.autocast():
-        # Use per-sample loss when RA-BC is enabled for proper weighting
-        if rabc_batch_weights is not None:
-            # Get per-sample losses
-            per_sample_loss, output_dict = policy.forward(batch, reduction="none")
+        try:
+            # Use per-sample loss when RA-BC is enabled for proper weighting
+            if rabc_batch_weights is not None:
+                # Get per-sample losses
+                per_sample_loss, output_dict = policy.forward(batch, reduction="none")
 
-            # Apply RA-BC weights: L_RA-BC = Σ(w_i * l_i) / (Σw_i + ε)
-            # rabc_batch_weights is already normalized to sum to batch_size
-            epsilon = 1e-6
-            loss = (per_sample_loss * rabc_batch_weights).sum() / (rabc_batch_weights.sum() + epsilon)
-            # Log raw mean weight (before normalization) - this is the meaningful metric
-            output_dict["rabc_mean_weight"] = rabc_batch_stats["raw_mean_weight"]
-            output_dict["rabc_num_zero_weight"] = rabc_batch_stats["num_zero_weight"]
-            output_dict["rabc_num_full_weight"] = rabc_batch_stats["num_full_weight"]
-        else:
-            loss, output_dict = policy.forward(batch)
+                # Apply RA-BC weights: L_RA-BC = Σ(w_i * l_i) / (Σw_i + ε)
+                # rabc_batch_weights is already normalized to sum to batch_size
+                epsilon = 1e-6
+                loss = (per_sample_loss * rabc_batch_weights).sum() / (rabc_batch_weights.sum() + epsilon)
+                # Log raw mean weight (before normalization) - this is the meaningful metric
+                output_dict["rabc_mean_weight"] = rabc_batch_stats["raw_mean_weight"]
+                output_dict["rabc_num_zero_weight"] = rabc_batch_stats["num_zero_weight"]
+                output_dict["rabc_num_full_weight"] = rabc_batch_stats["num_full_weight"]
+            else:
+                loss, output_dict = policy.forward(batch)
+        except Exception as exc:
+            if skip_bad_batches and BadBatchError is not None and isinstance(exc, BadBatchError):
+                bad_batch_error = exc
+            else:
+                raise
 
-        # TODO(rcadene): policy.unnormalize_outputs(out_dict)
+    should_skip_update = bad_batch_error is not None
+    if skip_bad_batches:
+        should_skip_update = _distributed_any(should_skip_update, accelerator=accelerator, device=accelerator.device)
+    if should_skip_update:
+        if bad_batch_error is not None:
+            logging.error("[bad-batch-skip] %s", bad_batch_error)
+        return train_metrics, {}, True
+
+    # TODO(rcadene): policy.unnormalize_outputs(out_dict)
 
     # Use accelerator's backward method
     accelerator.backward(loss)
@@ -150,7 +209,7 @@ def update_policy(
     train_metrics.grad_norm = grad_norm.item()
     train_metrics.lr = optimizer.param_groups[0]["lr"]
     train_metrics.update_s = time.perf_counter() - start_time
-    return train_metrics, output_dict
+    return train_metrics, output_dict, False
 
 
 @parser.wrap()
@@ -368,8 +427,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         sampler = None
 
     def _collate_skip_none(batch):
-        batch = [b for b in batch if b is not None]
-        if len(batch) == 0:
+        # Keep local batch size stable: if any sample failed decode, skip the whole local batch.
+        if any(b is None for b in batch):
             return None
         return torch.utils.data._utils.collate.default_collate(batch)
 
@@ -418,34 +477,65 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             f"Start offline training on a fixed dataset, with effective batch size: {effective_batch_size}"
         )
 
-    for _ in range(step, cfg.steps):
+    remaining_updates = max(0, cfg.steps - step)
+    max_skipped_batches = max(1000, remaining_updates)
+    skipped_batches = 0
+
+    while step < cfg.steps:
+        if skipped_batches > max_skipped_batches:
+            raise RuntimeError(
+                "Too many skipped batches while training. "
+                f"Skipped {skipped_batches} batches to complete {step}/{cfg.steps} updates. "
+                "This usually means there are too many bad samples or a data consistency issue."
+            )
+
         start_time = time.perf_counter()
         batch = next(dl_iter)
-        if batch is None:
+        if cfg.dataset.skip_bad_frames:
+            local_batch_size = _infer_batch_size(batch)
+            local_batch_invalid = batch is None or local_batch_size == 0
+            any_batch_invalid = _distributed_any(local_batch_invalid, accelerator=accelerator, device=device)
+            min_bs, max_bs = _distributed_min_max_int(local_batch_size, accelerator=accelerator, device=device)
+            inconsistent_bs = min_bs != max_bs
+            if any_batch_invalid or inconsistent_bs:
+                skipped_batches += 1
+                if is_main_process:
+                    if any_batch_invalid:
+                        logging.warning(
+                            "[bad-frame-skip] Skipping batch because at least one rank has no valid samples."
+                        )
+                    else:
+                        logging.warning(
+                            "[bad-frame-skip] Skipping batch due per-rank batch-size mismatch (min=%s, max=%s).",
+                            min_bs,
+                            max_bs,
+                        )
+                continue
+        elif batch is None:
             continue
+
         batch = preprocessor(batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
 
-        try:
-            train_tracker, output_dict = update_policy(
-                train_tracker,
-                policy,
-                batch,
-                optimizer,
-                cfg.optimizer.grad_clip_norm,
-                accelerator=accelerator,
-                lr_scheduler=lr_scheduler,
-                rabc_weights_provider=rabc_weights,
-            )
-        except Exception as exc:
-            if cfg.dataset.skip_bad_frames and BadBatchError is not None and isinstance(exc, BadBatchError):
-                logging.error("[bad-batch-skip] %s", exc)
-                continue
-            raise
+        train_tracker, output_dict, skipped_update = update_policy(
+            train_tracker,
+            policy,
+            batch,
+            optimizer,
+            cfg.optimizer.grad_clip_norm,
+            accelerator=accelerator,
+            lr_scheduler=lr_scheduler,
+            rabc_weights_provider=rabc_weights,
+            skip_bad_batches=cfg.dataset.skip_bad_frames,
+        )
+        if skipped_update:
+            skipped_batches += 1
+            continue
 
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.
         step += 1
+        skipped_batches = 0
         train_tracker.step()
         is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0 and is_main_process
         is_saving_step = step % cfg.save_freq == 0 or step == cfg.steps
