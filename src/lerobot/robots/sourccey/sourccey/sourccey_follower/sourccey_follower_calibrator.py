@@ -51,14 +51,8 @@ class SourcceyFollowerCalibrator:
     def manual_calibrate(self) -> Dict[str, MotorCalibration]:
         """Perform manual calibration with user interaction."""
         if self.robot.calibration:
-            # Calibration file exists, ask user whether to use it or run new calibration
-            user_input = input(
-                f"Press ENTER to use provided calibration file associated with the id {self.robot.id}, or type 'c' and press ENTER to run calibration: "
-            )
-            if user_input.strip().lower() != "c":
-                logger.info(f"Writing calibration file associated with the id {self.robot.id} to the motors")
-                self.robot.bus.write_calibration(self.robot.calibration)
-                return self.robot.calibration
+            self.robot.bus.write_calibration(self.robot.calibration)
+            return self.robot.calibration
 
         logger.info(f"\nRunning calibration of robot {self.robot.id}")
         self.robot.bus.disable_torque()

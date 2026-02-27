@@ -123,7 +123,7 @@ sourccey = [
     "grpcio-tools==1.73.1",
 
     # Audio
-    "vosk>=0.3.45",
+    "vosk>=0.3.45 ; sys_platform != 'darwin' and sys_platform != 'win32'",
     "sounddevice>=0.4.6",
     "faster-whisper>=1.1.1",
 ]
@@ -225,6 +225,7 @@ lerobot-replay="lerobot.scripts.lerobot_replay:main"
 lerobot-setup-motors="lerobot.scripts.lerobot_setup_motors:main"
 lerobot-teleoperate="lerobot.scripts.lerobot_teleoperate:main"
 lerobot-eval="lerobot.scripts.lerobot_eval:main"
+lerobot-inference="lerobot.scripts.lerobot_inference:main"
 lerobot-train="lerobot.scripts.lerobot_train:main"
 lerobot-train-tokenizer="lerobot.scripts.lerobot_train_tokenizer:main"
 lerobot-dataset-viz="lerobot.scripts.lerobot_dataset_viz:main"

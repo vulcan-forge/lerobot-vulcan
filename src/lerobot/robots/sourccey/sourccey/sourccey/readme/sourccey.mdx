@@ -21,9 +21,9 @@ Before using the Sourccey robot, you need to set up the development environment.
 
 ### Prerequisites
 
--   Python 3.10 or higher
--   [uv](https://docs.astral.sh/uv/getting-started/installation/) (Python package manager)
--   Git
+- Python 3.10 or higher
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) (Python package manager)
+- Git
 
 ### Installing uv
 
@@ -84,15 +84,14 @@ python src/lerobot/scripts/lerobot_find_port.py
 Then Calibrate the bi-manual teleoperator (leader arms):
 
 ```
-python src/lerobot/scripts/sourccey/auto_calibrate.py \
+python src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
  --teleop.type=bi_sourccey_leader \
  --teleop.id=bisd_sourccey_leader \
  --teleop.left_arm_port="/dev/ttyACM1" \
  --teleop.right_arm_port="/dev/ttyACM0"
 ```
 
-python src/lerobot/control/sourccey/sourccey/teleoperate.py  --id="sourccey"  --remote_ip="192.168.1.211"  --left_arm_port="/dev/ttyACM1"  --right_arm_port="/dev/ttyACM0"  --keyboard_port="keyboard"  --fps=30  --reverse=True
-
+python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --remote_ip="192.168.1.211" --left_arm_port="/dev/ttyACM1" --right_arm_port="/dev/ttyACM0" --keyboard_port="keyboard" --fps=30 --reverse=True
 
 For single-arm teleoperator:
 
@@ -148,12 +147,16 @@ source .venv/Scripts/activate
 ```
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.214" \
+ --remote_ip="192.168.1.212" \
  --left_arm_port="/dev/ttyACM1" \
  --right_arm_port="/dev/ttyACM0" \
  --keyboard_port="keyboard" \
  --fps=30 \
  --reverse=True
+```
+
+```
+python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --remote_ip="192.168.1.212" --left_arm_port="/dev/ttyACM1" --right_arm_port="/dev/ttyACM0" --keyboard_port="keyboard" --fps=30 --reverse=True
 ```
 
 Add this if the wheel motors are reversed
@@ -164,10 +167,10 @@ Add this if the wheel motors are reversed
 
 **Parameters:**
 
--   `--remote_ip`: IP address of the Raspberry Pi running the host
--   `--left_arm_port`: Serial port for left teleoperator arm (Windows: `COM3`, Linux: `/dev/ttyUSB0`)
--   `--right_arm_port`: Serial port for right teleoperator arm
--   `--fps`: Control loop frequency (default: 30)
+- `--remote_ip`: IP address of the Raspberry Pi running the host
+- `--left_arm_port`: Serial port for left teleoperator arm (Windows: `COM3`, Linux: `/dev/ttyUSB0`)
+- `--right_arm_port`: Serial port for right teleoperator arm
+- `--fps`: Control loop frequency (default: 30)
 
 ## Recording Data
 
@@ -191,11 +194,11 @@ python src/lerobot/control/sourccey/sourccey/record.py \
 
 **Key Parameters:**
 
--   `--dataset.repo_id`: Dataset identifier (use `local/` prefix for local storage)
--   `--dataset.num_episodes`: Number of episodes to record
--   `--dataset.episode_time_s`: Duration of each episode in seconds
--   `--dataset.reset_time_s`: Time between episodes for reset
--   `--dataset.task`: Task description for the dataset
+- `--dataset.repo_id`: Dataset identifier (use `local/` prefix for local storage)
+- `--dataset.num_episodes`: Number of episodes to record
+- `--dataset.episode_time_s`: Duration of each episode in seconds
+- `--dataset.reset_time_s`: Time between episodes for reset
+- `--dataset.task`: Task description for the dataset
 
 ---
 
@@ -257,15 +260,29 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --batch_size=4
 ```
 
+## Inference
+
+Evaluate a trained model on the robot without saving the run's recording:
+
+```
+uv run python src/lerobot/control/sourccey/sourccey/inference.py \
+ --id="sourccey" \
+ --remote_ip="192.168.1.211" \
+ --model_path="xvla__sourccey-012__shorts-fold__cmb__005__mylesr/checkpoints/100000/pretrained_model" \
+ --single_task="Fold the shorts" \
+ --fps=30 \
+ --episode_time_s=60
+```
+
 ## Evaluation
 
 Evaluate a trained model on the robot:
 
 ```
-python src/lerobot/control/sourccey/sourccey/evaluate.py \
+uv run src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.214" \
- --model_path="outputs/train/xvla__sourccey-009-012__shorts-fold__cmb__000__mylesr/checkpoints/100000/pretrained_model" \
+ --remote_ip="192.168.1.211" \
+ --model_path="outputs/train/xvla__sourccey-012__shorts-fold__cmb__005__mylesr/checkpoints/100000/pretrained_model" \
  --dataset.repo_id="sourccey-012/eval_sourccey-009-012__shorts-fold__cmb000__mylesr" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=60 \
@@ -307,7 +324,7 @@ Combine multiple datasets into one:
 
 ```
 
-python src/lerobot/scripts/sourccey/combine_datasets.py \
+python src/lerobot/scripts/sourccey/dataset/combine_datasets.py \
  --dataset_paths='[
 "sourccey-012/sourccey-012__shorts-fold-b__set000__mylesr",
 "sourccey-012/sourccey-012__shorts-fold-b__set001__mylesr",
@@ -445,20 +462,20 @@ python src/lerobot/scripts/sourccey/combine_datasets.py \
 
 ### Port Issues
 
--   Use `python -m lerobot.find_port` to find available serial ports
--   Ensure udev rules are set up correctly on Linux
--   Check port permissions: `ls -l /dev/ttyUSB*` or `ls -l /dev/ttyACM*`
+- Use `python -m lerobot.find_port` to find available serial ports
+- Ensure udev rules are set up correctly on Linux
+- Check port permissions: `ls -l /dev/ttyUSB*` or `ls -l /dev/ttyACM*`
 
 ### Connection Issues
 
--   Verify the Raspberry Pi IP address with `ip addr` or `ifconfig`
--   Ensure both devices are on the same network
--   Check firewall settings if connection fails
+- Verify the Raspberry Pi IP address with `ip addr` or `ifconfig`
+- Ensure both devices are on the same network
+- Check firewall settings if connection fails
 
 ### Calibration Issues
 
--   If calibration fails, try a hard reset with `--full_reset=True`
--   Manually edit calibration files if needed (see [Viewing/Editing Calibration Files](#viewingediting-calibration-files))
+- If calibration fails, try a hard reset with `--full_reset=True`
+- Manually edit calibration files if needed (see [Viewing/Editing Calibration Files](#viewingediting-calibration-files))
 
 ```
 

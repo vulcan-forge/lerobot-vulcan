@@ -18,7 +18,8 @@ def check_dependencies() -> bool:
         return True
     except ImportError:
         print("Error: grpc_tools not found. Please install it with:")
-        print("pip install grpcio-tools")
+        print("uv pip install grpcio-tools")
+        print("or: pip install grpcio-tools")
         return False
 
 def get_proto_files() -> List[str]:

@@ -14,6 +14,7 @@
 
 import abc
 import builtins
+import logging
 from pathlib import Path
 
 import draccus
@@ -23,6 +24,8 @@ from lerobot.processor import RobotAction, RobotObservation
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 
 from .config import RobotConfig
+
+logger = logging.getLogger(__name__)
 
 
 # TODO(aliberts): action/obs typing such as Generic[ObsType, ActType] similar to gym.Env ?
@@ -130,8 +133,13 @@ class Robot(abc.ABC):
             fpath (Path | None): Optional path to the calibration file. Defaults to `self.calibration_fpath`.
         """
         fpath = self.calibration_fpath if fpath is None else fpath
-        with open(fpath) as f, draccus.config_type("json"):
-            self.calibration = draccus.load(dict[str, MotorCalibration], f)
+        try:
+            with open(fpath) as f, draccus.config_type("json"):
+                self.calibration = draccus.load(dict[str, MotorCalibration], f)
+        except Exception as e:
+            # Treat malformed/empty calibration as "not calibrated" so callers can recalibrate.
+            logger.warning(f"Failed to load calibration file at {fpath}: {e}. Starting with empty calibration.")
+            self.calibration = {}
 
     def _save_calibration(self, fpath: Path | None = None) -> None:
         """
