@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 class SourcceyFollowerCalibrator:
     """Handles calibration operations for Sourccey robots."""
 
+    GRIPPER_RANGE_MAX_EXTENSION = 10
+
     def __init__(self, robot):
         self.robot = robot
 
@@ -105,7 +107,7 @@ class SourcceyFollowerCalibrator:
         # Step 2: Detect actual mechanical limits using current monitoring
         # Note: Torque will be enabled during limit detection
         logger.info("Detecting mechanical limits using current monitoring...")
-        detected_ranges = self._detect_mechanical_limits(reverse)
+        detected_ranges = self._detect_mecanical_limits(reverse)
 
         # Step 3: Disable torque for safety before setting homing offsets
         logger.info("Disabling torque for safety...")
@@ -128,6 +130,8 @@ class SourcceyFollowerCalibrator:
 
             range_min = range_mins[motor]
             range_max = range_maxes[motor]
+            if motor == "gripper":
+                range_max += self.GRIPPER_RANGE_MAX_EXTENSION
             calibration[motor] = MotorCalibration(
                 id=m.id,
                 drive_mode=drive_mode,
