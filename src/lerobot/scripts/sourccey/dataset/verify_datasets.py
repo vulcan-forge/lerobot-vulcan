@@ -248,6 +248,7 @@ def _verify_one_file(
     fps: int,
     backend: str,
     decode_batch_size: int = 1,
+    strict_invalid_packet: bool = False,
 ) -> list[FrameError]:
     """Decode sample frames at the given timestamps. Return list of errors (one per failed frame)."""
     errors: list[FrameError] = []
@@ -319,6 +320,18 @@ def _verify_one_file(
                 )
                 continue
             if _is_invalid_packet_error(msg):
+                if strict_invalid_packet:
+                    errors.append(
+                        FrameError(
+                            dataset_name=dataset_name,
+                            file_name=file_name,
+                            video_key=video_key,
+                            timestamp_s=first_ts,
+                            frame_index=frame_index,
+                            message=msg,
+                        )
+                    )
+                    break
                 # Decoder rejected a packet; often a decoder quirk, not real corruption.
                 logging.debug(
                     "Skipping chunk at ts=%.2f (invalid packet): %s",
@@ -359,6 +372,7 @@ def _verify_one_file_worker(
         fps,
         backend,
         decode_batch_size,
+        strict_invalid_packet,
     ) = args
     file_name = Path(file_path).name if isinstance(file_path, str) else Path(file_path).name
     logging.info("[%s] Analyzing video: %s (%s)", _worker_label(), file_name, video_key)
@@ -371,6 +385,7 @@ def _verify_one_file_worker(
         fps=fps,
         backend=backend,
         decode_batch_size=decode_batch_size,
+        strict_invalid_packet=strict_invalid_packet,
     )
 
 
@@ -384,6 +399,7 @@ def verify_datasets(
     decode_batch_size: int = 1,
     workers: int = 1,
     stop_on_first_error: bool = True,
+    strict_invalid_packet: bool = False,
 ) -> list[FrameError]:
     """
     Verify video frames for LeRobot datasets under the HuggingFace LeRobot cache.
@@ -476,6 +492,7 @@ def verify_datasets(
                 fps,
                 backend,
                 decode_batch_size,
+                strict_invalid_packet,
             )
             for video_key, file_path, timestamps in files_with_ts
         ]
@@ -499,6 +516,7 @@ def verify_datasets(
                     fps=task[5],
                     backend=task[6],
                     decode_batch_size=task[7],
+                    strict_invalid_packet=task[8],
                 )
                 all_errors.extend(errs)
                 if errs and stop_on_first_error:
@@ -592,6 +610,11 @@ def main() -> None:
         help="Decode this many timestamps per call (default: 1). Larger values are faster but report approximate error location.",
     )
     parser.add_argument(
+        "--strict_invalid_packet",
+        action="store_true",
+        help="Treat decoder 'invalid packet' errors as corruption (do not skip).",
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -631,6 +654,7 @@ def main() -> None:
         decode_batch_size=args.decode_batch_size,
         workers=args.workers,
         stop_on_first_error=not args.no_stop_on_first_error,
+        strict_invalid_packet=args.strict_invalid_packet,
     )
 
     for err in errors:

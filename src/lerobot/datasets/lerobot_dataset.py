@@ -16,6 +16,7 @@
 import concurrent.futures
 import contextlib
 import logging
+import os
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -567,6 +568,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         video_backend: str | None = None,
         batch_encoding_size: int = 1,
         vcodec: str = "libsvtav1",
+        skip_bad_frames: bool = False,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -698,6 +700,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.batch_encoding_size = batch_encoding_size
         self.episodes_since_last_encoding = 0
         self.vcodec = vcodec
+        self.skip_bad_frames = skip_bad_frames
 
         # Unused attributes
         self.image_writer = None
@@ -1027,7 +1030,25 @@ class LeRobotDataset(torch.utils.data.Dataset):
             shifted_query_ts = [from_timestamp + ts for ts in query_ts]
 
             video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)
-            frames = decode_video_frames(video_path, shifted_query_ts, self.tolerance_s, self.video_backend)
+            try:
+                frames = decode_video_frames(video_path, shifted_query_ts, self.tolerance_s, self.video_backend)
+            except Exception:
+                logging.exception(
+                    "[video-decode-failed] pid=%s ep_idx=%s vid_key=%s video_path=%s "
+                    "from_ts=%.6f tol=%.6f backend=%s query_len=%s "
+                    "query_ts=%s shifted_ts=%s",
+                    os.getpid(),
+                    ep_idx,
+                    vid_key,
+                    video_path,
+                    float(from_timestamp),
+                    float(self.tolerance_s),
+                    self.video_backend,
+                    len(query_ts),
+                    query_ts,
+                    shifted_query_ts,
+                )
+                raise
             item[vid_key] = frames.squeeze(0)
 
         return item
@@ -1064,7 +1085,12 @@ class LeRobotDataset(torch.utils.data.Dataset):
         if len(self.meta.video_keys) > 0:
             current_ts = item["timestamp"].item()
             query_timestamps = self._get_query_timestamps(current_ts, query_indices)
-            video_frames = self._query_videos(query_timestamps, ep_idx)
+            try:
+                video_frames = self._query_videos(query_timestamps, ep_idx)
+            except Exception:
+                if self.skip_bad_frames:
+                    return None
+                raise
             item = {**video_frames, **item}
 
         if self.image_transforms is not None:

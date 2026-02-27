@@ -13,7 +13,10 @@ from lerobot.utils.utils import init_logging
 
 def combine_datasets(
     dataset_paths: List[str],
-    output_path: str
+    output_path: str,
+    validate_videos: bool = True,
+    video_validation_retries: int = 2,
+    video_validation_full_chunk_size: int = 800,
 ) -> None:
     """
     Combine multiple LeRobot datasets into a single dataset using the aggregate function.
@@ -26,7 +29,10 @@ def combine_datasets(
 
     aggregate_datasets(
         repo_ids=dataset_paths,
-        aggr_repo_id=output_path
+        aggr_repo_id=output_path,
+        validate_videos=validate_videos,
+        video_validation_retries=video_validation_retries,
+        video_validation_full_chunk_size=video_validation_full_chunk_size,
     )
 
     logging.info(f"Successfully combined datasets into {output_path}")
@@ -46,6 +52,27 @@ def main():
         required=True,
         help="Output path/repo ID for the combined dataset (e.g., `repo_id/combined_dataset`).",
     )
+    parser.add_argument(
+        "--validate_videos",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Validate each finalized output video file using full decode checks. "
+            "If validation fails, the file is rebuilt and retried."
+        ),
+    )
+    parser.add_argument(
+        "--video_validation_retries",
+        type=int,
+        default=2,
+        help="How many rebuild attempts to make for a failed output video file.",
+    )
+    parser.add_argument(
+        "--video_validation_full_chunk_size",
+        type=int,
+        default=800,
+        help="Frame batch size used by the full decode validator.",
+    )
 
     args = parser.parse_args()
 
@@ -57,7 +84,10 @@ def main():
     # Run the combination using aggregate_datasets
     combine_datasets(
         dataset_paths=dataset_paths,
-        output_path=args.output_path
+        output_path=args.output_path,
+        validate_videos=args.validate_videos,
+        video_validation_retries=args.video_validation_retries,
+        video_validation_full_chunk_size=args.video_validation_full_chunk_size,
     )
 
     logging.info(f"Successfully combined datasets into {args.output_path}")

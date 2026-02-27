@@ -40,6 +40,10 @@ from .modeling_florence2 import Florence2ForConditionalGeneration
 from .soft_transformer import SoftPromptedTransformer
 
 
+class BadBatchError(RuntimeError):
+    """Raised when batch shapes/masks are invalid and should be skipped."""
+
+
 class XVLAModel(nn.Module):
     """
     XVLA backbone that stitches Florence-2 embeddings with the temporal/action transformer head.
@@ -163,15 +167,35 @@ class XVLAModel(nn.Module):
         """
         Encode text and multi-view images via Florence2 encoder.
         """
+        if pixel_values.ndim < 4 or image_mask.ndim < 2:
+            raise BadBatchError(
+                f"Invalid shapes: pixel_values={tuple(pixel_values.shape)} "
+                f"image_mask={tuple(image_mask.shape)}"
+            )
+        if image_mask.shape[:2] != pixel_values.shape[:2]:
+            raise BadBatchError(
+                "image_mask and pixel_values batch/view dims mismatch: "
+                f"mask={tuple(image_mask.shape[:2])} values={tuple(pixel_values.shape[:2])}"
+            )
         batch_size, num_views = pixel_values.shape[:2]
         flat_mask = image_mask.view(-1).to(dtype=torch.bool)
         flat_images = pixel_values.flatten(0, 1)
+        if flat_mask.numel() != flat_images.shape[0]:
+            raise BadBatchError(
+                "flattened mask/images mismatch: "
+                f"mask={flat_mask.numel()} images={flat_images.shape[0]}"
+            )
         num_valid = int(flat_mask.sum().item())
         if num_valid == 0:
-            raise ValueError("At least one image view must be valid per batch.")
+            raise BadBatchError("At least one image view must be valid per batch.")
 
         valid_images = flat_images[flat_mask]
         valid_feats = self.vlm._encode_image(valid_images)
+        if valid_feats.shape[0] != num_valid:
+            raise BadBatchError(
+                "valid_feats count mismatch: "
+                f"expected={num_valid} got={valid_feats.shape[0]}"
+            )
         tokens_per_view, hidden_dim = valid_feats.shape[1:]
 
         image_features = valid_feats.new_zeros((batch_size * num_views, tokens_per_view, hidden_dim))

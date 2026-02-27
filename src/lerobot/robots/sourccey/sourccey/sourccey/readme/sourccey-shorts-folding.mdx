@@ -87,8 +87,8 @@ Then Calibrate the bi-manual teleoperator (leader arms):
 python src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
  --teleop.type=bi_sourccey_leader \
  --teleop.id=bisd_sourccey_leader \
- --teleop.left_arm_port="/dev/ttyACM1" \
- --teleop.right_arm_port="/dev/ttyACM0"
+ --teleop.left_arm_port="/dev/ttyACM0" \
+ --teleop.right_arm_port="/dev/ttyACM1"
 ```
 
 python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --remote_ip="192.168.1.211" --left_arm_port="/dev/ttyACM1" --right_arm_port="/dev/ttyACM0" --keyboard_port="keyboard" --fps=30 --reverse=True
@@ -148,8 +148,8 @@ source .venv/Scripts/activate
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.214" \
- --left_arm_port="/dev/ttyACM1" \
- --right_arm_port="/dev/ttyACM0" \
+ --left_arm_port="/dev/ttyACM0" \
+ --right_arm_port="/dev/ttyACM1" \
  --keyboard_port="keyboard" \
  --fps=30 \
  --reverse=True
@@ -176,10 +176,10 @@ Record demonstration data for training:
 python src/lerobot/control/sourccey/sourccey/record.py \
  --id="sourccey" \
  --remote_ip="192.168.1.214" \
- --left_arm_port="/dev/ttyACM1" \
- --right_arm_port="/dev/ttyACM0" \
+ --left_arm_port="/dev/ttyACM0" \
+ --right_arm_port="/dev/ttyACM1" \
  --reverse=True \
- --dataset.repo_id="sourccey-012/sourccey-012__shorts-fold-c__set019__mylesr" \
+ --dataset.repo_id="sourccey-012/sourccey-012__shorts-fold-e__set019__mylesr" \
  --dataset.num_episodes=5 \
  --dataset.episode_time_s=200 \
  --dataset.reset_time_s=5 \
@@ -342,8 +342,8 @@ Evaluate a trained model on the robot:
 python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.214" \
- --model_path="outputs/train/xvla__sourccey-009-012__shorts-fold__cmb__000__mylesr/checkpoints/100000/pretrained_model" \
- --dataset.repo_id="sourccey-012/eval_sourccey-009-012__shorts-fold__cmb000__mylesr" \
+ --model_path="outputs/train/xvla__sourccey-009-012__shorts-fold__cmb__003__mylesr/checkpoints/300000/pretrained_model" \
+ --dataset.repo_id="sourccey-012/eval_sourccey-009-012__shorts-fold__cmb__003__mylesr" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=60 \
  --dataset.reset_time_s=5 \

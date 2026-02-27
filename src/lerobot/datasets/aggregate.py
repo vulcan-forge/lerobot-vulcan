@@ -17,6 +17,8 @@
 
 import logging
 import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -40,6 +42,120 @@ from lerobot.datasets.utils import (
     write_tasks,
 )
 from lerobot.datasets.video_utils import concatenate_video_files, get_video_duration_in_s
+
+
+def _verify_video_file_ffmpeg(video_path: Path) -> tuple[bool, str | None]:
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None:
+        return False, "ffmpeg not found in PATH"
+
+    cmd = [
+        ffmpeg_path,
+        "-v",
+        "error",
+        "-xerror",
+        "-i",
+        str(video_path),
+        "-map",
+        "0:v:0",
+        "-f",
+        "null",
+        "-",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        return True, None
+
+    err = (result.stderr or result.stdout or "").strip()
+    return False, err or f"ffmpeg exited with return code {result.returncode}"
+
+
+def _verify_video_file_torchcodec(video_path: Path, full_chunk_size: int) -> tuple[bool, str | None]:
+    try:
+        from torchcodec.decoders import VideoDecoder
+    except Exception as e:
+        return False, f"torchcodec import failed: {e}"
+
+    try:
+        decoder = VideoDecoder(str(video_path), seek_mode="approximate")
+        num_frames = int(decoder.metadata.num_frames or 0)
+        if num_frames <= 0:
+            return False, f"invalid_num_frames={num_frames}"
+
+        for start in range(0, num_frames, full_chunk_size):
+            end = min(num_frames, start + full_chunk_size)
+            decoder.get_frames_at(indices=list(range(start, end)))
+
+        return True, None
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
+def _verify_video_file(video_path: Path, full_chunk_size: int) -> tuple[bool, str | None]:
+    ok, err = _verify_video_file_torchcodec(video_path, full_chunk_size)
+    if ok:
+        return True, None
+
+    # Fallback to ffmpeg if torchcodec check couldn't run in this environment.
+    if err is not None and err.startswith("torchcodec import failed"):
+        return _verify_video_file_ffmpeg(video_path)
+
+    return False, err
+
+
+def _rebuild_video_file_from_sources(source_paths: list[Path], dst_path: Path):
+    if not source_paths:
+        raise RuntimeError(f"No source paths available to rebuild {dst_path}")
+
+    with tempfile.NamedTemporaryFile(
+        suffix=dst_path.suffix or ".mp4",
+        prefix=f"{dst_path.stem}.rebuild.",
+        dir=dst_path.parent,
+        delete=False,
+    ) as tmp_file:
+        tmp_path = Path(tmp_file.name)
+
+    try:
+        shutil.copy(str(source_paths[0]), str(tmp_path))
+        for src in source_paths[1:]:
+            concatenate_video_files([tmp_path, src], tmp_path)
+
+        shutil.move(str(tmp_path), str(dst_path))
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+def _validate_or_retry_video_file(
+    dst_path: Path,
+    source_paths: list[Path],
+    retries: int,
+    verify_full_chunk_size: int,
+):
+    ok, err = _verify_video_file(dst_path, verify_full_chunk_size)
+    if ok:
+        return
+
+    logging.error(
+        f"Video validation failed: {dst_path} ({err}). "
+        f"Will rebuild from {len(source_paths)} source part(s), retries={retries}."
+    )
+
+    for attempt in range(1, retries + 1):
+        if dst_path.exists():
+            dst_path.unlink()
+
+        _rebuild_video_file_from_sources(source_paths, dst_path)
+        ok, err = _verify_video_file(dst_path, verify_full_chunk_size)
+        if ok:
+            logging.info(f"Video validation succeeded after rebuild attempt {attempt}: {dst_path}")
+            return
+
+        logging.warning(f"Rebuild attempt {attempt} failed for {dst_path}: {err}")
+
+    raise RuntimeError(
+        f"Video remained invalid after {retries} rebuild attempt(s): {dst_path}. Last error: {err}"
+    )
 
 
 def validate_all_metadata(all_metadata: list[LeRobotDatasetMetadata]):
@@ -168,6 +284,9 @@ def aggregate_datasets(
     data_files_size_in_mb: float | None = None,
     video_files_size_in_mb: float | None = None,
     chunk_size: int | None = None,
+    validate_videos: bool = False,
+    video_validation_retries: int = 1,
+    video_validation_full_chunk_size: int = 800,
 ):
     """Aggregates multiple LeRobot datasets into a single unified dataset.
 
@@ -224,24 +343,73 @@ def aggregate_datasets(
     meta_idx = {"chunk": 0, "file": 0}
     data_idx = {"chunk": 0, "file": 0}
     videos_idx = {
-        key: {"chunk": 0, "file": 0, "episode_duration": 0, "episode_offset": 0, "src_to_offset": {} } for key in video_keys
+        key: {
+            "chunk": 0,
+            "file": 0,
+            "episode_duration": 0,
+            "episode_offset": 0,
+            "src_to_offset": {},
+            # Full provenance map for robust rebuild retries across all source datasets.
+            "dst_sources_by_file": {},
+        }
+        for key in video_keys
     }
 
     dst_meta.episodes = {}
+    if validate_videos:
+        logging.info(
+            "Video validation is enabled "
+            f"(retries={video_validation_retries}, chunk={video_validation_full_chunk_size})."
+        )
 
     for src_meta in tqdm.tqdm(all_metadata, desc="Copy data and videos"):
-        videos_idx = aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chunk_size)
+        videos_idx = aggregate_videos(
+            src_meta,
+            dst_meta,
+            videos_idx,
+            video_files_size_in_mb,
+            chunk_size,
+            validate_videos=validate_videos,
+            video_validation_retries=video_validation_retries,
+            video_validation_full_chunk_size=video_validation_full_chunk_size,
+        )
         data_idx = aggregate_data(src_meta, dst_meta, data_idx, data_files_size_in_mb, chunk_size)
         meta_idx = aggregate_metadata(src_meta, dst_meta, meta_idx, data_idx, videos_idx)
 
         dst_meta.info["total_episodes"] += src_meta.total_episodes
         dst_meta.info["total_frames"] += src_meta.total_frames
 
+    if validate_videos:
+        logging.info("Running final validation for current open video files...")
+        for key, video_idx in videos_idx.items():
+            chunk_idx = int(video_idx["chunk"])
+            file_idx = int(video_idx["file"])
+            final_dst_path = dst_meta.root / DEFAULT_VIDEO_PATH.format(
+                video_key=key,
+                chunk_index=chunk_idx,
+                file_index=file_idx,
+            )
+            _validate_or_retry_video_file(
+                dst_path=final_dst_path,
+                source_paths=video_idx["dst_sources_by_file"].get((chunk_idx, file_idx), []),
+                retries=video_validation_retries,
+                verify_full_chunk_size=video_validation_full_chunk_size,
+            )
+
     finalize_aggregation(dst_meta, all_metadata)
     logging.info("Aggregation complete.")
 
 
-def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chunk_size):
+def aggregate_videos(
+    src_meta,
+    dst_meta,
+    videos_idx,
+    video_files_size_in_mb,
+    chunk_size,
+    validate_videos: bool = False,
+    video_validation_retries: int = 1,
+    video_validation_full_chunk_size: int = 800,
+):
     """Aggregates video chunks from a source dataset into the destination dataset.
 
     Handles video file concatenation and rotation based on file size limits.
@@ -263,6 +431,8 @@ def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chu
         videos_idx[key]["src_to_offset"] = {}
 
     for key, video_idx in videos_idx.items():
+        dst_sources_by_file: dict[tuple[int, int], list[Path]] = video_idx["dst_sources_by_file"]
+
         unique_chunk_file_pairs = {
             (chunk, file)
             for chunk, file in zip(
@@ -297,6 +467,7 @@ def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chu
                 videos_idx[key]["src_to_offset"][(src_chunk_idx, src_file_idx)] = current_offset
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(str(src_path), str(dst_path))
+                dst_sources_by_file.setdefault((chunk_idx, file_idx), []).append(src_path)
 
                 current_offset += src_duration
                 videos_idx[key]["episode_offset"] = current_offset
@@ -308,6 +479,14 @@ def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chu
             dst_size = get_file_size_in_mb(dst_path)
 
             if dst_size + src_size >= video_files_size_in_mb:
+                if validate_videos:
+                    _validate_or_retry_video_file(
+                        dst_path=dst_path,
+                        source_paths=dst_sources_by_file.get((chunk_idx, file_idx), []),
+                        retries=video_validation_retries,
+                        verify_full_chunk_size=video_validation_full_chunk_size,
+                    )
+
                 # Rotate to a new file, this source becomes start of new destination
                 # So its offset should be 0
                 videos_idx[key]["src_to_offset"][(src_chunk_idx, src_file_idx)] = 0
@@ -319,6 +498,7 @@ def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chu
                 )
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(str(src_path), str(dst_path))
+                dst_sources_by_file.setdefault((chunk_idx, file_idx), []).append(src_path)
                 # Reset offset for next file
                 current_offset = src_duration
             else:
@@ -328,6 +508,7 @@ def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chu
                     [dst_path, src_path],
                     dst_path,
                 )
+                dst_sources_by_file.setdefault((chunk_idx, file_idx), []).append(src_path)
                 current_offset += src_duration
 
             videos_idx[key]["episode_offset"] = current_offset
