@@ -180,24 +180,24 @@ class SourcceyFollower(Robot):
                 self.bus.write("P_Coefficient", motor, 12)
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 48)  # Optimal damping (64 was too high)
-                self.bus.write("Max_Torque_Limit", motor, 1200)
-                self.bus.write("Protection_Current", motor, 2500)  # Reduced to soften brownout-inducing stall spikes
-                self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
-                self.bus.write("Minimum_Startup_Force", motor, 10)
+                self.bus.write("Max_Torque_Limit", motor, 900)
+                self.bus.write("Protection_Current", motor, 1800)  # Reduced further to limit shared-battery brownouts
+                self.bus.write("Overload_Torque", motor, 15)  # Back off earlier under load
+                self.bus.write("Minimum_Startup_Force", motor, 5)
                 self.bus.write("CW_Dead_Zone", motor, 2)
                 self.bus.write("CCW_Dead_Zone", motor, 2)
-                self.bus.write("Acceleration", motor, 100)
+                self.bus.write("Acceleration", motor, 60)
             elif motor == "elbow_flex":
                 self.bus.write("P_Coefficient", motor, 12)
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 48)  # Optimal damping (64 was too high)
-                self.bus.write("Max_Torque_Limit", motor, 1200)
-                self.bus.write("Protection_Current", motor, 2500)  # Reduced to soften brownout-inducing stall spikes
-                self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
-                self.bus.write("Minimum_Startup_Force", motor, 10)
+                self.bus.write("Max_Torque_Limit", motor, 900)
+                self.bus.write("Protection_Current", motor, 1800)  # Reduced further to limit shared-battery brownouts
+                self.bus.write("Overload_Torque", motor, 15)  # Back off earlier under load
+                self.bus.write("Minimum_Startup_Force", motor, 5)
                 self.bus.write("CW_Dead_Zone", motor, 2)
                 self.bus.write("CCW_Dead_Zone", motor, 2)
-                self.bus.write("Acceleration", motor, 100)
+                self.bus.write("Acceleration", motor, 60)
             else:
                 self.bus.write("P_Coefficient", motor, 16)
                 self.bus.write("I_Coefficient", motor, 2)
