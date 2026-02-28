@@ -106,6 +106,10 @@ class SourcceyFollowerConfig(RobotConfig):
     # stable before it is released back to the normal command stream.
     current_safe_hold_cycles: int = 3
 
+    # `disable_torque_on_hard_overcurrent` turns off torque on a joint after a hard overcurrent event
+    # instead of continuing to hold it under load. This is the most aggressive software protection mode.
+    disable_torque_on_hard_overcurrent: bool = True
+
     # `current_rest_backoff` is the small retreat used when a joint is drawing elevated current but
     # has not yet reached the hard overcurrent threshold.
     current_rest_backoff: float = 0.75

@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 class _ProtectedMotor:
     goal_pos: float
     safe_cycles: int = 0
+    torque_disabled: bool = False
 
 
 class SourcceyFollowerSafety:
@@ -182,6 +183,11 @@ class SourcceyFollowerSafety:
             if motor_name not in modified_goal_pos or motor_name not in present_pos:
                 continue
 
+            if self.robot.config.disable_torque_on_hard_overcurrent:
+                self._disable_motor_torque(motor_name, present_pos[motor_name], current)
+                modified_goal_pos[motor_name] = present_pos[motor_name]
+                continue
+
             target_delta = modified_goal_pos[motor_name] - present_pos[motor_name]
             if abs(target_delta) <= self.CURRENT_SAFETY_POSITION_TOLERANCE:
                 continue
@@ -209,6 +215,24 @@ class SourcceyFollowerSafety:
 
         return modified_goal_pos
 
+    def _disable_motor_torque(self, motor_name: str, present_value: float, current: float) -> None:
+        """Drop torque on a single motor after a hard overcurrent event."""
+        protected_motor = self._protected_motors.get(motor_name)
+        if protected_motor and protected_motor.torque_disabled:
+            protected_motor.goal_pos = present_value
+            protected_motor.safe_cycles = 0
+            return
+
+        self.robot.bus.disable_torque(motor_name)
+        self._protected_motors[motor_name] = _ProtectedMotor(
+            goal_pos=present_value,
+            safe_cycles=0,
+            torque_disabled=True,
+        )
+        logger.warning(
+            f"Disabling torque on {motor_name} after hard overcurrent ({current}mA)."
+        )
+
     def _update_protected_motors(
         self,
         safe_goal_pos: dict[str, float],
@@ -226,7 +250,12 @@ class SourcceyFollowerSafety:
             if abs(safe_goal - requested_goal) <= self.CURRENT_SAFETY_POSITION_TOLERANCE:
                 continue
 
-            self._protected_motors[motor_name] = _ProtectedMotor(goal_pos=safe_goal, safe_cycles=0)
+            protected_motor = self._protected_motors.get(motor_name)
+            if protected_motor is None:
+                self._protected_motors[motor_name] = _ProtectedMotor(goal_pos=safe_goal, safe_cycles=0)
+            else:
+                protected_motor.goal_pos = safe_goal
+                protected_motor.safe_cycles = 0
             newly_protected.add(motor_name)
 
         protected_motor_names = list(self._protected_motors)
@@ -253,6 +282,16 @@ class SourcceyFollowerSafety:
                 protected_motor.safe_cycles = 0
 
             if protected_motor.safe_cycles >= self.robot.config.current_safe_hold_cycles:
+                if protected_motor.torque_disabled:
+                    self.robot.bus.enable_torque(motor_name)
+                    protected_motor.goal_pos = present_pos[motor_name]
+                    protected_motor.safe_cycles = 0
+                    protected_motor.torque_disabled = False
+                    logger.warning(
+                        f"Re-enabled torque on {motor_name} after current settled; holding position before resuming stream."
+                    )
+                    continue
+
                 del self._protected_motors[motor_name]
 
     def _apply_protected_motors(
@@ -267,6 +306,10 @@ class SourcceyFollowerSafety:
         modified_goal_pos = goal_pos.copy()
         for motor_name, protected_motor in self._protected_motors.items():
             if motor_name not in modified_goal_pos or motor_name not in present_pos:
+                continue
+
+            if protected_motor.torque_disabled:
+                modified_goal_pos[motor_name] = present_pos[motor_name]
                 continue
 
             if abs(protected_motor.goal_pos - present_pos[motor_name]) <= self.CURRENT_SAFETY_POSITION_TOLERANCE:
