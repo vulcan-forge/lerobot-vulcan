@@ -180,24 +180,24 @@ class SourcceyFollower(Robot):
                 self.bus.write("P_Coefficient", motor, 12)
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 48)  # Optimal damping (64 was too high)
-                self.bus.write("Max_Torque_Limit", motor, 2000)
-                self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
+                self.bus.write("Max_Torque_Limit", motor, 1200)
+                self.bus.write("Protection_Current", motor, 2500)  # Reduced to soften brownout-inducing stall spikes
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
                 self.bus.write("Minimum_Startup_Force", motor, 10)
                 self.bus.write("CW_Dead_Zone", motor, 2)
                 self.bus.write("CCW_Dead_Zone", motor, 2)
-                self.bus.write("Acceleration", motor, 180)
+                self.bus.write("Acceleration", motor, 100)
             elif motor == "elbow_flex":
                 self.bus.write("P_Coefficient", motor, 12)
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 48)  # Optimal damping (64 was too high)
-                self.bus.write("Max_Torque_Limit", motor, 2000)
-                self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
+                self.bus.write("Max_Torque_Limit", motor, 1200)
+                self.bus.write("Protection_Current", motor, 2500)  # Reduced to soften brownout-inducing stall spikes
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
                 self.bus.write("Minimum_Startup_Force", motor, 10)
                 self.bus.write("CW_Dead_Zone", motor, 2)
                 self.bus.write("CCW_Dead_Zone", motor, 2)
-                self.bus.write("Acceleration", motor, 180)
+                self.bus.write("Acceleration", motor, 100)
             else:
                 self.bus.write("P_Coefficient", motor, 16)
                 self.bus.write("I_Coefficient", motor, 2)
