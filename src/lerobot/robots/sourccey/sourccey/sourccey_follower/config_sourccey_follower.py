@@ -38,6 +38,18 @@ def sourccey_cameras_config() -> dict[str, CameraConfig]:
         ),
     }
 
+
+def sourccey_max_relative_target() -> dict[str, float]:
+    """Conservative per-cycle step limits so streamed teleop behaves like a soft approach."""
+    return {
+        "shoulder_pan": 0.75,
+        "shoulder_lift": 0.5,
+        "elbow_flex": 0.5,
+        "wrist_flex": 0.75,
+        "wrist_roll": 0.75,
+        "gripper": 1.5,
+    }
+
 @RobotConfig.register_subclass("sourccey_follower")
 @dataclass
 class SourcceyFollowerConfig(RobotConfig):
@@ -53,7 +65,9 @@ class SourcceyFollowerConfig(RobotConfig):
     # Motion Safety
     # -------------------------------------------------------------------------
     # `max_relative_target` limits the per-command positional delta.
-    max_relative_target: int | None = None
+    # Sourccey defaults to small per-joint steps so live teleop ramps toward the streamed target
+    # instead of attempting a large immediate move.
+    max_relative_target: float | dict[str, float] | None = field(default_factory=sourccey_max_relative_target)
 
     # -------------------------------------------------------------------------
     # Recovery Pathing
