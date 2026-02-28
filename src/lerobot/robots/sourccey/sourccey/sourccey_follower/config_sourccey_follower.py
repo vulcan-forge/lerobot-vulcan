@@ -60,7 +60,7 @@ class SourcceyFollowerConfig(RobotConfig):
     # -------------------------------------------------------------------------
     # `enable_recovery_pathing` inserts temporary intermediate poses only after repeated stalled progress.
     # It is disabled by default so normal direct behavior is unchanged unless explicitly enabled.
-    enable_recovery_pathing: bool = False
+    enable_recovery_pathing: bool = True
 
     # `recovery_stall_window` is the number of consecutive stalled action cycles required before recovery starts.
     recovery_stall_window: int = 5
