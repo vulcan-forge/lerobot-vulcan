@@ -17,6 +17,7 @@ class SourcceyFollowerPathing:
     """Lightweight opt-in recovery planning for stalled follower motion."""
 
     POSTURE_MOTORS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex")
+    SHOULDER_TUCK_MOTORS = ("shoulder_pan", "shoulder_lift", "elbow_flex")
 
     def __init__(self, config: SourcceyFollowerConfig):
         self.config = config
@@ -27,6 +28,7 @@ class SourcceyFollowerPathing:
         self._stall_cycles = 0
         self._last_stalled_signature: tuple[str, ...] = ()
         self._recovery_queue: list[_RecoveryStage] = []
+        self._recovery_attempts: dict[tuple[str, ...], int] = {}
 
     def apply_recovery_pathing(
         self,
@@ -48,12 +50,16 @@ class SourcceyFollowerPathing:
         if stalled_joints:
             self._track_stall_signature(stalled_joints)
             if self._stall_cycles >= self.config.recovery_stall_window:
-                self._recovery_queue = self._build_recovery_queue(requested_goal, present_pos, stalled_joints)
+                stalled_signature = tuple(sorted(stalled_joints))
+                attempt_number = self._recovery_attempts.get(stalled_signature, 0)
+                strategy_name, self._recovery_queue = self._build_recovery_queue(requested_goal, present_pos, stalled_joints)
                 self._reset_stall_tracking()
                 if self._recovery_queue:
                     logger.warning(
-                        "Recovery pathing activated after repeated stalled motion on %s.",
+                        "Recovery pathing activated after repeated stalled motion on %s using %s (attempt %d).",
                         ", ".join(stalled_joints),
+                        strategy_name,
+                        attempt_number + 1,
                     )
                     staged_goal = self._consume_recovery_stage()
                     self._last_present_pos = present_pos.copy()
@@ -120,18 +126,57 @@ class SourcceyFollowerPathing:
         goal_pos: dict[str, float],
         present_pos: dict[str, float],
         stalled_joints: list[str],
-    ) -> list[_RecoveryStage]:
+    ) -> tuple[str, list[_RecoveryStage]]:
         recovery_queue: list[_RecoveryStage] = []
+        stalled_signature = tuple(sorted(stalled_joints))
+        attempt_number = self._recovery_attempts.get(stalled_signature, 0)
+        self._recovery_attempts[stalled_signature] = attempt_number + 1
 
         backoff_goal = goal_pos.copy()
         for motor_name in stalled_joints:
             if motor_name not in goal_pos or motor_name not in present_pos:
                 continue
 
-            remaining_error = goal_pos[motor_name] - present_pos[motor_name]
-            direction = 1.0 if remaining_error > 0 else -1.0
-            backoff_goal[motor_name] = present_pos[motor_name] - (direction * self.config.recovery_joint_backoff)
+            escape_direction = self._get_escape_direction(motor_name, goal_pos, present_pos)
+            if escape_direction == 0.0:
+                continue
 
+            backoff_goal[motor_name] = present_pos[motor_name] + (escape_direction * self.config.recovery_joint_backoff)
+
+        if backoff_goal != goal_pos:
+            recovery_queue.append(
+                _RecoveryStage(
+                    name="backoff",
+                    goal_pos=backoff_goal,
+                    hold_cycles=self.config.recovery_stage_hold_cycles,
+                )
+            )
+
+        strategy_name, staged_goal = self._build_strategy_stage(attempt_number, goal_pos, present_pos, backoff_goal)
+        if staged_goal != backoff_goal:
+            recovery_queue.append(
+                _RecoveryStage(
+                    name=strategy_name,
+                    goal_pos=staged_goal,
+                    hold_cycles=self.config.recovery_stage_hold_cycles,
+                )
+            )
+
+        return strategy_name, recovery_queue
+
+    def _build_strategy_stage(
+        self,
+        attempt_number: int,
+        goal_pos: dict[str, float],
+        present_pos: dict[str, float],
+        backoff_goal: dict[str, float],
+    ) -> tuple[str, dict[str, float]]:
+        if attempt_number % 2 == 0:
+            return "neutral_tuck", self._build_neutral_tuck_goal(backoff_goal)
+
+        return "shoulder_tuck", self._build_shoulder_tuck_goal(goal_pos, present_pos, backoff_goal)
+
+    def _build_neutral_tuck_goal(self, backoff_goal: dict[str, float]) -> dict[str, float]:
         tucked_goal = backoff_goal.copy()
         for motor_name in self.POSTURE_MOTORS:
             if motor_name not in tucked_goal:
@@ -143,25 +188,46 @@ class SourcceyFollowerPathing:
                 self.config.recovery_posture_step,
             )
 
-        if backoff_goal != goal_pos:
-            recovery_queue.append(
-                _RecoveryStage(
-                    name="backoff",
-                    goal_pos=backoff_goal,
-                    hold_cycles=self.config.recovery_stage_hold_cycles,
-                )
-            )
+        return tucked_goal
 
-        if tucked_goal != backoff_goal:
-            recovery_queue.append(
-                _RecoveryStage(
-                    name="tuck",
-                    goal_pos=tucked_goal,
-                    hold_cycles=self.config.recovery_stage_hold_cycles,
-                )
-            )
+    def _build_shoulder_tuck_goal(
+        self,
+        goal_pos: dict[str, float],
+        present_pos: dict[str, float],
+        backoff_goal: dict[str, float],
+    ) -> dict[str, float]:
+        tucked_goal = backoff_goal.copy()
+        for motor_name in self.SHOULDER_TUCK_MOTORS:
+            if motor_name not in tucked_goal or motor_name not in goal_pos or motor_name not in present_pos:
+                continue
 
-        return recovery_queue
+            escape_direction = self._get_escape_direction(motor_name, goal_pos, present_pos)
+            if escape_direction == 0.0:
+                tucked_goal[motor_name] = self._move_towards(
+                    tucked_goal[motor_name],
+                    self.config.recovery_neutral_pose_value,
+                    self.config.recovery_posture_step,
+                )
+                continue
+
+            tucked_goal[motor_name] = backoff_goal[motor_name] + (escape_direction * self.config.recovery_posture_step)
+
+        return tucked_goal
+
+    @staticmethod
+    def _get_escape_direction(
+        motor_name: str,
+        goal_pos: dict[str, float],
+        present_pos: dict[str, float],
+    ) -> float:
+        if motor_name not in goal_pos or motor_name not in present_pos:
+            return 0.0
+
+        remaining_error = goal_pos[motor_name] - present_pos[motor_name]
+        if remaining_error == 0.0:
+            return 0.0
+
+        return -1.0 if remaining_error > 0 else 1.0
 
     @staticmethod
     def _move_towards(current_value: float, target_value: float, max_step: float) -> float:
