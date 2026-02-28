@@ -16,7 +16,7 @@ def _make_joint_state(value: float) -> dict[str, float]:
 
 
 def test_recovery_pathing_is_disabled_by_default():
-    config = SourcceyFollowerConfig(port="/dev/null")
+    config = SourcceyFollowerConfig(port="/dev/null", enable_recovery_pathing=False)
     planner = SourcceyFollowerPathing(config)
     present_pos = _make_joint_state(6.0)
     goal_pos = _make_joint_state(12.0)
@@ -26,7 +26,7 @@ def test_recovery_pathing_is_disabled_by_default():
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == goal_pos
 
 
-def test_recovery_pathing_inserts_backoff_then_neutral_tuck_when_stalled():
+def test_recovery_pathing_inserts_backoff_then_default_core_tuck_when_stalled():
     config = SourcceyFollowerConfig(
         port="/dev/null",
         enable_recovery_pathing=True,
@@ -67,10 +67,10 @@ def test_recovery_pathing_inserts_backoff_then_neutral_tuck_when_stalled():
         "gripper": 20.0,
     }
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 1.0,
+        "shoulder_pan": 3.8570084666039577,
         "shoulder_lift": 1.0,
         "elbow_flex": 1.0,
-        "wrist_flex": 1.0,
+        "wrist_flex": 3.0,
         "wrist_roll": 1.0,
         "gripper": 20.0,
     }
@@ -78,7 +78,7 @@ def test_recovery_pathing_inserts_backoff_then_neutral_tuck_when_stalled():
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == goal_pos
 
 
-def test_recovery_pathing_rotates_to_shoulder_tuck_on_repeated_stalls():
+def test_recovery_pathing_rotates_to_default_full_tuck_on_repeated_stalls():
     config = SourcceyFollowerConfig(
         port="/dev/null",
         enable_recovery_pathing=True,
@@ -118,10 +118,10 @@ def test_recovery_pathing_rotates_to_shoulder_tuck_on_repeated_stalls():
         "gripper": 20.0,
     }
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 1.0,
+        "shoulder_pan": 3.8570084666039577,
         "shoulder_lift": 1.0,
         "elbow_flex": 1.0,
-        "wrist_flex": 1.0,
+        "wrist_flex": 3.0,
         "wrist_roll": 1.0,
         "gripper": 20.0,
     }
@@ -136,10 +136,17 @@ def test_recovery_pathing_rotates_to_shoulder_tuck_on_repeated_stalls():
         "gripper": 20.0,
     }
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 1.0,
+        "shoulder_pan": 3.8570084666039577,
         "shoulder_lift": 1.0,
         "elbow_flex": 1.0,
-        "wrist_flex": 3.0,
+        "wrist_flex": 2.021993614757008,
         "wrist_roll": 1.0,
         "gripper": 20.0,
     }
+
+
+def test_recovery_pathing_builds_many_recovery_strategies():
+    config = SourcceyFollowerConfig(port="/dev/null", enable_recovery_pathing=True)
+    planner = SourcceyFollowerPathing(config)
+
+    assert len(planner._recovery_strategies) >= 20

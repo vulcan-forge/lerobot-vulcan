@@ -1,4 +1,7 @@
+import json
 import logging
+from itertools import combinations
+from pathlib import Path
 from dataclasses import dataclass
 
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
@@ -13,14 +16,23 @@ class _RecoveryStage:
     hold_cycles: int
 
 
+@dataclass(frozen=True)
+class _RecoveryStrategy:
+    name: str
+    motors: tuple[str, ...]
+    target_mode: str
+
+
 class SourcceyFollowerPathing:
     """Lightweight opt-in recovery planning for stalled follower motion."""
 
     POSTURE_MOTORS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex")
-    SHOULDER_TUCK_MOTORS = ("shoulder_pan", "shoulder_lift", "elbow_flex")
+    CORE_TUCK_MOTORS = ("shoulder_pan", "shoulder_lift", "elbow_flex")
 
     def __init__(self, config: SourcceyFollowerConfig):
         self.config = config
+        self._default_recovery_pose = self._load_default_recovery_pose()
+        self._recovery_strategies = self._build_recovery_strategies()
         self.reset()
 
     def reset(self) -> None:
@@ -152,7 +164,7 @@ class SourcceyFollowerPathing:
                 )
             )
 
-        strategy_name, staged_goal = self._build_strategy_stage(attempt_number, goal_pos, present_pos, backoff_goal)
+        strategy_name, staged_goal = self._build_strategy_stage(attempt_number, backoff_goal)
         if staged_goal != backoff_goal:
             recovery_queue.append(
                 _RecoveryStage(
@@ -167,52 +179,102 @@ class SourcceyFollowerPathing:
     def _build_strategy_stage(
         self,
         attempt_number: int,
-        goal_pos: dict[str, float],
-        present_pos: dict[str, float],
         backoff_goal: dict[str, float],
     ) -> tuple[str, dict[str, float]]:
-        if attempt_number % 2 == 0:
-            return "neutral_tuck", self._build_neutral_tuck_goal(backoff_goal)
+        strategy = self._recovery_strategies[attempt_number % len(self._recovery_strategies)]
+        target_pose = self._get_target_pose(strategy.target_mode)
+        staged_goal = self._build_subset_goal(backoff_goal, target_pose, strategy.motors)
+        return strategy.name, staged_goal
 
-        return "shoulder_tuck", self._build_shoulder_tuck_goal(goal_pos, present_pos, backoff_goal)
-
-    def _build_neutral_tuck_goal(self, backoff_goal: dict[str, float]) -> dict[str, float]:
-        tucked_goal = backoff_goal.copy()
-        for motor_name in self.POSTURE_MOTORS:
-            if motor_name not in tucked_goal:
+    def _build_subset_goal(
+        self,
+        start_goal: dict[str, float],
+        target_pose: dict[str, float],
+        motors: tuple[str, ...],
+    ) -> dict[str, float]:
+        staged_goal = start_goal.copy()
+        for motor_name in motors:
+            if motor_name not in staged_goal or motor_name not in target_pose:
                 continue
 
-            tucked_goal[motor_name] = self._move_towards(
-                tucked_goal[motor_name],
-                self.config.recovery_neutral_pose_value,
+            staged_goal[motor_name] = self._move_towards(
+                staged_goal[motor_name],
+                target_pose[motor_name],
                 self.config.recovery_posture_step,
             )
 
-        return tucked_goal
+        return staged_goal
 
-    def _build_shoulder_tuck_goal(
-        self,
-        goal_pos: dict[str, float],
-        present_pos: dict[str, float],
-        backoff_goal: dict[str, float],
-    ) -> dict[str, float]:
-        tucked_goal = backoff_goal.copy()
-        for motor_name in self.SHOULDER_TUCK_MOTORS:
-            if motor_name not in tucked_goal or motor_name not in goal_pos or motor_name not in present_pos:
-                continue
+    def _build_recovery_strategies(self) -> list[_RecoveryStrategy]:
+        strategies: list[_RecoveryStrategy] = [
+            _RecoveryStrategy(
+                name="default_core_tuck",
+                motors=self.CORE_TUCK_MOTORS,
+                target_mode="default",
+            ),
+            _RecoveryStrategy(
+                name="default_full_tuck",
+                motors=self.POSTURE_MOTORS,
+                target_mode="default",
+            ),
+        ]
 
-            escape_direction = self._get_escape_direction(motor_name, goal_pos, present_pos)
-            if escape_direction == 0.0:
-                tucked_goal[motor_name] = self._move_towards(
-                    tucked_goal[motor_name],
-                    self.config.recovery_neutral_pose_value,
-                    self.config.recovery_posture_step,
-                )
-                continue
+        seen: set[tuple[tuple[str, ...], str]] = {
+            (strategy.motors, strategy.target_mode) for strategy in strategies
+        }
 
-            tucked_goal[motor_name] = backoff_goal[motor_name] + (escape_direction * self.config.recovery_posture_step)
+        for target_mode in ("default", "neutral"):
+            for size in range(len(self.POSTURE_MOTORS), 0, -1):
+                for combo in combinations(self.POSTURE_MOTORS, size):
+                    key = (combo, target_mode)
+                    if key in seen:
+                        continue
 
-        return tucked_goal
+                    strategies.append(
+                        _RecoveryStrategy(
+                            name=f"{target_mode}_{'_'.join(combo)}",
+                            motors=combo,
+                            target_mode=target_mode,
+                        )
+                    )
+                    seen.add(key)
+
+        return strategies
+
+    def _get_target_pose(self, target_mode: str) -> dict[str, float]:
+        if target_mode == "default":
+            return self._default_recovery_pose
+
+        if target_mode == "neutral":
+            return {
+                motor_name: self.config.recovery_neutral_pose_value
+                for motor_name in self.POSTURE_MOTORS
+            }
+
+        raise ValueError(target_mode)
+
+    def _load_default_recovery_pose(self) -> dict[str, float]:
+        defaults_dir = Path(__file__).resolve().parents[1] / "sourccey" / "defaults"
+        default_action_fpath = defaults_dir / f"{self.config.orientation}_arm_default_action.json"
+        try:
+            with default_action_fpath.open() as file:
+                payload = json.load(file)
+        except (FileNotFoundError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Failed to load recovery pose from %s: %s. Falling back to neutral recovery heuristics.",
+                default_action_fpath,
+                exc,
+            )
+            return {
+                motor_name: self.config.recovery_neutral_pose_value
+                for motor_name in self.POSTURE_MOTORS
+            }
+
+        return {
+            key.removesuffix(".pos"): value
+            for key, value in payload.items()
+            if key.endswith(".pos")
+        }
 
     @staticmethod
     def _get_escape_direction(

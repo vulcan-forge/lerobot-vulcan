@@ -269,6 +269,11 @@ class SourcceyFollower(Robot):
             # Optionally insert temporary recovery waypoints when the arm stops making progress.
             goal_pos = self.pathing.apply_recovery_pathing(goal_pos, present_pos)
 
+            # Recovery pathing also needs to obey the same per-cycle step limits.
+            if self.config.max_relative_target is not None:
+                goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
+                goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
+
             # If a joint is already over current, avoid commanding it deeper into the obstruction.
             goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)
 
