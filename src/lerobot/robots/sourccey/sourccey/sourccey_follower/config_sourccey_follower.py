@@ -93,6 +93,18 @@ class SourcceyFollowerConfig(RobotConfig):
     # If left as `None`, the safety module uses a tuned default for the gripper.
     gripper_current_safety_threshold: int | None = None
 
+    # `current_rest_safety_threshold_ratio` triggers an early unload step before the hard current limit.
+    # A value of `0.7` means "start trying to rest the joint at 70% of its current safety limit."
+    # Set this to `None` to disable the early-rest behavior.
+    current_rest_safety_threshold_ratio: float | None = 0.7
+
+    # `current_rest_backoff` is the small retreat used when a joint is drawing elevated current but
+    # has not yet reached the hard overcurrent threshold.
+    current_rest_backoff: float = 0.75
+
+    # `gripper_current_rest_backoff` is a smaller early-rest retreat for the gripper.
+    gripper_current_rest_backoff: float = 0.25
+
     # `current_safety_backoff` is how far to retreat a joint after an overcurrent event while it is still
     # being commanded deeper into the obstruction.
     current_safety_backoff: float = 2.0
