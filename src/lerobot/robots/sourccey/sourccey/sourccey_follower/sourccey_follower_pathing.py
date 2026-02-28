@@ -33,6 +33,7 @@ class SourcceyFollowerPathing:
     def __init__(self, config: SourcceyFollowerConfig):
         self.config = config
         self._default_recovery_pose = self._load_default_recovery_pose()
+        self._active_recovery_pose = self._load_active_recovery_pose()
         self._recovery_strategies = self._build_recovery_strategies()
         self.reset()
 
@@ -216,6 +217,16 @@ class SourcceyFollowerPathing:
     def _build_recovery_strategies(self) -> list[_RecoveryStrategy]:
         strategies: list[_RecoveryStrategy] = [
             _RecoveryStrategy(
+                name="active_core_tuck",
+                motors=self.CORE_TUCK_MOTORS,
+                target_mode="active",
+            ),
+            _RecoveryStrategy(
+                name="active_full_tuck",
+                motors=self.POSTURE_MOTORS,
+                target_mode="active",
+            ),
+            _RecoveryStrategy(
                 name="default_core_tuck",
                 motors=self.CORE_TUCK_MOTORS,
                 target_mode="default",
@@ -250,6 +261,9 @@ class SourcceyFollowerPathing:
         return strategies
 
     def _get_target_pose(self, target_mode: str) -> dict[str, float]:
+        if target_mode == "active":
+            return self._active_recovery_pose
+
         if target_mode == "default":
             return self._default_recovery_pose
 
@@ -264,13 +278,21 @@ class SourcceyFollowerPathing:
     def _load_default_recovery_pose(self) -> dict[str, float]:
         defaults_dir = Path(__file__).resolve().parents[1] / "sourccey" / "defaults"
         default_action_fpath = defaults_dir / f"{self.config.orientation}_arm_default_action.json"
+        return self._load_recovery_pose(default_action_fpath)
+
+    def _load_active_recovery_pose(self) -> dict[str, float]:
+        defaults_dir = Path(__file__).resolve().parents[1] / "sourccey" / "defaults"
+        active_action_fpath = defaults_dir / f"{self.config.orientation}_arm_default_active_action.json"
+        return self._load_recovery_pose(active_action_fpath)
+
+    def _load_recovery_pose(self, action_fpath: Path) -> dict[str, float]:
         try:
-            with default_action_fpath.open() as file:
+            with action_fpath.open() as file:
                 payload = json.load(file)
         except (FileNotFoundError, json.JSONDecodeError) as exc:
             logger.warning(
                 "Failed to load recovery pose from %s: %s. Falling back to neutral recovery heuristics.",
-                default_action_fpath,
+                action_fpath,
                 exc,
             )
             return {
@@ -278,11 +300,19 @@ class SourcceyFollowerPathing:
                 for motor_name in self.POSTURE_MOTORS
             }
 
-        return {
-            key.removesuffix(".pos"): value
-            for key, value in payload.items()
-            if key.endswith(".pos")
-        }
+        normalized_pose: dict[str, float] = {}
+        for key, value in payload.items():
+            if not key.endswith(".pos"):
+                continue
+
+            motor_name = key.removesuffix(".pos")
+            if "_" in motor_name:
+                _, _, suffix = motor_name.partition("_")
+                motor_name = suffix
+
+            normalized_pose[motor_name] = value
+
+        return normalized_pose
 
     @staticmethod
     def _get_escape_direction(

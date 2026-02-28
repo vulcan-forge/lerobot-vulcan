@@ -26,7 +26,7 @@ def test_recovery_pathing_is_disabled_by_default():
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == goal_pos
 
 
-def test_recovery_pathing_inserts_backoff_then_default_core_tuck_when_stalled():
+def test_recovery_pathing_inserts_backoff_then_active_core_tuck_when_stalled():
     config = SourcceyFollowerConfig(
         port="/dev/null",
         enable_recovery_pathing=True,
@@ -67,8 +67,8 @@ def test_recovery_pathing_inserts_backoff_then_default_core_tuck_when_stalled():
         "gripper": 20.0,
     }
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 3.8570084666039577,
-        "shoulder_lift": 1.0,
+        "shoulder_pan": 1.0,
+        "shoulder_lift": 5.0,
         "elbow_flex": 1.0,
         "wrist_flex": 3.0,
         "wrist_roll": 1.0,
@@ -78,7 +78,7 @@ def test_recovery_pathing_inserts_backoff_then_default_core_tuck_when_stalled():
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == goal_pos
 
 
-def test_recovery_pathing_rotates_to_default_full_tuck_on_repeated_stalls():
+def test_recovery_pathing_rotates_to_active_full_tuck_on_repeated_stalls():
     config = SourcceyFollowerConfig(
         port="/dev/null",
         enable_recovery_pathing=True,
@@ -118,8 +118,8 @@ def test_recovery_pathing_rotates_to_default_full_tuck_on_repeated_stalls():
         "gripper": 20.0,
     }
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 3.8570084666039577,
-        "shoulder_lift": 1.0,
+        "shoulder_pan": 1.0,
+        "shoulder_lift": 5.0,
         "elbow_flex": 1.0,
         "wrist_flex": 3.0,
         "wrist_roll": 1.0,
@@ -136,10 +136,10 @@ def test_recovery_pathing_rotates_to_default_full_tuck_on_repeated_stalls():
         "gripper": 20.0,
     }
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 3.8570084666039577,
-        "shoulder_lift": 1.0,
+        "shoulder_pan": 1.0,
+        "shoulder_lift": 5.0,
         "elbow_flex": 1.0,
-        "wrist_flex": 2.021993614757008,
+        "wrist_flex": 1.0,
         "wrist_roll": 1.0,
         "gripper": 20.0,
     }
@@ -197,8 +197,8 @@ def test_recovery_pathing_pauses_stage_consumption_while_motor_is_hot():
     assert planner.apply_recovery_pathing(goal_pos, present_pos, pause_motors={"shoulder_lift"}) == paused_backoff
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == paused_backoff
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 3.8570084666039577,
-        "shoulder_lift": 1.0,
+        "shoulder_pan": 1.0,
+        "shoulder_lift": 5.0,
         "elbow_flex": 1.0,
         "wrist_flex": 3.0,
         "wrist_roll": 1.0,
