@@ -1,11 +1,18 @@
 import logging
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower import SourcceyFollower
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _ProtectedMotor:
+    goal_pos: float
+    safe_cycles: int = 0
 
 
 class SourcceyFollowerSafety:
@@ -27,6 +34,7 @@ class SourcceyFollowerSafety:
     def __init__(self, robot: "SourcceyFollower"):
         self.robot = robot
         self._last_goal_pos: dict[str, float] = {}
+        self._protected_motors: dict[str, _ProtectedMotor] = {}
 
     def apply_current_safety(
         self,
@@ -35,10 +43,13 @@ class SourcceyFollowerSafety:
     ) -> dict[str, float]:
         """Adjust goals if a motor is already over current and still being pushed deeper."""
         currents = self.robot.bus.sync_read("Present_Current")
+        requested_goal = goal_pos.copy()
         resting_motors = self._check_rest_current_safety(currents)
         overcurrent_motors = self._check_current_safety(currents)
         goal_pos = self._handle_resting_motors(resting_motors, overcurrent_motors, goal_pos, present_pos)
-        return self._handle_overcurrent_motors(overcurrent_motors, goal_pos, present_pos)
+        goal_pos = self._handle_overcurrent_motors(overcurrent_motors, goal_pos, present_pos)
+        self._update_protected_motors(goal_pos, requested_goal, present_pos, currents)
+        return self._apply_protected_motors(goal_pos, present_pos)
 
     def remember_goal(self, goal_pos: dict[str, float]) -> None:
         """Store the most recent commanded goal so we can infer blocked direction next frame."""
@@ -99,6 +110,11 @@ class SourcceyFollowerSafety:
             return self.robot.config.gripper_current_rest_backoff
 
         return self.robot.config.current_rest_backoff
+
+    def _get_motor_current_release_limit(self, motor_name: str) -> float:
+        """Return the current threshold below which a protected motor can rejoin the action stream."""
+        release_ratio = self.robot.config.current_safe_release_threshold_ratio
+        return self._get_motor_current_safety_limit(motor_name) * release_ratio
 
     def _get_stalled_direction(self, motor_name: str, present_pos: dict[str, float]) -> int:
         """Infer the blocked direction from the last target that failed to move."""
@@ -190,6 +206,74 @@ class SourcceyFollowerSafety:
                 f"Backing off {motor_name} from overcurrent ({current}mA): "
                 f"requested {goal_pos[motor_name]}, safe target {safe_goal}."
             )
+
+        return modified_goal_pos
+
+    def _update_protected_motors(
+        self,
+        safe_goal_pos: dict[str, float],
+        requested_goal_pos: dict[str, float],
+        present_pos: dict[str, float],
+        currents: dict[str, float],
+    ) -> None:
+        """Latch safe retreat goals until the joint has settled at a low current."""
+        newly_protected: set[str] = set()
+        for motor_name, safe_goal in safe_goal_pos.items():
+            if motor_name not in requested_goal_pos or motor_name not in present_pos:
+                continue
+
+            requested_goal = requested_goal_pos[motor_name]
+            if abs(safe_goal - requested_goal) <= self.CURRENT_SAFETY_POSITION_TOLERANCE:
+                continue
+
+            self._protected_motors[motor_name] = _ProtectedMotor(goal_pos=safe_goal, safe_cycles=0)
+            newly_protected.add(motor_name)
+
+        protected_motor_names = list(self._protected_motors)
+        for motor_name in protected_motor_names:
+            if motor_name in newly_protected:
+                continue
+
+            if motor_name not in currents or motor_name not in present_pos:
+                del self._protected_motors[motor_name]
+                continue
+
+            protected_motor = self._protected_motors[motor_name]
+            current = currents[motor_name]
+            if self._is_nan(current):
+                protected_motor.safe_cycles = 0
+                continue
+
+            if (
+                abs(current) <= self._get_motor_current_release_limit(motor_name)
+                and abs(protected_motor.goal_pos - present_pos[motor_name]) <= self.CURRENT_SAFETY_POSITION_TOLERANCE
+            ):
+                protected_motor.safe_cycles += 1
+            else:
+                protected_motor.safe_cycles = 0
+
+            if protected_motor.safe_cycles >= self.robot.config.current_safe_hold_cycles:
+                del self._protected_motors[motor_name]
+
+    def _apply_protected_motors(
+        self,
+        goal_pos: dict[str, float],
+        present_pos: dict[str, float],
+    ) -> dict[str, float]:
+        """Override incoming actions while a motor is still in a protected settle window."""
+        if not self._protected_motors:
+            return goal_pos
+
+        modified_goal_pos = goal_pos.copy()
+        for motor_name, protected_motor in self._protected_motors.items():
+            if motor_name not in modified_goal_pos or motor_name not in present_pos:
+                continue
+
+            if abs(protected_motor.goal_pos - present_pos[motor_name]) <= self.CURRENT_SAFETY_POSITION_TOLERANCE:
+                modified_goal_pos[motor_name] = present_pos[motor_name]
+                continue
+
+            modified_goal_pos[motor_name] = protected_motor.goal_pos
 
         return modified_goal_pos
 

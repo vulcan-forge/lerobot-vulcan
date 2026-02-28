@@ -98,6 +98,14 @@ class SourcceyFollowerConfig(RobotConfig):
     # Set this to `None` to disable the early-rest behavior.
     current_rest_safety_threshold_ratio: float | None = 0.7
 
+    # `current_safe_release_threshold_ratio` is the lower current level a protected joint must fall below
+    # before the safety latch is allowed to release it back to incoming streamed commands.
+    current_safe_release_threshold_ratio: float = 0.35
+
+    # `current_safe_hold_cycles` is how many consecutive low-current cycles a protected joint must remain
+    # stable before it is released back to the normal command stream.
+    current_safe_hold_cycles: int = 3
+
     # `current_rest_backoff` is the small retreat used when a joint is drawing elevated current but
     # has not yet reached the hard overcurrent threshold.
     current_rest_backoff: float = 0.75
