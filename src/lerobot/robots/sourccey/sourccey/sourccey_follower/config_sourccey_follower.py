@@ -55,8 +55,19 @@ class SourcceyFollowerConfig(RobotConfig):
     # the number of motors in your follower arms.
     max_relative_target: int | None = None
 
-    # `max_current_safety_threshold` is the maximum current threshold for safety purposes.
+    # `max_current_safety_threshold` is the fallback runtime current threshold for joints without a tuned override.
     max_current_safety_threshold: int = 2500
+
+    # `gripper_current_safety_threshold` optionally overrides the gripper's runtime current threshold.
+    # If left as `None`, the safety module uses a tuned default for the gripper.
+    gripper_current_safety_threshold: int | None = None
+
+    # `current_safety_backoff` is how far to retreat a joint after an overcurrent event while it is still
+    # being commanded deeper into the obstruction.
+    current_safety_backoff: float = 2.0
+
+    # `gripper_current_safety_backoff` is a smaller retreat so the gripper can keep a light hold on objects.
+    gripper_current_safety_backoff: float = 0.5
 
     # `max_current_calibration_threshold` is the maximum current threshold for calibration purposes.
     max_current_calibration_threshold: int = 75

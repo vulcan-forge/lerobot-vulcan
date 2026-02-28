@@ -26,6 +26,7 @@ from lerobot.motors.motors_bus import Motor, MotorNormMode
 from lerobot.robots.robot import Robot
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import SourcceyFollowerCalibrator
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
+from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_safety import SourcceyFollowerSafety
 from lerobot.robots.utils import ensure_safe_goal_position
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,9 @@ class SourcceyFollower(Robot):
 
         # Initialize calibrator
         self.calibrator = SourcceyFollowerCalibrator(
+            robot=self
+        )
+        self.safety = SourcceyFollowerSafety(
             robot=self
         )
 
@@ -257,8 +261,12 @@ class SourcceyFollower(Robot):
                 goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
                 goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
+            # If a joint is already over current, avoid commanding it deeper into the obstruction.
+            goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)
+
             # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)
+            self.safety.remember_goal(goal_pos)
             return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
         except ConnectionError as e:
@@ -270,58 +278,3 @@ class SourcceyFollower(Robot):
             # Return present position instead of goal position when write fails
             return {f"{motor}.pos": val for motor, val in present_pos.items()}
 
-    ###################################################################
-    # Safety Functions (Must be used after extremely extensive testing
-    # to ensure these functions don't make joints anything unsafe
-    # or break the arm.)
-    ###################################################################
-    def _check_current_safety(self) -> list[str]:
-        """
-        Check if any motor is over current limit and return safety status.
-
-        Returns:
-            tuple: (is_safe, overcurrent_motors)
-            - is_safe: True if all motors are under current limit
-            - overcurrent_motors: List of motor names that are over current
-        """
-        # Read current from all motors
-        currents = self.bus.sync_read("Present_Current")
-        overcurrent_motors = []
-        for motor, current in currents.items():
-            if current > self.config.max_current_safety_threshold:
-                overcurrent_motors.append(motor)
-                logger.warning(f"Safety triggered: {motor} current {current}mA > {self.config.max_current_safety_threshold}mA")
-        return overcurrent_motors
-
-    def _handle_overcurrent_motors(
-        self,
-        overcurrent_motors: list[str],
-        goal_pos: dict[str, float],
-        present_pos: dict[str, float],
-    ) -> dict[str, float]:
-        """
-        Handle overcurrent motors by replacing their goal positions with present positions.
-
-        Args:
-            goal_pos: Dictionary of goal positions with keys like "shoulder_pan.pos"
-            present_pos: Dictionary of present positions with keys like "shoulder_pan.pos"
-            overcurrent_motors: List of motor names that are over current (e.g., ["shoulder_pan", "elbow_flex"])
-
-        Returns:
-            Dictionary of goal positions with overcurrent motors replaced by present positions
-        """
-        if not overcurrent_motors or len(overcurrent_motors) == 0:
-            return goal_pos
-
-        # Create copies of the goal positions to modify
-        modified_goal_pos = goal_pos.copy()
-        for motor_name in overcurrent_motors:
-            goal_key = f"{motor_name}.pos"
-            if goal_key in modified_goal_pos:
-                modified_goal_pos[goal_key] = present_pos[motor_name]
-                logger.warning(f"Replaced goal position for {motor_name} with present position: {present_pos[motor_name]}")
-
-        # Sync write the modified goal positions
-        goal_pos_raw = {k.replace(".pos", ""): v for k, v in modified_goal_pos.items()}
-        self.bus.sync_write("Goal_Position", goal_pos_raw)
-        return modified_goal_pos
