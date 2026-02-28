@@ -41,9 +41,11 @@ class SourcceyFollowerSafety:
         self,
         goal_pos: dict[str, float],
         present_pos: dict[str, float],
+        currents: dict[str, float] | None = None,
     ) -> dict[str, float]:
         """Adjust goals if a motor is already over current and still being pushed deeper."""
-        currents = self.robot.bus.sync_read("Present_Current")
+        if currents is None:
+            currents = self.robot.bus.sync_read("Present_Current")
         requested_goal = goal_pos.copy()
         resting_motors = self._check_rest_current_safety(currents)
         overcurrent_motors = self._check_current_safety(currents)
@@ -51,6 +53,16 @@ class SourcceyFollowerSafety:
         goal_pos = self._handle_overcurrent_motors(overcurrent_motors, goal_pos, present_pos)
         self._update_protected_motors(goal_pos, requested_goal, present_pos, currents)
         return self._apply_protected_motors(goal_pos, present_pos)
+
+    def get_pathing_pause_motors(self, currents: dict[str, float] | None = None) -> set[str]:
+        """Return motors that should pause recovery path progression until current settles."""
+        if currents is None:
+            currents = self.robot.bus.sync_read("Present_Current")
+
+        pause_motors = set(self._protected_motors)
+        pause_motors.update(self._check_rest_current_safety(currents))
+        pause_motors.update(self._check_current_safety(currents))
+        return pause_motors
 
     def remember_goal(self, goal_pos: dict[str, float]) -> None:
         """Store the most recent commanded goal so we can infer blocked direction next frame."""

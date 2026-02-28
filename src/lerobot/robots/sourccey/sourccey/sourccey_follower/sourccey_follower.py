@@ -260,6 +260,11 @@ class SourcceyFollower(Robot):
                 logger.warning("NaN values detected in goal positions. Skipping action execution.")
                 return {f"{motor}.pos": val for motor, val in present_pos.items()}
 
+            currents = self.bus.sync_read("Present_Current")
+            if any(np.isnan(v) for v in currents.values()):
+                logger.warning("NaN values detected in motor currents. Holding current position.")
+                return {f"{motor}.pos": val for motor, val in present_pos.items()}
+
             # Cap goal position when too far away from present position.
             # /!\ Slower fps expected due to reading from the follower.
             if self.config.max_relative_target is not None:
@@ -267,7 +272,11 @@ class SourcceyFollower(Robot):
                 goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
             # Optionally insert temporary recovery waypoints when the arm stops making progress.
-            goal_pos = self.pathing.apply_recovery_pathing(goal_pos, present_pos)
+            goal_pos = self.pathing.apply_recovery_pathing(
+                goal_pos,
+                present_pos,
+                pause_motors=self.safety.get_pathing_pause_motors(currents),
+            )
 
             # Recovery pathing also needs to obey the same per-cycle step limits.
             if self.config.max_relative_target is not None:
@@ -275,7 +284,7 @@ class SourcceyFollower(Robot):
                 goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
             # If a joint is already over current, avoid commanding it deeper into the obstruction.
-            goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)
+            goal_pos = self.safety.apply_current_safety(goal_pos, present_pos, currents=currents)
 
             # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)

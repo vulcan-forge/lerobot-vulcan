@@ -14,6 +14,7 @@ class _RecoveryStage:
     name: str
     goal_pos: dict[str, float]
     hold_cycles: int
+    motors: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -46,15 +47,17 @@ class SourcceyFollowerPathing:
         self,
         goal_pos: dict[str, float],
         present_pos: dict[str, float],
+        pause_motors: set[str] | None = None,
     ) -> dict[str, float]:
         """Return the requested goal or an intermediate recovery waypoint."""
         if not self.config.enable_recovery_pathing:
             return goal_pos
 
         requested_goal = goal_pos.copy()
+        pause_motors = pause_motors or set()
 
         if self._recovery_queue:
-            staged_goal = self._consume_recovery_stage()
+            staged_goal = self._consume_recovery_stage(pause_motors)
             self._last_present_pos = present_pos.copy()
             return staged_goal
 
@@ -73,7 +76,7 @@ class SourcceyFollowerPathing:
                         strategy_name,
                         attempt_number + 1,
                     )
-                    staged_goal = self._consume_recovery_stage()
+                    staged_goal = self._consume_recovery_stage(pause_motors)
                     self._last_present_pos = present_pos.copy()
                     return staged_goal
         else:
@@ -82,9 +85,12 @@ class SourcceyFollowerPathing:
         self._last_present_pos = present_pos.copy()
         return requested_goal
 
-    def _consume_recovery_stage(self) -> dict[str, float]:
+    def _consume_recovery_stage(self, pause_motors: set[str]) -> dict[str, float]:
         stage = self._recovery_queue[0]
         goal_pos = stage.goal_pos.copy()
+        if pause_motors.intersection(stage.motors):
+            return goal_pos
+
         stage.hold_cycles -= 1
         if stage.hold_cycles <= 0:
             self._recovery_queue.pop(0)
@@ -161,30 +167,32 @@ class SourcceyFollowerPathing:
                     name="backoff",
                     goal_pos=backoff_goal,
                     hold_cycles=self.config.recovery_stage_hold_cycles,
+                    motors=tuple(stalled_joints),
                 )
             )
 
-        strategy_name, staged_goal = self._build_strategy_stage(attempt_number, backoff_goal)
+        strategy, staged_goal = self._build_strategy_stage(attempt_number, backoff_goal)
         if staged_goal != backoff_goal:
             recovery_queue.append(
                 _RecoveryStage(
-                    name=strategy_name,
+                    name=strategy.name,
                     goal_pos=staged_goal,
                     hold_cycles=self.config.recovery_stage_hold_cycles,
+                    motors=strategy.motors,
                 )
             )
 
-        return strategy_name, recovery_queue
+        return strategy.name, recovery_queue
 
     def _build_strategy_stage(
         self,
         attempt_number: int,
         backoff_goal: dict[str, float],
-    ) -> tuple[str, dict[str, float]]:
+    ) -> tuple[_RecoveryStrategy, dict[str, float]]:
         strategy = self._recovery_strategies[attempt_number % len(self._recovery_strategies)]
         target_pose = self._get_target_pose(strategy.target_mode)
         staged_goal = self._build_subset_goal(backoff_goal, target_pose, strategy.motors)
-        return strategy.name, staged_goal
+        return strategy, staged_goal
 
     def _build_subset_goal(
         self,
