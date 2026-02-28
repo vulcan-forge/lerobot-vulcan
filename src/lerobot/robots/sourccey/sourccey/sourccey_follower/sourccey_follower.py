@@ -26,6 +26,7 @@ from lerobot.motors.motors_bus import Motor, MotorNormMode
 from lerobot.robots.robot import Robot
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import SourcceyFollowerCalibrator
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
+from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_pathing import SourcceyFollowerPathing
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_safety import SourcceyFollowerSafety
 from lerobot.robots.utils import ensure_safe_goal_position
 
@@ -65,6 +66,7 @@ class SourcceyFollower(Robot):
         self.safety = SourcceyFollowerSafety(
             robot=self
         )
+        self.pathing = SourcceyFollowerPathing(config)
 
         # Track last warning time for throttling
         self._last_write_warning_time = 0.0
@@ -125,16 +127,19 @@ class SourcceyFollower(Robot):
             cam.connect()
 
         self.configure()
+        self.pathing.reset()
         logger.info(f"{self} connected.")
 
     def disconnect(self) -> None:
          # Make disconnect idempotent: calling it twice should be harmless.
         if not self.is_connected:
+            self.pathing.reset()
             logger.info(f"{self} is not connected. Skipping disconnect.")
             return
 
         logger.info(f"Disconnecting Sourccey {self.config.orientation} Follower")
 
+        self.pathing.reset()
         self.bus.disconnect()
         for cam in self.cameras.values():
             cam.disconnect()
@@ -260,6 +265,9 @@ class SourcceyFollower(Robot):
             if self.config.max_relative_target is not None:
                 goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
                 goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
+
+            # Optionally insert temporary recovery waypoints when the arm stops making progress.
+            goal_pos = self.pathing.apply_recovery_pathing(goal_pos, present_pos)
 
             # If a joint is already over current, avoid commanding it deeper into the obstruction.
             goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)

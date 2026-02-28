@@ -41,20 +41,51 @@ def sourccey_cameras_config() -> dict[str, CameraConfig]:
 @RobotConfig.register_subclass("sourccey_follower")
 @dataclass
 class SourcceyFollowerConfig(RobotConfig):
-    # Port to connect to the arm
+    # -------------------------------------------------------------------------
+    # Connection
+    # -------------------------------------------------------------------------
     port: str
     orientation: str = "left"
-
-    # The models of the motors to use for the follower arms.
     motor_models: dict[str, str] = field(default_factory=sourccey_motor_models)
-
     disable_torque_on_disconnect: bool = True
 
-    # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
-    # Set this to a positive scalar to have the same value for all motors, or a list that is the same length as
-    # the number of motors in your follower arms.
+    # -------------------------------------------------------------------------
+    # Motion Safety
+    # -------------------------------------------------------------------------
+    # `max_relative_target` limits the per-command positional delta.
     max_relative_target: int | None = None
 
+    # -------------------------------------------------------------------------
+    # Recovery Pathing
+    # -------------------------------------------------------------------------
+    # `enable_recovery_pathing` inserts temporary intermediate poses only after repeated stalled progress.
+    # It is disabled by default so normal direct behavior is unchanged unless explicitly enabled.
+    enable_recovery_pathing: bool = False
+
+    # `recovery_stall_window` is the number of consecutive stalled action cycles required before recovery starts.
+    recovery_stall_window: int = 5
+
+    # `recovery_min_progress` is the minimum per-cycle joint movement that still counts as progress.
+    recovery_min_progress: float = 0.5
+
+    # `recovery_min_remaining_error` is the minimum remaining joint error that still counts as stuck.
+    recovery_min_remaining_error: float = 4.0
+
+    # `recovery_stage_hold_cycles` is how many action cycles each temporary recovery waypoint is held.
+    recovery_stage_hold_cycles: int = 4
+
+    # `recovery_joint_backoff` is how far a stalled joint retreats opposite the blocked direction.
+    recovery_joint_backoff: float = 4.0
+
+    # `recovery_posture_step` is how far recovery nudges posture joints toward the neutral recovery pose.
+    recovery_posture_step: float = 8.0
+
+    # `recovery_neutral_pose_value` is the neutral joint value used during the posture-tuck stage.
+    recovery_neutral_pose_value: float = 0.0
+
+    # -------------------------------------------------------------------------
+    # Current Safety
+    # -------------------------------------------------------------------------
     # `max_current_safety_threshold` is the fallback runtime current threshold for joints without a tuned override.
     max_current_safety_threshold: int = 2500
 
@@ -69,11 +100,19 @@ class SourcceyFollowerConfig(RobotConfig):
     # `gripper_current_safety_backoff` is a smaller retreat so the gripper can keep a light hold on objects.
     gripper_current_safety_backoff: float = 0.5
 
+    # -------------------------------------------------------------------------
+    # Calibration Safety
+    # -------------------------------------------------------------------------
     # `max_current_calibration_threshold` is the maximum current threshold for calibration purposes.
     max_current_calibration_threshold: int = 75
 
-    # cameras
+    # -------------------------------------------------------------------------
+    # Sensors
+    # -------------------------------------------------------------------------
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
 
-    # Set to `True` for backward compatibility with previous policies/dataset
+    # -------------------------------------------------------------------------
+    # Compatibility
+    # -------------------------------------------------------------------------
+    # Set to `True` for backward compatibility with previous policies/dataset.
     use_degrees: bool = False
