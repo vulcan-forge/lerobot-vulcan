@@ -26,7 +26,7 @@ def test_recovery_pathing_is_disabled_by_default():
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == goal_pos
 
 
-def test_recovery_pathing_inserts_backoff_then_active_core_tuck_when_stalled():
+def test_recovery_pathing_runs_table_escape_sequence_when_stalled():
     config = SourcceyFollowerConfig(
         port="/dev/null",
         enable_recovery_pathing=True,
@@ -59,18 +59,42 @@ def test_recovery_pathing_inserts_backoff_then_active_core_tuck_when_stalled():
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == goal_pos
 
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 3.0,
-        "shoulder_lift": 3.0,
-        "elbow_flex": 3.0,
-        "wrist_flex": 3.0,
+        "shoulder_pan": 12.0,
+        "shoulder_lift": 100.0,
+        "elbow_flex": 10.0,
+        "wrist_flex": 9.0,
         "wrist_roll": 1.0,
         "gripper": 20.0,
     }
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 1.0,
-        "shoulder_lift": 5.0,
-        "elbow_flex": 1.0,
-        "wrist_flex": 3.0,
+        "shoulder_pan": 12.0,
+        "shoulder_lift": 100.0,
+        "elbow_flex": -96.03045133224579,
+        "wrist_flex": 9.0,
+        "wrist_roll": 1.0,
+        "gripper": 20.0,
+    }
+    assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
+        "shoulder_pan": -34.12228796844181,
+        "shoulder_lift": 100.0,
+        "elbow_flex": -96.03045133224579,
+        "wrist_flex": 9.0,
+        "wrist_roll": 1.0,
+        "gripper": 20.0,
+    }
+    assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
+        "shoulder_pan": -34.12228796844181,
+        "shoulder_lift": -100.0,
+        "elbow_flex": -2.159161011721153,
+        "wrist_flex": 9.0,
+        "wrist_roll": 1.0,
+        "gripper": 20.0,
+    }
+    assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
+        "shoulder_pan": 3.8570084666039577,
+        "shoulder_lift": -100.0,
+        "elbow_flex": -2.159161011721153,
+        "wrist_flex": 9.0,
         "wrist_roll": 1.0,
         "gripper": 20.0,
     }
@@ -78,7 +102,7 @@ def test_recovery_pathing_inserts_backoff_then_active_core_tuck_when_stalled():
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == goal_pos
 
 
-def test_recovery_pathing_rotates_to_active_full_tuck_on_repeated_stalls():
+def test_recovery_pathing_restarts_table_escape_sequence_on_repeated_stalls():
     config = SourcceyFollowerConfig(
         port="/dev/null",
         enable_recovery_pathing=True,
@@ -110,46 +134,79 @@ def test_recovery_pathing_rotates_to_active_full_tuck_on_repeated_stalls():
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == goal_pos
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == goal_pos
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 3.0,
-        "shoulder_lift": 3.0,
-        "elbow_flex": 3.0,
-        "wrist_flex": 3.0,
+        "shoulder_pan": 12.0,
+        "shoulder_lift": 100.0,
+        "elbow_flex": 10.0,
+        "wrist_flex": 9.0,
         "wrist_roll": 1.0,
         "gripper": 20.0,
     }
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 1.0,
-        "shoulder_lift": 5.0,
-        "elbow_flex": 1.0,
-        "wrist_flex": 3.0,
+        "shoulder_pan": 12.0,
+        "shoulder_lift": 100.0,
+        "elbow_flex": -96.03045133224579,
+        "wrist_flex": 9.0,
+        "wrist_roll": 1.0,
+        "gripper": 20.0,
+    }
+    assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
+        "shoulder_pan": -34.12228796844181,
+        "shoulder_lift": 100.0,
+        "elbow_flex": -96.03045133224579,
+        "wrist_flex": 9.0,
+        "wrist_roll": 1.0,
+        "gripper": 20.0,
+    }
+    assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
+        "shoulder_pan": -34.12228796844181,
+        "shoulder_lift": -100.0,
+        "elbow_flex": -2.159161011721153,
+        "wrist_flex": 9.0,
+        "wrist_roll": 1.0,
+        "gripper": 20.0,
+    }
+    assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
+        "shoulder_pan": 3.8570084666039577,
+        "shoulder_lift": -100.0,
+        "elbow_flex": -2.159161011721153,
+        "wrist_flex": 9.0,
         "wrist_roll": 1.0,
         "gripper": 20.0,
     }
 
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == goal_pos
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 3.0,
-        "shoulder_lift": 3.0,
-        "elbow_flex": 3.0,
-        "wrist_flex": 3.0,
-        "wrist_roll": 1.0,
-        "gripper": 20.0,
-    }
-    assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 1.0,
-        "shoulder_lift": 5.0,
-        "elbow_flex": 1.0,
-        "wrist_flex": 1.0,
+        "shoulder_pan": 12.0,
+        "shoulder_lift": 100.0,
+        "elbow_flex": 10.0,
+        "wrist_flex": 9.0,
         "wrist_roll": 1.0,
         "gripper": 20.0,
     }
 
 
-def test_recovery_pathing_builds_many_recovery_strategies():
+def test_recovery_pathing_builds_five_stage_escape_sequence():
     config = SourcceyFollowerConfig(port="/dev/null", enable_recovery_pathing=True)
     planner = SourcceyFollowerPathing(config)
 
-    assert len(planner._recovery_strategies) >= 20
+    escape_sequence = planner._build_escape_sequence(
+        {
+            "shoulder_pan": 12.0,
+            "shoulder_lift": 12.0,
+            "elbow_flex": 10.0,
+            "wrist_flex": 9.0,
+            "wrist_roll": 1.0,
+            "gripper": 20.0,
+        }
+    )
+
+    assert [stage.name for stage in escape_sequence] == [
+        "shoulder_lift_up",
+        "elbow_flex_up",
+        "shoulder_pan_out",
+        "shoulder_elbow_down",
+        "shoulder_pan_in",
+    ]
 
 
 def test_recovery_pathing_pauses_stage_consumption_while_motor_is_hot():
@@ -184,23 +241,23 @@ def test_recovery_pathing_pauses_stage_consumption_while_motor_is_hot():
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == goal_pos
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == goal_pos
 
-    paused_backoff = planner.apply_recovery_pathing(goal_pos, present_pos, pause_motors={"shoulder_lift"})
-    assert paused_backoff == {
-        "shoulder_pan": 3.0,
-        "shoulder_lift": 3.0,
-        "elbow_flex": 3.0,
-        "wrist_flex": 3.0,
+    paused_stage = planner.apply_recovery_pathing(goal_pos, present_pos, pause_motors={"shoulder_lift"})
+    assert paused_stage == {
+        "shoulder_pan": 12.0,
+        "shoulder_lift": 100.0,
+        "elbow_flex": 10.0,
+        "wrist_flex": 9.0,
         "wrist_roll": 1.0,
         "gripper": 20.0,
     }
 
-    assert planner.apply_recovery_pathing(goal_pos, present_pos, pause_motors={"shoulder_lift"}) == paused_backoff
-    assert planner.apply_recovery_pathing(goal_pos, present_pos) == paused_backoff
+    assert planner.apply_recovery_pathing(goal_pos, present_pos, pause_motors={"shoulder_lift"}) == paused_stage
+    assert planner.apply_recovery_pathing(goal_pos, present_pos) == paused_stage
     assert planner.apply_recovery_pathing(goal_pos, present_pos) == {
-        "shoulder_pan": 1.0,
-        "shoulder_lift": 5.0,
-        "elbow_flex": 1.0,
-        "wrist_flex": 3.0,
+        "shoulder_pan": 12.0,
+        "shoulder_lift": 100.0,
+        "elbow_flex": -96.03045133224579,
+        "wrist_flex": 9.0,
         "wrist_roll": 1.0,
         "gripper": 20.0,
     }
