@@ -53,12 +53,12 @@ class SourcceyLeaderCalibrator:
 
         shoulder_pan_homing_offset = self.teleop.bus.set_position_homings(
             {
-                "shoulder_pan": 2474 if reverse else 1554,
-                "shoulder_lift": 483 if reverse else 3667,
-                "elbow_flex": 3884 if reverse else 151,
-                "wrist_flex": 6086 if reverse else 2144,
-                "wrist_roll": 2078 if reverse else 2069,
-                "gripper": 5571 if reverse else 2725
+                "shoulder_pan": 2568 if reverse else 1544,
+                "shoulder_lift": 379 if reverse else 3636,
+                "elbow_flex": 3923 if reverse else 112,
+                "wrist_flex": 2172 if reverse else 2084,
+                "wrist_roll": 2074 if reverse else 1996,
+                "gripper": 5425 if reverse else 2714
             }
         )
 
