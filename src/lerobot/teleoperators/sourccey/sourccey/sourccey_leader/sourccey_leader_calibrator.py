@@ -171,7 +171,7 @@ class SourcceyLeaderCalibrator:
                     "drive_mode": 0,
                     "homing_offset": -2009,
                     "range_min": 1471,
-                    "range_max": 4000
+                    "range_max": 2986
                 }
             }
         else:
