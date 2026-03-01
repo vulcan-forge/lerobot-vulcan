@@ -19,8 +19,11 @@
 # TODO(aliberts): Add block noqa when feature below is available
 # https://github.com/astral-sh/ruff/issues/3711
 
+from __future__ import annotations
+
 import abc
 import logging
+from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -39,6 +42,70 @@ NameOrID: TypeAlias = str | int
 Value: TypeAlias = int | float
 
 logger = logging.getLogger(__name__)
+
+
+class MotorsBusBase(abc.ABC):
+    """
+    Minimal interface shared by all motor bus implementations.
+
+    This base class keeps the common contract for both serial buses and newer
+    non-serial buses such as CAN-based implementations.
+    """
+
+    def __init__(
+        self,
+        port: str,
+        motors: dict[str, Motor],
+        calibration: dict[str, MotorCalibration] | None = None,
+    ):
+        self.port = port
+        self.motors = motors
+        self.calibration = calibration if calibration else {}
+
+    @abc.abstractmethod
+    def connect(self, handshake: bool = True) -> None:
+        pass
+
+    @abc.abstractmethod
+    def disconnect(self, disable_torque: bool = True) -> None:
+        pass
+
+    @property
+    @abc.abstractmethod
+    def is_connected(self) -> bool:
+        pass
+
+    @abc.abstractmethod
+    def read(self, data_name: str, motor: str) -> Value:
+        pass
+
+    @abc.abstractmethod
+    def write(self, data_name: str, motor: str, value: Value) -> None:
+        pass
+
+    @abc.abstractmethod
+    def sync_read(self, data_name: str, motors: str | list[str] | None = None) -> dict[str, Value]:
+        pass
+
+    @abc.abstractmethod
+    def sync_write(self, data_name: str, values: dict[str, Value]) -> None:
+        pass
+
+    @abc.abstractmethod
+    def enable_torque(self, motors: NameOrID | Sequence[NameOrID] | None = None, num_retry: int = 0) -> None:
+        pass
+
+    @abc.abstractmethod
+    def disable_torque(self, motors: NameOrID | Sequence[NameOrID] | None = None, num_retry: int = 0) -> None:
+        pass
+
+    @abc.abstractmethod
+    def read_calibration(self) -> dict[str, MotorCalibration]:
+        pass
+
+    @abc.abstractmethod
+    def write_calibration(self, calibration_dict: dict[str, MotorCalibration], cache: bool = True) -> None:
+        pass
 
 
 def get_ctrl_table(model_ctrl_table: dict[str, dict], model: str) -> dict[str, tuple[int, int]]:
@@ -96,18 +163,21 @@ class Motor:
     id: int
     model: str
     norm_mode: MotorNormMode
+    motor_type_str: str | None = None
+    recv_id: int | None = None
 
 
 class PortHandler(Protocol):
-    def __init__(self, port_name):
-        self.is_open: bool
-        self.baudrate: int
-        self.packet_start_time: float
-        self.packet_timeout: float
-        self.tx_time_per_byte: float
-        self.is_using: bool
-        self.port_name: str
-        self.ser: serial.Serial
+    is_open: bool
+    baudrate: int
+    packet_start_time: float
+    packet_timeout: float
+    tx_time_per_byte: float
+    is_using: bool
+    port_name: str
+    ser: serial.Serial
+
+    def __init__(self, port_name: str) -> None: ...
 
     def openPort(self): ...
     def closePort(self): ...
@@ -160,18 +230,22 @@ class PacketHandler(Protocol):
     def regWriteTxRx(self, port, id, address, length, data): ...
     def syncReadTx(self, port, start_address, data_length, param, param_length): ...
     def syncWriteTxOnly(self, port, start_address, data_length, param, param_length): ...
+    def broadcastPing(self, port): ...
 
 
 class GroupSyncRead(Protocol):
-    def __init__(self, port, ph, start_address, data_length):
-        self.port: str
-        self.ph: PortHandler
-        self.start_address: int
-        self.data_length: int
-        self.last_result: bool
-        self.is_param_changed: bool
-        self.param: list
-        self.data_dict: dict
+    port: str
+    ph: PortHandler
+    start_address: int
+    data_length: int
+    last_result: bool
+    is_param_changed: bool
+    param: list
+    data_dict: dict
+
+    def __init__(
+        self, port: PortHandler, ph: PacketHandler, start_address: int, data_length: int
+    ) -> None: ...
 
     def makeParam(self): ...
     def addParam(self, id): ...
@@ -185,14 +259,17 @@ class GroupSyncRead(Protocol):
 
 
 class GroupSyncWrite(Protocol):
-    def __init__(self, port, ph, start_address, data_length):
-        self.port: str
-        self.ph: PortHandler
-        self.start_address: int
-        self.data_length: int
-        self.is_param_changed: bool
-        self.param: list
-        self.data_dict: dict
+    port: str
+    ph: PortHandler
+    start_address: int
+    data_length: int
+    is_param_changed: bool
+    param: list
+    data_dict: dict
+
+    def __init__(
+        self, port: PortHandler, ph: PacketHandler, start_address: int, data_length: int
+    ) -> None: ...
 
     def makeParam(self): ...
     def addParam(self, id, data): ...
@@ -202,15 +279,15 @@ class GroupSyncWrite(Protocol):
     def txPacket(self): ...
 
 
-class MotorsBus(abc.ABC):
+class SerialMotorsBus(MotorsBusBase):
     """
-    A MotorsBus allows to efficiently read and write to the attached motors.
+    A SerialMotorsBus allows to efficiently read and write to the attached motors.
     It represents several motors daisy-chained together and connected through a serial port.
     There are currently two implementations of this abstract class:
         - DynamixelMotorsBus
         - FeetechMotorsBus
 
-    Note: This class may evolve in the future should we add support for other types of bus.
+    This class is the shared implementation for serial-based motor protocols.
 
     A MotorsBus subclass instance requires a port (e.g. `FeetechMotorsBus(port="/dev/tty.usbmodem575E0031751"`)).
     To find the port, you can run our utility script:
@@ -259,9 +336,7 @@ class MotorsBus(abc.ABC):
         motors: dict[str, Motor],
         calibration: dict[str, MotorCalibration] | None = None,
     ):
-        self.port = port
-        self.motors = motors
-        self.calibration = calibration if calibration else {}
+        super().__init__(port, motors, calibration)
 
         self.port_handler: PortHandler
         self.packet_handler: PacketHandler
@@ -322,7 +397,7 @@ class MotorsBus(abc.ABC):
         else:
             raise TypeError(f"'{motor}' should be int, str.")
 
-    def _get_motor_model(self, motor: NameOrID) -> int:
+    def _get_motor_model(self, motor: NameOrID) -> str:
         if isinstance(motor, str):
             return self.motors[motor].model
         elif isinstance(motor, int):
@@ -330,17 +405,19 @@ class MotorsBus(abc.ABC):
         else:
             raise TypeError(f"'{motor}' should be int, str.")
 
-    def _get_motors_list(self, motors: str | list[str] | None) -> list[str]:
+    def _get_motors_list(self, motors: NameOrID | Sequence[NameOrID] | None) -> list[str]:
         if motors is None:
             return list(self.motors)
         elif isinstance(motors, str):
             return [motors]
-        elif isinstance(motors, list):
-            return motors.copy()
+        elif isinstance(motors, int):
+            return [self._id_to_name(motors)]
+        elif isinstance(motors, Sequence):
+            return [motor if isinstance(motor, str) else self._id_to_name(motor) for motor in motors]
         else:
             raise TypeError(motors)
 
-    def _get_ids_values_dict(self, values: Value | dict[str, Value] | None) -> list[str]:
+    def _get_ids_values_dict(self, values: Value | dict[str, Value] | None) -> dict[int, Value]:
         if isinstance(values, (int | float)):
             return dict.fromkeys(self.ids, values)
         elif isinstance(values, dict):
@@ -556,7 +633,7 @@ class MotorsBus(abc.ABC):
         self.set_baudrate(self.default_baudrate)
 
     @abc.abstractmethod
-    def _find_single_motor(self, motor: str, initial_baudrate: int | None) -> tuple[int, int]:
+    def _find_single_motor(self, motor: str, initial_baudrate: int | None = None) -> tuple[int, int]:
         pass
 
     @abc.abstractmethod
@@ -569,14 +646,14 @@ class MotorsBus(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def disable_torque(self, motors: int | str | list[str] | None = None, num_retry: int = 0) -> None:
+    def disable_torque(self, motors: NameOrID | Sequence[NameOrID] | None = None, num_retry: int = 0) -> None:
         """Disable torque on selected motors.
 
         Disabling Torque allows to write to the motors' permanent memory area (EPROM/EEPROM).
 
         Args:
-            motors (int | str | list[str] | None, optional): Target motors.  Accepts a motor name, an ID, a
-                list of names or `None` to affect every registered motor.  Defaults to `None`.
+            motors (NameOrID | Sequence[NameOrID] | None, optional): Target motors. Accepts a motor
+                name, an ID, a sequence of either, or `None` to affect every registered motor.
             num_retry (int, optional): Number of additional retry attempts on communication failure.
                 Defaults to 0.
         """
@@ -587,18 +664,19 @@ class MotorsBus(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def enable_torque(self, motors: str | list[str] | None = None, num_retry: int = 0) -> None:
+    def enable_torque(self, motors: NameOrID | Sequence[NameOrID] | None = None, num_retry: int = 0) -> None:
         """Enable torque on selected motors.
 
         Args:
-            motor (int): Same semantics as :pymeth:`disable_torque`. Defaults to `None`.
+            motors (NameOrID | Sequence[NameOrID] | None, optional): Same semantics as
+                :pymeth:`disable_torque`. Defaults to `None`.
             num_retry (int, optional): Number of additional retry attempts on communication failure.
                 Defaults to 0.
         """
         pass
 
     @contextmanager
-    def torque_disabled(self, motors: int | str | list[str] | None = None):
+    def torque_disabled(self, motors: NameOrID | Sequence[NameOrID] | None = None):
         """Context-manager that guarantees torque is re-enabled.
 
         This helper is useful to temporarily disable torque when configuring motors.
@@ -675,24 +753,19 @@ class MotorsBus(abc.ABC):
         """
         pass
 
-    def reset_calibration(self, motors: NameOrID | list[NameOrID] | None = None) -> None:
+    def reset_calibration(self, motors: NameOrID | Sequence[NameOrID] | None = None) -> None:
         """Restore factory calibration for the selected motors.
 
         Homing offset is set to ``0`` and min/max position limits are set to the full usable range.
         The in-memory :pyattr:`calibration` is cleared.
 
         Args:
-            motors (NameOrID | list[NameOrID] | None, optional): Selection of motors. `None` (default)
+            motors (NameOrID | Sequence[NameOrID] | None, optional): Selection of motors. `None` (default)
                 resets every motor.
         """
-        if motors is None:
-            motors = list(self.motors)
-        elif isinstance(motors, (str | int)):
-            motors = [motors]
-        elif not isinstance(motors, list):
-            raise TypeError(motors)
+        motor_names = self._get_motors_list(motors)
 
-        for motor in motors:
+        for motor in motor_names:
             model = self._get_motor_model(motor)
             max_res = self.model_resolution_table[model] - 1
             self.write("Homing_Offset", motor, 0, normalize=False)
@@ -701,28 +774,26 @@ class MotorsBus(abc.ABC):
 
         self.calibration = {}
 
-    def set_half_turn_homings(self, motors: NameOrID | list[NameOrID] | None = None) -> dict[NameOrID, Value]:
+    def set_half_turn_homings(
+        self, motors: NameOrID | Sequence[NameOrID] | None = None
+    ) -> dict[NameOrID, Value]:
         """Centre each motor range around its current position.
 
         The function computes and writes a homing offset such that the present position becomes exactly one
         half-turn (e.g. `2047` on a 12-bit encoder).
 
         Args:
-            motors (NameOrID | list[NameOrID] | None, optional): Motors to adjust. Defaults to all motors (`None`).
+            motors (NameOrID | Sequence[NameOrID] | None, optional): Motors to adjust.
+                Defaults to all motors (`None`).
 
         Returns:
             dict[NameOrID, Value]: Mapping *motor → written homing offset*.
         """
-        if motors is None:
-            motors = list(self.motors)
-        elif isinstance(motors, (str | int)):
-            motors = [motors]
-        elif not isinstance(motors, list):
-            raise TypeError(motors)
+        motor_names = self._get_motors_list(motors)
 
-        self.reset_calibration(motors)
-        print(f"Resetting calibration for {motors}")
-        actual_positions = self.sync_read("Present_Position", motors, normalize=False)
+        self.reset_calibration(motor_names)
+        print(f"Resetting calibration for {motor_names}")
+        actual_positions = self.sync_read("Present_Position", motor_names, normalize=False)
         homing_offsets = self._get_half_turn_homings(actual_positions)
         for motor, offset in homing_offsets.items():
             self.write("Homing_Offset", motor, offset)
@@ -776,7 +847,7 @@ class MotorsBus(abc.ABC):
         pass
 
     def record_ranges_of_motion(
-        self, motors: NameOrID | list[NameOrID] | None = None, display_values: bool = True
+        self, motors: NameOrID | Sequence[NameOrID] | None = None, display_values: bool = True
     ) -> tuple[dict[NameOrID, Value], dict[NameOrID, Value]]:
         """Interactively record the min/max encoder values of each motor.
 
@@ -784,7 +855,7 @@ class MotorsBus(abc.ABC):
         :kbd:`Enter` to finish.
 
         Args:
-            motors (NameOrID | list[NameOrID] | None, optional): Motors to record.
+            motors (NameOrID | Sequence[NameOrID] | None, optional): Motors to record.
                 Defaults to every motor (`None`).
             display_values (bool, optional): When `True` (default) a live table is printed to the console.
 
@@ -792,27 +863,22 @@ class MotorsBus(abc.ABC):
             tuple[dict[NameOrID, Value], dict[NameOrID, Value]]: Two dictionaries *mins* and *maxes* with the
                 extreme values observed for each motor.
         """
-        if motors is None:
-            motors = list(self.motors)
-        elif isinstance(motors, (str | int)):
-            motors = [motors]
-        elif not isinstance(motors, list):
-            raise TypeError(motors)
+        motor_names = self._get_motors_list(motors)
 
-        start_positions = self.sync_read("Present_Position", motors, normalize=False)
+        start_positions = self.sync_read("Present_Position", motor_names, normalize=False)
         mins = start_positions.copy()
         maxes = start_positions.copy()
 
         user_pressed_enter = False
         while not user_pressed_enter:
-            positions = self.sync_read("Present_Position", motors, normalize=False)
+            positions = self.sync_read("Present_Position", motor_names, normalize=False)
             mins = {motor: min(positions[motor], min_) for motor, min_ in mins.items()}
             maxes = {motor: max(positions[motor], max_) for motor, max_ in maxes.items()}
 
             if display_values:
                 print("\n-------------------------------------------")
                 print(f"{'NAME':<15} | {'MIN':>6} | {'POS':>6} | {'MAX':>6}")
-                for motor in motors:
+                for motor in motor_names:
                     print(f"{motor:<15} | {mins[motor]:>6} | {positions[motor]:>6} | {maxes[motor]:>6}")
 
             if enter_pressed():
@@ -820,9 +886,9 @@ class MotorsBus(abc.ABC):
 
             if display_values and not user_pressed_enter:
                 # Move cursor up to overwrite the previous output
-                move_cursor_up(len(motors) + 3)
+                move_cursor_up(len(motor_names) + 3)
 
-        same_min_max = [motor for motor in motors if mins[motor] == maxes[motor]]
+        same_min_max = [motor for motor in motor_names if mins[motor] == maxes[motor]]
         # We just need the offsets for many calibrations, so we don't neccesary need range of motion to
         # be different if we are manually settings ranges. 7-28-2025
         # if same_min_max:
@@ -1261,3 +1327,6 @@ class MotorsBus(abc.ABC):
         for id_, value in ids_values.items():
             data = self._serialize_data(value, length)
             self.sync_writer.addParam(id_, data)
+
+
+MotorsBus: TypeAlias = SerialMotorsBus

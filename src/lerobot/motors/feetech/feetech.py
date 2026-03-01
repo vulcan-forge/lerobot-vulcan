@@ -19,7 +19,7 @@ from pprint import pformat
 
 from lerobot.motors.encoding_utils import decode_sign_magnitude, encode_sign_magnitude
 
-from ..motors_bus import Motor, MotorCalibration, MotorsBus, NameOrID, Value, get_address
+from ..motors_bus import Motor, MotorCalibration, NameOrID, SerialMotorsBus, Value, get_address
 from .tables import (
     FIRMWARE_MAJOR_VERSION,
     FIRMWARE_MINOR_VERSION,
@@ -96,7 +96,7 @@ def patch_setPacketTimeout(self, packet_length):  # noqa: N802
     self.packet_timeout = (self.tx_time_per_byte * packet_length) + (self.tx_time_per_byte * 3.0) + 50
 
 
-class FeetechMotorsBus(MotorsBus):
+class FeetechMotorsBus(SerialMotorsBus):
     """
     The FeetechMotorsBus class allows to efficiently read and write to the attached motors. It relies on the
     python feetech sdk to communicate with the motors, which is itself based on the dynamixel sdk.
@@ -127,7 +127,7 @@ class FeetechMotorsBus(MotorsBus):
 
         self.port_handler = scs.PortHandler(self.port)
         # HACK: monkeypatch
-        self.port_handler.setPacketTimeout = patch_setPacketTimeout.__get__(
+        self.port_handler.setPacketTimeout = patch_setPacketTimeout.__get__(  # type: ignore[method-assign]
             self.port_handler, scs.PortHandler
         )
         self.packet_handler = scs.PacketHandler(protocol_version)
@@ -332,7 +332,7 @@ class FeetechMotorsBus(MotorsBus):
 
         return homings
 
-    def disable_torque(self, motors: str | list[str] | None = None, num_retry: int = 10) -> None:
+    def disable_torque(self, motors: NameOrID | list[NameOrID] | None = None, num_retry: int = 10) -> None:
         for motor in self._get_motors_list(motors):
             self.write("Torque_Enable", motor, TorqueMode.DISABLED.value, num_retry=num_retry)
             self.write("Lock", motor, 0, num_retry=num_retry)
@@ -343,7 +343,7 @@ class FeetechMotorsBus(MotorsBus):
         addr, length = get_address(self.model_ctrl_table, model, "Lock")
         self._write(addr, length, motor_id, 0, num_retry=num_retry)
 
-    def enable_torque(self, motors: str | list[str] | None = None, num_retry: int = 10) -> None:
+    def enable_torque(self, motors: NameOrID | list[NameOrID] | None = None, num_retry: int = 10) -> None:
         for motor in self._get_motors_list(motors):
             self.write("Torque_Enable", motor, TorqueMode.ENABLED.value, num_retry=num_retry)
             self.write("Lock", motor, 1, num_retry=num_retry)
@@ -454,7 +454,7 @@ class FeetechMotorsBus(MotorsBus):
         if not self._is_comm_success(comm):
             if raise_on_error:
                 raise ConnectionError(self.packet_handler.getTxRxResult(comm))
-            return
+            return None
 
         ids_errors = {id_: status for id_, status in ids_status.items() if self._is_error(status)}
         if ids_errors:
