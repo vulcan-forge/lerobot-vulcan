@@ -14,14 +14,105 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import datasets
+import pandas as pd
+import PIL.Image
 import torch
 
 from lerobot.datasets.aggregate import aggregate_datasets
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.video_utils import encode_video_frames
 from tests.fixtures.constants import DUMMY_REPO_ID
+
+
+def load_local_dataset(repo_id: str, root: Path) -> LeRobotDataset:
+    with (
+        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+    ):
+        mock_get_safe_version.return_value = "v3.0"
+        mock_snapshot_download.return_value = str(root)
+        return LeRobotDataset(repo_id, root=root)
+
+
+def split_last_episode_into_second_video_file(dataset: LeRobotDataset, video_key: str) -> None:
+    meta_path = dataset.root / "meta/episodes/chunk-000/file-000.parquet"
+    meta_df = pd.read_parquet(meta_path)
+    split_episode = int(meta_df.loc[meta_df["length"] > 0, "episode_index"].iloc[-1])
+    split_row = meta_df.loc[meta_df["episode_index"] == split_episode].iloc[0]
+    start_frame = int(split_row["dataset_from_index"])
+    end_frame = int(split_row["dataset_to_index"])
+    offset_s = start_frame / dataset.fps
+
+    assert end_frame > start_frame, "Split episode must contain at least one frame"
+
+    with TemporaryDirectory(dir=dataset.root) as tmp_dir_str:
+        tmp_dir = Path(tmp_dir_str)
+        for output_idx, frame_idx in enumerate(range(start_frame, end_frame)):
+            frame = dataset[frame_idx][video_key]
+            frame_uint8 = frame.mul(255).clamp(0, 255).byte().permute(1, 2, 0).cpu().numpy()
+            PIL.Image.fromarray(frame_uint8).save(tmp_dir / f"frame-{output_idx:06d}.png")
+
+        split_video_path = dataset.root / f"videos/{video_key}/chunk-000/file-001.mp4"
+        split_video_path.parent.mkdir(parents=True, exist_ok=True)
+        encode_video_frames(tmp_dir, split_video_path, fps=dataset.fps)
+
+    meta_df.loc[meta_df["episode_index"] == split_episode, f"videos/{video_key}/file_index"] = 1
+    meta_df.loc[meta_df["episode_index"] == split_episode, f"videos/{video_key}/from_timestamp"] -= offset_s
+    meta_df.loc[meta_df["episode_index"] == split_episode, f"videos/{video_key}/to_timestamp"] -= offset_s
+    meta_df.to_parquet(meta_path)
+
+
+def split_last_episode_into_second_data_file(dataset: LeRobotDataset) -> None:
+    meta_path = dataset.root / "meta/episodes/chunk-000/file-000.parquet"
+    data_path = dataset.root / "data/chunk-000/file-000.parquet"
+
+    meta_df = pd.read_parquet(meta_path)
+    data_df = pd.read_parquet(data_path)
+    split_episode = int(meta_df.loc[meta_df["length"] > 0, "episode_index"].iloc[-1])
+
+    keep_df = data_df[data_df["episode_index"] != split_episode].reset_index(drop=True)
+    split_df = data_df[data_df["episode_index"] == split_episode].reset_index(drop=True)
+
+    assert not keep_df.empty, "Need at least one episode to remain in the first data file"
+    assert not split_df.empty, "Split episode must contain at least one row"
+
+    keep_df.to_parquet(data_path)
+    split_data_path = dataset.root / "data/chunk-000/file-001.parquet"
+    split_data_path.parent.mkdir(parents=True, exist_ok=True)
+    split_df.to_parquet(split_data_path)
+
+    meta_df.loc[meta_df["episode_index"] == split_episode, "data/file_index"] = 1
+    meta_df.to_parquet(meta_path)
+
+
+def assert_data_files_reference_matching_episodes(aggr_ds: LeRobotDataset) -> None:
+    cached_episode_indices: dict[Path, set[int]] = {}
+
+    for ep_idx in range(aggr_ds.num_episodes):
+        data_path = aggr_ds.root / aggr_ds.meta.get_data_file_path(ep_idx)
+        if data_path not in cached_episode_indices:
+            cached_episode_indices[data_path] = set(pd.read_parquet(data_path)["episode_index"].tolist())
+        assert ep_idx in cached_episode_indices[data_path], (
+            f"Episode {ep_idx} points to {data_path}, but that parquet file does not contain its rows"
+        )
+
+
+def assert_metadata_rows_reference_their_own_file(aggr_root: Path) -> None:
+    meta_files = sorted((aggr_root / "meta/episodes").rglob("*.parquet"))
+    assert len(meta_files) > 1, "Test setup should create multiple aggregated metadata files"
+
+    for meta_file in meta_files:
+        chunk_idx = int(meta_file.parent.name.split("-")[1])
+        file_idx = int(meta_file.stem.split("-")[1])
+        meta_df = pd.read_parquet(meta_file)
+
+        assert set(meta_df["meta/episodes/chunk_index"]) == {chunk_idx}
+        assert set(meta_df["meta/episodes/file_index"]) == {file_idx}
 
 
 def assert_episode_and_frame_counts(aggr_ds, expected_episodes, expected_frames):
@@ -381,6 +472,83 @@ def test_video_timestamps_regression(tmp_path, lerobot_dataset_factory):
         for key in aggr_ds.meta.video_keys:
             assert key in item, f"Video key {key} missing from item {i}"
             assert item[key].shape[0] == 3, f"Expected 3 channels for video key {key}"
+
+
+def test_aggregate_preserves_multi_file_source_video_mappings(tmp_path, lerobot_dataset_factory):
+    """Regression test for source datasets that already span multiple video files."""
+    src_ds = lerobot_dataset_factory(
+        root=tmp_path / "video_src",
+        repo_id=f"{DUMMY_REPO_ID}_video_src",
+        total_episodes=6,
+        total_frames=600,
+    )
+    video_key = src_ds.meta.video_keys[0]
+    split_last_episode_into_second_video_file(src_ds, video_key)
+
+    aggregate_datasets(
+        repo_ids=[src_ds.repo_id],
+        roots=[src_ds.root],
+        aggr_repo_id=f"{DUMMY_REPO_ID}_video_aggr",
+        aggr_root=tmp_path / "video_aggr",
+        video_files_size_in_mb=0.0001,
+    )
+
+    aggr_ds = load_local_dataset(f"{DUMMY_REPO_ID}_video_aggr", tmp_path / "video_aggr")
+
+    assert set(aggr_ds.meta.episodes[f"videos/{video_key}/file_index"]) == {0, 1}
+    assert_video_timestamps_within_bounds(aggr_ds)
+    assert_dataset_iteration_works(aggr_ds)
+
+
+def test_aggregate_preserves_multi_file_source_data_mappings(tmp_path, lerobot_dataset_factory):
+    """Regression test for source datasets that already span multiple data parquet files."""
+    src_ds = lerobot_dataset_factory(
+        root=tmp_path / "data_src",
+        repo_id=f"{DUMMY_REPO_ID}_data_src",
+        total_episodes=6,
+        total_frames=600,
+    )
+    split_last_episode_into_second_data_file(src_ds)
+
+    aggregate_datasets(
+        repo_ids=[src_ds.repo_id],
+        roots=[src_ds.root],
+        aggr_repo_id=f"{DUMMY_REPO_ID}_data_aggr",
+        aggr_root=tmp_path / "data_aggr",
+        data_files_size_in_mb=0.0001,
+    )
+
+    aggr_ds = load_local_dataset(f"{DUMMY_REPO_ID}_data_aggr", tmp_path / "data_aggr")
+
+    assert set(aggr_ds.meta.episodes["data/file_index"]) == {0, 1}
+    assert_data_files_reference_matching_episodes(aggr_ds)
+
+
+def test_aggregate_metadata_rows_reference_written_file(tmp_path, lerobot_dataset_factory):
+    """Regression test for metadata rows pointing at the wrong aggregated metadata file."""
+    ds_0 = lerobot_dataset_factory(
+        root=tmp_path / "meta_0",
+        repo_id=f"{DUMMY_REPO_ID}_meta_0",
+        total_episodes=4,
+        total_frames=200,
+    )
+    ds_1 = lerobot_dataset_factory(
+        root=tmp_path / "meta_1",
+        repo_id=f"{DUMMY_REPO_ID}_meta_1",
+        total_episodes=4,
+        total_frames=200,
+    )
+
+    with patch("lerobot.datasets.aggregate.DEFAULT_DATA_FILE_SIZE_IN_MB", 0.0001):
+        aggregate_datasets(
+            repo_ids=[ds_0.repo_id, ds_1.repo_id],
+            roots=[ds_0.root, ds_1.root],
+            aggr_repo_id=f"{DUMMY_REPO_ID}_meta_aggr",
+            aggr_root=tmp_path / "meta_aggr",
+            data_files_size_in_mb=100,
+        )
+
+    assert_metadata_rows_reference_their_own_file(tmp_path / "meta_aggr")
 
 
 def assert_image_schema_preserved(aggr_ds):
