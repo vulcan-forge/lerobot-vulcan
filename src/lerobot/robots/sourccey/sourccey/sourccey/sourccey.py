@@ -379,6 +379,33 @@ class Sourccey(Robot):
     def stop_base(self):
         self.dc_motors_controller.set_velocities({"front_left": 0, "front_right": 0, "rear_left": 0, "rear_right": 0})
 
+    def disable_arm_torque(self) -> None:
+        """
+        Disable torque on both follower arms so they can be freely moved by hand.
+
+        Also marks internal untorque edge state as active so the next streamed command
+        with untorque flags set to `False` will cleanly re-enable torque.
+        """
+        for arm_name, arm in (("left", self.left_arm), ("right", self.right_arm)):
+            try:
+                arm.bus.disable_torque()
+            except Exception as e:
+                logger.warning(f"Failed to disable torque on {arm_name} arm: {e}")
+
+        self.untorque_left_prev = True
+        self.untorque_right_prev = True
+
+    def watchdog_stop_and_relax(self) -> None:
+        """
+        Host watchdog fail-safe: stop mobile + z motion and fully release arm torque.
+        """
+        self.stop_base()
+        try:
+            self.z_actuator.stop()
+        except Exception as e:
+            logger.warning(f"Failed to stop z actuator during watchdog: {e}")
+        self.disable_arm_torque()
+
     ##################################################################################
     # Private Kinematic Functions
     ##################################################################################

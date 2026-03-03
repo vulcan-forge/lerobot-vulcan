@@ -199,6 +199,21 @@ class SourcceyClient(Robot):
     def configure(self):
         pass
 
+    def _send_relax_command(self) -> None:
+        """
+        Best-effort final command before disconnect: stop base and untorque both arms.
+        """
+        relax_action = {
+            "x.vel": 0.0,
+            "y.vel": 0.0,
+            "theta.vel": 0.0,
+            "z.pos": float(self._z_pos_cmd),
+            "untorque_left": True,
+            "untorque_right": True,
+        }
+        robot_action = self.protobuf_converter.action_to_protobuf(relax_action)
+        self.zmq_cmd_socket.send(robot_action.SerializeToString(), flags=zmq.NOBLOCK)
+
     def disconnect(self):
         """Cleans ZMQ comms"""
 
@@ -206,6 +221,12 @@ class SourcceyClient(Robot):
             raise DeviceNotConnectedError(
                 "SourcceyClient is not connected. You need to run `robot.connect()` before disconnecting."
             )
+        try:
+            self._send_relax_command()
+        except zmq.Again:
+            logging.debug("Could not send final relax command before disconnect: socket not ready.")
+        except Exception as e:
+            logging.debug(f"Could not send final relax command before disconnect: {e}")
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()

@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import logging
+import signal
 import time
 
 import zmq
@@ -46,6 +47,12 @@ class SourcceyHost:
 
 
 def main():
+    def _handle_termination_signal(signum, _frame):
+        logging.info(f"Received signal {signum}. Shutting down Sourccey Host.")
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _handle_termination_signal)
+
     _silence_camera_warnings_for_host()
 
     logging.info("Configuring Sourccey")
@@ -101,10 +108,11 @@ def main():
             now = time.time()
             if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
                 logging.warning(
-                    f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. Stopping the base."
+                    f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. "
+                    "Stopping base and releasing arm torque."
                 )
                 watchdog_active = True
-                robot.stop_base()
+                robot.watchdog_stop_and_relax()
 
             if observation is not None and observation != {}:
                 previous_observation = observation

@@ -320,11 +320,12 @@ def _run_host_loop(stop_event: threading.Event) -> None:
             now = time.time()
             if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
                 logging.warning(
-                    f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. Stopping the base."
+                    f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. "
+                    "Stopping base and releasing arm torque."
                 )
                 watchdog_active = True
                 try:
-                    robot.stop_base()
+                    robot.watchdog_stop_and_relax()
                 except Exception:
                     pass
 
