@@ -295,7 +295,6 @@ class FeetechMotorsBus(SerialMotorsBus):
 
         return half_turn_homings
 
-<<<<<<< HEAD
     def _get_position_homings(self, actual_positions: dict[NameOrID, Value], target_positions: dict[NameOrID, Value]) -> dict[NameOrID, Value]:
         """
         Calculate homing offsets to move from actual positions to target positions.
@@ -333,28 +332,17 @@ class FeetechMotorsBus(SerialMotorsBus):
         return homings
 
     def disable_torque(self, motors: NameOrID | list[NameOrID] | None = None, num_retry: int = 10) -> None:
-=======
-    def disable_torque(self, motors: int | str | list[str] | None = None, num_retry: int = 0) -> None:
->>>>>>> upstream/main
         for motor in self._get_motors_list(motors):
             self.write("Torque_Enable", motor, TorqueMode.DISABLED.value, num_retry=num_retry)
             self.write("Lock", motor, 0, num_retry=num_retry)
 
-<<<<<<< HEAD
-    def _disable_torque(self, motor_id: int, model: str, num_retry: int = 10) -> None:
-=======
     def _disable_torque(self, motor: int, model: str, num_retry: int = 0) -> None:
->>>>>>> upstream/main
         addr, length = get_address(self.model_ctrl_table, model, "Torque_Enable")
         self._write(addr, length, motor, TorqueMode.DISABLED.value, num_retry=num_retry)
         addr, length = get_address(self.model_ctrl_table, model, "Lock")
         self._write(addr, length, motor, 0, num_retry=num_retry)
 
-<<<<<<< HEAD
-    def enable_torque(self, motors: NameOrID | list[NameOrID] | None = None, num_retry: int = 10) -> None:
-=======
     def enable_torque(self, motors: int | str | list[str] | None = None, num_retry: int = 0) -> None:
->>>>>>> upstream/main
         for motor in self._get_motors_list(motors):
             self.write("Torque_Enable", motor, TorqueMode.ENABLED.value, num_retry=num_retry)
             self.write("Lock", motor, 1, num_retry=num_retry)

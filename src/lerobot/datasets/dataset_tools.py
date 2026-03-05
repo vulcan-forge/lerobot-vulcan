@@ -1475,13 +1475,9 @@ def modify_tasks(
 
     # Collect all unique tasks and create new task mapping
     unique_tasks = sorted(set(episode_to_task.values()))
-<<<<<<< HEAD
-    new_task_df = pd.DataFrame({"task_index": list(range(len(unique_tasks)))}, index=unique_tasks)
-=======
     new_task_df = pd.DataFrame(
         {"task_index": list(range(len(unique_tasks)))}, index=pd.Index(unique_tasks, name="task")
     )
->>>>>>> upstream/main
     task_to_index = {task: idx for idx, task in enumerate(unique_tasks)}
 
     logging.info(f"Modifying tasks in {dataset.repo_id}")
@@ -1535,11 +1531,7 @@ def modify_tasks(
 
 def convert_image_to_video_dataset(
     dataset: LeRobotDataset,
-<<<<<<< HEAD
-    output_dir: Path,
-=======
     output_dir: Path | None = None,
->>>>>>> upstream/main
     repo_id: str | None = None,
     vcodec: str = "libsvtav1",
     pix_fmt: str = "yuv420p",
@@ -1558,13 +1550,8 @@ def convert_image_to_video_dataset(
 
     Args:
         dataset: The source LeRobot dataset with images
-<<<<<<< HEAD
-        output_dir: Directory to save the new video dataset
-        repo_id: Repository ID for the new dataset (default: original_id + "_video")
-=======
         output_dir: Root directory where the edited dataset will be stored. If not specified, defaults to $HF_LEROBOT_HOME/repo_id. Equivalent to new_root in EditDatasetConfig.
         repo_id: Edited dataset identifier. Equivalent to new_repo_id in EditDatasetConfig.
->>>>>>> upstream/main
         vcodec: Video codec (default: libsvtav1)
         pix_fmt: Pixel format (default: yuv420p)
         g: Group of pictures size (default: 2)
@@ -1615,10 +1602,7 @@ def convert_image_to_video_dataset(
             # Video info will be updated after episodes are encoded
 
     # Create new metadata for video dataset
-<<<<<<< HEAD
-=======
     output_dir = Path(output_dir) if output_dir is not None else HF_LEROBOT_HOME / repo_id
->>>>>>> upstream/main
     new_meta = LeRobotDatasetMetadata.create(
         repo_id=repo_id,
         fps=dataset.meta.fps,
