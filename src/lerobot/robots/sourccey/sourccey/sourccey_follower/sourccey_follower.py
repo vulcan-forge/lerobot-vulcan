@@ -246,6 +246,7 @@ class SourcceyFollower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
+        present_pos: dict[str, float] = {}
         try:
             goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
@@ -276,5 +277,6 @@ class SourcceyFollower(Robot):
                 logger.warning(f"Status packet error during sync_read / sync_write in {self}: {e}. Returning present position.")
                 self._last_write_warning_time = current_time
             # Return present position instead of goal position when write fails
-            return {f"{motor}.pos": val for motor, val in present_pos.items()}
-
+            output = {f"{motor}.pos": val for motor, val in present_pos.items()}
+            output["status_packet_error"] = str(e)
+            return output

@@ -22,7 +22,7 @@ from typing import Any
 import zmq
 from lerobot.motors.motors_bus import get_address
 
-from .arm_debug_capture import ArmDebugCapture, extract_arm_positions
+from .arm_debug_capture import ARM_POSITION_KEYS, ArmDebugCapture, extract_arm_positions
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
 from .sourccey import Sourccey
 
@@ -63,6 +63,16 @@ def _env_float(name: str, default: float) -> float:
         return default
     try:
         return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
     except ValueError:
         return default
 
@@ -129,6 +139,12 @@ SHOULDER_LIFT_CONFIG_REGISTERS = (
 )
 
 
+ARM_SIDE_KEYS = {
+    "left": tuple(key for key in ARM_POSITION_KEYS if key.startswith("left_")),
+    "right": tuple(key for key in ARM_POSITION_KEYS if key.startswith("right_")),
+}
+
+
 def _decode_bitfield(value: float | None) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -190,6 +206,129 @@ def _read_shoulder_lift_config_snapshot(robot: Sourccey) -> dict[str, dict[str, 
         "left_shoulder_lift": _read_shoulder_lift_register_set(robot.left_arm, SHOULDER_LIFT_CONFIG_REGISTERS),
         "right_shoulder_lift": _read_shoulder_lift_register_set(robot.right_arm, SHOULDER_LIFT_CONFIG_REGISTERS),
     }
+
+
+def _new_arm_freeze_state() -> dict[str, dict[str, Any]]:
+    return {
+        "left": {
+            "active": False,
+            "good_status_packets": 0,
+            "hold_targets": {},
+            "last_error": None,
+        },
+        "right": {
+            "active": False,
+            "good_status_packets": 0,
+            "hold_targets": {},
+            "last_error": None,
+        },
+    }
+
+
+def _extract_side_arm_targets(arm_data: dict[str, float], side: str) -> dict[str, float]:
+    return {key: float(arm_data[key]) for key in ARM_SIDE_KEYS[side] if key in arm_data}
+
+
+def _serialize_arm_freeze_state(arm_freeze_state: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        side: {
+            "active": bool(state.get("active")),
+            "good_status_packets": int(state.get("good_status_packets", 0)),
+            "hold_target_count": len(state.get("hold_targets") or {}),
+            "last_error": state.get("last_error"),
+        }
+        for side, state in arm_freeze_state.items()
+    }
+
+
+def _apply_arm_freeze_to_action(
+    action: dict[str, Any],
+    arm_freeze_state: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, dict[str, float]]]:
+    adjusted = dict(action)
+    applied_freeze: dict[str, dict[str, float]] = {}
+    for side, state in arm_freeze_state.items():
+        if not state.get("active"):
+            continue
+        hold_targets = state.get("hold_targets") or {}
+        if not hold_targets:
+            continue
+        for key, value in hold_targets.items():
+            adjusted[key] = float(value)
+        applied_freeze[side] = {key: float(value) for key, value in hold_targets.items()}
+    return adjusted, applied_freeze
+
+
+def _extract_status_packet_errors_from_sent_action(sent_action: dict[str, Any]) -> dict[str, str | None]:
+    left_error = sent_action.get("left_status_packet_error")
+    right_error = sent_action.get("right_status_packet_error")
+    return {
+        "left": str(left_error) if left_error else None,
+        "right": str(right_error) if right_error else None,
+    }
+
+
+def _update_arm_freeze_state(
+    *,
+    arm_freeze_state: dict[str, dict[str, Any]],
+    status_packet_errors: dict[str, str | None],
+    observed_arm_position: dict[str, float],
+    last_sent_arm_target: dict[str, float],
+    resume_good_status_packets: int,
+    host_arm_debug: ArmDebugCapture,
+) -> None:
+    for side, error in status_packet_errors.items():
+        side_state = arm_freeze_state[side]
+        if error is not None:
+            side_state["good_status_packets"] = 0
+            side_state["last_error"] = error
+            if side_state["active"]:
+                continue
+
+            hold_targets = _extract_side_arm_targets(observed_arm_position, side)
+            if not hold_targets:
+                hold_targets = _extract_side_arm_targets(last_sent_arm_target, side)
+            side_state["active"] = True
+            side_state["hold_targets"] = hold_targets
+
+            transition = {
+                "transition": "freeze_activated",
+                "side": side,
+                "error": error,
+                "hold_targets": hold_targets,
+            }
+            logging.error(
+                "Freezing %s arm due to shoulder_lift status read error. error=%s hold_target_count=%d",
+                side,
+                error,
+                len(hold_targets),
+            )
+            host_arm_debug.record_session("host_arm_freeze_transition", transition)
+            continue
+
+        if not side_state["active"]:
+            continue
+
+        side_state["good_status_packets"] += 1
+        if side_state["good_status_packets"] < resume_good_status_packets:
+            continue
+
+        transition = {
+            "transition": "freeze_released",
+            "side": side,
+            "good_status_packets": side_state["good_status_packets"],
+            "resume_threshold": resume_good_status_packets,
+        }
+        logging.warning(
+            "Resuming %s arm after %d clean shoulder_lift status packets.",
+            side,
+            side_state["good_status_packets"],
+        )
+        host_arm_debug.record_session("host_arm_freeze_transition", transition)
+        side_state["active"] = False
+        side_state["good_status_packets"] = 0
+        side_state["hold_targets"] = {}
+        side_state["last_error"] = None
 
 
 def _compute_arm_target_adjustments(
@@ -327,6 +466,14 @@ def main():
 
     last_cmd_time = time.time()
     watchdog_active = False
+    resume_good_status_packets = max(_env_int("SOURCCEY_ARM_FREEZE_RESUME_STATUS_PACKETS", 1), 1)
+    arm_freeze_state = _new_arm_freeze_state()
+    host_arm_debug.record_session(
+        "host_arm_freeze_config",
+        {
+            "resume_good_status_packets": resume_good_status_packets,
+        },
+    )
 
     try:
         # Business logic
@@ -339,6 +486,7 @@ def main():
             observation = {}
         previous_observation = observation
         last_sent_arm_target: dict[str, float] = {}
+        status_packet_errors: dict[str, str | None] = {"left": None, "right": None}
         while duration < host.connection_time_s:
             loop_start_time = time.time()
             try:
@@ -352,6 +500,7 @@ def main():
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
 
                 host_arm_debug.maybe_start(action=data, observation=previous_observation)
+                action_to_send, applied_freeze = _apply_arm_freeze_to_action(data, arm_freeze_state)
 
                 received_arm_target = extract_arm_positions(data)
                 previous_obs_arm = extract_arm_positions(previous_observation)
@@ -373,11 +522,22 @@ def main():
                             "theta.vel": float(data.get("theta.vel", 0.0)),
                             "z.pos": float(data.get("z.pos", 0.0)),
                         },
+                        "arm_freeze_state": _serialize_arm_freeze_state(arm_freeze_state),
+                        "arm_freeze_applied": applied_freeze,
                     },
                 )
 
                 # Send action to robot
-                _action_sent = robot.send_action(data)
+                _action_sent = robot.send_action(action_to_send)
+                status_packet_errors = _extract_status_packet_errors_from_sent_action(_action_sent)
+                _update_arm_freeze_state(
+                    arm_freeze_state=arm_freeze_state,
+                    status_packet_errors=status_packet_errors,
+                    observed_arm_position=previous_obs_arm,
+                    last_sent_arm_target=last_sent_arm_target,
+                    resume_good_status_packets=resume_good_status_packets,
+                    host_arm_debug=host_arm_debug,
+                )
                 sent_arm_target = extract_arm_positions(_action_sent)
                 target_adjustments = _compute_arm_target_adjustments(received_arm_target, sent_arm_target)
                 host_arm_debug.record(
@@ -391,6 +551,9 @@ def main():
                             "theta.vel": float(_action_sent.get("theta.vel", 0.0)),
                             "z.pos": float(_action_sent.get("z.pos", 0.0)),
                         },
+                        "arm_freeze_state": _serialize_arm_freeze_state(arm_freeze_state),
+                        "arm_freeze_applied": applied_freeze,
+                        "status_packet_errors": status_packet_errors,
                     },
                 )
                 last_sent_arm_target = sent_arm_target
@@ -434,6 +597,8 @@ def main():
                     "observed_arm_position": observed_arm_position,
                     "shoulder_lift_diagnostics": shoulder_lift_diag,
                     "shoulder_lift_tracking": shoulder_lift_tracking,
+                    "status_packet_errors": status_packet_errors,
+                    "arm_freeze_state": _serialize_arm_freeze_state(arm_freeze_state),
                     "watchdog_active": watchdog_active,
                 },
             )
