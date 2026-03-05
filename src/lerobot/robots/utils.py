@@ -60,10 +60,13 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .reachy2 import Reachy2Robot
 
         return Reachy2Robot(config)
+<<<<<<< HEAD
     elif config.type == "sourccey":
         from .sourccey.sourccey import Sourccey
 
         return Sourccey(config)
+=======
+>>>>>>> upstream/main
     elif config.type == "openarm_follower":
         from .openarm_follower import OpenArmFollower
 

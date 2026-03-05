@@ -46,10 +46,10 @@ logger = logging.getLogger(__name__)
 
 class MotorsBusBase(abc.ABC):
     """
-    Minimal interface shared by all motor bus implementations.
+    Base class for all motor bus implementations.
 
-    This base class keeps the common contract for both serial buses and newer
-    non-serial buses such as CAN-based implementations.
+    This is a minimal interface that all motor buses must implement, regardless of their
+    communication protocol (serial, CAN, etc.).
     """
 
     def __init__(
@@ -64,47 +64,58 @@ class MotorsBusBase(abc.ABC):
 
     @abc.abstractmethod
     def connect(self, handshake: bool = True) -> None:
+        """Establish connection to the motors."""
         pass
 
     @abc.abstractmethod
     def disconnect(self, disable_torque: bool = True) -> None:
+        """Disconnect from the motors."""
         pass
 
     @property
     @abc.abstractmethod
     def is_connected(self) -> bool:
+        """Check if connected to the motors."""
         pass
 
     @abc.abstractmethod
     def read(self, data_name: str, motor: str) -> Value:
+        """Read a value from a single motor."""
         pass
 
     @abc.abstractmethod
     def write(self, data_name: str, motor: str, value: Value) -> None:
+        """Write a value to a single motor."""
         pass
 
     @abc.abstractmethod
     def sync_read(self, data_name: str, motors: str | list[str] | None = None) -> dict[str, Value]:
+        """Read a value from multiple motors."""
         pass
 
     @abc.abstractmethod
     def sync_write(self, data_name: str, values: dict[str, Value]) -> None:
+        """Write values to multiple motors."""
         pass
 
     @abc.abstractmethod
-    def enable_torque(self, motors: NameOrID | Sequence[NameOrID] | None = None, num_retry: int = 0) -> None:
+    def enable_torque(self, motors: str | list[str] | None = None, num_retry: int = 0) -> None:
+        """Enable torque on selected motors."""
         pass
 
     @abc.abstractmethod
-    def disable_torque(self, motors: NameOrID | Sequence[NameOrID] | None = None, num_retry: int = 0) -> None:
+    def disable_torque(self, motors: str | list[str] | None = None, num_retry: int = 0) -> None:
+        """Disable torque on selected motors."""
         pass
 
     @abc.abstractmethod
     def read_calibration(self) -> dict[str, MotorCalibration]:
+        """Read calibration parameters from the motors."""
         pass
 
     @abc.abstractmethod
     def write_calibration(self, calibration_dict: dict[str, MotorCalibration], cache: bool = True) -> None:
+        """Write calibration parameters to the motors."""
         pass
 
 
@@ -246,7 +257,6 @@ class GroupSyncRead(Protocol):
     def __init__(
         self, port: PortHandler, ph: PacketHandler, start_address: int, data_length: int
     ) -> None: ...
-
     def makeParam(self): ...
     def addParam(self, id): ...
     def removeParam(self, id): ...
@@ -270,7 +280,6 @@ class GroupSyncWrite(Protocol):
     def __init__(
         self, port: PortHandler, ph: PacketHandler, start_address: int, data_length: int
     ) -> None: ...
-
     def makeParam(self): ...
     def addParam(self, id, data): ...
     def removeParam(self, id): ...
@@ -281,13 +290,13 @@ class GroupSyncWrite(Protocol):
 
 class SerialMotorsBus(MotorsBusBase):
     """
-    A SerialMotorsBus allows to efficiently read and write to the attached motors.
+    A SerialMotorsBus allows to efficiently read and write to motors connected via serial communication.
     It represents several motors daisy-chained together and connected through a serial port.
-    There are currently two implementations of this abstract class:
+    There are currently two implementations of this class:
         - DynamixelMotorsBus
         - FeetechMotorsBus
 
-    This class is the shared implementation for serial-based motor protocols.
+    This class is specifically for serial-based motor protocols (Dynamixel, Feetech, etc.).
 
     A MotorsBus subclass instance requires a port (e.g. `FeetechMotorsBus(port="/dev/tty.usbmodem575E0031751"`)).
     To find the port, you can run our utility script:
@@ -413,7 +422,7 @@ class SerialMotorsBus(MotorsBusBase):
         elif isinstance(motors, int):
             return [self._id_to_name(motors)]
         elif isinstance(motors, Sequence):
-            return [motor if isinstance(motor, str) else self._id_to_name(motor) for motor in motors]
+            return [m if isinstance(m, str) else self._id_to_name(m) for m in motors]
         else:
             raise TypeError(motors)
 
@@ -646,14 +655,14 @@ class SerialMotorsBus(MotorsBusBase):
         pass
 
     @abc.abstractmethod
-    def disable_torque(self, motors: NameOrID | Sequence[NameOrID] | None = None, num_retry: int = 0) -> None:
+    def disable_torque(self, motors: str | list[str] | None = None, num_retry: int = 0) -> None:
         """Disable torque on selected motors.
 
         Disabling Torque allows to write to the motors' permanent memory area (EPROM/EEPROM).
 
         Args:
-            motors (NameOrID | Sequence[NameOrID] | None, optional): Target motors. Accepts a motor
-                name, an ID, a sequence of either, or `None` to affect every registered motor.
+            motors ( str | list[str] | None, optional): Target motors.  Accepts a motor name, an ID, a
+                list of names or `None` to affect every registered motor.  Defaults to `None`.
             num_retry (int, optional): Number of additional retry attempts on communication failure.
                 Defaults to 0.
         """
@@ -664,19 +673,19 @@ class SerialMotorsBus(MotorsBusBase):
         pass
 
     @abc.abstractmethod
-    def enable_torque(self, motors: NameOrID | Sequence[NameOrID] | None = None, num_retry: int = 0) -> None:
+    def enable_torque(self, motors: int | str | list[str] | None = None, num_retry: int = 0) -> None:
         """Enable torque on selected motors.
 
         Args:
-            motors (NameOrID | Sequence[NameOrID] | None, optional): Same semantics as
-                :pymeth:`disable_torque`. Defaults to `None`.
+            motors (int | str | list[str] | None, optional): Same semantics as :pymeth:`disable_torque`.
+                Defaults to `None`.
             num_retry (int, optional): Number of additional retry attempts on communication failure.
                 Defaults to 0.
         """
         pass
 
     @contextmanager
-    def torque_disabled(self, motors: NameOrID | Sequence[NameOrID] | None = None):
+    def torque_disabled(self, motors: str | list[str] | None = None):
         """Context-manager that guarantees torque is re-enabled.
 
         This helper is useful to temporarily disable torque when configuring motors.
@@ -787,7 +796,7 @@ class SerialMotorsBus(MotorsBusBase):
                 Defaults to all motors (`None`).
 
         Returns:
-            dict[NameOrID, Value]: Mapping *motor → written homing offset*.
+            dict[str, Value]: Mapping *motor name → written homing offset*.
         """
         motor_names = self._get_motors_list(motors)
 
@@ -848,7 +857,7 @@ class SerialMotorsBus(MotorsBusBase):
 
     def record_ranges_of_motion(
         self, motors: NameOrID | Sequence[NameOrID] | None = None, display_values: bool = True
-    ) -> tuple[dict[NameOrID, Value], dict[NameOrID, Value]]:
+    ) -> tuple[dict[str, Value], dict[str, Value]]:
         """Interactively record the min/max encoder values of each motor.
 
         Move the joints by hand (with torque disabled) while the method streams live positions. Press
@@ -860,7 +869,7 @@ class SerialMotorsBus(MotorsBusBase):
             display_values (bool, optional): When `True` (default) a live table is printed to the console.
 
         Returns:
-            tuple[dict[NameOrID, Value], dict[NameOrID, Value]]: Two dictionaries *mins* and *maxes* with the
+            tuple[dict[str, Value], dict[str, Value]]: Two dictionaries *mins* and *maxes* with the
                 extreme values observed for each motor.
         """
         motor_names = self._get_motors_list(motors)
@@ -1015,12 +1024,12 @@ class SerialMotorsBus(MotorsBusBase):
             if raise_on_error:
                 raise ConnectionError(self.packet_handler.getTxRxResult(comm))
             else:
-                return
+                return None
         if self._is_error(error):
             if raise_on_error:
                 raise RuntimeError(self.packet_handler.getRxPacketError(error))
             else:
-                return
+                return None
 
         return model_number
 
@@ -1067,11 +1076,13 @@ class SerialMotorsBus(MotorsBusBase):
         err_msg = f"Failed to read '{data_name}' on {id_=} after {num_retry + 1} tries."
         value, _, _ = self._read(addr, length, id_, num_retry=num_retry, raise_on_error=True, err_msg=err_msg)
 
-        id_value = self._decode_sign(data_name, {id_: value})
-        if normalize and data_name in self.normalized_data:
-            id_value = self._normalize(id_value)
+        decoded = self._decode_sign(data_name, {id_: value})
 
-        return id_value[id_]
+        if normalize and data_name in self.normalized_data:
+            normalized = self._normalize(decoded)
+            return normalized[id_]
+
+        return decoded[id_]
 
     def _read(
         self,
@@ -1082,7 +1093,7 @@ class SerialMotorsBus(MotorsBusBase):
         num_retry: int = 0,
         raise_on_error: bool = True,
         err_msg: str = "",
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         if length == 1:
             read_fn = self.packet_handler.read1ByteTxRx
         elif length == 2:
@@ -1132,12 +1143,14 @@ class SerialMotorsBus(MotorsBusBase):
         model = self.motors[motor].model
         addr, length = get_address(self.model_ctrl_table, model, data_name)
 
+        int_value = int(value)
         if normalize and data_name in self.normalized_data:
-            value = self._unnormalize({id_: value})[id_]
-        value = self._encode_sign(data_name, {id_: value})[id_]
+            int_value = self._unnormalize({id_: value})[id_]
 
-        err_msg = f"Failed to write '{data_name}' on {id_=} with '{value}' after {num_retry + 1} tries."
-        self._write(addr, length, id_, value, num_retry=num_retry, raise_on_error=True, err_msg=err_msg)
+        int_value = self._encode_sign(data_name, {id_: int_value})[id_]
+
+        err_msg = f"Failed to write '{data_name}' on {id_=} with '{int_value}' after {num_retry + 1} tries."
+        self._write(addr, length, id_, int_value, num_retry=num_retry, raise_on_error=True, err_msg=err_msg)
 
     def _write(
         self,
@@ -1171,7 +1184,7 @@ class SerialMotorsBus(MotorsBusBase):
     def sync_read(
         self,
         data_name: str,
-        motors: str | list[str] | None = None,
+        motors: NameOrID | Sequence[NameOrID] | None = None,
         *,
         normalize: bool = True,
         num_retry: int = 5,
@@ -1180,7 +1193,7 @@ class SerialMotorsBus(MotorsBusBase):
 
         Args:
             data_name (str): Register name.
-            motors (str | list[str] | None, optional): Motors to query. `None` (default) reads every motor.
+            motors (NameOrID | Sequence[NameOrID] | None, optional): Motors to query. `None` (default) reads every motor.
             normalize (bool, optional): Normalisation flag.  Defaults to `True`.
             num_retry (int, optional): Retry attempts.  Defaults to `5`.
 
@@ -1201,15 +1214,17 @@ class SerialMotorsBus(MotorsBusBase):
         addr, length = get_address(self.model_ctrl_table, model, data_name)
 
         err_msg = f"Failed to sync read '{data_name}' on {ids=} after {num_retry + 1} tries."
-        ids_values, _ = self._sync_read(
+        raw_ids_values, _ = self._sync_read(
             addr, length, ids, num_retry=num_retry, raise_on_error=True, err_msg=err_msg
         )
 
-        ids_values = self._decode_sign(data_name, ids_values)
-        if normalize and data_name in self.normalized_data:
-            ids_values = self._normalize(ids_values,)
+        decoded = self._decode_sign(data_name, raw_ids_values)
 
-        return {self._id_to_name(id_): value for id_, value in ids_values.items()}
+        if normalize and data_name in self.normalized_data:
+            normalized = self._normalize(decoded)
+            return {self._id_to_name(id_): value for id_, value in normalized.items()}
+
+        return {self._id_to_name(id_): value for id_, value in decoded.items()}
 
     def _sync_read(
         self,
@@ -1281,20 +1296,24 @@ class SerialMotorsBus(MotorsBusBase):
             num_retry (int, optional): Retry attempts.  Defaults to `5`.
         """
 
-        ids_values = self._get_ids_values_dict(values)
-        models = [self._id_to_model(id_) for id_ in ids_values]
+        raw_ids_values = self._get_ids_values_dict(values)
+        models = [self._id_to_model(id_) for id_ in raw_ids_values]
         if self._has_different_ctrl_tables:
             assert_same_address(self.model_ctrl_table, models, data_name)
 
         model = next(iter(models))
         addr, length = get_address(self.model_ctrl_table, model, data_name)
 
+        int_ids_values = {id_: int(val) for id_, val in raw_ids_values.items()}
         if normalize and data_name in self.normalized_data:
-            ids_values = self._unnormalize(ids_values,)
-        ids_values = self._encode_sign(data_name, ids_values)
+            int_ids_values = self._unnormalize(raw_ids_values)
 
-        err_msg = f"Failed to sync write '{data_name}' with {ids_values=} after {num_retry + 1} tries."
-        self._sync_write(addr, length, ids_values, num_retry=num_retry, raise_on_error=True, err_msg=err_msg)
+        int_ids_values = self._encode_sign(data_name, int_ids_values)
+
+        err_msg = f"Failed to sync write '{data_name}' with ids_values={int_ids_values} after {num_retry + 1} tries."
+        self._sync_write(
+            addr, length, int_ids_values, num_retry=num_retry, raise_on_error=True, err_msg=err_msg
+        )
 
     def _sync_write(
         self,
@@ -1329,4 +1348,5 @@ class SerialMotorsBus(MotorsBusBase):
             self.sync_writer.addParam(id_, data)
 
 
+# Backward compatibility alias
 MotorsBus: TypeAlias = SerialMotorsBus
