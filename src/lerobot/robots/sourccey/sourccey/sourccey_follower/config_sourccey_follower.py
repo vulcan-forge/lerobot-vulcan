@@ -72,6 +72,10 @@ class SourcceyFollowerConfig(RobotConfig):
     # `max_current_calibration_threshold` is the maximum current threshold for calibration purposes.
     max_current_calibration_threshold: int = 75
 
+    # Hard cap on per-cycle shoulder_lift command delta in raw counts.
+    # This guards against wrap/branch jumps near 0/4095 that can cause violent swings.
+    max_shoulder_lift_raw_delta: int | None = 200
+
     # cameras
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
 

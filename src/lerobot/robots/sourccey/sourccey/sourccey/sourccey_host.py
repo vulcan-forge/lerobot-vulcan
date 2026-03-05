@@ -287,8 +287,8 @@ def _apply_arm_command_governor(
                 governor_state["startup_settle_active"] = False
                 governor_state["startup_settle_started_t"] = None
             elif (
-                max_abs_delta_sent_vs_prev_obs is not None
-                and max_abs_delta_sent_vs_prev_obs <= float(governor_config["settle_complete_delta"])
+                max_abs_delta_target_vs_prev_obs is not None
+                and max_abs_delta_target_vs_prev_obs <= float(governor_config["settle_complete_delta"])
             ):
                 governor_state["startup_settle_active"] = False
                 governor_state["startup_settle_started_t"] = None

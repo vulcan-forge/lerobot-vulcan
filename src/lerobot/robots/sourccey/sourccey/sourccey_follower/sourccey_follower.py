@@ -247,11 +247,13 @@ class SourcceyFollower(Robot):
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         present_pos: dict[str, float] = {}
+        present_pos_raw: dict[str, int] = {}
         try:
             goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
             # Check for NaN values and skip sending actions if any are found
             present_pos = self.bus.sync_read("Present_Position")
+            present_pos_raw = self.bus.sync_read("Present_Position", normalize=False)
             if any(np.isnan(v) for v in goal_pos.values()) or any(np.isnan(v) for v in present_pos.values()):
                 logger.warning("NaN values detected in goal positions. Skipping action execution.")
                 return {f"{motor}.pos": val for motor, val in present_pos.items()}
@@ -261,6 +263,8 @@ class SourcceyFollower(Robot):
             if self.config.max_relative_target is not None:
                 goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
                 goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
+
+            goal_pos = self._apply_raw_delta_limiter(goal_pos, present_pos_raw)
 
             # If a joint is already over current, avoid commanding it deeper into the obstruction.
             goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)
@@ -280,3 +284,36 @@ class SourcceyFollower(Robot):
             output = {f"{motor}.pos": val for motor, val in present_pos.items()}
             output["status_packet_error"] = str(e)
             return output
+
+    def _apply_raw_delta_limiter(
+        self,
+        goal_pos: dict[str, float],
+        present_pos_raw: dict[str, int],
+    ) -> dict[str, float]:
+        max_delta = self.config.max_shoulder_lift_raw_delta
+        if max_delta is None or max_delta <= 0:
+            return goal_pos
+        if "shoulder_lift" not in goal_pos or "shoulder_lift" not in present_pos_raw:
+            return goal_pos
+
+        motor_id = self.bus.motors["shoulder_lift"].id
+        raw_goal = self.bus._unnormalize({motor_id: float(goal_pos["shoulder_lift"])})[motor_id]
+        raw_present = int(present_pos_raw["shoulder_lift"])
+        raw_delta = int(raw_goal - raw_present)
+        if abs(raw_delta) <= int(max_delta):
+            return goal_pos
+
+        limited_raw_goal = raw_present + (int(max_delta) if raw_delta > 0 else -int(max_delta))
+        limited_norm = self.bus._normalize({motor_id: int(limited_raw_goal)})[motor_id]
+        limited_goal = dict(goal_pos)
+        limited_goal["shoulder_lift"] = float(limited_norm)
+        logger.warning(
+            "%s shoulder_lift raw delta limited from %d to %d counts (raw_present=%d raw_goal=%d limited_raw_goal=%d).",
+            self.config.orientation,
+            raw_delta,
+            int(max_delta) if raw_delta > 0 else -int(max_delta),
+            raw_present,
+            raw_goal,
+            limited_raw_goal,
+        )
+        return limited_goal

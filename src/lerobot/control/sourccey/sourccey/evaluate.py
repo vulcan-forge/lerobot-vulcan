@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import time
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
 from lerobot.configs.policies import PreTrainedConfig
@@ -10,6 +11,65 @@ from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
 from lerobot.scripts.lerobot_record import record_loop
 from lerobot.configs import parser
+
+SHOULDER_KEYS = ("left_shoulder_lift.pos", "right_shoulder_lift.pos")
+
+
+def _build_hold_action(obs: dict, action_keys: tuple[str, ...]) -> dict[str, float]:
+    action: dict[str, float] = {}
+    for key in action_keys:
+        if key.endswith(".vel"):
+            action[key] = 0.0
+            continue
+        if key in obs:
+            action[key] = float(obs[key])
+            continue
+        if key == "z.pos":
+            action[key] = 100.0
+            continue
+        action[key] = 0.0
+    return action
+
+
+def _await_stable_start_pose(
+    robot: SourcceyClient,
+    *,
+    fps: int,
+    timeout_s: float,
+    min_stable_frames: int,
+    max_shoulder_delta: float,
+) -> None:
+    action_keys = tuple(robot.action_features.keys())
+    stable_count = 0
+    previous_shoulder_obs: dict[str, float] | None = None
+    deadline = time.monotonic() + timeout_s
+
+    while time.monotonic() < deadline:
+        obs = robot.get_observation()
+        robot.send_action(_build_hold_action(obs, action_keys))
+
+        shoulder_obs = {
+            key: float(obs[key])
+            for key in SHOULDER_KEYS
+            if key in obs and obs[key] is not None
+        }
+
+        if len(shoulder_obs) == len(SHOULDER_KEYS) and previous_shoulder_obs is not None:
+            max_delta = max(abs(shoulder_obs[k] - previous_shoulder_obs[k]) for k in SHOULDER_KEYS)
+            stable_count = stable_count + 1 if max_delta <= max_shoulder_delta else 0
+            if stable_count >= min_stable_frames:
+                return
+        else:
+            stable_count = 0
+
+        previous_shoulder_obs = shoulder_obs if len(shoulder_obs) == len(SHOULDER_KEYS) else None
+        time.sleep(max(1.0 / max(fps, 1), 0.01))
+
+    raise RuntimeError(
+        "Startup pose gate timed out: shoulder readings did not stabilize. "
+        "Check arm state/calibration before starting eval."
+    )
+
 
 @dataclass
 class DatasetEvaluateConfig:
@@ -33,6 +93,11 @@ class SourcceyEvaluateConfig:
     debug_capture_duration_s: float = 5.0
     debug_capture_motion_threshold: float = 1.0
     debug_capture_path: str | None = None
+    # Eval-only startup gate: hold until shoulder readings are stable before policy starts.
+    startup_pose_gate_enabled: bool = True
+    startup_pose_gate_timeout_s: float = 2.0
+    startup_pose_gate_min_stable_frames: int = 10
+    startup_pose_gate_max_shoulder_delta: float = 8.0
 
 @parser.wrap()
 def evaluate(cfg: SourcceyEvaluateConfig):
@@ -94,6 +159,14 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     recorded_episodes = 0
     while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
         log_say(f"Running inference, recording eval episode {recorded_episodes} of {cfg.dataset.num_episodes}")
+        if cfg.startup_pose_gate_enabled:
+            _await_stable_start_pose(
+                robot,
+                fps=cfg.dataset.fps,
+                timeout_s=cfg.startup_pose_gate_timeout_s,
+                min_stable_frames=cfg.startup_pose_gate_min_stable_frames,
+                max_shoulder_delta=cfg.startup_pose_gate_max_shoulder_delta,
+            )
 
         # Run the policy inference loop
         record_loop(
