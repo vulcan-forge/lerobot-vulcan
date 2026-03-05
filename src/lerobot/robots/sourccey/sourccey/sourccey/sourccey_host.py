@@ -20,6 +20,7 @@ import time
 from typing import Any
 
 import zmq
+from lerobot.motors.motors_bus import get_address
 
 from .arm_debug_capture import ArmDebugCapture, extract_arm_positions
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
@@ -79,27 +80,185 @@ def _calibration_to_dict(calibration: dict[str, Any]) -> dict[str, dict[str, int
     }
 
 
-def _safe_bus_read(bus: Any, data_name: str, motor: str) -> float | None:
+def _safe_bus_read_with_error(bus: Any, data_name: str, motor: str) -> tuple[float | None, str | None]:
     try:
-        return float(bus.read(data_name, motor, normalize=False))
+        return float(bus.read(data_name, motor, normalize=False, num_retry=0)), None
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def _bus_supports_register(bus: Any, motor: str, data_name: str) -> bool:
+    try:
+        model = bus.motors[motor].model
+        get_address(bus.model_ctrl_table, model, data_name)
+        return True
     except Exception:
+        return False
+
+
+SHOULDER_LIFT_DYNAMIC_REGISTERS = (
+    ("goal_position_raw", "Goal_Position"),
+    ("present_position_raw", "Present_Position"),
+    ("present_current_raw", "Present_Current"),
+    ("present_voltage_raw", "Present_Voltage"),
+    ("present_temperature_raw", "Present_Temperature"),
+    ("present_load_raw", "Present_Load"),
+    ("torque_enable_raw", "Torque_Enable"),
+    ("moving_raw", "Moving"),
+    ("status_raw", "Status"),
+    ("torque_limit_raw", "Torque_Limit"),
+)
+
+
+SHOULDER_LIFT_CONFIG_REGISTERS = (
+    ("operating_mode_raw", "Operating_Mode"),
+    ("p_coefficient_raw", "P_Coefficient"),
+    ("i_coefficient_raw", "I_Coefficient"),
+    ("d_coefficient_raw", "D_Coefficient"),
+    ("max_torque_limit_raw", "Max_Torque_Limit"),
+    ("protection_current_raw", "Protection_Current"),
+    ("protective_torque_raw", "Protective_Torque"),
+    ("overload_torque_raw", "Overload_Torque"),
+    ("over_current_protection_time_raw", "Over_Current_Protection_Time"),
+    ("minimum_startup_force_raw", "Minimum_Startup_Force"),
+    ("acceleration_raw", "Acceleration"),
+    ("min_voltage_limit_raw", "Min_Voltage_Limit"),
+    ("max_voltage_limit_raw", "Max_Voltage_Limit"),
+    ("unloading_condition_raw", "Unloading_Condition"),
+    ("led_alarm_condition_raw", "LED_Alarm_Condition"),
+)
+
+
+def _decode_bitfield(value: float | None) -> dict[str, Any] | None:
+    if value is None:
         return None
+    try:
+        intval = int(value)
+    except (TypeError, ValueError):
+        return None
+    bits_set = [bit for bit in range(8) if intval & (1 << bit)]
+    return {"value": intval, "binary": f"0b{intval:08b}", "bits_set": bits_set}
 
 
-def _read_shoulder_lift_diagnostics(robot: Sourccey) -> dict[str, dict[str, float | None]]:
-    def _read_arm(arm: Any) -> dict[str, float | None]:
-        bus = arm.bus
-        return {
-            "goal_position_raw": _safe_bus_read(bus, "Goal_Position", "shoulder_lift"),
-            "present_position_raw": _safe_bus_read(bus, "Present_Position", "shoulder_lift"),
-            "present_current_raw": _safe_bus_read(bus, "Present_Current", "shoulder_lift"),
-            "torque_enable_raw": _safe_bus_read(bus, "Torque_Enable", "shoulder_lift"),
-        }
+def _read_shoulder_lift_register_set(
+    arm: Any,
+    register_pairs: tuple[tuple[str, str], ...],
+) -> dict[str, Any]:
+    bus = arm.bus
+    values: dict[str, float | None] = {}
+    read_errors: dict[str, str] = {}
+    unsupported_registers: list[str] = []
+
+    for out_key, register_name in register_pairs:
+        if not _bus_supports_register(bus, "shoulder_lift", register_name):
+            values[out_key] = None
+            unsupported_registers.append(register_name)
+            continue
+
+        value, error = _safe_bus_read_with_error(bus, register_name, "shoulder_lift")
+        values[out_key] = value
+        if error is not None:
+            read_errors[register_name] = error
+
+    decoded_flags = {
+        "status": _decode_bitfield(values.get("status_raw")),
+        "unloading_condition": _decode_bitfield(values.get("unloading_condition_raw")),
+        "led_alarm_condition": _decode_bitfield(values.get("led_alarm_condition_raw")),
+    }
+
+    payload: dict[str, Any] = {
+        **values,
+        "unsupported_registers": unsupported_registers,
+        "read_errors": read_errors,
+        "decoded_flags": decoded_flags,
+    }
+    return payload
+
+
+def _read_shoulder_lift_diagnostics(robot: Sourccey) -> dict[str, dict[str, Any]]:
+    def _read_arm(arm: Any) -> dict[str, Any]:
+        return _read_shoulder_lift_register_set(arm, SHOULDER_LIFT_DYNAMIC_REGISTERS)
 
     return {
         "left_shoulder_lift": _read_arm(robot.left_arm),
         "right_shoulder_lift": _read_arm(robot.right_arm),
     }
+
+
+def _read_shoulder_lift_config_snapshot(robot: Sourccey) -> dict[str, dict[str, Any]]:
+    return {
+        "left_shoulder_lift": _read_shoulder_lift_register_set(robot.left_arm, SHOULDER_LIFT_CONFIG_REGISTERS),
+        "right_shoulder_lift": _read_shoulder_lift_register_set(robot.right_arm, SHOULDER_LIFT_CONFIG_REGISTERS),
+    }
+
+
+def _compute_arm_target_adjustments(
+    received_arm_target: dict[str, float],
+    sent_arm_target: dict[str, float],
+) -> dict[str, Any]:
+    common_keys = [k for k in received_arm_target if k in sent_arm_target]
+    adjustments = {k: float(sent_arm_target[k] - received_arm_target[k]) for k in common_keys}
+    abs_adjustments = {k: abs(v) for k, v in adjustments.items()}
+    adjusted = {k: v for k, v in adjustments.items() if abs(v) > 1e-6}
+    return {
+        "joint_adjustments": adjusted,
+        "max_abs_adjustment": max(abs_adjustments.values()) if abs_adjustments else None,
+        "adjusted_joint_count": len(adjusted),
+    }
+
+
+def _build_shoulder_lift_tracking(
+    sent_arm_target: dict[str, float],
+    observed_arm_position: dict[str, float],
+    shoulder_lift_diag: dict[str, dict[str, Any]] | None,
+) -> dict[str, Any]:
+    tracking: dict[str, Any] = {}
+    key_to_side = {
+        "left_shoulder_lift.pos": "left_shoulder_lift",
+        "right_shoulder_lift.pos": "right_shoulder_lift",
+    }
+    errors: list[float] = []
+
+    for pos_key, side_key in key_to_side.items():
+        sent = sent_arm_target.get(pos_key)
+        obs = observed_arm_position.get(pos_key)
+        if sent is None or obs is None:
+            continue
+
+        target_minus_observed = float(sent - obs)
+        errors.append(abs(target_minus_observed))
+
+        side_diag = (shoulder_lift_diag or {}).get(side_key, {})
+        goal_raw = side_diag.get("goal_position_raw")
+        present_raw = side_diag.get("present_position_raw")
+        present_current = side_diag.get("present_current_raw")
+
+        raw_gap = None
+        if goal_raw is not None and present_raw is not None:
+            raw_gap = float(goal_raw - present_raw)
+
+        stall_like = bool(
+            raw_gap is not None
+            and abs(raw_gap) >= 500
+            and present_current is not None
+            and abs(float(present_current)) >= 600
+        )
+
+        tracking[side_key] = {
+            "sent_target": float(sent),
+            "observed_position": float(obs),
+            "target_minus_observed": target_minus_observed,
+            "raw_goal_minus_present": raw_gap,
+            "stall_like_signature": stall_like,
+        }
+
+    tracking["max_abs_target_minus_observed"] = max(errors) if errors else None
+    tracking["stall_like_signature_arms"] = [
+        side
+        for side, payload in tracking.items()
+        if isinstance(payload, dict) and payload.get("stall_like_signature")
+    ]
+    return tracking
 
 
 def main():
@@ -149,6 +308,20 @@ def main():
             "host_calibration_snapshot_error",
             {"error": str(e)},
         )
+    try:
+        host_arm_debug.record_session(
+            "host_shoulder_lift_config_snapshot",
+            {
+                "left_arm_port": str(robot.left_arm.bus.port),
+                "right_arm_port": str(robot.right_arm.bus.port),
+                "register_snapshot": _read_shoulder_lift_config_snapshot(robot),
+            },
+        )
+    except Exception as e:
+        host_arm_debug.record_session(
+            "host_shoulder_lift_config_snapshot_error",
+            {"error": str(e)},
+        )
 
     print("Waiting for commands...")
 
@@ -165,6 +338,7 @@ def main():
         except Exception:
             observation = {}
         previous_observation = observation
+        last_sent_arm_target: dict[str, float] = {}
         while duration < host.connection_time_s:
             loop_start_time = time.time()
             try:
@@ -204,10 +378,13 @@ def main():
 
                 # Send action to robot
                 _action_sent = robot.send_action(data)
+                sent_arm_target = extract_arm_positions(_action_sent)
+                target_adjustments = _compute_arm_target_adjustments(received_arm_target, sent_arm_target)
                 host_arm_debug.record(
                     "host_sent_action",
                     {
-                        "sent_arm_target": extract_arm_positions(_action_sent),
+                        "sent_arm_target": sent_arm_target,
+                        "target_adjustments": target_adjustments,
                         "sent_base_target": {
                             "x.vel": float(_action_sent.get("x.vel", 0.0)),
                             "y.vel": float(_action_sent.get("y.vel", 0.0)),
@@ -216,6 +393,7 @@ def main():
                         },
                     },
                 )
+                last_sent_arm_target = sent_arm_target
 
                 # Update the robot
                 robot.update()
@@ -241,14 +419,22 @@ def main():
             if observation is not None and observation != {}:
                 previous_observation = observation
             observation = robot.get_observation()
+            observed_arm_position = extract_arm_positions(observation)
             shoulder_lift_diag = (
                 _read_shoulder_lift_diagnostics(robot) if host_arm_debug.is_active else None
+            )
+            shoulder_lift_tracking = (
+                _build_shoulder_lift_tracking(last_sent_arm_target, observed_arm_position, shoulder_lift_diag)
+                if host_arm_debug.is_active
+                else None
             )
             host_arm_debug.record(
                 "host_observation",
                 {
-                    "observed_arm_position": extract_arm_positions(observation),
+                    "observed_arm_position": observed_arm_position,
                     "shoulder_lift_diagnostics": shoulder_lift_diag,
+                    "shoulder_lift_tracking": shoulder_lift_tracking,
+                    "watchdog_active": watchdog_active,
                 },
             )
 
