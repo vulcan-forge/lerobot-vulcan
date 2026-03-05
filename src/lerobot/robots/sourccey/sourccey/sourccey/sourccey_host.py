@@ -145,6 +145,167 @@ ARM_SIDE_KEYS = {
 }
 
 
+def _new_arm_command_governor_config() -> dict[str, Any]:
+    return {
+        "enabled": _env_flag("SOURCCEY_ARM_GOVERNOR_ENABLED", True),
+        "base_step": max(_env_float("SOURCCEY_ARM_GOVERNOR_STEP", 10.0), 0.0),
+        "base_step_shoulder_lift": max(_env_float("SOURCCEY_ARM_GOVERNOR_SHOULDER_LIFT_STEP", 6.0), 0.0),
+        "settle_step": max(_env_float("SOURCCEY_ARM_GOVERNOR_SETTLE_STEP", 6.0), 0.0),
+        "settle_step_shoulder_lift": max(
+            _env_float("SOURCCEY_ARM_GOVERNOR_SETTLE_SHOULDER_LIFT_STEP", 3.0), 0.0
+        ),
+        "settle_engage_delta": max(_env_float("SOURCCEY_ARM_GOVERNOR_SETTLE_ENGAGE_DELTA", 35.0), 0.0),
+        "settle_complete_delta": max(_env_float("SOURCCEY_ARM_GOVERNOR_SETTLE_COMPLETE_DELTA", 10.0), 0.0),
+        "settle_max_duration_s": max(_env_float("SOURCCEY_ARM_GOVERNOR_SETTLE_MAX_DURATION_S", 2.5), 0.0),
+        "rearm_gap_s": max(_env_float("SOURCCEY_ARM_GOVERNOR_REARM_GAP_S", 1.0), 0.0),
+    }
+
+
+def _new_arm_command_governor_state() -> dict[str, Any]:
+    return {
+        "startup_settle_active": False,
+        "startup_settle_started_t": None,
+        "last_arm_command_t": None,
+    }
+
+
+def _serialize_arm_command_governor_state(governor_state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "startup_settle_active": bool(governor_state.get("startup_settle_active", False)),
+        "startup_settle_started_t": governor_state.get("startup_settle_started_t"),
+        "last_arm_command_t": governor_state.get("last_arm_command_t"),
+    }
+
+
+def _arm_governor_step_for_joint(
+    key: str,
+    *,
+    startup_settle_active: bool,
+    governor_config: dict[str, Any],
+) -> float:
+    is_shoulder_lift = key.endswith("shoulder_lift.pos")
+    if startup_settle_active:
+        return (
+            float(governor_config["settle_step_shoulder_lift"])
+            if is_shoulder_lift
+            else float(governor_config["settle_step"])
+        )
+    return (
+        float(governor_config["base_step_shoulder_lift"])
+        if is_shoulder_lift
+        else float(governor_config["base_step"])
+    )
+
+
+def _apply_arm_command_governor(
+    *,
+    action: dict[str, Any],
+    previous_observed_arm_position: dict[str, float],
+    last_sent_arm_target: dict[str, float],
+    governor_state: dict[str, Any],
+    governor_config: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not governor_config.get("enabled", False):
+        return action, {
+            "enabled": False,
+            "applied": False,
+            "startup_settle_active": False,
+            "clamped_joint_count": 0,
+        }
+
+    received_arm_target = extract_arm_positions(action)
+    if not received_arm_target:
+        return action, {
+            "enabled": True,
+            "applied": False,
+            "startup_settle_active": bool(governor_state.get("startup_settle_active", False)),
+            "clamped_joint_count": 0,
+            "reason": "no_arm_targets",
+        }
+
+    now = time.monotonic()
+    last_arm_command_t = governor_state.get("last_arm_command_t")
+    if last_arm_command_t is None or (now - float(last_arm_command_t)) >= float(governor_config["rearm_gap_s"]):
+        governor_state["startup_settle_active"] = False
+        governor_state["startup_settle_started_t"] = None
+
+    common_keys = [k for k in received_arm_target if k in previous_observed_arm_position]
+    max_abs_delta_target_vs_prev_obs = (
+        max(abs(received_arm_target[k] - previous_observed_arm_position[k]) for k in common_keys)
+        if common_keys
+        else None
+    )
+
+    if (
+        not governor_state.get("startup_settle_active", False)
+        and max_abs_delta_target_vs_prev_obs is not None
+        and max_abs_delta_target_vs_prev_obs >= float(governor_config["settle_engage_delta"])
+    ):
+        governor_state["startup_settle_active"] = True
+        governor_state["startup_settle_started_t"] = now
+
+    startup_settle_active = bool(governor_state.get("startup_settle_active", False))
+    if startup_settle_active and governor_state.get("startup_settle_started_t") is None:
+        governor_state["startup_settle_started_t"] = now
+
+    adjusted_action = dict(action)
+    clamped_joints: dict[str, float] = {}
+    for key, target in received_arm_target.items():
+        baseline = last_sent_arm_target.get(key)
+        if baseline is None:
+            baseline = previous_observed_arm_position.get(key, target)
+
+        step = _arm_governor_step_for_joint(
+            key,
+            startup_settle_active=startup_settle_active,
+            governor_config=governor_config,
+        )
+        if step <= 0.0:
+            continue
+
+        delta = float(target - baseline)
+        if abs(delta) <= step:
+            continue
+        adjusted = float(baseline + (step if delta > 0 else -step))
+        adjusted_action[key] = adjusted
+        clamped_joints[key] = adjusted
+
+    adjusted_arm_target = extract_arm_positions(adjusted_action)
+    common_adjusted_keys = [k for k in adjusted_arm_target if k in previous_observed_arm_position]
+    max_abs_delta_sent_vs_prev_obs = (
+        max(abs(adjusted_arm_target[k] - previous_observed_arm_position[k]) for k in common_adjusted_keys)
+        if common_adjusted_keys
+        else None
+    )
+
+    elapsed_s = None
+    if governor_state.get("startup_settle_active", False):
+        started = governor_state.get("startup_settle_started_t")
+        if started is not None:
+            elapsed_s = float(now - float(started))
+            if elapsed_s >= float(governor_config["settle_max_duration_s"]):
+                governor_state["startup_settle_active"] = False
+                governor_state["startup_settle_started_t"] = None
+            elif (
+                max_abs_delta_sent_vs_prev_obs is not None
+                and max_abs_delta_sent_vs_prev_obs <= float(governor_config["settle_complete_delta"])
+            ):
+                governor_state["startup_settle_active"] = False
+                governor_state["startup_settle_started_t"] = None
+
+    governor_state["last_arm_command_t"] = now
+    return adjusted_action, {
+        "enabled": True,
+        "applied": len(clamped_joints) > 0,
+        "startup_settle_active": bool(governor_state.get("startup_settle_active", False)),
+        "elapsed_s": elapsed_s,
+        "max_abs_delta_target_vs_prev_obs": max_abs_delta_target_vs_prev_obs,
+        "max_abs_delta_sent_vs_prev_obs": max_abs_delta_sent_vs_prev_obs,
+        "clamped_joint_count": len(clamped_joints),
+        "clamped_joints": clamped_joints,
+    }
+
+
 def _decode_bitfield(value: float | None) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -468,10 +629,19 @@ def main():
     watchdog_active = False
     resume_good_status_packets = max(_env_int("SOURCCEY_ARM_FREEZE_RESUME_STATUS_PACKETS", 1), 1)
     arm_freeze_state = _new_arm_freeze_state()
+    arm_governor_config = _new_arm_command_governor_config()
+    arm_governor_state = _new_arm_command_governor_state()
     host_arm_debug.record_session(
         "host_arm_freeze_config",
         {
             "resume_good_status_packets": resume_good_status_packets,
+        },
+    )
+    host_arm_debug.record_session(
+        "host_arm_command_governor_config",
+        {
+            "config": arm_governor_config,
+            "state": _serialize_arm_command_governor_state(arm_governor_state),
         },
     )
 
@@ -500,10 +670,19 @@ def main():
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
 
                 host_arm_debug.maybe_start(action=data, observation=previous_observation)
-                action_to_send, applied_freeze = _apply_arm_freeze_to_action(data, arm_freeze_state)
-
                 received_arm_target = extract_arm_positions(data)
                 previous_obs_arm = extract_arm_positions(previous_observation)
+                governed_action, governor_info = _apply_arm_command_governor(
+                    action=data,
+                    previous_observed_arm_position=previous_obs_arm,
+                    last_sent_arm_target=last_sent_arm_target,
+                    governor_state=arm_governor_state,
+                    governor_config=arm_governor_config,
+                )
+                governed_arm_target = extract_arm_positions(governed_action)
+                action_to_send, applied_freeze = _apply_arm_freeze_to_action(governed_action, arm_freeze_state)
+                freeze_input_arm_target = extract_arm_positions(action_to_send)
+
                 common_keys = [k for k in received_arm_target if k in previous_obs_arm]
                 max_abs_delta_target_vs_prev_obs = (
                     max(abs(received_arm_target[k] - previous_obs_arm[k]) for k in common_keys)
@@ -522,8 +701,11 @@ def main():
                             "theta.vel": float(data.get("theta.vel", 0.0)),
                             "z.pos": float(data.get("z.pos", 0.0)),
                         },
+                        "governed_arm_target": governed_arm_target,
+                        "governor_info": governor_info,
                         "arm_freeze_state": _serialize_arm_freeze_state(arm_freeze_state),
                         "arm_freeze_applied": applied_freeze,
+                        "arm_governor_state": _serialize_arm_command_governor_state(arm_governor_state),
                     },
                 )
 
@@ -540,17 +722,23 @@ def main():
                 )
                 sent_arm_target = extract_arm_positions(_action_sent)
                 target_adjustments = _compute_arm_target_adjustments(received_arm_target, sent_arm_target)
+                governor_adjustments = _compute_arm_target_adjustments(received_arm_target, governed_arm_target)
+                freeze_adjustments = _compute_arm_target_adjustments(governed_arm_target, freeze_input_arm_target)
                 host_arm_debug.record(
                     "host_sent_action",
                     {
                         "sent_arm_target": sent_arm_target,
                         "target_adjustments": target_adjustments,
+                        "governor_adjustments": governor_adjustments,
+                        "freeze_adjustments": freeze_adjustments,
                         "sent_base_target": {
                             "x.vel": float(_action_sent.get("x.vel", 0.0)),
                             "y.vel": float(_action_sent.get("y.vel", 0.0)),
                             "theta.vel": float(_action_sent.get("theta.vel", 0.0)),
                             "z.pos": float(_action_sent.get("z.pos", 0.0)),
                         },
+                        "governor_info": governor_info,
+                        "arm_governor_state": _serialize_arm_command_governor_state(arm_governor_state),
                         "arm_freeze_state": _serialize_arm_freeze_state(arm_freeze_state),
                         "arm_freeze_applied": applied_freeze,
                         "status_packet_errors": status_packet_errors,
@@ -598,6 +786,7 @@ def main():
                     "shoulder_lift_diagnostics": shoulder_lift_diag,
                     "shoulder_lift_tracking": shoulder_lift_tracking,
                     "status_packet_errors": status_packet_errors,
+                    "arm_governor_state": _serialize_arm_command_governor_state(arm_governor_state),
                     "arm_freeze_state": _serialize_arm_freeze_state(arm_freeze_state),
                     "watchdog_active": watchdog_active,
                 },
