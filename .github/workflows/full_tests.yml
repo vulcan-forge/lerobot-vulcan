@@ -180,13 +180,10 @@ jobs:
         shell: bash
         working-directory: /lerobot
     steps:
-<<<<<<< HEAD
-=======
       - name: Login to Hugging Face
         run: |
           hf auth login --token "$HF_USER_TOKEN" --add-to-git-credential
           hf auth whoami
->>>>>>> upstream
       - name: Fix ptxas permissions
         run: chmod +x /lerobot/.venv/lib/python3.10/site-packages/triton/backends/nvidia/bin/ptxas
       - name: Run pytest on GPU

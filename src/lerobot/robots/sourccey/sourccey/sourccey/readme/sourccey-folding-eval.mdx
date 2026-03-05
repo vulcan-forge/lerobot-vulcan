@@ -185,7 +185,7 @@ python src/lerobot/scripts/sourccey/dataset/combine_datasets.py \
 "sourccey-013/sourccey-013__shirt-fold-light-purple-c__long-set000__nickm",
 "sourccey-013/sourccey-013__shirt-fold-light-purple-c__long-set000__nickm"
 ]' \
- --output_path="sourccey-013/sourccey-013__shirt-fold-a-b-c-2-TEST-1__cmb000__nickm"
+ --output_path="sourccey-013/sourccey-013__shirt-fold-a-b-c-2-TEST-3__cmb000__nickm"
 
 ```
 
@@ -199,9 +199,9 @@ Training Single GPU:
 
 ```
 CUDA_VISIBLE_DEVICES=0 python src/lerobot/scripts/lerobot_train.py \
- --dataset.repo_id=sourccey-013/sourccey-013__shirt-fold-a-b-c-2-TEST-1__cmb000__nickm \
- --output_dir=outputs/train/xvla__sourccey-013__shirt-fold-a-b-c-2-TEST-1__cmb000__nickm \
- --job_name=xvla__sourccey-013__shirt-fold-a-b-c-2-TEST-1__cmb000__nickm \
+ --dataset.repo_id=sourccey-013/sourccey-013__shirt-fold-a-b-c-2-TEST-3__cmb000__nickm \
+ --output_dir=outputs/train/xvla__sourccey-013__shirt-fold-a-b-c-2-TEST-3__cmb000__nickm \
+ --job_name=xvla__sourccey-013__shirt-fold-a-b-c-2-TEST-3__cmb000__nickm \
  --policy.path="lerobot/xvla-base" \
  --policy.dtype=float32 \
  --policy.action_mode=auto \
