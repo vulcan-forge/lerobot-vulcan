@@ -104,13 +104,6 @@ class SourcceyInferenceConfig:
     display_port: int | None = None
     # Whether to display compressed images in Rerun
     display_compressed_images: bool = False
-    # Startup alignment for large first policy commands.
-    startup_alignment_enabled: bool = True
-    startup_alignment_rearm_gap_s: float = 1.0
-    startup_alignment_engage_delta: float = 35.0
-    startup_alignment_max_delta: float = 20.0
-    startup_alignment_max_duration_s: float = 2.5
-    startup_alignment_complete_delta: float = 10.0
 
 
 def inference_loop(
@@ -177,12 +170,6 @@ def inference(cfg: SourcceyInferenceConfig):
     robot_config = SourcceyClientConfig(
         remote_ip=cfg.remote_ip,
         id=cfg.id,
-        startup_alignment_enabled=cfg.startup_alignment_enabled,
-        startup_alignment_rearm_gap_s=cfg.startup_alignment_rearm_gap_s,
-        startup_alignment_engage_delta=cfg.startup_alignment_engage_delta,
-        startup_alignment_max_delta=cfg.startup_alignment_max_delta,
-        startup_alignment_max_duration_s=cfg.startup_alignment_max_duration_s,
-        startup_alignment_complete_delta=cfg.startup_alignment_complete_delta,
     )
     robot = SourcceyClient(robot_config)
 

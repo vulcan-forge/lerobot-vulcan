@@ -33,13 +33,6 @@ class SourcceyEvaluateConfig:
     debug_capture_duration_s: float = 5.0
     debug_capture_motion_threshold: float = 1.0
     debug_capture_path: str | None = None
-    # Startup alignment for large first policy commands.
-    startup_alignment_enabled: bool = True
-    startup_alignment_rearm_gap_s: float = 1.0
-    startup_alignment_engage_delta: float = 35.0
-    startup_alignment_max_delta: float = 20.0
-    startup_alignment_max_duration_s: float = 2.5
-    startup_alignment_complete_delta: float = 10.0
 
 @parser.wrap()
 def evaluate(cfg: SourcceyEvaluateConfig):
@@ -52,12 +45,6 @@ def evaluate(cfg: SourcceyEvaluateConfig):
         debug_capture_duration_s=cfg.debug_capture_duration_s,
         debug_capture_motion_threshold=cfg.debug_capture_motion_threshold,
         debug_capture_path=cfg.debug_capture_path,
-        startup_alignment_enabled=cfg.startup_alignment_enabled,
-        startup_alignment_rearm_gap_s=cfg.startup_alignment_rearm_gap_s,
-        startup_alignment_engage_delta=cfg.startup_alignment_engage_delta,
-        startup_alignment_max_delta=cfg.startup_alignment_max_delta,
-        startup_alignment_max_duration_s=cfg.startup_alignment_max_duration_s,
-        startup_alignment_complete_delta=cfg.startup_alignment_complete_delta,
     )
     robot = SourcceyClient(robot_config)
 

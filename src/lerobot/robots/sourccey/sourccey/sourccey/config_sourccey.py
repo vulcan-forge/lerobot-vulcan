@@ -150,17 +150,3 @@ class SourcceyClientConfig(RobotConfig):
     debug_capture_duration_s: float = 5.0
     debug_capture_motion_threshold: float = 1.0
     debug_capture_path: str | None = None
-
-    # Startup alignment: prevent large first policy command jumps after connect/reset.
-    # This is not a hard stop; it smoothly blends from observed pose to policy target.
-    startup_alignment_enabled: bool = True
-    # Re-arm startup alignment if there has been no arm command for this long.
-    startup_alignment_rearm_gap_s: float = 1.0
-    # Engage alignment only when first-frame arm mismatch exceeds this amount (normalized units).
-    startup_alignment_engage_delta: float = 35.0
-    # Per-command max arm offset from current observation while alignment is active.
-    startup_alignment_max_delta: float = 20.0
-    # Maximum alignment phase duration before handing over to raw policy targets.
-    startup_alignment_max_duration_s: float = 2.5
-    # Alignment ends early once max arm mismatch drops below this amount.
-    startup_alignment_complete_delta: float = 10.0
