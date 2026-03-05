@@ -79,6 +79,29 @@ def _calibration_to_dict(calibration: dict[str, Any]) -> dict[str, dict[str, int
     }
 
 
+def _safe_bus_read(bus: Any, data_name: str, motor: str) -> float | None:
+    try:
+        return float(bus.read(data_name, motor, normalize=False))
+    except Exception:
+        return None
+
+
+def _read_shoulder_lift_diagnostics(robot: Sourccey) -> dict[str, dict[str, float | None]]:
+    def _read_arm(arm: Any) -> dict[str, float | None]:
+        bus = arm.bus
+        return {
+            "goal_position_raw": _safe_bus_read(bus, "Goal_Position", "shoulder_lift"),
+            "present_position_raw": _safe_bus_read(bus, "Present_Position", "shoulder_lift"),
+            "present_current_raw": _safe_bus_read(bus, "Present_Current", "shoulder_lift"),
+            "torque_enable_raw": _safe_bus_read(bus, "Torque_Enable", "shoulder_lift"),
+        }
+
+    return {
+        "left_shoulder_lift": _read_arm(robot.left_arm),
+        "right_shoulder_lift": _read_arm(robot.right_arm),
+    }
+
+
 def main():
     def _handle_termination_signal(signum, _frame):
         logging.info(f"Received signal {signum}. Shutting down Sourccey Host.")
@@ -153,7 +176,9 @@ def main():
                 robot_action.ParseFromString(msg_bytes)
 
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
+
                 host_arm_debug.maybe_start(action=data, observation=previous_observation)
+
                 received_arm_target = extract_arm_positions(data)
                 previous_obs_arm = extract_arm_positions(previous_observation)
                 common_keys = [k for k in received_arm_target if k in previous_obs_arm]
@@ -216,10 +241,14 @@ def main():
             if observation is not None and observation != {}:
                 previous_observation = observation
             observation = robot.get_observation()
+            shoulder_lift_diag = (
+                _read_shoulder_lift_diagnostics(robot) if host_arm_debug.is_active else None
+            )
             host_arm_debug.record(
                 "host_observation",
                 {
                     "observed_arm_position": extract_arm_positions(observation),
+                    "shoulder_lift_diagnostics": shoulder_lift_diag,
                 },
             )
 
