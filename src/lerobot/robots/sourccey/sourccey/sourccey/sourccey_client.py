@@ -27,7 +27,7 @@ import zmq
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from lerobot.robots.robot import Robot
-from .arm_debug_capture import ArmDebugCapture, extract_arm_positions
+from .arm_debug_capture import ARM_POSITION_KEYS, ArmDebugCapture, extract_arm_positions
 from .config_sourccey import SourcceyClientConfig
 
 # Import protobuf modules
@@ -112,6 +112,11 @@ class SourcceyClient(Robot):
         )
         if self._arm_debug_capture.path:
             logging.warning("Client arm debug capture enabled. Writing to %s", self._arm_debug_capture.path)
+
+        # Startup alignment state (protects against large first policy command discontinuities).
+        self._startup_alignment_active = False
+        self._startup_alignment_started_t: float | None = None
+        self._last_arm_command_t: float | None = None
 
     ###################################################################
     # Properties and Attributes
@@ -204,6 +209,9 @@ class SourcceyClient(Robot):
             raise DeviceNotConnectedError("Timeout waiting for Sourccey Host to connect expired.")
 
         self._is_connected = True
+        self._startup_alignment_active = False
+        self._startup_alignment_started_t = None
+        self._last_arm_command_t = None
 
     def calibrate(self) -> None:
         pass
@@ -244,6 +252,9 @@ class SourcceyClient(Robot):
         self.zmq_context.term()
         self._is_connected = False
         self._arm_debug_capture.close()
+        self._startup_alignment_active = False
+        self._startup_alignment_started_t = None
+        self._last_arm_command_t = None
 
     ###################################################################
     # Data Management
@@ -285,31 +296,109 @@ class SourcceyClient(Robot):
                 "ManipulatorRobot is not connected. You need to run `robot.connect()`."
             )
 
-        self._arm_debug_capture.maybe_start(action=action, observation=self.last_remote_state)
+        requested_action = dict(action)
+        action_to_send, startup_alignment = self._apply_startup_alignment(requested_action)
+
+        self._arm_debug_capture.maybe_start(action=action_to_send, observation=self.last_remote_state)
         self._arm_debug_capture.record(
             "client_outgoing_action",
             {
-                "outgoing_arm_target": extract_arm_positions(action),
+                "requested_arm_target": extract_arm_positions(requested_action),
+                "outgoing_arm_target": extract_arm_positions(action_to_send),
                 "latest_remote_arm_observation": extract_arm_positions(self.last_remote_state),
+                "startup_alignment": startup_alignment,
                 "outgoing_base": {
-                    "x.vel": float(action.get("x.vel", 0.0)),
-                    "y.vel": float(action.get("y.vel", 0.0)),
-                    "theta.vel": float(action.get("theta.vel", 0.0)),
-                    "z.pos": float(action.get("z.pos", 0.0)),
+                    "x.vel": float(action_to_send.get("x.vel", 0.0)),
+                    "y.vel": float(action_to_send.get("y.vel", 0.0)),
+                    "theta.vel": float(action_to_send.get("theta.vel", 0.0)),
+                    "z.pos": float(action_to_send.get("z.pos", 0.0)),
                 },
             },
         )
 
         # Convert action to protobuf and send
-        robot_action = self.protobuf_converter.action_to_protobuf(action)
+        robot_action = self.protobuf_converter.action_to_protobuf(action_to_send)
         self.zmq_cmd_socket.send(robot_action.SerializeToString())
 
         # TODO(Steven): Remove the np conversion when it is possible to record a non-numpy array value
-        actions = np.array([action.get(k, 0.0) for k in self._state_order], dtype=np.float32)
+        actions = np.array([action_to_send.get(k, 0.0) for k in self._state_order], dtype=np.float32)
 
         action_sent = {key: actions[i] for i, key in enumerate(self._state_order)}
         action_sent["action"] = actions
         return action_sent
+
+    def _apply_startup_alignment(self, action: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        if not self.config.startup_alignment_enabled:
+            return action, {"enabled": False, "applied": False}
+
+        arm_target = extract_arm_positions(action)
+        observed_arm = extract_arm_positions(self.last_remote_state)
+        common_keys = [k for k in ARM_POSITION_KEYS if k in arm_target and k in observed_arm]
+        if not common_keys:
+            return action, {"enabled": True, "applied": False, "reason": "missing_arm_observation"}
+
+        now = time.monotonic()
+        if (
+            self._last_arm_command_t is None
+            or now - self._last_arm_command_t >= self.config.startup_alignment_rearm_gap_s
+        ):
+            self._startup_alignment_active = False
+            self._startup_alignment_started_t = None
+
+        max_abs_delta = max(abs(arm_target[k] - observed_arm[k]) for k in common_keys)
+        if (not self._startup_alignment_active) and (
+            max_abs_delta < self.config.startup_alignment_engage_delta
+        ):
+            self._last_arm_command_t = now
+            return {
+                **action,
+            }, {
+                "enabled": True,
+                "applied": False,
+                "reason": "below_engage_delta",
+                "max_abs_delta_target_vs_observation": max_abs_delta,
+            }
+
+        if not self._startup_alignment_active:
+            self._startup_alignment_active = True
+            self._startup_alignment_started_t = now
+
+        if self._startup_alignment_started_t is None:
+            self._startup_alignment_started_t = now
+
+        adjusted = dict(action)
+        max_delta = float(self.config.startup_alignment_max_delta)
+        clamped_joints: dict[str, float] = {}
+
+        for key in common_keys:
+            delta = float(arm_target[key] - observed_arm[key])
+            if abs(delta) <= max_delta:
+                continue
+            adjusted_value = float(observed_arm[key] + np.sign(delta) * max_delta)
+            adjusted[key] = adjusted_value
+            clamped_joints[key] = adjusted_value
+
+        adjusted_arm = extract_arm_positions(adjusted)
+        adjusted_max_abs_delta = max(abs(adjusted_arm[k] - observed_arm[k]) for k in common_keys)
+        elapsed_s = now - self._startup_alignment_started_t
+        timed_out = elapsed_s >= float(self.config.startup_alignment_max_duration_s)
+
+        if max_abs_delta <= float(self.config.startup_alignment_complete_delta):
+            self._startup_alignment_active = False
+            self._startup_alignment_started_t = None
+
+        self._last_arm_command_t = now
+        return adjusted, {
+            "enabled": True,
+            "applied": len(clamped_joints) > 0,
+            "active": self._startup_alignment_active,
+            "elapsed_s": elapsed_s,
+            "timed_out": timed_out,
+            "max_abs_delta_target_vs_observation": max_abs_delta,
+            "max_abs_delta_sent_vs_observation": adjusted_max_abs_delta,
+            "clamped_joint_count": len(clamped_joints),
+            "clamped_joints": clamped_joints,
+        }
 
     ###################################################################
     # Private Data Management
