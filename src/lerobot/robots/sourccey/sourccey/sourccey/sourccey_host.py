@@ -14,11 +14,14 @@
 # limitations under the License.
 
 import logging
+import os
 import signal
 import time
+from typing import Any
 
 import zmq
 
+from .arm_debug_capture import ArmDebugCapture, extract_arm_positions
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
 from .sourccey import Sourccey
 
@@ -46,6 +49,36 @@ class SourcceyHost:
         self.zmq_context.term()
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _calibration_to_dict(calibration: dict[str, Any]) -> dict[str, dict[str, int]]:
+    return {
+        motor: {
+            "id": int(cal.id),
+            "drive_mode": int(cal.drive_mode),
+            "homing_offset": int(cal.homing_offset),
+            "range_min": int(cal.range_min),
+            "range_max": int(cal.range_max),
+        }
+        for motor, cal in calibration.items()
+    }
+
+
 def main():
     def _handle_termination_signal(signum, _frame):
         logging.info(f"Received signal {signum}. Shutting down Sourccey Host.")
@@ -66,6 +99,34 @@ def main():
     host_config = SourcceyHostConfig()
     host = SourcceyHost(host_config)
 
+    host_arm_debug = ArmDebugCapture(
+        enabled=_env_flag("SOURCCEY_HOST_ARM_DEBUG_CAPTURE", True),
+        duration_s=_env_float("SOURCCEY_HOST_ARM_DEBUG_DURATION_S", 5.0),
+        motion_threshold=_env_float("SOURCCEY_HOST_ARM_DEBUG_MOTION_THRESHOLD", 1.0),
+        label="host",
+        capture_path=os.getenv("SOURCCEY_HOST_ARM_DEBUG_PATH"),
+    )
+    if host_arm_debug.path:
+        logging.warning("Host arm debug capture enabled. Writing to %s", host_arm_debug.path)
+    try:
+        host_arm_debug.record_session(
+            "host_calibration_snapshot",
+            {
+                "robot_id": robot.id,
+                "left_calibration_file": str(robot.left_arm.calibration_fpath),
+                "right_calibration_file": str(robot.right_arm.calibration_fpath),
+                "left_file_calibration": _calibration_to_dict(robot.left_arm.calibration),
+                "right_file_calibration": _calibration_to_dict(robot.right_arm.calibration),
+                "left_motor_calibration": _calibration_to_dict(robot.left_arm.bus.read_calibration()),
+                "right_motor_calibration": _calibration_to_dict(robot.right_arm.bus.read_calibration()),
+            },
+        )
+    except Exception as e:
+        host_arm_debug.record_session(
+            "host_calibration_snapshot_error",
+            {"error": str(e)},
+        )
+
     print("Waiting for commands...")
 
     last_cmd_time = time.time()
@@ -76,8 +137,11 @@ def main():
         start = time.perf_counter()
         duration = 0
 
-        observation = None
-        previous_observation = None
+        try:
+            observation = robot.get_observation()
+        except Exception:
+            observation = {}
+        previous_observation = observation
         while duration < host.connection_time_s:
             loop_start_time = time.time()
             try:
@@ -89,9 +153,44 @@ def main():
                 robot_action.ParseFromString(msg_bytes)
 
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
+                host_arm_debug.maybe_start(action=data, observation=previous_observation)
+                received_arm_target = extract_arm_positions(data)
+                previous_obs_arm = extract_arm_positions(previous_observation)
+                common_keys = [k for k in received_arm_target if k in previous_obs_arm]
+                max_abs_delta_target_vs_prev_obs = (
+                    max(abs(received_arm_target[k] - previous_obs_arm[k]) for k in common_keys)
+                    if common_keys
+                    else None
+                )
+                host_arm_debug.record(
+                    "host_received_action",
+                    {
+                        "received_arm_target": received_arm_target,
+                        "previous_observed_arm_position": previous_obs_arm,
+                        "max_abs_delta_target_vs_prev_obs": max_abs_delta_target_vs_prev_obs,
+                        "received_base_target": {
+                            "x.vel": float(data.get("x.vel", 0.0)),
+                            "y.vel": float(data.get("y.vel", 0.0)),
+                            "theta.vel": float(data.get("theta.vel", 0.0)),
+                            "z.pos": float(data.get("z.pos", 0.0)),
+                        },
+                    },
+                )
 
                 # Send action to robot
                 _action_sent = robot.send_action(data)
+                host_arm_debug.record(
+                    "host_sent_action",
+                    {
+                        "sent_arm_target": extract_arm_positions(_action_sent),
+                        "sent_base_target": {
+                            "x.vel": float(_action_sent.get("x.vel", 0.0)),
+                            "y.vel": float(_action_sent.get("y.vel", 0.0)),
+                            "theta.vel": float(_action_sent.get("theta.vel", 0.0)),
+                            "z.pos": float(_action_sent.get("z.pos", 0.0)),
+                        },
+                    },
+                )
 
                 # Update the robot
                 robot.update()
@@ -117,6 +216,12 @@ def main():
             if observation is not None and observation != {}:
                 previous_observation = observation
             observation = robot.get_observation()
+            host_arm_debug.record(
+                "host_observation",
+                {
+                    "observed_arm_position": extract_arm_positions(observation),
+                },
+            )
 
             # Send the observation to the remote agent
             try:
@@ -149,6 +254,7 @@ def main():
         print("Shutting down Sourccey Host.")
         robot.disconnect()
         host.disconnect()
+        host_arm_debug.close()
 
     logging.info("Finished Sourccey cleanly")
 

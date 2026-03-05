@@ -28,12 +28,24 @@ class SourcceyEvaluateConfig:
     remote_ip: str = "192.168.1.243"
     model_path: str = "outputs/train/act__sourccey-003__myles__large-towel-fold-a-001-010/checkpoints/200000/pretrained_model"
     dataset: DatasetEvaluateConfig = field(default_factory=DatasetEvaluateConfig)
+    # Client-side arm debug capture (first few seconds after motion starts).
+    debug_capture_enabled: bool = True
+    debug_capture_duration_s: float = 5.0
+    debug_capture_motion_threshold: float = 1.0
+    debug_capture_path: str | None = None
 
 @parser.wrap()
 def evaluate(cfg: SourcceyEvaluateConfig):
 
     # Create the robot and teleoperator configurations
-    robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
+    robot_config = SourcceyClientConfig(
+        remote_ip=cfg.remote_ip,
+        id=cfg.id,
+        debug_capture_enabled=cfg.debug_capture_enabled,
+        debug_capture_duration_s=cfg.debug_capture_duration_s,
+        debug_capture_motion_threshold=cfg.debug_capture_motion_threshold,
+        debug_capture_path=cfg.debug_capture_path,
+    )
     robot = SourcceyClient(robot_config)
 
     # Load config to determine policy type
