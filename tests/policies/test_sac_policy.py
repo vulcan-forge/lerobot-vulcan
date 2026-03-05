@@ -377,6 +377,10 @@ def test_sac_policy_with_visual_input(batch_size: int, state_dim: int, action_di
     "batch_size,state_dim,action_dim,vision_encoder_name",
     [(1, 6, 6, "helper2424/resnet10"), (1, 6, 6, "facebook/convnext-base-224")],
 )
+@pytest.mark.skipif(not TRANSFORMERS_AVAILABLE, reason="Transformers are not installed")
+@pytest.mark.skip(
+    reason="helper2424/resnet10 needs to be updated to work with the latest version of transformers"
+)
 def test_sac_policy_with_pretrained_encoder(
     batch_size: int, state_dim: int, action_dim: int, vision_encoder_name: str
 ):

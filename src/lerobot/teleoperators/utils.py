@@ -91,6 +91,7 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .reachy2_teleoperator import Reachy2Teleoperator
 
         return Reachy2Teleoperator(config)
+<<<<<<< HEAD
     elif config.type == "sourccey_leader":
         from .sourccey.sourccey.sourccey_leader.sourccey_leader import SourcceyLeader
 
@@ -99,6 +100,8 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
 
         return BiSourcceyLeader(config)
+=======
+>>>>>>> upstream
     elif config.type == "openarm_leader":
         from .openarm_leader import OpenArmLeader
 

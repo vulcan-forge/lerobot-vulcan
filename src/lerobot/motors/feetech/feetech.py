@@ -17,8 +17,7 @@ from copy import deepcopy
 from enum import Enum
 from pprint import pformat
 
-from lerobot.motors.encoding_utils import decode_sign_magnitude, encode_sign_magnitude
-
+from ..encoding_utils import decode_sign_magnitude, encode_sign_magnitude
 from ..motors_bus import Motor, MotorCalibration, NameOrID, SerialMotorsBus, Value, get_address
 from .tables import (
     FIRMWARE_MAJOR_VERSION,
@@ -265,9 +264,9 @@ class FeetechMotorsBus(SerialMotorsBus):
             calibration[motor] = MotorCalibration(
                 id=m.id,
                 drive_mode=0,
-                homing_offset=offsets[motor],
-                range_min=mins[motor],
-                range_max=maxes[motor],
+                homing_offset=int(offsets[motor]),
+                range_min=int(mins[motor]),
+                range_max=int(maxes[motor]),
             )
 
         return calibration
@@ -287,7 +286,7 @@ class FeetechMotorsBus(SerialMotorsBus):
         On Feetech Motors:
         Present_Position = Actual_Position - Homing_Offset
         """
-        half_turn_homings = {}
+        half_turn_homings: dict[NameOrID, Value] = {}
         for motor, pos in positions.items():
             model = self._get_motor_model(motor)
             max_res = self.model_resolution_table[model] - 1
@@ -337,13 +336,13 @@ class FeetechMotorsBus(SerialMotorsBus):
             self.write("Torque_Enable", motor, TorqueMode.DISABLED.value, num_retry=num_retry)
             self.write("Lock", motor, 0, num_retry=num_retry)
 
-    def _disable_torque(self, motor_id: int, model: str, num_retry: int = 10) -> None:
+    def _disable_torque(self, motor: int, model: str, num_retry: int = 0) -> None:
         addr, length = get_address(self.model_ctrl_table, model, "Torque_Enable")
-        self._write(addr, length, motor_id, TorqueMode.DISABLED.value, num_retry=num_retry)
+        self._write(addr, length, motor, TorqueMode.DISABLED.value, num_retry=num_retry)
         addr, length = get_address(self.model_ctrl_table, model, "Lock")
-        self._write(addr, length, motor_id, 0, num_retry=num_retry)
+        self._write(addr, length, motor, 0, num_retry=num_retry)
 
-    def enable_torque(self, motors: NameOrID | list[NameOrID] | None = None, num_retry: int = 10) -> None:
+    def enable_torque(self, motors: int | str | list[str] | None = None, num_retry: int = 0) -> None:
         for motor in self._get_motors_list(motors):
             self.write("Torque_Enable", motor, TorqueMode.ENABLED.value, num_retry=num_retry)
             self.write("Lock", motor, 1, num_retry=num_retry)
@@ -374,7 +373,7 @@ class FeetechMotorsBus(SerialMotorsBus):
     def _broadcast_ping(self) -> tuple[dict[int, int], int]:
         import scservo_sdk as scs
 
-        data_list = {}
+        data_list: dict[int, int] = {}
 
         status_length = 6
 

@@ -247,7 +247,10 @@ def test_async_read_before_connect():
         _ = camera.async_read()
 
 
+<<<<<<< HEAD
 @SKIP_NO_OPENCV_IMAGE_SUPPORT
+=======
+>>>>>>> upstream
 def test_read_latest():
     config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH, warmup_s=0)
 

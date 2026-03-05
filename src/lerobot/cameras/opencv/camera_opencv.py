@@ -455,7 +455,11 @@ class OpenCVCamera(Camera):
             except DeviceNotConnectedError:
                 break
             except Exception as e:
-                logger.warning(f"Error reading frame in background thread for {self}: {e}")
+                if failure_count <= 10:
+                    failure_count += 1
+                    logger.warning(f"Error reading frame in background thread for {self}: {e}")
+                else:
+                    raise RuntimeError(f"{self} exceeded maximum consecutive read failures.") from e
 
 
     def _start_read_thread(self) -> None:
