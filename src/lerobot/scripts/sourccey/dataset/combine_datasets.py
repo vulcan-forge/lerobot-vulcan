@@ -7,7 +7,7 @@ from typing import List
 import json
 import shlex
 
-from lerobot.datasets.aggregate import aggregate_datasets
+from lerobot.datasets.sourccey_aggregate import aggregate_datasets
 from lerobot.utils.utils import init_logging
 
 
