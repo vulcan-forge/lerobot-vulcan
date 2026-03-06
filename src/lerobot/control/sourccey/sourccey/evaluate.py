@@ -28,12 +28,24 @@ class SourcceyEvaluateConfig:
     remote_ip: str = "192.168.1.243"
     model_path: str = "outputs/train/act__sourccey-003__myles__large-towel-fold-a-001-010/checkpoints/200000/pretrained_model"
     dataset: DatasetEvaluateConfig = field(default_factory=DatasetEvaluateConfig)
+    # Client-side arm debug capture (first few seconds after motion starts).
+    debug_capture_enabled: bool = True
+    debug_capture_duration_s: float = 5.0
+    debug_capture_motion_threshold: float = 1.0
+    debug_capture_path: str | None = None
 
 @parser.wrap()
 def evaluate(cfg: SourcceyEvaluateConfig):
 
     # Create the robot and teleoperator configurations
-    robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
+    robot_config = SourcceyClientConfig(
+        remote_ip=cfg.remote_ip,
+        id=cfg.id,
+        debug_capture_enabled=cfg.debug_capture_enabled,
+        debug_capture_duration_s=cfg.debug_capture_duration_s,
+        debug_capture_motion_threshold=cfg.debug_capture_motion_threshold,
+        debug_capture_path=cfg.debug_capture_path,
+    )
     robot = SourcceyClient(robot_config)
 
     # Load config to determine policy type
@@ -62,8 +74,8 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=policy,
         pretrained_path=cfg.model_path,
-        # Use policy checkpoint stats. A newly created eval dataset does not
-        # carry meaningful normalization statistics for inference.
+        # Use policy checkpoint stats. A freshly created eval dataset does not
+        # provide representative normalization stats for inference.
         dataset_stats=None,
         # The inference device is automatically set to match the detected hardware, overriding any previous device settings from training to ensure compatibility.
         preprocessor_overrides={"device_processor": {"device": str(policy.config.device)}},
