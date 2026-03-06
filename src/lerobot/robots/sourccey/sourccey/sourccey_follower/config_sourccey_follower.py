@@ -55,17 +55,6 @@ class SourcceyFollowerConfig(RobotConfig):
     # the number of motors in your follower arms.
     max_relative_target: int | None = None
 
-    # Runtime state-guard settings.
-    # The guard rejects physically implausible per-cycle joint jumps, temporarily holds the last known-good
-    # command, and only resumes after a short valid feedback streak.
-    state_guard_enabled: bool = True
-    state_guard_min_valid_samples: int = 3
-    state_guard_step_min_ratio: float = 0.20
-    state_guard_step_bias_ratio: float = 0.04
-    state_guard_step_gain: float = 3.0
-    state_guard_recovery_window_ratio: float = 0.08
-    state_guard_freeze_on_shoulder_lift_invalid: bool = True
-
     # `max_current_safety_threshold` is the fallback runtime current threshold for joints without a tuned override.
     max_current_safety_threshold: int = 2500
 

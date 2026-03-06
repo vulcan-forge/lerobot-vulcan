@@ -144,9 +144,3 @@ class SourcceyClientConfig(RobotConfig):
     connect_timeout_s: int = 5
 
     reverse: bool = False
-
-    # Debug capture: first N seconds after arm motion starts.
-    debug_capture_enabled: bool = False
-    debug_capture_duration_s: float = 5.0
-    debug_capture_motion_threshold: float = 1.0
-    debug_capture_path: str | None = None

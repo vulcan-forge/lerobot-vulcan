@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 class SourcceyFollower(Robot):
     config_class = SourcceyFollowerConfig
     name = "sourccey_follower"
-    _STATE_GUARD_CRITICAL_JOINTS = {"shoulder_lift"}
 
     def __init__(self, config: SourcceyFollowerConfig):
         super().__init__(config)
@@ -70,18 +69,6 @@ class SourcceyFollower(Robot):
         # Track last warning time for throttling
         self._last_write_warning_time = 0.0
         self._write_warning_throttle_interval = 60.0  # seconds
-        self._last_state_guard_warning_time = 0.0
-        self._state_guard_warning_interval = 1.0
-        self._last_commanded_goal: dict[str, float] = {}
-        self._joint_state_guard: dict[str, dict[str, Any]] = {
-            motor: {
-                "last_valid": None,
-                "last_observed": None,
-                "invalid": False,
-                "valid_streak": 0,
-            }
-            for motor in self.bus.motors
-        }
 
     def __del__(self):
         # Destructors can run on partially initialized objects if __init__ raised.
@@ -220,138 +207,6 @@ class SourcceyFollower(Robot):
             self.bus.setup_motor(motor)
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
-    def _state_guard_full_scale(self, motor: str) -> float:
-        mode = self.bus.motors[motor].norm_mode
-        if mode is MotorNormMode.DEGREES:
-            return 360.0
-        return 200.0
-
-    def _state_guard_allowed_step(self, motor: str, commanded_step: float) -> float:
-        full_scale = self._state_guard_full_scale(motor)
-        min_step = max(1.0, float(self.config.state_guard_step_min_ratio) * full_scale)
-        bias = max(0.0, float(self.config.state_guard_step_bias_ratio) * full_scale)
-        gain = max(0.0, float(self.config.state_guard_step_gain))
-        return max(min_step, (gain * max(0.0, commanded_step)) + bias)
-
-    def _state_guard_recovery_window(self, motor: str) -> float:
-        full_scale = self._state_guard_full_scale(motor)
-        return max(1.0, float(self.config.state_guard_recovery_window_ratio) * full_scale)
-
-    def _filter_present_positions(self, present_pos: dict[str, float]) -> tuple[dict[str, float], dict[str, Any]]:
-        if not self.config.state_guard_enabled:
-            for motor, value in present_pos.items():
-                state = self._joint_state_guard[motor]
-                state["last_valid"] = float(value)
-                state["last_observed"] = float(value)
-                state["invalid"] = False
-                state["valid_streak"] = 0
-            return present_pos, {"invalid_motors": [], "newly_invalid": [], "recovered": []}
-
-        filtered: dict[str, float] = {}
-        invalid_motors: list[str] = []
-        newly_invalid: list[dict[str, float | str | int]] = []
-        recovered: list[str] = []
-        required_valid = max(1, int(self.config.state_guard_min_valid_samples))
-
-        for motor, observed in present_pos.items():
-            state = self._joint_state_guard[motor]
-            observed_val = float(observed)
-            last_valid = state.get("last_valid")
-            last_observed = state.get("last_observed")
-            last_goal = self._last_commanded_goal.get(motor)
-
-            commanded_step = (
-                abs(float(last_goal) - float(last_valid))
-                if last_goal is not None and last_valid is not None
-                else 0.0
-            )
-            allowed_step = self._state_guard_allowed_step(motor, commanded_step)
-            observed_step = (
-                abs(observed_val - float(last_valid))
-                if last_valid is not None
-                else 0.0
-            )
-            jump_detected = last_valid is not None and observed_step > allowed_step
-
-            if not bool(state.get("invalid", False)):
-                if jump_detected:
-                    state["invalid"] = True
-                    state["valid_streak"] = 0
-                    invalid_motors.append(motor)
-                    filtered[motor] = float(last_valid)
-                    newly_invalid.append(
-                        {
-                            "motor": motor,
-                            "observed_step": float(observed_step),
-                            "allowed_step": float(allowed_step),
-                            "last_valid": float(last_valid),
-                            "observed": float(observed_val),
-                        }
-                    )
-                else:
-                    state["last_valid"] = observed_val
-                    state["valid_streak"] = 0
-                    filtered[motor] = observed_val
-            else:
-                invalid_motors.append(motor)
-                recovery_ref = float(last_valid) if last_valid is not None else observed_val
-                recovery_window = self._state_guard_recovery_window(motor)
-                close_to_ref = abs(observed_val - recovery_ref) <= recovery_window
-                stable_step = (
-                    True
-                    if last_observed is None
-                    else abs(observed_val - float(last_observed)) <= allowed_step
-                )
-
-                if close_to_ref and stable_step:
-                    state["valid_streak"] = int(state.get("valid_streak", 0)) + 1
-                else:
-                    state["valid_streak"] = 0
-
-                if int(state["valid_streak"]) >= required_valid:
-                    state["invalid"] = False
-                    state["last_valid"] = observed_val
-                    state["valid_streak"] = 0
-                    filtered[motor] = observed_val
-                    recovered.append(motor)
-                    invalid_motors = [m for m in invalid_motors if m != motor]
-                else:
-                    filtered[motor] = recovery_ref
-
-            state["last_observed"] = observed_val
-
-        summary = {
-            "invalid_motors": invalid_motors,
-            "newly_invalid": newly_invalid,
-            "recovered": recovered,
-        }
-        return filtered, summary
-
-    def _log_state_guard_summary(self, summary: dict[str, Any]) -> None:
-        newly_invalid = summary.get("newly_invalid", [])
-        recovered = summary.get("recovered", [])
-        if not newly_invalid and not recovered:
-            return
-
-        now = time.time()
-        if now - self._last_state_guard_warning_time < self._state_guard_warning_interval:
-            return
-
-        if newly_invalid:
-            logger.warning(
-                "%s follower state-guard detected implausible joint jump(s): %s",
-                self.config.orientation,
-                newly_invalid,
-            )
-        if recovered:
-            logger.info(
-                "%s follower state-guard recovered joint(s): %s",
-                self.config.orientation,
-                recovered,
-            )
-
-        self._last_state_guard_warning_time = now
-
     ###################################################################
     # Data Management
     ###################################################################
@@ -361,10 +216,8 @@ class SourcceyFollower(Robot):
 
         # Read arm position
         start = time.perf_counter()
-        present_pos = self.bus.sync_read("Present_Position")
-        filtered_present_pos, guard_summary = self._filter_present_positions(present_pos)
-        self._log_state_guard_summary(guard_summary)
-        obs_dict = {f"{motor}.pos": val for motor, val in filtered_present_pos.items()}
+        obs_dict = self.bus.sync_read("Present_Position")
+        obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 
@@ -393,29 +246,14 @@ class SourcceyFollower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        present_pos: dict[str, float] = {}
         try:
             goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
             # Check for NaN values and skip sending actions if any are found
             present_pos = self.bus.sync_read("Present_Position")
-            present_pos, guard_summary = self._filter_present_positions(present_pos)
-            self._log_state_guard_summary(guard_summary)
             if any(np.isnan(v) for v in goal_pos.values()) or any(np.isnan(v) for v in present_pos.values()):
                 logger.warning("NaN values detected in goal positions. Skipping action execution.")
                 return {f"{motor}.pos": val for motor, val in present_pos.items()}
-
-            invalid_motors = set(guard_summary.get("invalid_motors", []))
-            if invalid_motors:
-                freeze_all = (
-                    self.config.state_guard_freeze_on_shoulder_lift_invalid
-                    and any(motor in self._STATE_GUARD_CRITICAL_JOINTS for motor in invalid_motors)
-                )
-                frozen_motors = goal_pos.keys() if freeze_all else invalid_motors
-                for motor in frozen_motors:
-                    hold_target = self._last_commanded_goal.get(motor, present_pos.get(motor))
-                    if hold_target is not None:
-                        goal_pos[motor] = float(hold_target)
 
             # Cap goal position when too far away from present position.
             # /!\ Slower fps expected due to reading from the follower.
@@ -428,7 +266,6 @@ class SourcceyFollower(Robot):
 
             # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)
-            self._last_commanded_goal = {motor: float(val) for motor, val in goal_pos.items()}
             self.safety.remember_goal(goal_pos)
             return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
@@ -439,6 +276,5 @@ class SourcceyFollower(Robot):
                 logger.warning(f"Status packet error during sync_read / sync_write in {self}: {e}. Returning present position.")
                 self._last_write_warning_time = current_time
             # Return present position instead of goal position when write fails
-            output = {f"{motor}.pos": val for motor, val in present_pos.items()}
-            output["status_packet_error"] = str(e)
-            return output
+            return {f"{motor}.pos": val for motor, val in present_pos.items()}
+

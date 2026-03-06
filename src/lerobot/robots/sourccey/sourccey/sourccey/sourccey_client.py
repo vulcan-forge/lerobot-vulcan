@@ -27,7 +27,6 @@ import zmq
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from lerobot.robots.robot import Robot
-from .arm_debug_capture import ArmDebugCapture, extract_arm_positions
 from .config_sourccey import SourcceyClientConfig
 
 # Import protobuf modules
@@ -101,17 +100,6 @@ class SourcceyClient(Robot):
 
         # Stored target position (what we "expect" z to be at while holding keys).
         self._z_pos_cmd = 0.0
-
-        # One-shot arm debug capture for first few seconds of motion.
-        self._arm_debug_capture = ArmDebugCapture(
-            enabled=bool(config.debug_capture_enabled),
-            duration_s=config.debug_capture_duration_s,
-            motion_threshold=config.debug_capture_motion_threshold,
-            label="client",
-            capture_path=config.debug_capture_path,
-        )
-        if self._arm_debug_capture.path:
-            logging.warning("Client arm debug capture enabled. Writing to %s", self._arm_debug_capture.path)
 
     ###################################################################
     # Properties and Attributes
@@ -243,7 +231,6 @@ class SourcceyClient(Robot):
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
         self._is_connected = False
-        self._arm_debug_capture.close()
 
     ###################################################################
     # Data Management
@@ -285,29 +272,12 @@ class SourcceyClient(Robot):
                 "ManipulatorRobot is not connected. You need to run `robot.connect()`."
             )
 
-        action_to_send = dict(action)
-
-        self._arm_debug_capture.maybe_start(action=action_to_send, observation=self.last_remote_state)
-        self._arm_debug_capture.record(
-            "client_outgoing_action",
-            {
-                "outgoing_arm_target": extract_arm_positions(action_to_send),
-                "latest_remote_arm_observation": extract_arm_positions(self.last_remote_state),
-                "outgoing_base": {
-                    "x.vel": float(action_to_send.get("x.vel", 0.0)),
-                    "y.vel": float(action_to_send.get("y.vel", 0.0)),
-                    "theta.vel": float(action_to_send.get("theta.vel", 0.0)),
-                    "z.pos": float(action_to_send.get("z.pos", 0.0)),
-                },
-            },
-        )
-
         # Convert action to protobuf and send
-        robot_action = self.protobuf_converter.action_to_protobuf(action_to_send)
+        robot_action = self.protobuf_converter.action_to_protobuf(action)
         self.zmq_cmd_socket.send(robot_action.SerializeToString())
 
         # TODO(Steven): Remove the np conversion when it is possible to record a non-numpy array value
-        actions = np.array([action_to_send.get(k, 0.0) for k in self._state_order], dtype=np.float32)
+        actions = np.array([action.get(k, 0.0) for k in self._state_order], dtype=np.float32)
 
         action_sent = {key: actions[i] for i, key in enumerate(self._state_order)}
         action_sent["action"] = actions
@@ -592,3 +562,4 @@ class SourcceyClient(Robot):
         if delta < -max_step:
             return current - max_step
         return target
+

@@ -309,9 +309,6 @@ class Sourccey(Robot):
             else:
                 sent_right = {}
 
-            left_status_packet_error = sent_left.pop("status_packet_error", None) if sent_left else None
-            right_status_packet_error = sent_right.pop("status_packet_error", None) if sent_right else None
-
             prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
             prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
 
@@ -333,10 +330,6 @@ class Sourccey(Robot):
             self.dc_motors_controller.set_velocities(dc_motors_action)
 
             sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_pos, **base_goal_vel}
-            if left_status_packet_error is not None:
-                sent_action["left_status_packet_error"] = str(left_status_packet_error)
-            if right_status_packet_error is not None:
-                sent_action["right_status_packet_error"] = str(right_status_packet_error)
             return sent_action
         except Exception as e:
             print(f"Error sending action: {e}")

@@ -167,10 +167,7 @@ def inference_loop(
 def inference(cfg: SourcceyInferenceConfig):
 
     # Create the robot and teleoperator configurations
-    robot_config = SourcceyClientConfig(
-        remote_ip=cfg.remote_ip,
-        id=cfg.id,
-    )
+    robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
     robot = SourcceyClient(robot_config)
 
     resolved_model_path = resolve_model_path(cfg.model_path)
