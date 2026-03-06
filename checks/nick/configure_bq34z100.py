@@ -160,14 +160,23 @@ class BQ34Z100R2:
             self._select_df_block(bus, subclass, block)
             return [self._read_byte(bus, REG_BLOCKDATA_BASE + i) for i in range(32)]
 
-    def write_df_block(self, subclass: int, block: int, new_block: Iterable[int], verify: bool = True) -> None:
+    def write_df_block(
+        self,
+        subclass: int,
+        block: int,
+        new_block: Iterable[int],
+        verify: bool = True,
+        verify_indices: set[int] | None = None,
+    ) -> None:
         new_vals = [int(v) & 0xFF for v in new_block]
         if len(new_vals) != 32:
             raise ValueError("new_block must contain exactly 32 bytes")
 
         with self._open_bus(self.bus_num) as bus:
             self._select_df_block(bus, subclass, block)
-            for i, value in enumerate(new_vals):
+            indices_to_write = range(32) if verify_indices is None else sorted(verify_indices)
+            for i in indices_to_write:
+                value = new_vals[i]
                 self._write_byte(bus, REG_BLOCKDATA_BASE + i, value)
 
             checksum = self._calc_block_checksum(new_vals)
@@ -177,10 +186,12 @@ class BQ34Z100R2:
             if verify:
                 self._select_df_block(bus, subclass, block)
                 read_back = [self._read_byte(bus, REG_BLOCKDATA_BASE + i) for i in range(32)]
-                if read_back != new_vals:
+                indices_to_check = range(32) if verify_indices is None else sorted(verify_indices)
+                mismatches = [i for i in indices_to_check if read_back[i] != new_vals[i]]
+                if mismatches:
                     raise RuntimeError(
-                        f"Block verify failed for subclass={subclass} block={block}: "
-                        f"wrote {new_vals!r}, read {read_back!r}"
+                        f"Block verify failed for subclass={subclass} block={block} "
+                        f"at indices={mismatches}: wrote={new_vals!r}, read={read_back!r}"
                     )
 
     def read_df_bytes(self, subclass: int, offset: int, size: int) -> bytes:
@@ -207,10 +218,22 @@ class BQ34Z100R2:
             chunk = min(remaining, 32 - index)
 
             block_data = self.read_df_block(subclass, block)
+            changed_indices: set[int] = set()
             for i in range(chunk):
-                block_data[index + i] = data[src_idx + i]
+                block_index = index + i
+                new_val = data[src_idx + i]
+                if block_data[block_index] != new_val:
+                    block_data[block_index] = new_val
+                    changed_indices.add(block_index)
 
-            self.write_df_block(subclass, block, block_data, verify=verify)
+            if changed_indices:
+                self.write_df_block(
+                    subclass,
+                    block,
+                    block_data,
+                    verify=verify,
+                    verify_indices=changed_indices,
+                )
 
             cursor += chunk
             src_idx += chunk
