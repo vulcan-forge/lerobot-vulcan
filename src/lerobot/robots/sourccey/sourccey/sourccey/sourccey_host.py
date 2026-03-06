@@ -91,6 +91,11 @@ def _new_startup_supervisor_config() -> dict[str, Any]:
         "stall_error_threshold": max(_env_float("SOURCCEY_STALL_ERROR_THRESHOLD", 25.0), 0.0),
         "stall_progress_threshold": max(_env_float("SOURCCEY_STALL_PROGRESS_THRESHOLD", 0.8), 0.0),
         "stall_consecutive_frames": max(_env_int("SOURCCEY_STALL_CONSECUTIVE_FRAMES", 8), 1),
+        "target_latch_window_frames": max(_env_int("SOURCCEY_TARGET_LATCH_WINDOW_FRAMES", 5), 1),
+        "target_latch_shoulder_spread_max": max(_env_float("SOURCCEY_TARGET_LATCH_SHOULDER_SPREAD_MAX", 30.0), 0.0),
+        "target_latch_shoulder_observed_delta_max": max(
+            _env_float("SOURCCEY_TARGET_LATCH_SHOULDER_OBSERVED_DELTA_MAX", 45.0), 0.0
+        ),
     }
 
 
@@ -100,6 +105,8 @@ def _new_startup_supervisor_state() -> dict[str, Any]:
         "mode_enter_t": time.monotonic(),
         "align_target_arm": {},
         "align_stable_frames": 0,
+        "target_latch_buffer": [],
+        "target_latch_reject_reason": None,
         "fault_hold_action": {},
         "fault_reason": None,
         "fault_clean_frames": 0,
@@ -114,6 +121,8 @@ def _serialize_supervisor_state(state: dict[str, Any]) -> dict[str, Any]:
         "mode_enter_t": state.get("mode_enter_t"),
         "align_target_count": len(state.get("align_target_arm") or {}),
         "align_stable_frames": int(state.get("align_stable_frames", 0)),
+        "target_latch_buffer_len": len(state.get("target_latch_buffer") or []),
+        "target_latch_reject_reason": state.get("target_latch_reject_reason"),
         "fault_reason": state.get("fault_reason"),
         "fault_clean_frames": int(state.get("fault_clean_frames", 0)),
         "stall_counts": {
@@ -161,6 +170,167 @@ def _set_mode(
 def _extract_side_arm_targets(arm_data: dict[str, float], side: str) -> dict[str, float]:
     prefix = f"{side}_"
     return {k: float(v) for k, v in arm_data.items() if k.startswith(prefix)}
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(float(v) for v in values)
+    n = len(ordered)
+    mid = n // 2
+    if n % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _append_target_latch_sample(
+    state: dict[str, Any],
+    arm_targets: dict[str, float],
+    *,
+    supervisor_cfg: dict[str, Any],
+) -> None:
+    buffer = state.setdefault("target_latch_buffer", [])
+    buffer.append({k: float(v) for k, v in arm_targets.items()})
+    max_len = int(supervisor_cfg["target_latch_window_frames"])
+    if len(buffer) > max_len:
+        del buffer[:-max_len]
+
+
+def _build_median_target_from_samples(samples: list[dict[str, float]]) -> dict[str, float]:
+    if not samples:
+        return {}
+    keys = sorted({key for sample in samples for key in sample})
+    target: dict[str, float] = {}
+    for key in keys:
+        values = [float(sample[key]) for sample in samples if key in sample]
+        if values:
+            target[key] = _median(values)
+    return target
+
+
+def _evaluate_startup_target_candidate(
+    *,
+    samples: list[dict[str, float]],
+    candidate_target: dict[str, float],
+    observed_arm: dict[str, float],
+    supervisor_cfg: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    required_frames = int(supervisor_cfg["target_latch_window_frames"])
+    if len(samples) < required_frames:
+        return False, {
+            "reason": "insufficient_samples",
+            "required_frames": required_frames,
+            "sample_count": len(samples),
+        }
+
+    shoulder_keys = ("left_shoulder_lift.pos", "right_shoulder_lift.pos")
+    spread_limit = float(supervisor_cfg["target_latch_shoulder_spread_max"])
+    observed_delta_limit = float(supervisor_cfg["target_latch_shoulder_observed_delta_max"])
+    shoulder_spreads: dict[str, float] = {}
+    shoulder_observed_deltas: dict[str, float] = {}
+
+    for key in shoulder_keys:
+        values = [float(sample[key]) for sample in samples if key in sample]
+        if len(values) < required_frames:
+            return False, {
+                "reason": "missing_shoulder_samples",
+                "joint": key,
+                "required_frames": required_frames,
+                "sample_count": len(values),
+            }
+
+        spread = max(values) - min(values)
+        shoulder_spreads[key] = spread
+        if spread > spread_limit:
+            return False, {
+                "reason": "shoulder_lift_unstable",
+                "joint": key,
+                "spread": spread,
+                "spread_limit": spread_limit,
+                "shoulder_spreads": shoulder_spreads,
+            }
+
+        observed = observed_arm.get(key)
+        candidate = candidate_target.get(key)
+        if observed is None or candidate is None:
+            return False, {
+                "reason": "missing_shoulder_data",
+                "joint": key,
+                "has_observed": observed is not None,
+                "has_candidate": candidate is not None,
+            }
+
+        observed_delta = abs(float(candidate) - float(observed))
+        shoulder_observed_deltas[key] = observed_delta
+        if observed_delta > observed_delta_limit:
+            return False, {
+                "reason": "shoulder_lift_far_from_observed",
+                "joint": key,
+                "observed_delta": observed_delta,
+                "observed_delta_limit": observed_delta_limit,
+                "shoulder_observed_deltas": shoulder_observed_deltas,
+            }
+
+    return True, {
+        "reason": "ok",
+        "required_frames": required_frames,
+        "sample_count": len(samples),
+        "shoulder_spreads": shoulder_spreads,
+        "shoulder_observed_deltas": shoulder_observed_deltas,
+    }
+
+
+def _try_latch_startup_align_target(
+    *,
+    state: dict[str, Any],
+    latest_action: dict[str, Any] | None,
+    observed_arm: dict[str, float],
+    supervisor_cfg: dict[str, Any],
+    host_arm_debug: ArmDebugCapture,
+) -> bool:
+    if latest_action is None:
+        return False
+
+    arm_targets = extract_arm_positions(latest_action)
+    if not arm_targets:
+        return False
+
+    _append_target_latch_sample(state, arm_targets, supervisor_cfg=supervisor_cfg)
+    samples = state.get("target_latch_buffer") or []
+    candidate_target = _build_median_target_from_samples(samples)
+
+    accepted, check_info = _evaluate_startup_target_candidate(
+        samples=samples,
+        candidate_target=candidate_target,
+        observed_arm=observed_arm,
+        supervisor_cfg=supervisor_cfg,
+    )
+
+    check_payload: dict[str, Any] = {
+        "accepted": accepted,
+        "check_info": check_info,
+        "candidate_shoulder_targets": {
+            "left_shoulder_lift.pos": candidate_target.get("left_shoulder_lift.pos"),
+            "right_shoulder_lift.pos": candidate_target.get("right_shoulder_lift.pos"),
+        },
+        "observed_shoulder_positions": {
+            "left_shoulder_lift.pos": observed_arm.get("left_shoulder_lift.pos"),
+            "right_shoulder_lift.pos": observed_arm.get("right_shoulder_lift.pos"),
+        },
+        "supervisor_state": _serialize_supervisor_state(state),
+    }
+
+    if accepted:
+        state["align_target_arm"] = candidate_target
+        state["align_stable_frames"] = 0
+        state["target_latch_buffer"] = []
+        state["target_latch_reject_reason"] = None
+        host_arm_debug.record("host_startup_target_latch", check_payload)
+        return True
+
+    reject_reason = str(check_info.get("reason", "unknown"))
+    if state.get("target_latch_reject_reason") != reject_reason:
+        host_arm_debug.record("host_startup_target_latch", check_payload)
+    state["target_latch_reject_reason"] = reject_reason
+    return False
 
 
 def _build_hold_action(
@@ -445,13 +615,17 @@ def main():
                     "theta.vel": 0.0,
                     "z.pos": float((previous_observation or {}).get("z.pos", 100.0)),
                 }
-                if latest_action is not None and extract_arm_positions(latest_action):
-                    supervisor_state["align_target_arm"] = extract_arm_positions(latest_action)
-                    supervisor_state["align_stable_frames"] = 0
+                if received_this_loop and _try_latch_startup_align_target(
+                    state=supervisor_state,
+                    latest_action=latest_action,
+                    observed_arm=previous_obs_arm,
+                    supervisor_cfg=supervisor_cfg,
+                    host_arm_debug=host_arm_debug,
+                ):
                     _set_mode(
                         supervisor_state,
                         mode="ALIGN",
-                        reason="first_action_received",
+                        reason="startup_target_latched",
                         host_arm_debug=host_arm_debug,
                     )
                     mode = "ALIGN"
