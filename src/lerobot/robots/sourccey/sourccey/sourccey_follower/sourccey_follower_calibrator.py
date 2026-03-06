@@ -28,7 +28,7 @@ class SourcceyFollowerCalibrator:
     """Handles calibration operations for Sourccey robots."""
 
     GRIPPER_RANGE_EXTENSION = 25
-    SHOULDER_LIFT_RANGE_EXTENSION = 50
+    SHOULDER_LIFT_RANGE_EXTENSION = 500
 
     def __init__(self, robot):
         self.robot = robot
@@ -141,10 +141,28 @@ class SourcceyFollowerCalibrator:
                 # Shoulder lift startup can hit either edge depending on pose.
                 # Expand both sides so calibration tolerates slight start-position drift.
                 ext = self._get_shoulder_lift_range_extension()
+                detected_min = int(range_min)
+                detected_max = int(range_max)
                 range_min -= ext
                 range_max += ext
+            else:
+                ext = 0
 
-            range_min, range_max = self._clamp_range_to_motor_resolution(m, int(range_min), int(range_max))
+            requested_min = int(range_min)
+            requested_max = int(range_max)
+            range_min, range_max = self._clamp_range_to_motor_resolution(m, requested_min, requested_max)
+            if motor == "shoulder_lift":
+                logger.warning(
+                    "Shoulder calibration expansion (%s arm): detected=[%s,%s] ext=%s requested=[%s,%s] final=[%s,%s]",
+                    self.robot.config.orientation,
+                    detected_min,
+                    detected_max,
+                    ext,
+                    requested_min,
+                    requested_max,
+                    range_min,
+                    range_max,
+                )
             calibration[motor] = MotorCalibration(
                 id=m.id,
                 drive_mode=drive_mode,

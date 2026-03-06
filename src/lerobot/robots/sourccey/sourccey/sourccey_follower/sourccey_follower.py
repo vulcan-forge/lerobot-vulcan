@@ -14,8 +14,11 @@
 # limitations under the License.
 
 from functools import cached_property
+import json
 import time
-from typing import Any
+from datetime import datetime
+from pathlib import Path
+from typing import Any, TextIO
 import logging
 
 import numpy as np
@@ -69,6 +72,13 @@ class SourcceyFollower(Robot):
         # Track last warning time for throttling
         self._last_write_warning_time = 0.0
         self._write_warning_throttle_interval = 60.0  # seconds
+
+        # Shoulder range debug capture (used to verify calibration changes at startup).
+        self._shoulder_range_log_file: TextIO | None = None
+        self._shoulder_range_log_path: Path | None = None
+        self._shoulder_range_log_count = 0
+        self._shoulder_range_log_max_samples = 600
+        self._shoulder_boundary_threshold = 99.0
 
     def __del__(self):
         # Destructors can run on partially initialized objects if __init__ raised.
@@ -125,6 +135,7 @@ class SourcceyFollower(Robot):
             cam.connect()
 
         self.configure()
+        self._open_shoulder_range_log_file()
         logger.info(f"{self} connected.")
 
     def disconnect(self) -> None:
@@ -134,6 +145,7 @@ class SourcceyFollower(Robot):
             return
 
         logger.info(f"Disconnecting Sourccey {self.config.orientation} Follower")
+        self._close_shoulder_range_log_file()
 
         self.bus.disconnect()
         for cam in self.cameras.values():
@@ -246,13 +258,22 @@ class SourcceyFollower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
+        goal_pos: dict[str, float] = {}
+        present_pos: dict[str, float] = {}
         try:
             goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
             # Check for NaN values and skip sending actions if any are found
             present_pos = self.bus.sync_read("Present_Position")
+            self._log_shoulder_range_sample(stage="present_position_read", goal_pos=goal_pos, present_pos=present_pos)
             if any(np.isnan(v) for v in goal_pos.values()) or any(np.isnan(v) for v in present_pos.values()):
                 logger.warning("NaN values detected in goal positions. Skipping action execution.")
+                self._log_shoulder_range_sample(
+                    stage="nan_detected_skip",
+                    goal_pos=goal_pos,
+                    present_pos=present_pos,
+                    error="nan_detected",
+                )
                 return {f"{motor}.pos": val for motor, val in present_pos.items()}
 
             # Cap goal position when too far away from present position.
@@ -263,10 +284,12 @@ class SourcceyFollower(Robot):
 
             # If a joint is already over current, avoid commanding it deeper into the obstruction.
             goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)
+            self._log_shoulder_range_sample(stage="goal_after_current_safety", goal_pos=goal_pos, present_pos=present_pos)
 
             # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)
             self.safety.remember_goal(goal_pos)
+            self._log_shoulder_range_sample(stage="goal_written_sync_write", goal_pos=goal_pos, present_pos=present_pos)
             return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
         except ConnectionError as e:
@@ -275,6 +298,147 @@ class SourcceyFollower(Robot):
             if current_time - self._last_write_warning_time >= self._write_warning_throttle_interval:
                 logger.warning(f"Status packet error during sync_read / sync_write in {self}: {e}. Returning present position.")
                 self._last_write_warning_time = current_time
+            self._log_shoulder_range_sample(
+                stage="connection_error",
+                goal_pos=goal_pos,
+                present_pos=present_pos,
+                error=str(e),
+            )
             # Return present position instead of goal position when write fails
             return {f"{motor}.pos": val for motor, val in present_pos.items()}
 
+    def _open_shoulder_range_log_file(self) -> None:
+        if self._shoulder_range_log_file is not None:
+            return
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = (
+            Path.home()
+            / "Desktop"
+            / "calibrations"
+            / "run-logs"
+            / f"sourccey_shoulder_range_debug_{self.config.orientation}_{ts}.jsonl"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._shoulder_range_log_file = path.open("a", encoding="utf-8", buffering=1)
+        self._shoulder_range_log_path = path
+        self._shoulder_range_log_count = 0
+
+        shoulder_cal = self.bus.calibration.get("shoulder_lift") if self.bus.calibration else None
+        self._write_shoulder_range_event(
+            {
+                "event": "shoulder_range_debug_session_start",
+                "wall_time_s": time.time(),
+                "orientation": self.config.orientation,
+                "path": str(path),
+                "max_samples": self._shoulder_range_log_max_samples,
+                "boundary_threshold_norm": self._shoulder_boundary_threshold,
+                "calibration_shoulder_lift_range_extension": int(
+                    getattr(self.config, "calibration_shoulder_lift_range_extension", 0)
+                ),
+                "calibration_shoulder_lift": {
+                    "range_min": int(shoulder_cal.range_min) if shoulder_cal else None,
+                    "range_max": int(shoulder_cal.range_max) if shoulder_cal else None,
+                    "homing_offset": int(shoulder_cal.homing_offset) if shoulder_cal else None,
+                },
+            }
+        )
+        logger.warning("Shoulder range debug capture enabled for %s arm: %s", self.config.orientation, path)
+
+    def _close_shoulder_range_log_file(self) -> None:
+        if self._shoulder_range_log_file is None:
+            return
+        try:
+            self._write_shoulder_range_event(
+                {
+                    "event": "shoulder_range_debug_session_end",
+                    "wall_time_s": time.time(),
+                    "orientation": self.config.orientation,
+                    "captured_samples": self._shoulder_range_log_count,
+                }
+            )
+            self._shoulder_range_log_file.close()
+        finally:
+            self._shoulder_range_log_file = None
+            self._shoulder_range_log_path = None
+
+    def _write_shoulder_range_event(self, event: dict[str, Any]) -> None:
+        if self._shoulder_range_log_file is None:
+            return
+        self._shoulder_range_log_file.write(json.dumps(event, ensure_ascii=True) + "\n")
+        self._shoulder_range_log_file.flush()
+
+    def _log_shoulder_range_sample(
+        self,
+        *,
+        stage: str,
+        goal_pos: dict[str, Any],
+        present_pos: dict[str, Any],
+        error: str | None = None,
+    ) -> None:
+        if self._shoulder_range_log_file is None:
+            return
+        if self._shoulder_range_log_count >= self._shoulder_range_log_max_samples:
+            return
+
+        self._shoulder_range_log_count += 1
+        present_norm = self._safe_float(present_pos.get("shoulder_lift"))
+        goal_norm = self._safe_float(goal_pos.get("shoulder_lift"))
+        at_boundary = (
+            present_norm is not None and abs(float(present_norm)) >= float(self._shoulder_boundary_threshold)
+        )
+
+        shoulder_cal = self.bus.calibration.get("shoulder_lift") if self.bus.calibration else None
+        range_min = int(shoulder_cal.range_min) if shoulder_cal else None
+        range_max = int(shoulder_cal.range_max) if shoulder_cal else None
+        raw_present = None
+        outside_range = None
+        raw_read_error = None
+
+        if at_boundary:
+            try:
+                raw_present = int(self.bus.read("Present_Position", "shoulder_lift", normalize=False))
+                if range_min is not None and range_max is not None:
+                    outside_range = bool(raw_present < range_min or raw_present > range_max)
+            except Exception as e:
+                raw_read_error = str(e)
+
+        event = {
+            "event": "shoulder_range_debug_sample",
+            "wall_time_s": time.time(),
+            "orientation": self.config.orientation,
+            "sample_index": self._shoulder_range_log_count,
+            "stage": stage,
+            "present_shoulder_lift_norm": present_norm,
+            "goal_shoulder_lift_norm": goal_norm,
+            "at_boundary_norm": at_boundary,
+            "raw_present_shoulder_lift": raw_present,
+            "range_min": range_min,
+            "range_max": range_max,
+            "outside_range": outside_range,
+            "raw_read_error": raw_read_error,
+        }
+        if error is not None:
+            event["error"] = error
+
+        self._write_shoulder_range_event(event)
+
+        if at_boundary:
+            logger.warning(
+                "[SHOULDER_RANGE_DEBUG] %s arm boundary hit: present_norm=%.3f goal_norm=%s raw=%s range=[%s,%s] outside=%s",
+                self.config.orientation,
+                float(present_norm),
+                goal_norm,
+                raw_present,
+                range_min,
+                range_max,
+                outside_range,
+            )
+
+    @staticmethod
+    def _safe_float(value: Any) -> float | None:
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
