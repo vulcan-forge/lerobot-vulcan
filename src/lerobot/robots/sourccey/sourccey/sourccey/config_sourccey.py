@@ -150,3 +150,31 @@ class SourcceyClientConfig(RobotConfig):
     debug_capture_duration_s: float = 5.0
     debug_capture_motion_threshold: float = 1.0
     debug_capture_path: str | None = None
+
+    # Startup shoulder seam handling:
+    # During startup stabilization, canonicalize shoulder_lift sign near ±100 seam
+    # to avoid sign aliasing spikes that can cause throw-back behavior.
+    startup_shoulder_seam_filter_enabled: bool = False
+    # Legacy window parameter kept for backward compatibility/logging.
+    startup_shoulder_seam_filter_duration_s: float = 2.0
+    startup_shoulder_seam_abs_threshold: float = 90.0
+    # Disable the startup seam filter after K consecutive plausible shoulder samples.
+    startup_shoulder_seam_required_plausible_frames: int = 10
+    # Plausibility model: maximum expected shoulder delta per second in normalized units.
+    startup_shoulder_seam_max_delta_per_s: float = 250.0
+    # Extra margin added to the per-frame max delta threshold.
+    startup_shoulder_seam_delta_margin: float = 8.0
+
+    # Deprecated startup recovery fields kept only for backward compatibility.
+    # Client now uses seam continuity filtering directly (no recovery/pinning state machine).
+    startup_shoulder_recovery_enabled: bool = False
+    startup_shoulder_recovery_window_s: float = 15.0
+    startup_shoulder_recovery_bad_abs_limit: float = 95.0
+    startup_shoulder_recovery_left_target: float = 70.0
+    startup_shoulder_recovery_right_target: float = -70.0
+    startup_shoulder_recovery_max_step_per_s: float = 20.0
+    startup_shoulder_recovery_min_step: float = 0.5
+    startup_shoulder_recovery_verify_error: float = 10.0
+    startup_shoulder_recovery_verify_frames: int = 8
+    startup_shoulder_recovery_blend_s: float = 0.6
+    startup_shoulder_recovery_timeout_s: float = 10.0

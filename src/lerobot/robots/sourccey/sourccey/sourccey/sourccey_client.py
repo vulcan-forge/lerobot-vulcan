@@ -34,6 +34,10 @@ from .config_sourccey import SourcceyClientConfig
 from ..protobuf.generated import sourccey_pb2
 from ..protobuf.sourccey_protobuf import SourcceyProtobuf
 
+_LEFT_SHOULDER_LIFT_KEY = "left_shoulder_lift.pos"
+_RIGHT_SHOULDER_LIFT_KEY = "right_shoulder_lift.pos"
+_STARTUP_SHOULDER_KEYS = (_LEFT_SHOULDER_LIFT_KEY, _RIGHT_SHOULDER_LIFT_KEY)
+
 class SourcceyClient(Robot):
     config_class = SourcceyClientConfig
     name = "sourccey_client"
@@ -71,6 +75,19 @@ class SourcceyClient(Robot):
 
         self._is_connected = False
         self.logs = {}
+        self._startup_run_t0: float | None = None
+        self._startup_seam_warned: bool = False
+        self._startup_seam_intervention_count: int = 0
+        self._startup_seam_filter_active: bool = bool(config.startup_shoulder_seam_filter_enabled)
+        self._startup_seam_plausible_streak: int = 0
+        self._startup_seam_clean_streak: int = 0
+        self._startup_seam_last_shoulders: dict[str, float] | None = None
+        self._startup_seam_last_t: float | None = None
+        self._startup_seam_release_reason: str | None = None
+        self._startup_seam_release_logged: bool = False
+        self._startup_action_filter_intervention_count: int = 0
+        self._startup_last_sent_shoulders: dict[str, float] | None = None
+        self._startup_last_sent_t: float | None = None
 
         # Initialize protobuf converter
         self.protobuf_converter = SourcceyProtobuf()
@@ -204,6 +221,19 @@ class SourcceyClient(Robot):
             raise DeviceNotConnectedError("Timeout waiting for Sourccey Host to connect expired.")
 
         self._is_connected = True
+        self._startup_run_t0 = time.monotonic()
+        self._startup_seam_warned = False
+        self._startup_seam_intervention_count = 0
+        self._startup_seam_filter_active = bool(self.config.startup_shoulder_seam_filter_enabled)
+        self._startup_seam_plausible_streak = 0
+        self._startup_seam_clean_streak = 0
+        self._startup_seam_last_shoulders = None
+        self._startup_seam_last_t = None
+        self._startup_seam_release_reason = None
+        self._startup_seam_release_logged = False
+        self._startup_action_filter_intervention_count = 0
+        self._startup_last_sent_shoulders = None
+        self._startup_last_sent_t = None
 
     def calibrate(self) -> None:
         pass
@@ -239,6 +269,28 @@ class SourcceyClient(Robot):
             logging.debug("Could not send final relax command before disconnect: socket not ready.")
         except Exception as e:
             logging.debug(f"Could not send final relax command before disconnect: {e}")
+        self._arm_debug_capture.record_session(
+            "startup_shoulder_seam_filter_summary",
+            {
+                "enabled": bool(self.config.startup_shoulder_seam_filter_enabled),
+                "duration_s": float(self.config.startup_shoulder_seam_filter_duration_s),
+                "abs_threshold": float(self.config.startup_shoulder_seam_abs_threshold),
+                "intervention_count": int(self._startup_seam_intervention_count),
+                "required_plausible_frames": int(self.config.startup_shoulder_seam_required_plausible_frames),
+                "plausible_streak_at_disconnect": int(self._startup_seam_plausible_streak),
+                "clean_streak_at_disconnect": int(self._startup_seam_clean_streak),
+                "filter_active_at_disconnect": bool(self._startup_seam_filter_active),
+                "release_reason": self._startup_seam_release_reason,
+            },
+        )
+        self._arm_debug_capture.record_session(
+            "startup_shoulder_action_filter_summary",
+            {
+                "enabled": bool(self.config.startup_shoulder_seam_filter_enabled),
+                "intervention_count": int(self._startup_action_filter_intervention_count),
+                "last_sent_shoulders": self._startup_last_sent_shoulders,
+            },
+        )
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
@@ -285,27 +337,40 @@ class SourcceyClient(Robot):
                 "ManipulatorRobot is not connected. You need to run `robot.connect()`."
             )
 
-        self._arm_debug_capture.maybe_start(action=action, observation=self.last_remote_state)
+        requested_action = dict(action)
+        action_to_send = self._apply_startup_shoulder_action_canonicalization(requested_action)
+        requested_arm = extract_arm_positions(requested_action)
+        outgoing_arm = extract_arm_positions(action_to_send)
+        startup_override_keys = [
+            key
+            for key in _STARTUP_SHOULDER_KEYS
+            if abs(float(outgoing_arm.get(key, 0.0)) - float(requested_arm.get(key, 0.0))) > 1e-6
+        ]
+
+        self._arm_debug_capture.maybe_start(action=action_to_send, observation=self.last_remote_state)
         self._arm_debug_capture.record(
             "client_outgoing_action",
             {
-                "outgoing_arm_target": extract_arm_positions(action),
+                "requested_arm_target": requested_arm,
+                "outgoing_arm_target": outgoing_arm,
                 "latest_remote_arm_observation": extract_arm_positions(self.last_remote_state),
+                "startup_shoulder_filter_active": bool(self._startup_seam_filter_active),
+                "startup_shoulder_action_filter_override_keys": startup_override_keys,
                 "outgoing_base": {
-                    "x.vel": float(action.get("x.vel", 0.0)),
-                    "y.vel": float(action.get("y.vel", 0.0)),
-                    "theta.vel": float(action.get("theta.vel", 0.0)),
-                    "z.pos": float(action.get("z.pos", 0.0)),
+                    "x.vel": float(action_to_send.get("x.vel", 0.0)),
+                    "y.vel": float(action_to_send.get("y.vel", 0.0)),
+                    "theta.vel": float(action_to_send.get("theta.vel", 0.0)),
+                    "z.pos": float(action_to_send.get("z.pos", 0.0)),
                 },
             },
         )
 
         # Convert action to protobuf and send
-        robot_action = self.protobuf_converter.action_to_protobuf(action)
+        robot_action = self.protobuf_converter.action_to_protobuf(action_to_send)
         self.zmq_cmd_socket.send(robot_action.SerializeToString())
 
         # TODO(Steven): Remove the np conversion when it is possible to record a non-numpy array value
-        actions = np.array([action.get(k, 0.0) for k in self._state_order], dtype=np.float32)
+        actions = np.array([action_to_send.get(k, 0.0) for k in self._state_order], dtype=np.float32)
 
         action_sent = {key: actions[i] for i, key in enumerate(self._state_order)}
         action_sent["action"] = actions
@@ -444,6 +509,47 @@ class SourcceyClient(Robot):
     ) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
         """Extracts frames, and state from the parsed observation."""
         flat_state = {key: observation.get(key, 0.0) for key in self._state_order}
+        pre_filter_shoulder = {
+            "left_shoulder_lift.pos": float(flat_state.get("left_shoulder_lift.pos", 0.0)),
+            "right_shoulder_lift.pos": float(flat_state.get("right_shoulder_lift.pos", 0.0)),
+        }
+
+        seam_filtered_obs_keys: list[str] = []
+        if self._should_apply_startup_shoulder_seam_filter():
+            flat_state, seam_filtered_obs_keys, seam_filter_debug = self._apply_startup_shoulder_sign_canonicalization(
+                flat_state
+            )
+            if seam_filtered_obs_keys and not self._startup_seam_warned:
+                logging.warning(
+                    "Startup shoulder seam filter active; canonicalized observation keys: %s",
+                    ", ".join(seam_filtered_obs_keys),
+                )
+                self._startup_seam_warned = True
+            if seam_filtered_obs_keys:
+                self._startup_seam_intervention_count += 1
+                post_filter_shoulder = {
+                    "left_shoulder_lift.pos": float(flat_state.get("left_shoulder_lift.pos", 0.0)),
+                    "right_shoulder_lift.pos": float(flat_state.get("right_shoulder_lift.pos", 0.0)),
+                }
+                startup_elapsed_s = None
+                if self._startup_run_t0 is not None:
+                    startup_elapsed_s = time.monotonic() - self._startup_run_t0
+
+                self._arm_debug_capture.record_session(
+                    "startup_shoulder_seam_filter_intervention",
+                    {
+                        "keys": seam_filtered_obs_keys,
+                        "raw_shoulder_observation": pre_filter_shoulder,
+                        "filtered_shoulder_observation": post_filter_shoulder,
+                        "abs_threshold": float(self.config.startup_shoulder_seam_abs_threshold),
+                        "startup_elapsed_s": startup_elapsed_s,
+                        "intervention_index": int(self._startup_seam_intervention_count),
+                        "sample_plausible": bool(seam_filter_debug.get("sample_plausible", True)),
+                        "plausible_streak": int(seam_filter_debug.get("plausible_streak", 0)),
+                        "clean_streak": int(seam_filter_debug.get("clean_streak", 0)),
+                        "max_delta_allowed": seam_filter_debug.get("max_delta_allowed"),
+                    },
+                )
 
         state_vec = np.array([flat_state[key] for key in self._state_order], dtype=np.float32)
 
@@ -464,6 +570,240 @@ class SourcceyClient(Robot):
                     current_frames[cam_name] = frame
 
         return current_frames, obs_dict
+
+    def _apply_startup_shoulder_action_canonicalization(self, action: dict[str, Any]) -> dict[str, Any]:
+        if not self._should_apply_startup_shoulder_seam_filter():
+            return action
+        if not action:
+            return action
+
+        out = dict(action)
+        threshold = float(self.config.startup_shoulder_seam_abs_threshold)
+        now_t = time.monotonic()
+        max_delta_allowed: float | None = None
+        if self._startup_last_sent_t is not None:
+            dt_s = max(1e-6, now_t - self._startup_last_sent_t)
+            max_delta_allowed = (
+                float(self.config.startup_shoulder_seam_max_delta_per_s) * dt_s
+                + float(self.config.startup_shoulder_seam_delta_margin)
+            )
+
+        changed_sign_keys: list[str] = []
+        slew_limited_keys: list[str] = []
+        requested_shoulders: dict[str, float] = {}
+        outgoing_shoulders: dict[str, float] = {}
+        observed_shoulders = {
+            key: float(self.last_remote_state.get(key, 0.0)) for key in _STARTUP_SHOULDER_KEYS
+        }
+
+        for key in _STARTUP_SHOULDER_KEYS:
+            if key not in out:
+                continue
+
+            try:
+                requested = float(out[key])
+            except (TypeError, ValueError):
+                continue
+
+            requested_shoulders[key] = requested
+            candidate = requested
+            observed = float(observed_shoulders.get(key, requested))
+
+            # Near seam, keep outgoing action on the sign branch closest to observed state.
+            if max(abs(requested), abs(observed)) >= threshold:
+                opposite = -requested
+                if abs(opposite - observed) + 1e-6 < abs(candidate - observed):
+                    candidate = opposite
+                    changed_sign_keys.append(key)
+
+            prev_sent = None
+            if self._startup_last_sent_shoulders is not None:
+                prev_sent = self._startup_last_sent_shoulders.get(key)
+
+            # During startup seam filtering only, rate-limit sudden shoulder jumps.
+            if prev_sent is not None and max_delta_allowed is not None:
+                delta = candidate - float(prev_sent)
+                if abs(delta) > max_delta_allowed:
+                    candidate = float(prev_sent + np.sign(delta) * max_delta_allowed)
+                    slew_limited_keys.append(key)
+
+            bounded = float(min(100.0, max(-100.0, candidate)))
+            out[key] = bounded
+            outgoing_shoulders[key] = bounded
+
+        if outgoing_shoulders:
+            self._startup_last_sent_shoulders = outgoing_shoulders
+            self._startup_last_sent_t = now_t
+
+        if changed_sign_keys or slew_limited_keys:
+            self._startup_action_filter_intervention_count += 1
+            self._arm_debug_capture.record_session(
+                "startup_shoulder_action_filter_intervention",
+                {
+                    "keys_sign_aligned": changed_sign_keys,
+                    "keys_slew_limited": slew_limited_keys,
+                    "requested_shoulder_action": requested_shoulders,
+                    "outgoing_shoulder_action": outgoing_shoulders,
+                    "observed_shoulder_state": observed_shoulders,
+                    "max_delta_allowed": max_delta_allowed,
+                    "intervention_index": int(self._startup_action_filter_intervention_count),
+                },
+            )
+
+        return out
+
+    def _should_apply_startup_shoulder_seam_filter(self) -> bool:
+        if not bool(self.config.startup_shoulder_seam_filter_enabled):
+            return False
+        if not bool(self._startup_seam_filter_active):
+            return False
+
+        # Deterministic upper bound: always release the startup seam filter after
+        # the configured startup window, even if continuity heuristics still see
+        # seam-aliasing samples.
+        duration_s = float(self.config.startup_shoulder_seam_filter_duration_s)
+        if duration_s > 0.0 and self._startup_run_t0 is not None:
+            startup_elapsed_s = time.monotonic() - self._startup_run_t0
+            if startup_elapsed_s >= duration_s:
+                self._release_startup_shoulder_seam_filter("duration_elapsed")
+                return False
+
+        return True
+
+    def _apply_startup_shoulder_sign_canonicalization(
+        self, state_like: Dict[str, Any]
+    ) -> tuple[Dict[str, Any], list[str], dict[str, Any]]:
+        threshold = float(self.config.startup_shoulder_seam_abs_threshold)
+        out = dict(state_like)
+        changed: list[str] = []
+        debug_info: dict[str, Any] = {}
+
+        raw_values: dict[str, float] = {}
+        corrected_values: dict[str, float] = {}
+
+        for key in _STARTUP_SHOULDER_KEYS:
+            if key not in out:
+                continue
+
+            try:
+                val = float(out[key])
+            except (TypeError, ValueError):
+                continue
+
+            raw_values[key] = val
+            corrected_values[key] = val
+            if abs(val) < threshold:
+                continue
+
+            # Near seam, choose the sign branch nearest to previous filtered sample.
+            if self._startup_seam_last_shoulders is None or key not in self._startup_seam_last_shoulders:
+                continue
+            prev = float(self._startup_seam_last_shoulders[key])
+            opposite = -val
+            if abs(opposite - prev) + 1e-6 < abs(val - prev):
+                corrected_values[key] = opposite
+
+        now_t = time.monotonic()
+        max_delta_allowed: float | None = None
+        sample_plausible = True
+        last_shoulders = self._startup_seam_last_shoulders
+        if (
+            last_shoulders is not None
+            and self._startup_seam_last_t is not None
+            and raw_values
+        ):
+            dt_s = max(1e-6, now_t - self._startup_seam_last_t)
+            max_delta_allowed = (
+                float(self.config.startup_shoulder_seam_max_delta_per_s) * dt_s
+                + float(self.config.startup_shoulder_seam_delta_margin)
+            )
+            debug_info["dt_s"] = dt_s
+
+        for key, raw_val in raw_values.items():
+            chosen = raw_val
+            corrected = corrected_values.get(key, raw_val)
+
+            if last_shoulders is None or max_delta_allowed is None:
+                # No continuity baseline yet: take corrected seam sign if detected.
+                if corrected != raw_val:
+                    chosen = corrected
+            else:
+                prev_val = float(last_shoulders.get(key, raw_val))
+                raw_jump = abs(raw_val - prev_val)
+                corrected_jump = abs(corrected - prev_val)
+                if corrected != raw_val and raw_jump > max_delta_allowed and corrected_jump <= max_delta_allowed:
+                    chosen = corrected
+                elif corrected != raw_val and raw_jump > max_delta_allowed and corrected_jump < raw_jump:
+                    chosen = corrected
+
+            out[key] = chosen
+            if chosen != raw_val:
+                changed.append(key)
+
+            if last_shoulders is not None and max_delta_allowed is not None:
+                prev_val = float(last_shoulders.get(key, chosen))
+                if abs(chosen - prev_val) > max_delta_allowed:
+                    sample_plausible = False
+
+        if raw_values:
+            if last_shoulders is None or max_delta_allowed is None:
+                self._startup_seam_plausible_streak = 1
+            elif sample_plausible:
+                self._startup_seam_plausible_streak += 1
+            else:
+                self._startup_seam_plausible_streak = 0
+
+            # Release only after stable plausible samples that require no seam correction.
+            if sample_plausible and not changed:
+                self._startup_seam_clean_streak += 1
+            else:
+                self._startup_seam_clean_streak = 0
+
+            self._startup_seam_last_shoulders = {
+                key: float(out.get(key, raw_values[key])) for key in raw_values
+            }
+            self._startup_seam_last_t = now_t
+
+        required_plausible = max(1, int(self.config.startup_shoulder_seam_required_plausible_frames))
+        if self._startup_seam_filter_active and self._startup_seam_clean_streak >= required_plausible:
+            self._release_startup_shoulder_seam_filter("clean_plausible_streak_reached")
+
+        debug_info["sample_plausible"] = sample_plausible
+        debug_info["plausible_streak"] = int(self._startup_seam_plausible_streak)
+        debug_info["clean_streak"] = int(self._startup_seam_clean_streak)
+        debug_info["max_delta_allowed"] = max_delta_allowed
+        debug_info["filter_active"] = bool(self._startup_seam_filter_active)
+        return out, changed, debug_info
+
+    def _release_startup_shoulder_seam_filter(self, reason: str) -> None:
+        if not self._startup_seam_filter_active:
+            return
+
+        self._startup_seam_filter_active = False
+        self._startup_seam_release_reason = reason
+        if self._startup_seam_release_logged:
+            return
+
+        startup_elapsed_s = None
+        if self._startup_run_t0 is not None:
+            startup_elapsed_s = time.monotonic() - self._startup_run_t0
+
+        self._arm_debug_capture.record_session(
+            "startup_shoulder_seam_filter_released",
+            {
+                "reason": reason,
+                "startup_elapsed_s": startup_elapsed_s,
+                "plausible_streak": int(self._startup_seam_plausible_streak),
+                "clean_streak": int(self._startup_seam_clean_streak),
+                "required_plausible_frames": int(self.config.startup_shoulder_seam_required_plausible_frames),
+            },
+        )
+        logging.info(
+            "Startup shoulder seam filter released (%s). clean plausible frames=%d.",
+            reason,
+            self._startup_seam_clean_streak,
+        )
+        self._startup_seam_release_logged = True
 
     ###################################################################
     # Private Control Functions
