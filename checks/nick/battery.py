@@ -102,14 +102,18 @@ class BQ34Z100:
         rows: list[dict[str, str]] = []
         with self._open_bus(self._bus_num) as bus:
             for reg in range(start_reg, end_reg + 1):
-                byte_val = self._read_u8(bus, reg)
-                row: dict[str, str] = {
-                    "reg": self._fmt_hex_u8(reg),
-                    "byte": self._fmt_hex_u8(byte_val),
-                }
+                row: dict[str, str] = {"reg": self._fmt_hex_u8(reg)}
+                try:
+                    byte_val = self._read_u8(bus, reg)
+                    row["byte"] = self._fmt_hex_u8(byte_val)
+                except OSError as exc:
+                    row["byte"] = f"ERR({exc.errno})"
                 if reg <= 0xFE:
-                    word_val = self._read_u16(bus, reg, swap_word_bytes)
-                    row["word"] = self._fmt_hex_u16(word_val)
+                    try:
+                        word_val = self._read_u16(bus, reg, swap_word_bytes)
+                        row["word"] = self._fmt_hex_u16(word_val)
+                    except OSError as exc:
+                        row["word"] = f"ERR({exc.errno})"
                 rows.append(row)
         return rows
 
