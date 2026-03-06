@@ -33,11 +33,14 @@ REG_VOLTAGE = 0x08  # 2 bytes (mV)
 REG_AVERAGE_CURRENT = 0x0A  # 2 bytes (mA, signed)
 REG_TEMPERATURE = 0x0C  # 2 bytes (0.1 K)
 REG_FLAGS = 0x0E  # 2 bytes
+REG_VOLT_SCALE = 0x20  # 1 byte
 
 
 @dataclass
 class BatteryGaugeData:
     voltage_cmd_v: float
+    voltage_times_scale_v: float
+    volt_scale: int
     bat_pin_voltage_v: float
     pack_voltage_est_v: float
     voltage_mode_used: str
@@ -146,9 +149,11 @@ class BQ34Z100:
             voltage_mv = self._read_u16(bus, REG_VOLTAGE, swap_word_bytes)
             current_raw = self._read_u16(bus, REG_AVERAGE_CURRENT, swap_word_bytes)
             flags = self._read_u16(bus, REG_FLAGS, swap_word_bytes)
+            volt_scale = self._read_u8(bus, REG_VOLT_SCALE)
 
         current_ma = self._to_s16(current_raw)
         voltage_cmd_v = voltage_mv / 1000.0
+        voltage_times_scale_v = voltage_cmd_v * max(1, volt_scale)
         divider_gain = (divider_top_kohm + divider_bottom_kohm) / divider_bottom_kohm
 
         # Voltage() can represent either BAT-pin or pack voltage depending on gauge config.
@@ -166,6 +171,8 @@ class BQ34Z100:
 
         return BatteryGaugeData(
             voltage_cmd_v=voltage_cmd_v,
+            voltage_times_scale_v=voltage_times_scale_v,
+            volt_scale=volt_scale,
             bat_pin_voltage_v=bat_pin_voltage_v,
             pack_voltage_est_v=pack_voltage_est_v,
             voltage_mode_used=mode_used,
@@ -250,6 +257,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _print_human(data: BatteryGaugeData) -> None:
     print(f"Voltage Cmd        : {data.voltage_cmd_v:.3f} V")
+    print(f"VoltScale          : {data.volt_scale:d}")
+    print(f"Voltage*VoltScale  : {data.voltage_times_scale_v:.3f} V")
     print(f"Voltage Mode Used  : {data.voltage_mode_used}")
     print(f"BAT Pin Voltage    : {data.bat_pin_voltage_v:.3f} V")
     print(f"Pack Voltage (est) : {data.pack_voltage_est_v:.3f} V")
