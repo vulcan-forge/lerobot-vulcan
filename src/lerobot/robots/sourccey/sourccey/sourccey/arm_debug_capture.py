@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,13 @@ def extract_arm_positions(data: dict[str, Any] | None) -> dict[str, float]:
     return arm_data
 
 
+def _default_capture_dir() -> Path:
+    configured_dir = os.getenv("SOURCCEY_ARM_DEBUG_DIR")
+    if configured_dir:
+        return Path(configured_dir).expanduser()
+    return Path.home() / "Desktop" / "calibrations" / "run-logs"
+
+
 class ArmDebugCapture:
     def __init__(
         self,
@@ -60,7 +68,7 @@ class ArmDebugCapture:
 
         if capture_path is None:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
-            self.fpath = Path("/tmp") / f"sourccey_{self.label}_arm_debug_{timestamp}.jsonl"
+            self.fpath = _default_capture_dir() / f"sourccey_{self.label}_arm_debug_{timestamp}.jsonl"
         else:
             self.fpath = Path(capture_path).expanduser()
 

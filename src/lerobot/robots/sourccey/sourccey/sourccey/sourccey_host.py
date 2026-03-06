@@ -283,10 +283,7 @@ def _apply_arm_command_governor(
         started = governor_state.get("startup_settle_started_t")
         if started is not None:
             elapsed_s = float(now - float(started))
-            if elapsed_s >= float(governor_config["settle_max_duration_s"]):
-                governor_state["startup_settle_active"] = False
-                governor_state["startup_settle_started_t"] = None
-            elif (
+            if (
                 max_abs_delta_target_vs_prev_obs is not None
                 and max_abs_delta_target_vs_prev_obs <= float(governor_config["settle_complete_delta"])
             ):
@@ -427,6 +424,35 @@ def _extract_status_packet_errors_from_sent_action(sent_action: dict[str, Any]) 
         "left": str(left_error) if left_error else None,
         "right": str(right_error) if right_error else None,
     }
+
+
+def _extract_overload_errors_from_shoulder_lift_status(robot: Sourccey) -> dict[str, str | None]:
+    def _read_overload(arm: Any, side: str) -> str | None:
+        bus = arm.bus
+        if not _bus_supports_register(bus, "shoulder_lift", "Status"):
+            return None
+
+        _value, error = _safe_bus_read_with_error(bus, "Status", "shoulder_lift")
+        if error is None:
+            return None
+        if "Overload error" in error:
+            return f"{side}_shoulder_lift_status_read: {error}"
+        return None
+
+    return {
+        "left": _read_overload(robot.left_arm, "left"),
+        "right": _read_overload(robot.right_arm, "right"),
+    }
+
+
+def _merge_arm_errors(
+    primary: dict[str, str | None],
+    secondary: dict[str, str | None],
+) -> dict[str, str | None]:
+    merged: dict[str, str | None] = {}
+    for side in ("left", "right"):
+        merged[side] = primary.get(side) or secondary.get(side)
+    return merged
 
 
 def _update_arm_freeze_state(
@@ -657,6 +683,8 @@ def main():
         previous_observation = observation
         last_sent_arm_target: dict[str, float] = {}
         status_packet_errors: dict[str, str | None] = {"left": None, "right": None}
+        shoulder_lift_overload_errors: dict[str, str | None] = {"left": None, "right": None}
+        freeze_trigger_errors: dict[str, str | None] = {"left": None, "right": None}
         while duration < host.connection_time_s:
             loop_start_time = time.time()
             try:
@@ -712,9 +740,11 @@ def main():
                 # Send action to robot
                 _action_sent = robot.send_action(action_to_send)
                 status_packet_errors = _extract_status_packet_errors_from_sent_action(_action_sent)
+                shoulder_lift_overload_errors = _extract_overload_errors_from_shoulder_lift_status(robot)
+                freeze_trigger_errors = _merge_arm_errors(status_packet_errors, shoulder_lift_overload_errors)
                 _update_arm_freeze_state(
                     arm_freeze_state=arm_freeze_state,
-                    status_packet_errors=status_packet_errors,
+                    status_packet_errors=freeze_trigger_errors,
                     observed_arm_position=previous_obs_arm,
                     last_sent_arm_target=last_sent_arm_target,
                     resume_good_status_packets=resume_good_status_packets,
@@ -742,6 +772,8 @@ def main():
                         "arm_freeze_state": _serialize_arm_freeze_state(arm_freeze_state),
                         "arm_freeze_applied": applied_freeze,
                         "status_packet_errors": status_packet_errors,
+                        "shoulder_lift_overload_errors": shoulder_lift_overload_errors,
+                        "freeze_trigger_errors": freeze_trigger_errors,
                     },
                 )
                 last_sent_arm_target = sent_arm_target
@@ -786,6 +818,8 @@ def main():
                     "shoulder_lift_diagnostics": shoulder_lift_diag,
                     "shoulder_lift_tracking": shoulder_lift_tracking,
                     "status_packet_errors": status_packet_errors,
+                    "shoulder_lift_overload_errors": shoulder_lift_overload_errors,
+                    "freeze_trigger_errors": freeze_trigger_errors,
                     "arm_governor_state": _serialize_arm_command_governor_state(arm_governor_state),
                     "arm_freeze_state": _serialize_arm_freeze_state(arm_freeze_state),
                     "watchdog_active": watchdog_active,
