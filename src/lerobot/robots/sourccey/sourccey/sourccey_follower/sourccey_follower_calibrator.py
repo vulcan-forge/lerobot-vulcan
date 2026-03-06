@@ -138,14 +138,11 @@ class SourcceyFollowerCalibrator:
                 else:
                     range_min -= ext
             elif motor == "shoulder_lift":
-                # Shoulder lift autocalibration only scans one direction. Expand the
-                # opposite side slightly (same pattern as gripper) so startup poses
-                # near the edge stay inside calibrated range.
+                # Shoulder lift startup can hit either edge depending on pose.
+                # Expand both sides so calibration tolerates slight start-position drift.
                 ext = self._get_shoulder_lift_range_extension()
-                if self.robot.config.orientation == "right":
-                    range_min -= ext
-                else:
-                    range_max += ext
+                range_min -= ext
+                range_max += ext
 
             range_min, range_max = self._clamp_range_to_motor_resolution(m, int(range_min), int(range_max))
             calibration[motor] = MotorCalibration(
