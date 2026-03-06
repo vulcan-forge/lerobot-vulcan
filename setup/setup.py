@@ -92,6 +92,34 @@ class SetupScript:
         """Return True when running on macOS or Windows."""
         return platform.system() in {"Darwin", "Windows"}
 
+    @staticmethod
+    def _env_flag(name: str, default: bool = False) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+    def is_raspberry_pi(self) -> bool:
+        """Best-effort detection for Raspberry Pi hardware."""
+        if platform.system() != "Linux":
+            return False
+
+        model_paths = (
+            Path("/proc/device-tree/model"),
+            Path("/sys/firmware/devicetree/base/model"),
+        )
+        for model_path in model_paths:
+            try:
+                if not model_path.exists():
+                    continue
+                model = model_path.read_text(encoding="utf-8", errors="ignore").replace("\x00", "").strip().lower()
+                if "raspberry pi" in model:
+                    return True
+            except OSError:
+                continue
+
+        return False
+
     def ensure_executable(self, path: Path) -> None:
         """Ensure a file is executable on Unix-like systems."""
         if platform.system() == "Windows":
@@ -311,6 +339,61 @@ class SetupScript:
             print_success=self.print_success,
             print_error=self.print_error,
         )
+
+    def should_configure_bq34z100(self, force: bool = False, skip: bool = False) -> bool:
+        """Determine if bq34z100 setup should run on this machine."""
+        if skip or self._env_flag("SOURCCEY_SKIP_BQ34Z100_SETUP"):
+            self.print_status("Skipping bq34z100 setup (skip flag set).")
+            return False
+
+        if force or self._env_flag("SOURCCEY_FORCE_BQ34Z100_SETUP"):
+            self.print_status("Running bq34z100 setup (forced).")
+            return True
+
+        if not self.is_raspberry_pi():
+            self.print_status("Skipping bq34z100 setup (not a Raspberry Pi).")
+            return False
+
+        return True
+
+    def configure_bq34z100(self) -> bool:
+        """Apply default bq34z100 battery gauge settings."""
+        python_path = self.get_venv_python_path()
+        configure_script = (
+            self.project_root / "src" / "lerobot" / "scripts" / "sourccey" / "battery" / "configure_bq34z100.py"
+        )
+
+        if not configure_script.exists():
+            self.print_warning(f"bq34z100 setup skipped: script not found at {configure_script}")
+            return True
+        if not python_path.exists():
+            self.print_error(f"bq34z100 setup failed: venv Python not found at {python_path}")
+            return False
+        if platform.system() == "Linux" and not Path("/dev/i2c-1").exists():
+            self.print_warning("bq34z100 setup skipped: /dev/i2c-1 not found")
+            return True
+
+        self.print_status("Applying bq34z100 default configuration...")
+        result = subprocess.run(
+            [str(python_path), str(configure_script)],
+            capture_output=True,
+            text=True,
+            cwd=self.project_root,
+        )
+
+        if result.returncode != 0:
+            self.print_error("bq34z100 setup command failed.")
+            if result.stderr and result.stderr.strip():
+                self.print_error(result.stderr.strip())
+            elif result.stdout and result.stdout.strip():
+                self.print_error(result.stdout.strip())
+            return False
+
+        stdout = (result.stdout or "").strip()
+        if stdout:
+            self.print_status(f"bq34z100: {stdout}")
+        self.print_success("bq34z100 setup completed.")
+        return True
 
     def fix_final_ownership(self) -> bool:
         """Restore project directory ownership to the normal user after setup."""
@@ -535,7 +618,12 @@ class SetupScript:
         print(f"{Colors.CYAN}{message.center(60)}{Colors.NC}")
         print(f"{Colors.CYAN}{'='*60}{Colors.NC}\n")
 
-    def run(self, desktop: bool = False) -> bool:
+    def run(
+        self,
+        desktop: bool = False,
+        force_bq34z100_setup: bool = False,
+        skip_bq34z100_setup: bool = False,
+    ) -> bool:
         """Run the complete setup process"""
         self.print_header("LEROBOT VULCAN SETUP")
 
@@ -569,6 +657,8 @@ class SetupScript:
         if desktop:
             setup_steps.append(self.setup_desktop_extras())
         setup_steps.append(self.compile_profobufs())
+        if self.should_configure_bq34z100(force=force_bq34z100_setup, skip=skip_bq34z100_setup):
+            setup_steps.append(self.configure_bq34z100())
 
         if not all(setup_steps):
             self.print_error("Project setup failed.")
@@ -585,10 +675,18 @@ class SetupScript:
 ################################################################
 # Main function
 ################################################################
-def setup(desktop: bool = False):
+def setup(
+    desktop: bool = False,
+    force_bq34z100_setup: bool = False,
+    skip_bq34z100_setup: bool = False,
+):
     """Setup the project"""
     setup = SetupScript()
-    success = setup.run(desktop=desktop)
+    success = setup.run(
+        desktop=desktop,
+        force_bq34z100_setup=force_bq34z100_setup,
+        skip_bq34z100_setup=skip_bq34z100_setup,
+    )
     return success
 
 def main():
@@ -600,9 +698,25 @@ def main():
         default=False,
         help="Install Sourccey desktop extras (sourccey-desktop).",
     )
+    parser.add_argument(
+        "--force-bq34z100-setup",
+        action="store_true",
+        default=False,
+        help="Run bq34z100 battery setup even when Raspberry Pi detection does not match.",
+    )
+    parser.add_argument(
+        "--skip-bq34z100-setup",
+        action="store_true",
+        default=False,
+        help="Skip bq34z100 battery setup.",
+    )
     args = parser.parse_args()
 
-    success = setup(desktop=args.desktop)
+    success = setup(
+        desktop=args.desktop,
+        force_bq34z100_setup=args.force_bq34z100_setup,
+        skip_bq34z100_setup=args.skip_bq34z100_setup,
+    )
 
     if not success:
         sys.exit(1)
