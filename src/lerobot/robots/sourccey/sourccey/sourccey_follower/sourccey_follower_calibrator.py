@@ -28,6 +28,7 @@ class SourcceyFollowerCalibrator:
     """Handles calibration operations for Sourccey robots."""
 
     GRIPPER_RANGE_EXTENSION = 25
+    SHOULDER_LIFT_RANGE_EXTENSION = 50
 
     def __init__(self, robot):
         self.robot = robot
@@ -131,10 +132,22 @@ class SourcceyFollowerCalibrator:
             range_min = range_mins[motor]
             range_max = range_maxes[motor]
             if motor == "gripper":
+                ext = self._get_gripper_range_extension()
                 if self.robot.config.orientation == "right":
-                    range_max += self.GRIPPER_RANGE_EXTENSION
+                    range_max += ext
                 else:
-                    range_min -= self.GRIPPER_RANGE_EXTENSION
+                    range_min -= ext
+            elif motor == "shoulder_lift":
+                # Shoulder lift autocalibration only scans one direction. Expand the
+                # opposite side slightly (same pattern as gripper) so startup poses
+                # near the edge stay inside calibrated range.
+                ext = self._get_shoulder_lift_range_extension()
+                if self.robot.config.orientation == "right":
+                    range_min -= ext
+                else:
+                    range_max += ext
+
+            range_min, range_max = self._clamp_range_to_motor_resolution(m, int(range_min), int(range_max))
             calibration[motor] = MotorCalibration(
                 id=m.id,
                 drive_mode=drive_mode,
@@ -143,6 +156,34 @@ class SourcceyFollowerCalibrator:
                 range_max=range_max,
             )
         return calibration
+
+    def _get_gripper_range_extension(self) -> int:
+        return max(
+            0,
+            int(getattr(self.robot.config, "calibration_gripper_range_extension", self.GRIPPER_RANGE_EXTENSION)),
+        )
+
+    def _get_shoulder_lift_range_extension(self) -> int:
+        return max(
+            0,
+            int(
+                getattr(
+                    self.robot.config,
+                    "calibration_shoulder_lift_range_extension",
+                    self.SHOULDER_LIFT_RANGE_EXTENSION,
+                )
+            ),
+        )
+
+    def _clamp_range_to_motor_resolution(self, motor, range_min: int, range_max: int) -> tuple[int, int]:
+        max_res = self.robot.bus.model_resolution_table.get(motor.model, 4096) - 1
+        clamped_min = max(0, min(int(range_min), int(max_res)))
+        clamped_max = max(0, min(int(range_max), int(max_res)))
+        if clamped_min >= clamped_max:
+            mid = (clamped_min + clamped_max) // 2
+            clamped_min = max(0, mid - 1)
+            clamped_max = min(int(max_res), mid + 1)
+        return clamped_min, clamped_max
 
     def _initialize_calibration(self, reverse: bool = False) -> Dict[str, int]:
         """Initialize the calibration of the robot."""
