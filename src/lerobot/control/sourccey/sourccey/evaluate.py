@@ -74,7 +74,9 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=policy,
         pretrained_path=cfg.model_path,
-        dataset_stats=dataset.meta.stats,
+        # Use policy checkpoint stats; a newly created eval dataset does not contain
+        # representative normalization statistics.
+        dataset_stats=None,
         # The inference device is automatically set to match the detected hardware, overriding any previous device settings from training to ensure compatibility.
         preprocessor_overrides={"device_processor": {"device": str(policy.config.device)}},
     )

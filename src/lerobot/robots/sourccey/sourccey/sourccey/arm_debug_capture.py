@@ -83,6 +83,7 @@ class ArmDebugCapture:
                 "path": str(self.fpath),
             },
             include_dt=False,
+            durable=True,
         )
 
     @property
@@ -124,6 +125,7 @@ class ArmDebugCapture:
                 "arm_observation": obs_arm,
             },
             include_dt=False,
+            durable=True,
         )
 
     def record(self, event: str, payload: dict[str, Any]) -> None:
@@ -138,6 +140,7 @@ class ArmDebugCapture:
                     "elapsed_s": elapsed,
                     "reason": "duration_elapsed",
                 },
+                durable=True,
             )
             self.close()
             return
@@ -155,12 +158,20 @@ class ArmDebugCapture:
         self.closed = True
         if self._fh is not None:
             try:
+                self._flush_to_disk()
                 self._fh.close()
             except Exception:
                 pass
         self._fh = None
 
-    def _write(self, event: str, payload: dict[str, Any], *, include_dt: bool = True) -> None:
+    def _write(
+        self,
+        event: str,
+        payload: dict[str, Any],
+        *,
+        include_dt: bool = True,
+        durable: bool = False,
+    ) -> None:
         if self._fh is None:
             return
 
@@ -174,3 +185,15 @@ class ArmDebugCapture:
             )
         row.update(payload)
         self._fh.write(json.dumps(row, ensure_ascii=True) + "\n")
+        if durable:
+            self._flush_to_disk()
+
+    def _flush_to_disk(self) -> None:
+        if self._fh is None:
+            return
+        try:
+            self._fh.flush()
+            os.fsync(self._fh.fileno())
+        except Exception:
+            # Best-effort durability. Logging must not crash control loop.
+            pass
