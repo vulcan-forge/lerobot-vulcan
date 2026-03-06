@@ -75,7 +75,7 @@ class SourcceyFollowerConfig(RobotConfig):
     # Extra raw encoder range added after calibration to tolerate slight startup pose drift.
     # Gripper already used this pattern; shoulder_lift can use it too for the same reason.
     calibration_gripper_range_extension: int = 25
-    calibration_shoulder_lift_range_extension: int = 500
+    calibration_shoulder_lift_range_extension: int = 700
 
     # cameras
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)

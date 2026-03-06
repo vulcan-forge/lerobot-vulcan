@@ -28,7 +28,7 @@ class SourcceyFollowerCalibrator:
     """Handles calibration operations for Sourccey robots."""
 
     GRIPPER_RANGE_EXTENSION = 25
-    SHOULDER_LIFT_RANGE_EXTENSION = 500
+    SHOULDER_LIFT_RANGE_EXTENSION = 700
 
     def __init__(self, robot):
         self.robot = robot
