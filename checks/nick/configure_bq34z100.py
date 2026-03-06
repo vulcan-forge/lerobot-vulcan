@@ -184,15 +184,22 @@ class BQ34Z100R2:
             time.sleep(0.06)
 
             if verify:
-                self._select_df_block(bus, subclass, block)
-                read_back = [self._read_byte(bus, REG_BLOCKDATA_BASE + i) for i in range(32)]
                 indices_to_check = range(32) if verify_indices is None else sorted(verify_indices)
-                mismatches = [i for i in indices_to_check if read_back[i] != new_vals[i]]
-                if mismatches:
-                    raise RuntimeError(
-                        f"Block verify failed for subclass={subclass} block={block} "
-                        f"at indices={mismatches}: wrote={new_vals!r}, read={read_back!r}"
-                    )
+                last_read_back: list[int] | None = None
+                last_mismatches: list[int] = []
+                for _ in range(3):
+                    self._select_df_block(bus, subclass, block)
+                    read_back = [self._read_byte(bus, REG_BLOCKDATA_BASE + i) for i in range(32)]
+                    mismatches = [i for i in indices_to_check if read_back[i] != new_vals[i]]
+                    if not mismatches:
+                        return
+                    last_read_back = read_back
+                    last_mismatches = mismatches
+                    time.sleep(0.08)
+                raise RuntimeError(
+                    f"Block verify failed for subclass={subclass} block={block} "
+                    f"at indices={last_mismatches}: wrote={new_vals!r}, read={last_read_back!r}"
+                )
 
     def read_df_bytes(self, subclass: int, offset: int, size: int) -> bytes:
         out = bytearray()
@@ -335,12 +342,13 @@ def cmd_read_field(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
 
 
 def apply_writes(gauge: BQ34Z100R2, writes: list[PendingWrite], verify: bool, dry_run: bool) -> None:
-    if not writes:
+    writes_to_apply = [w for w in writes if w.old_value != w.new_value]
+    if not writes_to_apply:
         print("No changes requested.")
         return
 
     print("Planned writes:")
-    for w in writes:
+    for w in writes_to_apply:
         print(
             f"- {w.spec.name}: {format_value(w.spec, w.old_value)} -> {format_value(w.spec, w.new_value)} "
             f"(subclass={w.spec.subclass}, offset={w.spec.offset}, type={w.spec.dtype})"
@@ -350,7 +358,7 @@ def apply_writes(gauge: BQ34Z100R2, writes: list[PendingWrite], verify: bool, dr
         print("Dry-run enabled: no writes performed.")
         return
 
-    for w in writes:
+    for w in writes_to_apply:
         gauge.write_field(w.spec, w.new_value, verify=verify)
 
 
