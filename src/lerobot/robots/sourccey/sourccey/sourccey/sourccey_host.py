@@ -20,7 +20,6 @@ import time
 from typing import Any
 
 import zmq
-from lerobot.motors.motors_bus import get_address
 
 from .arm_debug_capture import ARM_POSITION_KEYS, ArmDebugCapture, extract_arm_positions
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
@@ -28,6 +27,7 @@ from .sourccey import Sourccey
 
 # Import protobuf modules
 from ..protobuf.generated import sourccey_pb2
+
 
 class SourcceyHost:
     def __init__(self, config: SourcceyHostConfig):
@@ -77,344 +77,156 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _calibration_to_dict(calibration: dict[str, Any]) -> dict[str, dict[str, int]]:
+def _new_startup_supervisor_config() -> dict[str, Any]:
     return {
-        motor: {
-            "id": int(cal.id),
-            "drive_mode": int(cal.drive_mode),
-            "homing_offset": int(cal.homing_offset),
-            "range_min": int(cal.range_min),
-            "range_max": int(cal.range_max),
-        }
-        for motor, cal in calibration.items()
+        "enabled": _env_flag("SOURCCEY_STARTUP_SUPERVISOR_ENABLED", True),
+        "align_step": max(_env_float("SOURCCEY_ALIGN_STEP", 6.0), 0.0),
+        "align_step_shoulder_lift": max(_env_float("SOURCCEY_ALIGN_STEP_SHOULDER_LIFT", 3.0), 0.0),
+        "align_tolerance": max(_env_float("SOURCCEY_ALIGN_TOLERANCE", 6.0), 0.0),
+        "align_stable_frames": max(_env_int("SOURCCEY_ALIGN_STABLE_FRAMES", 8), 1),
+        "align_timeout_s": max(_env_float("SOURCCEY_ALIGN_TIMEOUT_S", 5.0), 0.1),
+        "fault_hold_min_s": max(_env_float("SOURCCEY_FAULT_HOLD_MIN_S", 0.5), 0.0),
+        "fault_relax_after_s": max(_env_float("SOURCCEY_FAULT_RELAX_AFTER_S", 5.0), 0.5),
+        "fault_resume_clean_frames": max(_env_int("SOURCCEY_FAULT_RESUME_CLEAN_FRAMES", 8), 1),
+        "stall_error_threshold": max(_env_float("SOURCCEY_STALL_ERROR_THRESHOLD", 25.0), 0.0),
+        "stall_progress_threshold": max(_env_float("SOURCCEY_STALL_PROGRESS_THRESHOLD", 0.8), 0.0),
+        "stall_consecutive_frames": max(_env_int("SOURCCEY_STALL_CONSECUTIVE_FRAMES", 8), 1),
     }
 
 
-def _safe_bus_read_with_error(bus: Any, data_name: str, motor: str) -> tuple[float | None, str | None]:
-    try:
-        return float(bus.read(data_name, motor, normalize=False, num_retry=0)), None
-    except Exception as exc:
-        return None, f"{type(exc).__name__}: {exc}"
-
-
-def _bus_supports_register(bus: Any, motor: str, data_name: str) -> bool:
-    try:
-        model = bus.motors[motor].model
-        get_address(bus.model_ctrl_table, model, data_name)
-        return True
-    except Exception:
-        return False
-
-
-SHOULDER_LIFT_DYNAMIC_REGISTERS = (
-    ("goal_position_raw", "Goal_Position"),
-    ("present_position_raw", "Present_Position"),
-    ("present_current_raw", "Present_Current"),
-    ("present_voltage_raw", "Present_Voltage"),
-    ("present_temperature_raw", "Present_Temperature"),
-    ("present_load_raw", "Present_Load"),
-    ("torque_enable_raw", "Torque_Enable"),
-    ("moving_raw", "Moving"),
-    ("status_raw", "Status"),
-    ("torque_limit_raw", "Torque_Limit"),
-)
-
-
-SHOULDER_LIFT_CONFIG_REGISTERS = (
-    ("operating_mode_raw", "Operating_Mode"),
-    ("p_coefficient_raw", "P_Coefficient"),
-    ("i_coefficient_raw", "I_Coefficient"),
-    ("d_coefficient_raw", "D_Coefficient"),
-    ("max_torque_limit_raw", "Max_Torque_Limit"),
-    ("protection_current_raw", "Protection_Current"),
-    ("protective_torque_raw", "Protective_Torque"),
-    ("overload_torque_raw", "Overload_Torque"),
-    ("over_current_protection_time_raw", "Over_Current_Protection_Time"),
-    ("minimum_startup_force_raw", "Minimum_Startup_Force"),
-    ("acceleration_raw", "Acceleration"),
-    ("min_voltage_limit_raw", "Min_Voltage_Limit"),
-    ("max_voltage_limit_raw", "Max_Voltage_Limit"),
-    ("unloading_condition_raw", "Unloading_Condition"),
-    ("led_alarm_condition_raw", "LED_Alarm_Condition"),
-)
-
-
-ARM_SIDE_KEYS = {
-    "left": tuple(key for key in ARM_POSITION_KEYS if key.startswith("left_")),
-    "right": tuple(key for key in ARM_POSITION_KEYS if key.startswith("right_")),
-}
-
-
-def _new_arm_command_governor_config() -> dict[str, Any]:
+def _new_startup_supervisor_state() -> dict[str, Any]:
     return {
-        "enabled": _env_flag("SOURCCEY_ARM_GOVERNOR_ENABLED", True),
-        "base_step": max(_env_float("SOURCCEY_ARM_GOVERNOR_STEP", 10.0), 0.0),
-        "base_step_shoulder_lift": max(_env_float("SOURCCEY_ARM_GOVERNOR_SHOULDER_LIFT_STEP", 6.0), 0.0),
-        "settle_step": max(_env_float("SOURCCEY_ARM_GOVERNOR_SETTLE_STEP", 6.0), 0.0),
-        "settle_step_shoulder_lift": max(
-            _env_float("SOURCCEY_ARM_GOVERNOR_SETTLE_SHOULDER_LIFT_STEP", 3.0), 0.0
-        ),
-        "settle_engage_delta": max(_env_float("SOURCCEY_ARM_GOVERNOR_SETTLE_ENGAGE_DELTA", 35.0), 0.0),
-        "settle_complete_delta": max(_env_float("SOURCCEY_ARM_GOVERNOR_SETTLE_COMPLETE_DELTA", 10.0), 0.0),
-        "settle_max_duration_s": max(_env_float("SOURCCEY_ARM_GOVERNOR_SETTLE_MAX_DURATION_S", 2.5), 0.0),
-        "rearm_gap_s": max(_env_float("SOURCCEY_ARM_GOVERNOR_REARM_GAP_S", 1.0), 0.0),
+        "mode": "BOOT",
+        "mode_enter_t": time.monotonic(),
+        "align_target_arm": {},
+        "align_stable_frames": 0,
+        "fault_hold_action": {},
+        "fault_reason": None,
+        "fault_clean_frames": 0,
+        "stall_counts": {"left": 0, "right": 0},
+        "relax_sent": False,
     }
 
 
-def _new_arm_command_governor_state() -> dict[str, Any]:
+def _serialize_supervisor_state(state: dict[str, Any]) -> dict[str, Any]:
     return {
-        "startup_settle_active": False,
-        "startup_settle_started_t": None,
-        "last_arm_command_t": None,
+        "mode": str(state.get("mode", "BOOT")),
+        "mode_enter_t": state.get("mode_enter_t"),
+        "align_target_count": len(state.get("align_target_arm") or {}),
+        "align_stable_frames": int(state.get("align_stable_frames", 0)),
+        "fault_reason": state.get("fault_reason"),
+        "fault_clean_frames": int(state.get("fault_clean_frames", 0)),
+        "stall_counts": {
+            "left": int((state.get("stall_counts") or {}).get("left", 0)),
+            "right": int((state.get("stall_counts") or {}).get("right", 0)),
+        },
+        "relax_sent": bool(state.get("relax_sent", False)),
     }
 
 
-def _serialize_arm_command_governor_state(governor_state: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "startup_settle_active": bool(governor_state.get("startup_settle_active", False)),
-        "startup_settle_started_t": governor_state.get("startup_settle_started_t"),
-        "last_arm_command_t": governor_state.get("last_arm_command_t"),
-    }
+def _arm_key_to_side(key: str) -> str | None:
+    if key.startswith("left_"):
+        return "left"
+    if key.startswith("right_"):
+        return "right"
+    return None
 
 
-def _arm_governor_step_for_joint(
-    key: str,
+def _set_mode(
+    state: dict[str, Any],
     *,
-    startup_settle_active: bool,
-    governor_config: dict[str, Any],
-) -> float:
-    is_shoulder_lift = key.endswith("shoulder_lift.pos")
-    if startup_settle_active:
-        return (
-            float(governor_config["settle_step_shoulder_lift"])
-            if is_shoulder_lift
-            else float(governor_config["settle_step"])
-        )
-    return (
-        float(governor_config["base_step_shoulder_lift"])
-        if is_shoulder_lift
-        else float(governor_config["base_step"])
-    )
-
-
-def _apply_arm_command_governor(
-    *,
-    action: dict[str, Any],
-    previous_observed_arm_position: dict[str, float],
-    last_sent_arm_target: dict[str, float],
-    governor_state: dict[str, Any],
-    governor_config: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    if not governor_config.get("enabled", False):
-        return action, {
-            "enabled": False,
-            "applied": False,
-            "startup_settle_active": False,
-            "clamped_joint_count": 0,
-        }
-
-    received_arm_target = extract_arm_positions(action)
-    if not received_arm_target:
-        return action, {
-            "enabled": True,
-            "applied": False,
-            "startup_settle_active": bool(governor_state.get("startup_settle_active", False)),
-            "clamped_joint_count": 0,
-            "reason": "no_arm_targets",
-        }
-
-    now = time.monotonic()
-    last_arm_command_t = governor_state.get("last_arm_command_t")
-    if last_arm_command_t is None or (now - float(last_arm_command_t)) >= float(governor_config["rearm_gap_s"]):
-        governor_state["startup_settle_active"] = False
-        governor_state["startup_settle_started_t"] = None
-
-    common_keys = [k for k in received_arm_target if k in previous_observed_arm_position]
-    max_abs_delta_target_vs_prev_obs = (
-        max(abs(received_arm_target[k] - previous_observed_arm_position[k]) for k in common_keys)
-        if common_keys
-        else None
-    )
-
-    if (
-        not governor_state.get("startup_settle_active", False)
-        and max_abs_delta_target_vs_prev_obs is not None
-        and max_abs_delta_target_vs_prev_obs >= float(governor_config["settle_engage_delta"])
-    ):
-        governor_state["startup_settle_active"] = True
-        governor_state["startup_settle_started_t"] = now
-
-    startup_settle_active = bool(governor_state.get("startup_settle_active", False))
-    if startup_settle_active and governor_state.get("startup_settle_started_t") is None:
-        governor_state["startup_settle_started_t"] = now
-
-    adjusted_action = dict(action)
-    clamped_joints: dict[str, float] = {}
-    for key, target in received_arm_target.items():
-        baseline = last_sent_arm_target.get(key)
-        if baseline is None:
-            baseline = previous_observed_arm_position.get(key, target)
-
-        step = _arm_governor_step_for_joint(
-            key,
-            startup_settle_active=startup_settle_active,
-            governor_config=governor_config,
-        )
-        if step <= 0.0:
-            continue
-
-        delta = float(target - baseline)
-        if abs(delta) <= step:
-            continue
-        adjusted = float(baseline + (step if delta > 0 else -step))
-        adjusted_action[key] = adjusted
-        clamped_joints[key] = adjusted
-
-    adjusted_arm_target = extract_arm_positions(adjusted_action)
-    common_adjusted_keys = [k for k in adjusted_arm_target if k in previous_observed_arm_position]
-    max_abs_delta_sent_vs_prev_obs = (
-        max(abs(adjusted_arm_target[k] - previous_observed_arm_position[k]) for k in common_adjusted_keys)
-        if common_adjusted_keys
-        else None
-    )
-
-    elapsed_s = None
-    if governor_state.get("startup_settle_active", False):
-        started = governor_state.get("startup_settle_started_t")
-        if started is not None:
-            elapsed_s = float(now - float(started))
-            if (
-                max_abs_delta_target_vs_prev_obs is not None
-                and max_abs_delta_target_vs_prev_obs <= float(governor_config["settle_complete_delta"])
-            ):
-                governor_state["startup_settle_active"] = False
-                governor_state["startup_settle_started_t"] = None
-
-    governor_state["last_arm_command_t"] = now
-    return adjusted_action, {
-        "enabled": True,
-        "applied": len(clamped_joints) > 0,
-        "startup_settle_active": bool(governor_state.get("startup_settle_active", False)),
-        "elapsed_s": elapsed_s,
-        "max_abs_delta_target_vs_prev_obs": max_abs_delta_target_vs_prev_obs,
-        "max_abs_delta_sent_vs_prev_obs": max_abs_delta_sent_vs_prev_obs,
-        "clamped_joint_count": len(clamped_joints),
-        "clamped_joints": clamped_joints,
-    }
-
-
-def _decode_bitfield(value: float | None) -> dict[str, Any] | None:
-    if value is None:
-        return None
-    try:
-        intval = int(value)
-    except (TypeError, ValueError):
-        return None
-    bits_set = [bit for bit in range(8) if intval & (1 << bit)]
-    return {"value": intval, "binary": f"0b{intval:08b}", "bits_set": bits_set}
-
-
-def _read_shoulder_lift_register_set(
-    arm: Any,
-    register_pairs: tuple[tuple[str, str], ...],
-) -> dict[str, Any]:
-    bus = arm.bus
-    values: dict[str, float | None] = {}
-    read_errors: dict[str, str] = {}
-    unsupported_registers: list[str] = []
-
-    for out_key, register_name in register_pairs:
-        if not _bus_supports_register(bus, "shoulder_lift", register_name):
-            values[out_key] = None
-            unsupported_registers.append(register_name)
-            continue
-
-        value, error = _safe_bus_read_with_error(bus, register_name, "shoulder_lift")
-        values[out_key] = value
-        if error is not None:
-            read_errors[register_name] = error
-
-    decoded_flags = {
-        "status": _decode_bitfield(values.get("status_raw")),
-        "unloading_condition": _decode_bitfield(values.get("unloading_condition_raw")),
-        "led_alarm_condition": _decode_bitfield(values.get("led_alarm_condition_raw")),
-    }
-
+    mode: str,
+    reason: str,
+    host_arm_debug: ArmDebugCapture,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    previous_mode = state.get("mode")
+    state["mode"] = mode
+    state["mode_enter_t"] = time.monotonic()
+    if mode != "ALIGN":
+        state["align_stable_frames"] = 0
+    if mode != "FAULT_HOLD":
+        state["fault_clean_frames"] = 0
     payload: dict[str, Any] = {
-        **values,
-        "unsupported_registers": unsupported_registers,
-        "read_errors": read_errors,
-        "decoded_flags": decoded_flags,
+        "previous_mode": previous_mode,
+        "next_mode": mode,
+        "reason": reason,
+        "state": _serialize_supervisor_state(state),
     }
-    return payload
-
-
-def _read_shoulder_lift_diagnostics(robot: Sourccey) -> dict[str, dict[str, Any]]:
-    def _read_arm(arm: Any) -> dict[str, Any]:
-        return _read_shoulder_lift_register_set(arm, SHOULDER_LIFT_DYNAMIC_REGISTERS)
-
-    return {
-        "left_shoulder_lift": _read_arm(robot.left_arm),
-        "right_shoulder_lift": _read_arm(robot.right_arm),
-    }
-
-
-def _read_shoulder_lift_config_snapshot(robot: Sourccey) -> dict[str, dict[str, Any]]:
-    return {
-        "left_shoulder_lift": _read_shoulder_lift_register_set(robot.left_arm, SHOULDER_LIFT_CONFIG_REGISTERS),
-        "right_shoulder_lift": _read_shoulder_lift_register_set(robot.right_arm, SHOULDER_LIFT_CONFIG_REGISTERS),
-    }
-
-
-def _new_arm_freeze_state() -> dict[str, dict[str, Any]]:
-    return {
-        "left": {
-            "active": False,
-            "good_status_packets": 0,
-            "hold_targets": {},
-            "last_error": None,
-        },
-        "right": {
-            "active": False,
-            "good_status_packets": 0,
-            "hold_targets": {},
-            "last_error": None,
-        },
-    }
+    if extra:
+        payload["extra"] = extra
+    host_arm_debug.record_session("host_mode_transition", payload)
 
 
 def _extract_side_arm_targets(arm_data: dict[str, float], side: str) -> dict[str, float]:
-    return {key: float(arm_data[key]) for key in ARM_SIDE_KEYS[side] if key in arm_data}
+    prefix = f"{side}_"
+    return {k: float(v) for k, v in arm_data.items() if k.startswith(prefix)}
 
 
-def _serialize_arm_freeze_state(arm_freeze_state: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    return {
-        side: {
-            "active": bool(state.get("active")),
-            "good_status_packets": int(state.get("good_status_packets", 0)),
-            "hold_target_count": len(state.get("hold_targets") or {}),
-            "last_error": state.get("last_error"),
-        }
-        for side, state in arm_freeze_state.items()
-    }
+def _build_hold_action(
+    observation: dict[str, Any] | None,
+    template_action: dict[str, Any] | None,
+) -> dict[str, Any]:
+    obs_arm = extract_arm_positions(observation)
+    action: dict[str, Any] = {k: float(v) for k, v in obs_arm.items()}
+
+    action["x.vel"] = 0.0
+    action["y.vel"] = 0.0
+    action["theta.vel"] = 0.0
+
+    if isinstance(template_action, dict) and "z.pos" in template_action:
+        action["z.pos"] = float(template_action["z.pos"])
+    elif isinstance(observation, dict) and "z.pos" in observation:
+        action["z.pos"] = float(observation["z.pos"])
+    else:
+        action["z.pos"] = 100.0
+
+    return action
 
 
-def _apply_arm_freeze_to_action(
-    action: dict[str, Any],
-    arm_freeze_state: dict[str, dict[str, Any]],
-) -> tuple[dict[str, Any], dict[str, dict[str, float]]]:
-    adjusted = dict(action)
-    applied_freeze: dict[str, dict[str, float]] = {}
-    for side, state in arm_freeze_state.items():
-        if not state.get("active"):
+def _step_toward(
+    current: float,
+    target: float,
+    *,
+    step: float,
+) -> float:
+    if step <= 0.0:
+        return target
+    delta = target - current
+    if abs(delta) <= step:
+        return target
+    return current + (step if delta > 0 else -step)
+
+
+def _build_align_action(
+    *,
+    observation: dict[str, Any] | None,
+    align_target_arm: dict[str, float],
+    template_action: dict[str, Any] | None,
+    supervisor_cfg: dict[str, Any],
+) -> dict[str, Any]:
+    action = _build_hold_action(observation, template_action)
+    observed_arm = extract_arm_positions(observation)
+
+    for key, target in align_target_arm.items():
+        current = observed_arm.get(key)
+        if current is None:
             continue
-        hold_targets = state.get("hold_targets") or {}
-        if not hold_targets:
-            continue
-        for key, value in hold_targets.items():
-            adjusted[key] = float(value)
-        applied_freeze[side] = {key: float(value) for key, value in hold_targets.items()}
-    return adjusted, applied_freeze
+        step = (
+            float(supervisor_cfg["align_step_shoulder_lift"])
+            if key.endswith("shoulder_lift.pos")
+            else float(supervisor_cfg["align_step"])
+        )
+        action[key] = float(_step_toward(float(current), float(target), step=step))
+
+    return action
+
+
+def _max_abs_arm_delta(target: dict[str, float], observed: dict[str, float]) -> float | None:
+    common = [k for k in target if k in observed]
+    if not common:
+        return None
+    return max(abs(float(target[k]) - float(observed[k])) for k in common)
 
 
 def _extract_status_packet_errors_from_sent_action(sent_action: dict[str, Any]) -> dict[str, str | None]:
@@ -424,98 +236,6 @@ def _extract_status_packet_errors_from_sent_action(sent_action: dict[str, Any]) 
         "left": str(left_error) if left_error else None,
         "right": str(right_error) if right_error else None,
     }
-
-
-def _extract_overload_errors_from_shoulder_lift_status(robot: Sourccey) -> dict[str, str | None]:
-    def _read_overload(arm: Any, side: str) -> str | None:
-        bus = arm.bus
-        if not _bus_supports_register(bus, "shoulder_lift", "Status"):
-            return None
-
-        _value, error = _safe_bus_read_with_error(bus, "Status", "shoulder_lift")
-        if error is None:
-            return None
-        if "Overload error" in error:
-            return f"{side}_shoulder_lift_status_read: {error}"
-        return None
-
-    return {
-        "left": _read_overload(robot.left_arm, "left"),
-        "right": _read_overload(robot.right_arm, "right"),
-    }
-
-
-def _merge_arm_errors(
-    primary: dict[str, str | None],
-    secondary: dict[str, str | None],
-) -> dict[str, str | None]:
-    merged: dict[str, str | None] = {}
-    for side in ("left", "right"):
-        merged[side] = primary.get(side) or secondary.get(side)
-    return merged
-
-
-def _update_arm_freeze_state(
-    *,
-    arm_freeze_state: dict[str, dict[str, Any]],
-    status_packet_errors: dict[str, str | None],
-    observed_arm_position: dict[str, float],
-    last_sent_arm_target: dict[str, float],
-    resume_good_status_packets: int,
-    host_arm_debug: ArmDebugCapture,
-) -> None:
-    for side, error in status_packet_errors.items():
-        side_state = arm_freeze_state[side]
-        if error is not None:
-            side_state["good_status_packets"] = 0
-            side_state["last_error"] = error
-            if side_state["active"]:
-                continue
-
-            hold_targets = _extract_side_arm_targets(observed_arm_position, side)
-            if not hold_targets:
-                hold_targets = _extract_side_arm_targets(last_sent_arm_target, side)
-            side_state["active"] = True
-            side_state["hold_targets"] = hold_targets
-
-            transition = {
-                "transition": "freeze_activated",
-                "side": side,
-                "error": error,
-                "hold_targets": hold_targets,
-            }
-            logging.error(
-                "Freezing %s arm due to shoulder_lift status read error. error=%s hold_target_count=%d",
-                side,
-                error,
-                len(hold_targets),
-            )
-            host_arm_debug.record_session("host_arm_freeze_transition", transition)
-            continue
-
-        if not side_state["active"]:
-            continue
-
-        side_state["good_status_packets"] += 1
-        if side_state["good_status_packets"] < resume_good_status_packets:
-            continue
-
-        transition = {
-            "transition": "freeze_released",
-            "side": side,
-            "good_status_packets": side_state["good_status_packets"],
-            "resume_threshold": resume_good_status_packets,
-        }
-        logging.warning(
-            "Resuming %s arm after %d clean shoulder_lift status packets.",
-            side,
-            side_state["good_status_packets"],
-        )
-        host_arm_debug.record_session("host_arm_freeze_transition", transition)
-        side_state["active"] = False
-        side_state["good_status_packets"] = 0
-        side_state["hold_targets"] = {}
-        side_state["last_error"] = None
 
 
 def _compute_arm_target_adjustments(
@@ -533,58 +253,63 @@ def _compute_arm_target_adjustments(
     }
 
 
-def _build_shoulder_lift_tracking(
+def _detect_startup_stall(
+    *,
     sent_arm_target: dict[str, float],
     observed_arm_position: dict[str, float],
-    shoulder_lift_diag: dict[str, dict[str, Any]] | None,
+    previous_observed_arm_position: dict[str, float],
+    stall_counts: dict[str, int],
+    supervisor_cfg: dict[str, Any],
 ) -> dict[str, Any]:
-    tracking: dict[str, Any] = {}
-    key_to_side = {
-        "left_shoulder_lift.pos": "left_shoulder_lift",
-        "right_shoulder_lift.pos": "right_shoulder_lift",
+    per_side = {
+        "left": "left_shoulder_lift.pos",
+        "right": "right_shoulder_lift.pos",
     }
-    errors: list[float] = []
 
-    for pos_key, side_key in key_to_side.items():
-        sent = sent_arm_target.get(pos_key)
-        obs = observed_arm_position.get(pos_key)
-        if sent is None or obs is None:
-            continue
+    info: dict[str, Any] = {"sides": {}, "triggered_sides": []}
+    for side, key in per_side.items():
+        sent = sent_arm_target.get(key)
+        obs = observed_arm_position.get(key)
+        prev_obs = previous_observed_arm_position.get(key)
 
-        target_minus_observed = float(sent - obs)
-        errors.append(abs(target_minus_observed))
-
-        side_diag = (shoulder_lift_diag or {}).get(side_key, {})
-        goal_raw = side_diag.get("goal_position_raw")
-        present_raw = side_diag.get("present_position_raw")
-        present_current = side_diag.get("present_current_raw")
-
-        raw_gap = None
-        if goal_raw is not None and present_raw is not None:
-            raw_gap = float(goal_raw - present_raw)
-
-        stall_like = bool(
-            raw_gap is not None
-            and abs(raw_gap) >= 500
-            and present_current is not None
-            and abs(float(present_current)) >= 600
-        )
-
-        tracking[side_key] = {
-            "sent_target": float(sent),
-            "observed_position": float(obs),
-            "target_minus_observed": target_minus_observed,
-            "raw_goal_minus_present": raw_gap,
-            "stall_like_signature": stall_like,
+        side_payload: dict[str, Any] = {
+            "sent_target": float(sent) if sent is not None else None,
+            "observed_position": float(obs) if obs is not None else None,
+            "previous_observed_position": float(prev_obs) if prev_obs is not None else None,
+            "target_minus_observed": None,
+            "observed_step": None,
+            "consecutive_hits": int(stall_counts.get(side, 0)),
+            "triggered": False,
         }
 
-    tracking["max_abs_target_minus_observed"] = max(errors) if errors else None
-    tracking["stall_like_signature_arms"] = [
-        side
-        for side, payload in tracking.items()
-        if isinstance(payload, dict) and payload.get("stall_like_signature")
-    ]
-    return tracking
+        if sent is None or obs is None or prev_obs is None:
+            stall_counts[side] = 0
+            side_payload["consecutive_hits"] = 0
+            info["sides"][side] = side_payload
+            continue
+
+        target_error = abs(float(sent - obs))
+        observed_step = abs(float(obs - prev_obs))
+
+        side_payload["target_minus_observed"] = float(sent - obs)
+        side_payload["observed_step"] = observed_step
+
+        if (
+            target_error >= float(supervisor_cfg["stall_error_threshold"])
+            and observed_step <= float(supervisor_cfg["stall_progress_threshold"])
+        ):
+            stall_counts[side] = int(stall_counts.get(side, 0)) + 1
+        else:
+            stall_counts[side] = 0
+
+        side_payload["consecutive_hits"] = int(stall_counts[side])
+        if stall_counts[side] >= int(supervisor_cfg["stall_consecutive_frames"]):
+            side_payload["triggered"] = True
+            info["triggered_sides"].append(side)
+
+        info["sides"][side] = side_payload
+
+    return info
 
 
 def main():
@@ -607,6 +332,9 @@ def main():
     host_config = SourcceyHostConfig()
     host = SourcceyHost(host_config)
 
+    supervisor_cfg = _new_startup_supervisor_config()
+    supervisor_state = _new_startup_supervisor_state()
+
     host_arm_debug = ArmDebugCapture(
         enabled=_env_flag("SOURCCEY_HOST_ARM_DEBUG_CAPTURE", True),
         duration_s=_env_float("SOURCCEY_HOST_ARM_DEBUG_DURATION_S", 5.0),
@@ -616,239 +344,302 @@ def main():
     )
     if host_arm_debug.path:
         logging.warning("Host arm debug capture enabled. Writing to %s", host_arm_debug.path)
-    try:
-        host_arm_debug.record_session(
-            "host_calibration_snapshot",
-            {
-                "robot_id": robot.id,
-                "left_calibration_file": str(robot.left_arm.calibration_fpath),
-                "right_calibration_file": str(robot.right_arm.calibration_fpath),
-                "left_file_calibration": _calibration_to_dict(robot.left_arm.calibration),
-                "right_file_calibration": _calibration_to_dict(robot.right_arm.calibration),
-                "left_motor_calibration": _calibration_to_dict(robot.left_arm.bus.read_calibration()),
-                "right_motor_calibration": _calibration_to_dict(robot.right_arm.bus.read_calibration()),
-            },
-        )
-    except Exception as e:
-        host_arm_debug.record_session(
-            "host_calibration_snapshot_error",
-            {"error": str(e)},
-        )
-    try:
-        host_arm_debug.record_session(
-            "host_shoulder_lift_config_snapshot",
-            {
-                "left_arm_port": str(robot.left_arm.bus.port),
-                "right_arm_port": str(robot.right_arm.bus.port),
-                "register_snapshot": _read_shoulder_lift_config_snapshot(robot),
-            },
-        )
-    except Exception as e:
-        host_arm_debug.record_session(
-            "host_shoulder_lift_config_snapshot_error",
-            {"error": str(e)},
-        )
+
+    host_arm_debug.record_session(
+        "host_startup_supervisor_config",
+        {
+            "supervisor_config": supervisor_cfg,
+            "supervisor_state": _serialize_supervisor_state(supervisor_state),
+            "host_debug_path": host_arm_debug.path,
+        },
+    )
 
     print("Waiting for commands...")
 
     last_cmd_time = time.time()
     watchdog_active = False
-    resume_good_status_packets = max(_env_int("SOURCCEY_ARM_FREEZE_RESUME_STATUS_PACKETS", 1), 1)
-    arm_freeze_state = _new_arm_freeze_state()
-    arm_governor_config = _new_arm_command_governor_config()
-    arm_governor_state = _new_arm_command_governor_state()
-    host_arm_debug.record_session(
-        "host_arm_freeze_config",
-        {
-            "resume_good_status_packets": resume_good_status_packets,
-        },
-    )
-    host_arm_debug.record_session(
-        "host_arm_command_governor_config",
-        {
-            "config": arm_governor_config,
-            "state": _serialize_arm_command_governor_state(arm_governor_state),
-        },
-    )
+
+    latest_action: dict[str, Any] | None = None
+    latest_action_received_t: float | None = None
 
     try:
-        # Business logic
-        start = time.perf_counter()
-        duration = 0
-
         try:
             observation = robot.get_observation()
         except Exception:
             observation = {}
         previous_observation = observation
+
+        last_sent_action: dict[str, Any] = {}
         last_sent_arm_target: dict[str, float] = {}
         status_packet_errors: dict[str, str | None] = {"left": None, "right": None}
-        shoulder_lift_overload_errors: dict[str, str | None] = {"left": None, "right": None}
-        freeze_trigger_errors: dict[str, str | None] = {"left": None, "right": None}
+        stall_info: dict[str, Any] = {"sides": {}, "triggered_sides": []}
+
+        start = time.perf_counter()
+        duration = 0.0
         while duration < host.connection_time_s:
             loop_start_time = time.time()
-            try:
-                # Receive protobuf message instead of JSON
-                msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
+            received_this_loop = False
 
-                # Convert protobuf to action dictionary using existing method
+            try:
+                msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
                 robot_action = sourccey_pb2.SourcceyRobotAction()
                 robot_action.ParseFromString(msg_bytes)
+                latest_action = robot.protobuf_converter.protobuf_to_action(robot_action)
+                latest_action_received_t = time.monotonic()
+                received_this_loop = True
+                last_cmd_time = time.time()
+                watchdog_active = False
 
-                data = robot.protobuf_converter.protobuf_to_action(robot_action)
+                host_arm_debug.maybe_start(action=latest_action, observation=previous_observation)
 
-                host_arm_debug.maybe_start(action=data, observation=previous_observation)
-                received_arm_target = extract_arm_positions(data)
-                previous_obs_arm = extract_arm_positions(previous_observation)
-                governed_action, governor_info = _apply_arm_command_governor(
-                    action=data,
-                    previous_observed_arm_position=previous_obs_arm,
-                    last_sent_arm_target=last_sent_arm_target,
-                    governor_state=arm_governor_state,
-                    governor_config=arm_governor_config,
-                )
-                governed_arm_target = extract_arm_positions(governed_action)
-                action_to_send, applied_freeze = _apply_arm_freeze_to_action(governed_action, arm_freeze_state)
-                freeze_input_arm_target = extract_arm_positions(action_to_send)
-
-                common_keys = [k for k in received_arm_target if k in previous_obs_arm]
-                max_abs_delta_target_vs_prev_obs = (
-                    max(abs(received_arm_target[k] - previous_obs_arm[k]) for k in common_keys)
-                    if common_keys
-                    else None
-                )
                 host_arm_debug.record(
                     "host_received_action",
                     {
-                        "received_arm_target": received_arm_target,
-                        "previous_observed_arm_position": previous_obs_arm,
-                        "max_abs_delta_target_vs_prev_obs": max_abs_delta_target_vs_prev_obs,
+                        "received_arm_target": extract_arm_positions(latest_action),
                         "received_base_target": {
-                            "x.vel": float(data.get("x.vel", 0.0)),
-                            "y.vel": float(data.get("y.vel", 0.0)),
-                            "theta.vel": float(data.get("theta.vel", 0.0)),
-                            "z.pos": float(data.get("z.pos", 0.0)),
+                            "x.vel": float(latest_action.get("x.vel", 0.0)),
+                            "y.vel": float(latest_action.get("y.vel", 0.0)),
+                            "theta.vel": float(latest_action.get("theta.vel", 0.0)),
+                            "z.pos": float(latest_action.get("z.pos", 0.0)),
                         },
-                        "governed_arm_target": governed_arm_target,
-                        "governor_info": governor_info,
-                        "arm_freeze_state": _serialize_arm_freeze_state(arm_freeze_state),
-                        "arm_freeze_applied": applied_freeze,
-                        "arm_governor_state": _serialize_arm_command_governor_state(arm_governor_state),
+                        "supervisor_state": _serialize_supervisor_state(supervisor_state),
                     },
                 )
-
-                # Send action to robot
-                _action_sent = robot.send_action(action_to_send)
-                status_packet_errors = _extract_status_packet_errors_from_sent_action(_action_sent)
-                shoulder_lift_overload_errors = _extract_overload_errors_from_shoulder_lift_status(robot)
-                freeze_trigger_errors = _merge_arm_errors(status_packet_errors, shoulder_lift_overload_errors)
-                _update_arm_freeze_state(
-                    arm_freeze_state=arm_freeze_state,
-                    status_packet_errors=freeze_trigger_errors,
-                    observed_arm_position=previous_obs_arm,
-                    last_sent_arm_target=last_sent_arm_target,
-                    resume_good_status_packets=resume_good_status_packets,
-                    host_arm_debug=host_arm_debug,
-                )
-                sent_arm_target = extract_arm_positions(_action_sent)
-                target_adjustments = _compute_arm_target_adjustments(received_arm_target, sent_arm_target)
-                governor_adjustments = _compute_arm_target_adjustments(received_arm_target, governed_arm_target)
-                freeze_adjustments = _compute_arm_target_adjustments(governed_arm_target, freeze_input_arm_target)
-                host_arm_debug.record(
-                    "host_sent_action",
-                    {
-                        "sent_arm_target": sent_arm_target,
-                        "target_adjustments": target_adjustments,
-                        "governor_adjustments": governor_adjustments,
-                        "freeze_adjustments": freeze_adjustments,
-                        "sent_base_target": {
-                            "x.vel": float(_action_sent.get("x.vel", 0.0)),
-                            "y.vel": float(_action_sent.get("y.vel", 0.0)),
-                            "theta.vel": float(_action_sent.get("theta.vel", 0.0)),
-                            "z.pos": float(_action_sent.get("z.pos", 0.0)),
-                        },
-                        "governor_info": governor_info,
-                        "arm_governor_state": _serialize_arm_command_governor_state(arm_governor_state),
-                        "arm_freeze_state": _serialize_arm_freeze_state(arm_freeze_state),
-                        "arm_freeze_applied": applied_freeze,
-                        "status_packet_errors": status_packet_errors,
-                        "shoulder_lift_overload_errors": shoulder_lift_overload_errors,
-                        "freeze_trigger_errors": freeze_trigger_errors,
-                    },
-                )
-                last_sent_arm_target = sent_arm_target
-
-                # Update the robot
-                robot.update()
-
-                last_cmd_time = time.time()
-                watchdog_active = False
             except zmq.Again:
-                if not watchdog_active:
-                    # logging.warning("No command available")
-                    pass
+                pass
             except Exception as e:
                 logging.error("Message fetching failed: %s", e)
 
+            previous_obs_arm = extract_arm_positions(previous_observation)
+            mode = str(supervisor_state.get("mode", "BOOT"))
+
+            if not supervisor_cfg.get("enabled", True):
+                mode = "RUN"
+                supervisor_state["mode"] = "RUN"
+
+            # BOOT: wait for first action, hold current robot pose.
+            if mode == "BOOT":
+                action_to_send = _build_hold_action(previous_observation, latest_action)
+                if latest_action is not None and extract_arm_positions(latest_action):
+                    supervisor_state["align_target_arm"] = extract_arm_positions(latest_action)
+                    supervisor_state["align_stable_frames"] = 0
+                    _set_mode(
+                        supervisor_state,
+                        mode="ALIGN",
+                        reason="first_action_received",
+                        host_arm_debug=host_arm_debug,
+                    )
+                    mode = "ALIGN"
+
+            # ALIGN: ramp from measured current pose to latched startup target.
+            if mode == "ALIGN":
+                align_target_arm = supervisor_state.get("align_target_arm") or {}
+                action_to_send = _build_align_action(
+                    observation=previous_observation,
+                    align_target_arm=align_target_arm,
+                    template_action=latest_action,
+                    supervisor_cfg=supervisor_cfg,
+                )
+                max_align_delta = _max_abs_arm_delta(align_target_arm, previous_obs_arm)
+
+                if max_align_delta is not None and max_align_delta <= float(supervisor_cfg["align_tolerance"]):
+                    supervisor_state["align_stable_frames"] = int(supervisor_state.get("align_stable_frames", 0)) + 1
+                else:
+                    supervisor_state["align_stable_frames"] = 0
+
+                if int(supervisor_state["align_stable_frames"]) >= int(supervisor_cfg["align_stable_frames"]):
+                    _set_mode(
+                        supervisor_state,
+                        mode="RUN",
+                        reason="align_complete",
+                        host_arm_debug=host_arm_debug,
+                        extra={"max_align_delta": max_align_delta},
+                    )
+                    mode = "RUN"
+                elif (time.monotonic() - float(supervisor_state.get("mode_enter_t", time.monotonic()))) >= float(
+                    supervisor_cfg["align_timeout_s"]
+                ):
+                    supervisor_state["fault_hold_action"] = _build_hold_action(previous_observation, latest_action)
+                    supervisor_state["fault_reason"] = "align_timeout"
+                    _set_mode(
+                        supervisor_state,
+                        mode="FAULT_HOLD",
+                        reason="align_timeout",
+                        host_arm_debug=host_arm_debug,
+                        extra={"max_align_delta": max_align_delta},
+                    )
+                    mode = "FAULT_HOLD"
+
+            # RUN: pass policy actions directly.
+            if mode == "RUN":
+                if latest_action is not None:
+                    action_to_send = dict(latest_action)
+                else:
+                    action_to_send = _build_hold_action(previous_observation, latest_action)
+
+            # FAULT_HOLD: hold current pose, wait for recovery, then re-align.
+            if mode == "FAULT_HOLD":
+                hold_action = supervisor_state.get("fault_hold_action") or {}
+                if not hold_action:
+                    hold_action = _build_hold_action(previous_observation, latest_action)
+                    supervisor_state["fault_hold_action"] = hold_action
+                action_to_send = dict(hold_action)
+
+            # FAULT_RELAX: untorque and wait for operator intervention.
+            if mode == "FAULT_RELAX":
+                action_to_send = {
+                    "x.vel": 0.0,
+                    "y.vel": 0.0,
+                    "theta.vel": 0.0,
+                    "z.pos": float((previous_observation or {}).get("z.pos", 100.0)),
+                    "untorque_left": True,
+                    "untorque_right": True,
+                }
+
+            sent_action = robot.send_action(action_to_send)
+            last_sent_action = sent_action
+            status_packet_errors = _extract_status_packet_errors_from_sent_action(sent_action)
+            sent_arm_target = extract_arm_positions(sent_action)
+            last_sent_arm_target = sent_arm_target
+
+            robot.update()
+
             now = time.time()
-            if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
+            if (now - last_cmd_time > host.watchdog_timeout_ms / 1000.0) and not watchdog_active:
                 logging.debug(
-                    f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. "
-                    "Stopping base and releasing arm torque."
+                    "Command not received for more than %d milliseconds. Stopping base and releasing arm torque.",
+                    host.watchdog_timeout_ms,
                 )
                 watchdog_active = True
                 robot.watchdog_stop_and_relax()
+                supervisor_state["fault_reason"] = "watchdog_timeout"
+                _set_mode(
+                    supervisor_state,
+                    mode="FAULT_RELAX",
+                    reason="watchdog_timeout",
+                    host_arm_debug=host_arm_debug,
+                )
 
             if observation is not None and observation != {}:
                 previous_observation = observation
             observation = robot.get_observation()
-            observed_arm_position = extract_arm_positions(observation)
-            shoulder_lift_diag = (
-                _read_shoulder_lift_diagnostics(robot) if host_arm_debug.is_active else None
+
+            observed_arm = extract_arm_positions(observation)
+            stall_info = _detect_startup_stall(
+                sent_arm_target=last_sent_arm_target,
+                observed_arm_position=observed_arm,
+                previous_observed_arm_position=previous_obs_arm,
+                stall_counts=supervisor_state.get("stall_counts", {"left": 0, "right": 0}),
+                supervisor_cfg=supervisor_cfg,
             )
-            shoulder_lift_tracking = (
-                _build_shoulder_lift_tracking(last_sent_arm_target, observed_arm_position, shoulder_lift_diag)
-                if host_arm_debug.is_active
-                else None
+
+            mode = str(supervisor_state.get("mode", "BOOT"))
+            has_status_error = any(v is not None for v in status_packet_errors.values())
+            has_stall = bool(stall_info.get("triggered_sides"))
+
+            if mode in {"ALIGN", "RUN"} and (has_status_error or has_stall):
+                supervisor_state["fault_hold_action"] = _build_hold_action(observation, latest_action)
+                supervisor_state["fault_reason"] = "status_packet_error" if has_status_error else "stall_detected"
+                _set_mode(
+                    supervisor_state,
+                    mode="FAULT_HOLD",
+                    reason=str(supervisor_state["fault_reason"]),
+                    host_arm_debug=host_arm_debug,
+                    extra={
+                        "status_packet_errors": status_packet_errors,
+                        "stall_triggered_sides": stall_info.get("triggered_sides", []),
+                    },
+                )
+
+            mode = str(supervisor_state.get("mode", "BOOT"))
+            if mode == "FAULT_HOLD":
+                if not has_status_error and not has_stall:
+                    supervisor_state["fault_clean_frames"] = int(supervisor_state.get("fault_clean_frames", 0)) + 1
+                else:
+                    supervisor_state["fault_clean_frames"] = 0
+
+                mode_elapsed = time.monotonic() - float(supervisor_state.get("mode_enter_t", time.monotonic()))
+                if mode_elapsed >= float(supervisor_cfg["fault_relax_after_s"]):
+                    _set_mode(
+                        supervisor_state,
+                        mode="FAULT_RELAX",
+                        reason="fault_hold_timeout",
+                        host_arm_debug=host_arm_debug,
+                        extra={"mode_elapsed_s": mode_elapsed},
+                    )
+                elif (
+                    mode_elapsed >= float(supervisor_cfg["fault_hold_min_s"])
+                    and int(supervisor_state.get("fault_clean_frames", 0))
+                    >= int(supervisor_cfg["fault_resume_clean_frames"])
+                    and latest_action is not None
+                    and extract_arm_positions(latest_action)
+                ):
+                    supervisor_state["align_target_arm"] = extract_arm_positions(latest_action)
+                    supervisor_state["align_stable_frames"] = 0
+                    _set_mode(
+                        supervisor_state,
+                        mode="ALIGN",
+                        reason="fault_recovered_realign",
+                        host_arm_debug=host_arm_debug,
+                    )
+
+            mode = str(supervisor_state.get("mode", "BOOT"))
+            if mode == "FAULT_RELAX" and not bool(supervisor_state.get("relax_sent", False)):
+                robot.watchdog_stop_and_relax()
+                supervisor_state["relax_sent"] = True
+
+            received_arm_target = extract_arm_positions(latest_action if latest_action is not None else {})
+            target_adjustments = _compute_arm_target_adjustments(received_arm_target, sent_arm_target)
+
+            host_arm_debug.record(
+                "host_sent_action",
+                {
+                    "mode": mode,
+                    "received_this_loop": received_this_loop,
+                    "latest_action_received_t": latest_action_received_t,
+                    "sent_arm_target": sent_arm_target,
+                    "target_adjustments": target_adjustments,
+                    "sent_base_target": {
+                        "x.vel": float(sent_action.get("x.vel", 0.0)),
+                        "y.vel": float(sent_action.get("y.vel", 0.0)),
+                        "theta.vel": float(sent_action.get("theta.vel", 0.0)),
+                        "z.pos": float(sent_action.get("z.pos", 0.0)),
+                    },
+                    "status_packet_errors": status_packet_errors,
+                    "supervisor_state": _serialize_supervisor_state(supervisor_state),
+                },
             )
+
             host_arm_debug.record(
                 "host_observation",
                 {
-                    "observed_arm_position": observed_arm_position,
-                    "shoulder_lift_diagnostics": shoulder_lift_diag,
-                    "shoulder_lift_tracking": shoulder_lift_tracking,
+                    "mode": mode,
+                    "observed_arm_position": observed_arm,
+                    "stall_info": stall_info,
                     "status_packet_errors": status_packet_errors,
-                    "shoulder_lift_overload_errors": shoulder_lift_overload_errors,
-                    "freeze_trigger_errors": freeze_trigger_errors,
-                    "arm_governor_state": _serialize_arm_command_governor_state(arm_governor_state),
-                    "arm_freeze_state": _serialize_arm_freeze_state(arm_freeze_state),
+                    "supervisor_state": _serialize_supervisor_state(supervisor_state),
                     "watchdog_active": watchdog_active,
                 },
             )
 
             # Send the observation to the remote agent
             try:
-                # Don't send an empty observation
                 if observation is None or observation == {}:
                     observation = previous_observation
                     logging.warning("No observation received. Sending previous observation.")
 
                 if observation is not None and observation != {}:
-                    # Convert observation to protobuf using existing method
                     robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
-
-                    # Send protobuf message instead of JSON
                     host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
             except zmq.Again:
                 logging.info("Dropping observation, no client connected")
             except Exception as e:
-                logging.error(f"Failed to send observation: {e}")
+                logging.error("Failed to send observation: %s", e)
 
-            # Ensure a short sleep to avoid overloading the CPU.
             elapsed = time.time() - loop_start_time
-
             time.sleep(max(1 / host.max_loop_freq_hz - elapsed, 0))
             duration = time.perf_counter() - start
+
         print("Cycle time reached.")
 
     except KeyboardInterrupt:
@@ -894,6 +685,7 @@ def _silence_camera_warnings_for_host() -> None:
     except Exception:
         # Don't fail startup just because OpenCV logging APIs differ
         pass
+
 
 if __name__ == "__main__":
     main()
