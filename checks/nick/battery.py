@@ -37,8 +37,10 @@ REG_FLAGS = 0x0E  # 2 bytes
 
 @dataclass
 class BatteryGaugeData:
+    voltage_cmd_v: float
     bat_pin_voltage_v: float
     pack_voltage_est_v: float
+    voltage_mode_used: str
     current_a: float
     temperature_c: float
     state_of_charge_pct: int
@@ -124,11 +126,14 @@ class BQ34Z100:
         swap_word_bytes: bool,
         divider_top_kohm: float,
         divider_bottom_kohm: float,
+        voltage_mode: str,
     ) -> BatteryGaugeData:
         if actual_rsense_mohm <= 0.0 or configured_rsense_mohm <= 0.0:
             raise ValueError("Sense resistor values must be > 0")
         if divider_top_kohm < 0.0 or divider_bottom_kohm <= 0.0:
             raise ValueError("Divider values must be top >= 0 and bottom > 0")
+        if voltage_mode not in {"auto", "bat-pin", "pack"}:
+            raise ValueError("voltage_mode must be one of: auto, bat-pin, pack")
 
         correction = configured_rsense_mohm / actual_rsense_mohm
 
@@ -143,12 +148,27 @@ class BQ34Z100:
             flags = self._read_u16(bus, REG_FLAGS, swap_word_bytes)
 
         current_ma = self._to_s16(current_raw)
-        bat_pin_voltage_v = voltage_mv / 1000.0
+        voltage_cmd_v = voltage_mv / 1000.0
         divider_gain = (divider_top_kohm + divider_bottom_kohm) / divider_bottom_kohm
 
+        # Voltage() can represent either BAT-pin or pack voltage depending on gauge config.
+        if voltage_mode == "auto":
+            mode_used = "pack" if voltage_cmd_v > 2.5 else "bat-pin"
+        else:
+            mode_used = voltage_mode
+
+        if mode_used == "pack":
+            pack_voltage_est_v = voltage_cmd_v
+            bat_pin_voltage_v = voltage_cmd_v / divider_gain
+        else:
+            bat_pin_voltage_v = voltage_cmd_v
+            pack_voltage_est_v = voltage_cmd_v * divider_gain
+
         return BatteryGaugeData(
+            voltage_cmd_v=voltage_cmd_v,
             bat_pin_voltage_v=bat_pin_voltage_v,
-            pack_voltage_est_v=bat_pin_voltage_v * divider_gain,
+            pack_voltage_est_v=pack_voltage_est_v,
+            voltage_mode_used=mode_used,
             current_a=(current_ma * correction) / 1000.0,
             temperature_c=(temp_raw / 10.0) - 273.15,
             state_of_charge_pct=max(0, min(100, soc_pct)),
@@ -195,6 +215,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Voltage-divider bottom resistor from BAT pin to GND (kOhm)",
     )
     p.add_argument(
+        "--voltage-mode",
+        choices=("auto", "bat-pin", "pack"),
+        default="auto",
+        help="Interpretation of Voltage() command: auto (default), bat-pin, or pack",
+    )
+    p.add_argument(
         "--watch",
         type=float,
         default=0.0,
@@ -223,6 +249,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _print_human(data: BatteryGaugeData) -> None:
+    print(f"Voltage Cmd        : {data.voltage_cmd_v:.3f} V")
+    print(f"Voltage Mode Used  : {data.voltage_mode_used}")
     print(f"BAT Pin Voltage    : {data.bat_pin_voltage_v:.3f} V")
     print(f"Pack Voltage (est) : {data.pack_voltage_est_v:.3f} V")
     print(f"Current            : {data.current_a:+.3f} A")
@@ -274,6 +302,7 @@ def main() -> int:
             swap_word_bytes=args.swap_word_bytes,
             divider_top_kohm=args.divider_top_kohm,
             divider_bottom_kohm=args.divider_bottom_kohm,
+            voltage_mode=args.voltage_mode,
         )
 
         if args.json:
