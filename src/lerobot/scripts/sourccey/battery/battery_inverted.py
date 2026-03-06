@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from . import battery_standard as base_battery
+import battery_standard as base_battery
 
 
 DEFAULT_STATE_FILE = Path(__file__).resolve().parent / "battery_inverted_state.json"
