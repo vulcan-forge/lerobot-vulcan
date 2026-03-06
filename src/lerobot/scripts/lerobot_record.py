@@ -350,6 +350,7 @@ def record_loop(
         if policy is not None or dataset is not None:
             observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
 
+        raw_policy_action = None
         # Get action from either policy or teleop
         if policy is not None and preprocessor is not None and postprocessor is not None:
             action_values = predict_action(
@@ -362,6 +363,7 @@ def record_loop(
                 task=single_task,
                 robot_type=robot.robot_type,
             )
+            raw_policy_action = action_values
 
             act_processed_policy: RobotAction = make_robot_action(action_values, dataset.features)
 
@@ -394,6 +396,16 @@ def record_loop(
         if policy is not None and act_processed_policy is not None:
             action_values = act_processed_policy
             robot_action_to_send = robot_action_processor((act_processed_policy, obs))
+            if hasattr(robot, "record_policy_pipeline_debug"):
+                try:
+                    robot.record_policy_pipeline_debug(
+                        raw_policy_action=raw_policy_action,
+                        policy_robot_action=act_processed_policy,
+                        robot_action_to_send=robot_action_to_send,
+                        observation=obs,
+                    )
+                except Exception as e:
+                    logging.debug("Failed to record policy pipeline debug info: %s", e)
         else:
             action_values = act_processed_teleop
             robot_action_to_send = robot_action_processor((act_processed_teleop, obs))

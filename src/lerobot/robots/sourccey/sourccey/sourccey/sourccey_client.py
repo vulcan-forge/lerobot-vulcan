@@ -311,6 +311,36 @@ class SourcceyClient(Robot):
         action_sent["action"] = actions
         return action_sent
 
+    def record_policy_pipeline_debug(
+        self,
+        *,
+        raw_policy_action: Any,
+        policy_robot_action: dict[str, Any] | None,
+        robot_action_to_send: dict[str, Any] | None,
+        observation: dict[str, Any] | None,
+    ) -> None:
+        """Record policy pipeline stages to identify where startup commands diverge."""
+        if not self._is_connected:
+            return
+
+        policy_robot_action = policy_robot_action or {}
+        robot_action_to_send = robot_action_to_send or {}
+
+        self._arm_debug_capture.maybe_start(action=robot_action_to_send, observation=self.last_remote_state)
+        self._arm_debug_capture.record(
+            "client_policy_pipeline",
+            {
+                "raw_policy_action_summary": self._summarize_action_like(raw_policy_action),
+                "policy_robot_arm_target": extract_arm_positions(policy_robot_action),
+                "processor_outgoing_arm_target": extract_arm_positions(robot_action_to_send),
+                "latest_remote_arm_observation": extract_arm_positions(self.last_remote_state),
+                "loop_observation_arm": extract_arm_positions(observation),
+                "max_abs_delta_policy_to_processor": self._max_abs_delta_between_actions(
+                    policy_robot_action, robot_action_to_send
+                ),
+            },
+        )
+
     ###################################################################
     # Private Data Management
     ###################################################################
@@ -578,6 +608,70 @@ class SourcceyClient(Robot):
             "x.vel": float(x_in * x_speed),
             "y.vel": float(y_in * y_speed),
             "theta.vel": float(theta_in * theta_speed),
+        }
+
+    def _max_abs_delta_between_actions(
+        self,
+        action_a: dict[str, Any] | None,
+        action_b: dict[str, Any] | None,
+    ) -> float | None:
+        arm_a = extract_arm_positions(action_a)
+        arm_b = extract_arm_positions(action_b)
+        common_keys = [k for k in arm_a if k in arm_b]
+        if not common_keys:
+            return None
+        return max(abs(arm_a[k] - arm_b[k]) for k in common_keys)
+
+    def _summarize_action_like(self, value: Any) -> dict[str, Any]:
+        if value is None:
+            return {"type": "none"}
+
+        if isinstance(value, dict):
+            summary: dict[str, Any] = {
+                "type": "dict",
+                "key_count": len(value),
+                "arm_targets": extract_arm_positions(value),
+            }
+            action_value = value.get("action")
+            action_vec = self._as_numpy_array(action_value)
+            if action_vec is not None:
+                summary["action_vector"] = self._summarize_array(action_vec)
+            return summary
+
+        arr = self._as_numpy_array(value)
+        if arr is not None:
+            return {"type": "array_like", "action_vector": self._summarize_array(arr)}
+
+        return {"type": type(value).__name__, "repr": repr(value)[:200]}
+
+    def _as_numpy_array(self, value: Any) -> np.ndarray | None:
+        if value is None:
+            return None
+        if isinstance(value, np.ndarray):
+            return value
+        if isinstance(value, (list, tuple)):
+            try:
+                return np.asarray(value, dtype=np.float32)
+            except Exception:
+                return None
+        if hasattr(value, "detach") and hasattr(value, "cpu"):
+            try:
+                return value.detach().cpu().numpy()
+            except Exception:
+                return None
+        return None
+
+    def _summarize_array(self, value: np.ndarray) -> dict[str, Any]:
+        arr = np.asarray(value, dtype=np.float32).reshape(-1)
+        if arr.size == 0:
+            return {"size": 0, "shape": list(value.shape)}
+        return {
+            "shape": list(value.shape),
+            "size": int(arr.size),
+            "min": float(np.min(arr)),
+            "max": float(np.max(arr)),
+            "mean": float(np.mean(arr)),
+            "first_values": [float(v) for v in arr[:12]],
         }
 
     def _slew(self, current: float, target: float, dt: float, up_rate: float, down_rate: float) -> float:
