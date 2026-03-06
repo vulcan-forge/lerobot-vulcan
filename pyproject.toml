@@ -134,6 +134,9 @@ sourccey = [
     "numpy>=1.24",
     "grpcio-tools==1.73.1",
 
+    # Battery
+    "smbus2>=0.4.3 ; sys_platform == 'linux'",
+
     # Audio
     "vosk>=0.3.45 ; sys_platform != 'darwin' and sys_platform != 'win32'",
     "sounddevice>=0.4.6",
