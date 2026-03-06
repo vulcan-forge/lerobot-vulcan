@@ -361,6 +361,7 @@ def main():
 
     latest_action: dict[str, Any] | None = None
     latest_action_received_t: float | None = None
+    has_received_action = False
 
     try:
         try:
@@ -387,6 +388,7 @@ def main():
                 latest_action = robot.protobuf_converter.protobuf_to_action(robot_action)
                 latest_action_received_t = time.monotonic()
                 received_this_loop = True
+                has_received_action = True
                 last_cmd_time = time.time()
                 watchdog_active = False
 
@@ -417,9 +419,32 @@ def main():
                 mode = "RUN"
                 supervisor_state["mode"] = "RUN"
 
+            # Allow automatic recovery from FAULT_RELAX when fresh arm commands resume.
+            if mode == "FAULT_RELAX" and received_this_loop and latest_action is not None:
+                arm_targets = extract_arm_positions(latest_action)
+                if arm_targets:
+                    supervisor_state["align_target_arm"] = arm_targets
+                    supervisor_state["align_stable_frames"] = 0
+                    supervisor_state["fault_reason"] = None
+                    supervisor_state["fault_clean_frames"] = 0
+                    supervisor_state["stall_counts"] = {"left": 0, "right": 0}
+                    supervisor_state["relax_sent"] = False
+                    _set_mode(
+                        supervisor_state,
+                        mode="ALIGN",
+                        reason="command_received_exit_fault_relax",
+                        host_arm_debug=host_arm_debug,
+                    )
+                    mode = "ALIGN"
+
             # BOOT: wait for first action, hold current robot pose.
             if mode == "BOOT":
-                action_to_send = _build_hold_action(previous_observation, latest_action)
+                action_to_send = {
+                    "x.vel": 0.0,
+                    "y.vel": 0.0,
+                    "theta.vel": 0.0,
+                    "z.pos": float((previous_observation or {}).get("z.pos", 100.0)),
+                }
                 if latest_action is not None and extract_arm_positions(latest_action):
                     supervisor_state["align_target_arm"] = extract_arm_positions(latest_action)
                     supervisor_state["align_stable_frames"] = 0
@@ -505,20 +530,22 @@ def main():
             robot.update()
 
             now = time.time()
-            if (now - last_cmd_time > host.watchdog_timeout_ms / 1000.0) and not watchdog_active:
+            if has_received_action and (now - last_cmd_time > host.watchdog_timeout_ms / 1000.0) and not watchdog_active:
                 logging.debug(
                     "Command not received for more than %d milliseconds. Stopping base and releasing arm torque.",
                     host.watchdog_timeout_ms,
                 )
                 watchdog_active = True
                 robot.watchdog_stop_and_relax()
-                supervisor_state["fault_reason"] = "watchdog_timeout"
-                _set_mode(
-                    supervisor_state,
-                    mode="FAULT_RELAX",
-                    reason="watchdog_timeout",
-                    host_arm_debug=host_arm_debug,
-                )
+                current_mode = str(supervisor_state.get("mode", "BOOT"))
+                if current_mode in {"ALIGN", "RUN", "FAULT_HOLD"}:
+                    supervisor_state["fault_reason"] = "watchdog_timeout"
+                    _set_mode(
+                        supervisor_state,
+                        mode="FAULT_RELAX",
+                        reason="watchdog_timeout",
+                        host_arm_debug=host_arm_debug,
+                    )
 
             if observation is not None and observation != {}:
                 previous_observation = observation
