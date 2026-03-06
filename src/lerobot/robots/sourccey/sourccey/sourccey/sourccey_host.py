@@ -94,7 +94,10 @@ def _new_startup_supervisor_config() -> dict[str, Any]:
         "target_latch_window_frames": max(_env_int("SOURCCEY_TARGET_LATCH_WINDOW_FRAMES", 5), 1),
         "target_latch_shoulder_spread_max": max(_env_float("SOURCCEY_TARGET_LATCH_SHOULDER_SPREAD_MAX", 30.0), 0.0),
         "target_latch_shoulder_observed_delta_max": max(
-            _env_float("SOURCCEY_TARGET_LATCH_SHOULDER_OBSERVED_DELTA_MAX", 45.0), 0.0
+            _env_float("SOURCCEY_TARGET_LATCH_SHOULDER_OBSERVED_DELTA_MAX", 120.0), 0.0
+        ),
+        "target_latch_shoulder_sign_flip_delta_max": max(
+            _env_float("SOURCCEY_TARGET_LATCH_SHOULDER_SIGN_FLIP_DELTA_MAX", 60.0), 0.0
         ),
     }
 
@@ -224,8 +227,10 @@ def _evaluate_startup_target_candidate(
     shoulder_keys = ("left_shoulder_lift.pos", "right_shoulder_lift.pos")
     spread_limit = float(supervisor_cfg["target_latch_shoulder_spread_max"])
     observed_delta_limit = float(supervisor_cfg["target_latch_shoulder_observed_delta_max"])
+    sign_flip_delta_limit = float(supervisor_cfg["target_latch_shoulder_sign_flip_delta_max"])
     shoulder_spreads: dict[str, float] = {}
     shoulder_observed_deltas: dict[str, float] = {}
+    shoulder_sign_flip: dict[str, bool] = {}
 
     for key in shoulder_keys:
         values = [float(sample[key]) for sample in samples if key in sample]
@@ -260,12 +265,24 @@ def _evaluate_startup_target_candidate(
 
         observed_delta = abs(float(candidate) - float(observed))
         shoulder_observed_deltas[key] = observed_delta
+        sign_flip = (float(observed) * float(candidate)) < 0.0
+        shoulder_sign_flip[key] = sign_flip
+        if sign_flip and observed_delta > sign_flip_delta_limit:
+            return False, {
+                "reason": "shoulder_lift_sign_flip",
+                "joint": key,
+                "observed_delta": observed_delta,
+                "sign_flip_delta_limit": sign_flip_delta_limit,
+                "shoulder_sign_flip": shoulder_sign_flip,
+                "shoulder_observed_deltas": shoulder_observed_deltas,
+            }
         if observed_delta > observed_delta_limit:
             return False, {
                 "reason": "shoulder_lift_far_from_observed",
                 "joint": key,
                 "observed_delta": observed_delta,
                 "observed_delta_limit": observed_delta_limit,
+                "shoulder_sign_flip": shoulder_sign_flip,
                 "shoulder_observed_deltas": shoulder_observed_deltas,
             }
 
@@ -274,6 +291,7 @@ def _evaluate_startup_target_candidate(
         "required_frames": required_frames,
         "sample_count": len(samples),
         "shoulder_spreads": shoulder_spreads,
+        "shoulder_sign_flip": shoulder_sign_flip,
         "shoulder_observed_deltas": shoulder_observed_deltas,
     }
 
