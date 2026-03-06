@@ -63,9 +63,14 @@ class BQ34Z100:
             ) from exc
         return SMBus(bus_num)
 
-    def _read_u16(self, bus: Any, reg: int) -> int:
-        data = bus.read_i2c_block_data(self._addr, reg, 2)
-        return data[0] | (data[1] << 8)
+    @staticmethod
+    def _swap_u16(raw: int) -> int:
+        return ((raw & 0xFF) << 8) | ((raw >> 8) & 0xFF)
+
+    def _read_u16(self, bus: Any, reg: int, swap_word_bytes: bool) -> int:
+        # bq34z100 commands are 16-bit "read-word" transactions.
+        raw = bus.read_word_data(self._addr, reg)
+        return self._swap_u16(raw) if swap_word_bytes else raw
 
     def _read_u8(self, bus: Any, reg: int) -> int:
         return bus.read_byte_data(self._addr, reg)
@@ -74,7 +79,12 @@ class BQ34Z100:
     def _to_s16(raw: int) -> int:
         return raw - 0x10000 if raw & 0x8000 else raw
 
-    def read(self, configured_rsense_mohm: float, actual_rsense_mohm: float) -> BatteryGaugeData:
+    def read(
+        self,
+        configured_rsense_mohm: float,
+        actual_rsense_mohm: float,
+        swap_word_bytes: bool,
+    ) -> BatteryGaugeData:
         if actual_rsense_mohm <= 0.0 or configured_rsense_mohm <= 0.0:
             raise ValueError("Sense resistor values must be > 0")
 
@@ -83,12 +93,12 @@ class BQ34Z100:
         with self._open_bus(self._bus_num) as bus:
             soc_pct = self._read_u8(bus, REG_STATE_OF_CHARGE)
             max_error_pct = self._read_u8(bus, REG_MAX_ERROR)
-            rem_cap_mah = self._read_u16(bus, REG_REMAINING_CAPACITY)
-            fcc_mah = self._read_u16(bus, REG_FULL_CHARGE_CAPACITY)
-            temp_raw = self._read_u16(bus, REG_TEMPERATURE)
-            voltage_mv = self._read_u16(bus, REG_VOLTAGE)
-            current_raw = self._read_u16(bus, REG_AVERAGE_CURRENT)
-            flags = self._read_u16(bus, REG_FLAGS)
+            rem_cap_mah = self._read_u16(bus, REG_REMAINING_CAPACITY, swap_word_bytes)
+            fcc_mah = self._read_u16(bus, REG_FULL_CHARGE_CAPACITY, swap_word_bytes)
+            temp_raw = self._read_u16(bus, REG_TEMPERATURE, swap_word_bytes)
+            voltage_mv = self._read_u16(bus, REG_VOLTAGE, swap_word_bytes)
+            current_raw = self._read_u16(bus, REG_AVERAGE_CURRENT, swap_word_bytes)
+            flags = self._read_u16(bus, REG_FLAGS, swap_word_bytes)
 
         current_ma = self._to_s16(current_raw)
 
@@ -123,6 +133,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--json", action="store_true", help="Print JSON output")
     p.add_argument(
+        "--swap-word-bytes",
+        action="store_true",
+        help="Swap high/low bytes for 16-bit commands (use if adapter endianness is reversed)",
+    )
+    p.add_argument(
         "--watch",
         type=float,
         default=0.0,
@@ -151,6 +166,7 @@ def main() -> int:
         data = gauge.read(
             configured_rsense_mohm=args.configured_rsense_mohm,
             actual_rsense_mohm=args.actual_rsense_mohm,
+            swap_word_bytes=args.swap_word_bytes,
         )
 
         if args.json:
