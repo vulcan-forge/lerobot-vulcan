@@ -24,13 +24,15 @@ from typing import Any
 
 DEFAULT_I2C_ADDR = 0x55
 
-# bq34z100 standard command addresses
-REG_TEMPERATURE = 0x02  # 0.1 K
-REG_VOLTAGE = 0x04  # mV
-REG_AVERAGE_CURRENT = 0x10  # mA (signed)
-REG_REMAINING_CAPACITY = 0x0C  # mAh
-REG_FULL_CHARGE_CAPACITY = 0x0E  # mAh
-REG_STATE_OF_CHARGE = 0x22  # %
+# bq34z100 standard command addresses (TI TRM, Data Commands table)
+REG_STATE_OF_CHARGE = 0x02  # 1 byte (%)
+REG_MAX_ERROR = 0x03  # 1 byte (%)
+REG_REMAINING_CAPACITY = 0x04  # 2 bytes (mAh)
+REG_FULL_CHARGE_CAPACITY = 0x06  # 2 bytes (mAh)
+REG_VOLTAGE = 0x08  # 2 bytes (mV)
+REG_AVERAGE_CURRENT = 0x0A  # 2 bytes (mA, signed)
+REG_TEMPERATURE = 0x0C  # 2 bytes (0.1 K)
+REG_FLAGS = 0x0E  # 2 bytes
 
 
 @dataclass
@@ -39,8 +41,10 @@ class BatteryGaugeData:
     current_a: float
     temperature_c: float
     state_of_charge_pct: int
+    max_error_pct: int
     remaining_capacity_ah: float
     full_charge_capacity_ah: float
+    flags_hex: str
     shunt_correction_factor: float
 
 
@@ -63,6 +67,9 @@ class BQ34Z100:
         data = bus.read_i2c_block_data(self._addr, reg, 2)
         return data[0] | (data[1] << 8)
 
+    def _read_u8(self, bus: Any, reg: int) -> int:
+        return bus.read_byte_data(self._addr, reg)
+
     @staticmethod
     def _to_s16(raw: int) -> int:
         return raw - 0x10000 if raw & 0x8000 else raw
@@ -74,12 +81,14 @@ class BQ34Z100:
         correction = configured_rsense_mohm / actual_rsense_mohm
 
         with self._open_bus(self._bus_num) as bus:
+            soc_pct = self._read_u8(bus, REG_STATE_OF_CHARGE)
+            max_error_pct = self._read_u8(bus, REG_MAX_ERROR)
+            rem_cap_mah = self._read_u16(bus, REG_REMAINING_CAPACITY)
+            fcc_mah = self._read_u16(bus, REG_FULL_CHARGE_CAPACITY)
             temp_raw = self._read_u16(bus, REG_TEMPERATURE)
             voltage_mv = self._read_u16(bus, REG_VOLTAGE)
             current_raw = self._read_u16(bus, REG_AVERAGE_CURRENT)
-            rem_cap_mah = self._read_u16(bus, REG_REMAINING_CAPACITY)
-            fcc_mah = self._read_u16(bus, REG_FULL_CHARGE_CAPACITY)
-            soc_pct = self._read_u16(bus, REG_STATE_OF_CHARGE)
+            flags = self._read_u16(bus, REG_FLAGS)
 
         current_ma = self._to_s16(current_raw)
 
@@ -88,8 +97,10 @@ class BQ34Z100:
             current_a=(current_ma * correction) / 1000.0,
             temperature_c=(temp_raw / 10.0) - 273.15,
             state_of_charge_pct=max(0, min(100, soc_pct)),
+            max_error_pct=max_error_pct,
             remaining_capacity_ah=(rem_cap_mah * correction) / 1000.0,
             full_charge_capacity_ah=(fcc_mah * correction) / 1000.0,
+            flags_hex=f"0x{flags:04X}",
             shunt_correction_factor=correction,
         )
 
@@ -125,8 +136,10 @@ def _print_human(data: BatteryGaugeData) -> None:
     print(f"Current            : {data.current_a:+.3f} A")
     print(f"Temperature        : {data.temperature_c:.2f} C")
     print(f"State of Charge    : {data.state_of_charge_pct:d} %")
+    print(f"Max Error          : {data.max_error_pct:d} %")
     print(f"Remaining Capacity : {data.remaining_capacity_ah:.3f} Ah")
     print(f"Full Charge Cap.   : {data.full_charge_capacity_ah:.3f} Ah")
+    print(f"Flags              : {data.flags_hex}")
     print(f"Shunt Correction   : x{data.shunt_correction_factor:.4f}")
 
 
