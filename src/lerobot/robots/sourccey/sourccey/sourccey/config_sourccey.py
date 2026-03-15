@@ -25,16 +25,40 @@ from lerobot.robots.config import RobotConfig
 def sourccey_cameras_config() -> dict[str, CameraConfig]:
     config = {
          "front_left": OpenCVCameraConfig(
-             index_or_path="/dev/cameraFrontLeft", fps=30, width=320, height=240
+             index_or_path="/dev/cameraFrontLeft",
+             fps=30,
+             width=320,
+             height=240,
+             auto_reconnect=True,
+             max_consecutive_read_failures=2,
+             reconnect_interval_s=0.25,
          ),
          "front_right": OpenCVCameraConfig(
-             index_or_path="/dev/cameraFrontRight", fps=30, width=320, height=240
+             index_or_path="/dev/cameraFrontRight",
+             fps=30,
+             width=320,
+             height=240,
+             auto_reconnect=True,
+             max_consecutive_read_failures=2,
+             reconnect_interval_s=0.25,
          ),
          "wrist_left": OpenCVCameraConfig(
-             index_or_path="/dev/cameraWristLeft", fps=30, width=320, height=240
+             index_or_path="/dev/cameraWristLeft",
+             fps=30,
+             width=320,
+             height=240,
+             auto_reconnect=True,
+             max_consecutive_read_failures=2,
+             reconnect_interval_s=0.25,
          ),
          "wrist_right": OpenCVCameraConfig(
-             index_or_path="/dev/cameraWristRight", fps=30, width=320, height=240
+             index_or_path="/dev/cameraWristRight",
+             fps=30,
+             width=320,
+             height=240,
+             auto_reconnect=True,
+             max_consecutive_read_failures=2,
+             reconnect_interval_s=0.25,
          ),
     }
     return config
