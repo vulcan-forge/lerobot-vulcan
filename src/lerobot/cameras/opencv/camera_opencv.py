@@ -121,6 +121,8 @@ class OpenCVCamera(Camera):
         self.backend: int = config.backend
         self.auto_reconnect = config.auto_reconnect
         self.max_consecutive_read_failures = config.max_consecutive_read_failures
+        self.fast_reconnect_interval_s = config.fast_reconnect_interval_s
+        self.fast_reconnect_window_s = config.fast_reconnect_window_s
         self.reconnect_interval_s = config.reconnect_interval_s
 
         if self.height and self.width:
@@ -199,6 +201,7 @@ class OpenCVCamera(Camera):
 
         logger.warning(f"{self} reconnecting after read failure: {reason}")
         self._release_videocapture()
+        reconnect_start_time = time.monotonic()
 
         while self.stop_event is not None and not self.stop_event.is_set():
             try:
@@ -209,7 +212,13 @@ class OpenCVCamera(Camera):
                 return True
             except Exception as reconnect_error:
                 logger.warning(f"{self} reconnect attempt failed: {reconnect_error}")
-                if self.stop_event.wait(self.reconnect_interval_s):
+                reconnect_elapsed_s = time.monotonic() - reconnect_start_time
+                if reconnect_elapsed_s < self.fast_reconnect_window_s:
+                    reconnect_interval_s = self.fast_reconnect_interval_s
+                else:
+                    reconnect_interval_s = self.reconnect_interval_s
+
+                if self.stop_event.wait(reconnect_interval_s):
                     break
 
         return False

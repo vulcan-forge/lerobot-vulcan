@@ -31,7 +31,9 @@ def sourccey_cameras_config() -> dict[str, CameraConfig]:
              height=240,
              auto_reconnect=True,
              max_consecutive_read_failures=2,
-             reconnect_interval_s=0.25,
+             fast_reconnect_interval_s=0.05,
+             fast_reconnect_window_s=2.0,
+             reconnect_interval_s=0.5,
          ),
          "front_right": OpenCVCameraConfig(
              index_or_path="/dev/cameraFrontRight",
@@ -40,7 +42,9 @@ def sourccey_cameras_config() -> dict[str, CameraConfig]:
              height=240,
              auto_reconnect=True,
              max_consecutive_read_failures=2,
-             reconnect_interval_s=0.25,
+             fast_reconnect_interval_s=0.05,
+             fast_reconnect_window_s=2.0,
+             reconnect_interval_s=0.5,
          ),
          "wrist_left": OpenCVCameraConfig(
              index_or_path="/dev/cameraWristLeft",
@@ -49,7 +53,9 @@ def sourccey_cameras_config() -> dict[str, CameraConfig]:
              height=240,
              auto_reconnect=True,
              max_consecutive_read_failures=2,
-             reconnect_interval_s=0.25,
+             fast_reconnect_interval_s=0.05,
+             fast_reconnect_window_s=2.0,
+             reconnect_interval_s=0.5,
          ),
          "wrist_right": OpenCVCameraConfig(
              index_or_path="/dev/cameraWristRight",
@@ -58,7 +64,9 @@ def sourccey_cameras_config() -> dict[str, CameraConfig]:
              height=240,
              auto_reconnect=True,
              max_consecutive_read_failures=2,
-             reconnect_interval_s=0.25,
+             fast_reconnect_interval_s=0.05,
+             fast_reconnect_window_s=2.0,
+             reconnect_interval_s=0.5,
          ),
     }
     return config
