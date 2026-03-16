@@ -411,7 +411,8 @@ class SourcceyClient(Robot):
     # Private Control Functions
     ###################################################################
     def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray, z_obs_pos: float | None = None):
-        reverse = self.reverse
+        base_sign = 1.0
+        z_sign = base_sign
         speed_setting = self.speed_levels[self.speed_index]
         x_speed = speed_setting["x"]
         y_speed = speed_setting["y"]
@@ -426,47 +427,23 @@ class SourcceyClient(Robot):
         x_cmd_target = 0.0
 
         if self.teleop_keys["forward"] in pressed:
-            if reverse:
-                x_cmd_target -= x_speed
-            else:
-                x_cmd_target += x_speed
+            x_cmd_target += base_sign * x_speed
         if self.teleop_keys["backward"] in pressed:
-            if reverse:
-                x_cmd_target += x_speed
-            else:
-                x_cmd_target -= x_speed
+            x_cmd_target -= base_sign * x_speed
         if self.teleop_keys["left"] in pressed:
-            if reverse:
-                y_cmd -= y_speed
-            else:
-                y_cmd += y_speed
+            y_cmd += base_sign * y_speed
         if self.teleop_keys["right"] in pressed:
-            if reverse:
-                y_cmd += y_speed
-            else:
-                y_cmd -= y_speed
+            y_cmd -= base_sign * y_speed
         # Z: integrate held keys into a stored position command (z.pos)
         z_dir = 0.0
         if self.teleop_keys["up"] in pressed:
-            if reverse:
-                z_dir -= z_speed
-            else:
-                z_dir += z_speed
+            z_dir += z_sign * z_speed
         if self.teleop_keys["down"] in pressed:
-            if reverse:
-                z_dir += z_speed
-            else:
-                z_dir -= z_speed
+            z_dir -= z_sign * z_speed
         if self.teleop_keys["rotate_left"] in pressed:
-            if reverse:
-                theta_cmd -= theta_speed
-            else:
-                theta_cmd += theta_speed
+            theta_cmd += base_sign * theta_speed
         if self.teleop_keys["rotate_right"] in pressed:
-            if reverse:
-                theta_cmd += theta_speed
-            else:
-                theta_cmd -= theta_speed
+            theta_cmd -= base_sign * theta_speed
 
         slew_time_s = self._slew_time_s_levels[self.speed_index]
         x_accel = self._x_accel_levels[self.speed_index]
@@ -527,30 +504,6 @@ class SourcceyClient(Robot):
             pass
 
         return action
-
-    def _from_analog_to_base_action(self, x: float, y: float, theta: float):
-        """Map analog base inputs (in [-1,1]) through the same speed scaling used for keyboard.
-
-        Ensures behavior is consistent with `_from_keyboard_to_base_action` speed levels.
-
-        Note: since z is now position-controlled, we interpret analog z as an absolute position
-        target in [-100, 100] (i.e. z=-1 -> -100, z=+1 -> +100).
-        """
-        # Clamp to [-1, 1]
-        x_in = max(-1.0, min(1.0, float(x)))
-        y_in = max(-1.0, min(1.0, float(y)))
-        theta_in = max(-1.0, min(1.0, float(theta)))
-
-        speed_setting = self.speed_levels[self.speed_index]
-        x_speed = speed_setting["x"]
-        y_speed = speed_setting["y"]
-        theta_speed = speed_setting["theta"]
-
-        return {
-            "x.vel": float(x_in * x_speed),
-            "y.vel": float(y_in * y_speed),
-            "theta.vel": float(theta_in * theta_speed),
-        }
 
     def _slew(self, current: float, target: float, dt: float, up_rate: float, down_rate: float) -> float:
         delta = target - current
