@@ -415,16 +415,16 @@ class Sourccey(Robot):
         y: float,
         theta: float,
     ) -> dict:
-        velocity_vector = np.array([x, y, theta])
+        velocity_vector = np.array([x, y, theta], dtype=float)
 
         # Build the correct kinematic matrix for mecanum wheels
         # Columns correspond to [x, y (strafe), theta (turn)].
         # This mapping makes A/D (y.vel) strafe and Z/X (theta.vel) rotate.
         m = np.array([
-            [ 1, -1, -1], # Front-left wheel
-            [-1, -1, -1], # Front-right wheel
-            [ 1,  1, -1], # Rear-left wheel
-            [-1,  1, -1], # Rear-right wheel
+            [-1,  1,  1], # Front-left wheel
+            [ 1,  1,  1], # Front-right wheel
+            [-1, -1,  1], # Rear-left wheel
+            [ 1, -1,  1], # Rear-right wheel
         ])
 
         wheel_normalized = m.dot(velocity_vector)
@@ -453,10 +453,10 @@ class Sourccey(Robot):
 
         # Kinematic matrix for mecanum wheels (must match forward kinematics)
         m = np.array([
-            [ 1, -1, -1], # Front-left wheel
-            [-1, -1, -1], # Front-right wheel
-            [ 1,  1, -1], # Rear-left wheel
-            [-1,  1, -1], # Rear-right wheel
+            [-1,  1,  1], # Front-left wheel
+            [ 1,  1,  1], # Front-right wheel
+            [-1, -1,  1], # Rear-left wheel
+            [ 1, -1,  1], # Rear-right wheel
         ])
 
         # Solve the inverse kinematics: body_velocity = M⁺ · wheel_linear_speeds.
