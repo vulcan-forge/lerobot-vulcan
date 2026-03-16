@@ -91,7 +91,7 @@ python src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
  --teleop.right_arm_port="/dev/ttyACM1"
 ```
 
-python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --remote_ip="192.168.1.211" --left_arm_port="/dev/ttyACM1" --right_arm_port="/dev/ttyACM0" --keyboard_port="keyboard" --fps=30 --reverse=True
+python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --remote_ip="192.168.1.211" --left_arm_port="/dev/ttyACM1" --right_arm_port="/dev/ttyACM0" --keyboard_port="keyboard" --fps=30
 
 For single-arm teleoperator:
 
@@ -151,18 +151,11 @@ python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --left_arm_port="/dev/ttyACM1" \
  --right_arm_port="/dev/ttyACM0" \
  --keyboard_port="keyboard" \
- --fps=30 \
- --reverse=True
+ --fps=30
 ```
 
 ```
-python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --remote_ip="192.168.1.212" --left_arm_port="/dev/ttyACM1" --right_arm_port="/dev/ttyACM0" --keyboard_port="keyboard" --fps=30 --reverse=True
-```
-
-Add this if the wheel motors are reversed
-
-```
---reverse=True
+python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --remote_ip="192.168.1.212" --left_arm_port="/dev/ttyACM1" --right_arm_port="/dev/ttyACM0" --keyboard_port="keyboard" --fps=30
 ```
 
 **Parameters:**
@@ -182,7 +175,6 @@ python src/lerobot/control/sourccey/sourccey/record.py \
  --remote_ip="192.168.1.214" \
  --left_arm_port="/dev/ttyACM1" \
  --right_arm_port="/dev/ttyACM0" \
- --reverse=True \
  --dataset.repo_id="sourccey-012/sourccey-012__shorts-fold-c__set019__mylesr" \
  --dataset.num_episodes=5 \
  --dataset.episode_time_s=200 \

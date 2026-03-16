@@ -66,7 +66,6 @@ class SourcceyClient(Robot):
             {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # fast
         ]
         self.speed_index = 1  # Start at medium speed (0.9)
-        self.reverse = config.reverse
 
         self._is_connected = False
         self.logs = {}
