@@ -69,7 +69,7 @@ class OpenCVCameraConfig(CameraConfig):
     warmup_s: int = 1
     fourcc: str | None = None
     backend: Cv2Backends = Cv2Backends.ANY
-    auto_reconnect: bool = True
+    auto_reconnect: bool = False
     max_consecutive_read_failures: int = 10
     fast_reconnect_interval_s: float = 0.25
     fast_reconnect_window_s: float = 0.0

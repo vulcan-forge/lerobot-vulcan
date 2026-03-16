@@ -301,6 +301,7 @@ def test_async_read_reconnects_after_consecutive_failures():
         width=160,
         height=120,
         warmup_s=0,
+        auto_reconnect=True,
         max_consecutive_read_failures=2,
         reconnect_interval_s=0.01,
     )
