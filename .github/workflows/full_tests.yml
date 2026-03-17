@@ -37,7 +37,7 @@ permissions:
 # Sets up the environment variables
 env:
   UV_VERSION: "0.8.0"
-  PYTHON_VERSION: "3.10"
+  PYTHON_VERSION: "3.12"
   DOCKER_IMAGE_NAME: huggingface/lerobot-gpu
 
 # Ensures that only the latest action is built, canceling older runs.
@@ -89,6 +89,10 @@ jobs:
         run: uv sync --extra all # TODO(Steven): Make flash-attn optional
 
       - name: Login to Hugging Face
+<<<<<<< HEAD
+=======
+        if: env.HF_USER_TOKEN != ''
+>>>>>>> v0.5.0
         run: |
           uv run hf auth login --token "$HF_USER_TOKEN" --add-to-git-credential
           uv run hf auth whoami
@@ -181,11 +185,19 @@ jobs:
         working-directory: /lerobot
     steps:
       - name: Login to Hugging Face
+<<<<<<< HEAD
+=======
+        if: env.HF_USER_TOKEN != ''
+>>>>>>> v0.5.0
         run: |
           hf auth login --token "$HF_USER_TOKEN" --add-to-git-credential
           hf auth whoami
       - name: Fix ptxas permissions
+<<<<<<< HEAD
         run: chmod +x /lerobot/.venv/lib/python3.10/site-packages/triton/backends/nvidia/bin/ptxas
+=======
+        run: chmod +x /lerobot/.venv/lib/python3.12/site-packages/triton/backends/nvidia/bin/ptxas
+>>>>>>> v0.5.0
       - name: Run pytest on GPU
         run: pytest tests -vv --maxfail=10
       - name: Run end-to-end tests

@@ -639,4 +639,9 @@ class OpenCVCamera(Camera):
             self.latest_timestamp = None
             self.new_frame_event.clear()
 
+        with self.frame_lock:
+            self.latest_frame = None
+            self.latest_timestamp = None
+            self.new_frame_event.clear()
+
         logger.info(f"{self} disconnected.")

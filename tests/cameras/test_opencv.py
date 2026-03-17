@@ -281,7 +281,11 @@ def test_async_read(index_or_path):
         assert isinstance(img, np.ndarray)
 
 
+<<<<<<< HEAD
 @SKIP_NO_OPENCV_IMAGE_SUPPORT
+=======
+@pytest.mark.skip("Skipping test: async_read  0 timeout behavior may be flaky/non-deterministic.")
+>>>>>>> v0.5.0
 def test_async_read_timeout():
     config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH, warmup_s=0)
 
@@ -326,7 +330,10 @@ def test_async_read_before_connect():
         _ = camera.async_read()
 
 
+<<<<<<< HEAD
 @SKIP_NO_OPENCV_IMAGE_SUPPORT
+=======
+>>>>>>> v0.5.0
 def test_read_latest():
     config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH, warmup_s=0)
 

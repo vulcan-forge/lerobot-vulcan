@@ -40,7 +40,7 @@ from lerobot.utils.constants import (
     OBS_LANGUAGE_TOKENS,
     OBS_STATE,
 )  # noqa: E402
-from tests.utils import require_cuda  # noqa: E402
+from tests.utils import require_cuda, require_hf_token  # noqa: E402
 
 # Constants
 DUMMY_ACTION_DIM = 7
@@ -65,6 +65,10 @@ EXPECTED_ACTIONS_FIRST_5 = torch.tensor([0.0000, 0.3536, 0.0707, 0.0000, 0.0000]
 
 
 @require_cuda
+<<<<<<< HEAD
+=======
+@require_hf_token
+>>>>>>> v0.5.0
 def set_seed_all(seed: int):
     """Set random seed for all RNG sources to ensure reproducibility."""
     random.seed(seed)
@@ -82,6 +86,10 @@ def set_seed_all(seed: int):
 
 
 @require_cuda
+<<<<<<< HEAD
+=======
+@require_hf_token
+>>>>>>> v0.5.0
 def instantiate_lerobot_pi0_fast(
     from_pretrained: bool = False,
     model_path: str = MODEL_PATH_LEROBOT,
@@ -125,6 +133,10 @@ def instantiate_lerobot_pi0_fast(
 
 
 @require_cuda
+<<<<<<< HEAD
+=======
+@require_hf_token
+>>>>>>> v0.5.0
 def create_dummy_data(device=DEVICE):
     """Create dummy data for testing both implementations."""
     batch_size = 1
@@ -157,6 +169,10 @@ def create_dummy_data(device=DEVICE):
 # Pytest fixtures
 @pytest.fixture(scope="module")
 @require_cuda
+<<<<<<< HEAD
+=======
+@require_hf_token
+>>>>>>> v0.5.0
 def pi0_fast_components():
     """Fixture to instantiate and provide all PI0Fast components for tests."""
     print(f"\nTesting with DEVICE='{DEVICE}'")
@@ -168,6 +184,10 @@ def pi0_fast_components():
 
 @pytest.fixture(scope="module")
 @require_cuda
+<<<<<<< HEAD
+=======
+@require_hf_token
+>>>>>>> v0.5.0
 def policy(pi0_fast_components):
     """Fixture to provide the PI0Fast policy for tests."""
     return pi0_fast_components[0]
@@ -175,12 +195,17 @@ def policy(pi0_fast_components):
 
 @pytest.fixture(scope="module")
 @require_cuda
+<<<<<<< HEAD
+=======
+@require_hf_token
+>>>>>>> v0.5.0
 def preprocessor(pi0_fast_components):
     """Fixture to provide the PI0Fast preprocessor for tests."""
     return pi0_fast_components[1]
 
 
 @require_cuda
+@require_hf_token
 def test_pi0_fast_preprocessor_alignment(policy, preprocessor):
     """Test that LeRobot PI0Fast preprocessor produces expected outputs."""
     print("\n" + "=" * 80)
@@ -228,6 +253,7 @@ def test_pi0_fast_preprocessor_alignment(policy, preprocessor):
 
 
 @require_cuda
+@require_hf_token
 def test_pi0_fast_action_generation(policy, preprocessor):
     """Test PI0Fast LeRobot implementation generates expected actions."""
     print("\n" + "=" * 80)
@@ -306,6 +332,7 @@ def test_pi0_fast_action_generation(policy, preprocessor):
 
 
 @require_cuda
+@require_hf_token
 def test_pi0_fast_inference_reproducibility(policy, preprocessor):
     """Test that PI0Fast inference is reproducible with the same seed."""
     print("\n" + "=" * 80)
@@ -347,6 +374,7 @@ def test_pi0_fast_inference_reproducibility(policy, preprocessor):
 
 
 @require_cuda
+@require_hf_token
 def test_pi0_fast_forward_pass_logits(policy, preprocessor):
     """Test PI0Fast forward pass and compare logits against expected values."""
     print("\n" + "=" * 80)
@@ -396,6 +424,7 @@ def test_pi0_fast_forward_pass_logits(policy, preprocessor):
 
 
 @require_cuda
+@require_hf_token
 def test_pi0_fast_action_token_sampling(policy, preprocessor):
     """Test PI0Fast action token sampling (autoregressive decoding)."""
     print("\n" + "=" * 80)
@@ -452,6 +481,7 @@ def test_pi0_fast_action_token_sampling(policy, preprocessor):
 
 
 @require_cuda
+@require_hf_token
 def test_pi0_fast_detokenization(policy, preprocessor):
     """Test PI0Fast action detokenization (FAST decoding)."""
     print("\n" + "=" * 80)
