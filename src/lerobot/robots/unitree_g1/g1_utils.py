@@ -22,8 +22,6 @@ import numpy as np
 # ruff: noqa: N801, N815
 
 NUM_MOTORS = 29
-<<<<<<< HEAD
-=======
 
 REMOTE_AXES = ("remote.lx", "remote.ly", "remote.rx", "remote.ry")
 REMOTE_BUTTONS = tuple(f"remote.button.{i}" for i in range(16))
@@ -43,7 +41,6 @@ def get_gravity_orientation(quaternion: list[float] | np.ndarray) -> np.ndarray:
     gravity_orientation[1] = -2 * (qz * qy + qw * qx)
     gravity_orientation[2] = 1 - 2 * (qw * qw + qz * qz)
     return gravity_orientation
->>>>>>> v0.5.0
 
 
 class G1_29_JointArmIndex(IntEnum):

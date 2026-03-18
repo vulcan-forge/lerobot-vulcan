@@ -28,11 +28,7 @@ from lerobot.policies.pi05 import (  # noqa: E402
     make_pi05_pre_post_processors,  # noqa: E402
 )
 from lerobot.utils.random_utils import set_seed
-<<<<<<< HEAD
-from tests.utils import require_cuda  # noqa: E402
-=======
 from tests.utils import require_cuda, require_hf_token  # noqa: E402
->>>>>>> v0.5.0
 
 
 @require_cuda

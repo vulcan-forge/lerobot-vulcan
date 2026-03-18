@@ -1346,8 +1346,4 @@ class SerialMotorsBus(MotorsBusBase):
 
 
 # Backward compatibility alias
-<<<<<<< HEAD
-MotorsBus: TypeAlias = SerialMotorsBus
-=======
 MotorsBus = SerialMotorsBus
->>>>>>> v0.5.0

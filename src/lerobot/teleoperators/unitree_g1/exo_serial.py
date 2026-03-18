@@ -119,11 +119,6 @@ class ExoskeletonArm:
         return {} if raw is None else exo_raw_to_angles(raw, self.calibration)
 
     def calibrate(self) -> None:
-<<<<<<< HEAD
-        ser = self._ser
-        self.calibration = run_exo_calibration(ser, self.side, self.calibration_fpath)
-=======
         if not self.is_connected:
             raise RuntimeError("Cannot calibrate: exoskeleton not connected")
         self.calibration = run_exo_calibration(self._ser, self.side, self.calibration_fpath)
->>>>>>> v0.5.0

@@ -119,10 +119,7 @@ def test_policy_instantiation():
 
 
 @require_cuda
-<<<<<<< HEAD
-=======
 @require_hf_token
->>>>>>> v0.5.0
 def test_config_creation():
     """Test policy config creation through factory."""
     try:
