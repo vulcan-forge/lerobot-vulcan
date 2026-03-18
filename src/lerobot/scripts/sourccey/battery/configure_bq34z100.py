@@ -544,7 +544,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable external-divider mode (default: enabled)",
     )
     p_setup.add_argument("--taper-current-ma", type=int, default=None, help="Optional taper current")
-    p_setup.add_argument("--cell-terminate-voltage-mv", type=int, default=None, help="Optional per-cell terminate voltage")
+    p_setup.add_argument(
+        "--cell-terminate-voltage-mv",
+        type=int,
+        default=2850,
+        help="Per-cell terminate voltage in mV (default: 2850)",
+    )
     p_setup.add_argument(
         "--pack-charge-voltage-mv",
         type=int,
