@@ -5,13 +5,14 @@ This guide walks you through setting up and using the Sourccey robot, from initi
 ## Table of Contents
 
 1. [Setup](#setup)
-2. [Calibration](#calibration)
-3. [Hosting the Robot](#hosting-the-robot)
-4. [Teleoperation](#teleoperation)
-5. [Recording Data](#recording-data)
-6. [Training Models](#training-models)
-7. [Evaluation](#evaluation)
-8. [Utilities](#utilities)
+2. [Battery Setup and Monitoring](#battery-setup-and-monitoring)
+3. [Calibration](#calibration)
+4. [Hosting the Robot](#hosting-the-robot)
+5. [Teleoperation](#teleoperation)
+6. [Recording Data](#recording-data)
+7. [Training Models](#training-models)
+8. [Evaluation](#evaluation)
+9. [Utilities](#utilities)
 
 ---
 
@@ -49,6 +50,56 @@ After setup, activate the virtual environment:
 **On Linux/Mac:**
 source .venv/bin/activate**On Windows:**sh
 source .venv/Scripts/activate---
+
+## Battery Setup and Monitoring
+
+Battery support now uses a single script:
+`src/lerobot/scripts/sourccey/battery/battery.py`
+
+### 1) Configure the bq34z100 (one-time or when hardware changes)
+
+Run the default 4S LiFePO4 setup profile:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py setup-4s-lifepo4
+```
+
+If your divider values are custom, set them explicitly:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py set-divider \
+  --top-ohm 249000 \
+  --bottom-ohm 16500 \
+  --enable-voltsel
+```
+
+### 2) Read battery telemetry
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/battery.py
+```
+
+JSON output fields sent to the frontend:
+
+- `voltage`
+- `current_a`
+- `remaining_capacity_ah`
+- `max_capacity_ah`
+- `state_of_charge`
+- `error`
+
+Example:
+
+```json
+{
+  "voltage": 13.245,
+  "current_a": -0.812,
+  "remaining_capacity_ah": 6.291,
+  "max_capacity_ah": 10.000,
+  "state_of_charge": 63,
+  "error": null
+}
+```
 
 ## Calibration
 

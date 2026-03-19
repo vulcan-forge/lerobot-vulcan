@@ -1,87 +1,170 @@
+#!/usr/bin/env python3
+"""Read bq34z100 battery telemetry in a single script.
+
+Outputs only frontend-facing fields:
+- voltage
+- current_a
+- remaining_capacity_ah
+- max_capacity_ah
+- state_of_charge
+- error
+"""
+
 from __future__ import annotations
 
+import argparse
 import json
-import os
-import subprocess
-import sys
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import asdict, dataclass
 from typing import Any
+
+
+DEFAULT_I2C_ADDR = 0x55
+
+# bq34z100 standard command addresses.
+REG_STATE_OF_CHARGE = 0x02  # 1 byte (%)
+REG_REMAINING_CAPACITY = 0x04  # 2 bytes (mAh)
+REG_FULL_CHARGE_CAPACITY = 0x06  # 2 bytes (mAh)
+REG_VOLTAGE = 0x08  # 2 bytes (mV)
+REG_AVERAGE_CURRENT = 0x0A  # 2 bytes (mA, signed)
 
 
 @dataclass
 class BatteryData:
     voltage: float
-    percent: int
-    charging: bool
-    current_a: float | None = None
-    remaining_capacity_ah: float | None = None
-    full_charge_capacity_ah: float | None = None
+    current_a: float
+    remaining_capacity_ah: float
+    max_capacity_ah: float
+    state_of_charge: int
+    error: str | None
 
 
-def _mode_is_inverted() -> bool:
-    return os.getenv("SOURCCEY_BATTERY_MODE", "standard").strip().lower() in {"inverted", "invert"}
+class BQ34Z100:
+    def __init__(self, bus: int = 1, address: int = DEFAULT_I2C_ADDR) -> None:
+        self._bus_num = bus
+        self._addr = address
+
+    @staticmethod
+    def _open_bus(bus_num: int) -> Any:
+        try:
+            from smbus2 import SMBus
+        except ImportError as exc:  # pragma: no cover
+            raise SystemExit("smbus2 is required. Install with: pip install smbus2") from exc
+        return SMBus(bus_num)
+
+    @staticmethod
+    def _swap_u16(raw: int) -> int:
+        return ((raw & 0xFF) << 8) | ((raw >> 8) & 0xFF)
+
+    @staticmethod
+    def _to_s16(raw: int) -> int:
+        return raw - 0x10000 if raw & 0x8000 else raw
+
+    def _read_u8(self, bus: Any, reg: int) -> int:
+        return bus.read_byte_data(self._addr, reg)
+
+    def _read_u16(self, bus: Any, reg: int, swap_word_bytes: bool) -> int:
+        raw = bus.read_word_data(self._addr, reg)
+        return self._swap_u16(raw) if swap_word_bytes else raw
+
+    def read(
+        self,
+        configured_rsense_mohm: float,
+        actual_rsense_mohm: float,
+        swap_word_bytes: bool,
+    ) -> BatteryData:
+        if actual_rsense_mohm <= 0.0 or configured_rsense_mohm <= 0.0:
+            raise ValueError("Sense resistor values must be > 0")
+
+        correction = configured_rsense_mohm / actual_rsense_mohm
+        with self._open_bus(self._bus_num) as bus:
+            soc_pct = self._read_u8(bus, REG_STATE_OF_CHARGE)
+            remaining_mah = self._read_u16(bus, REG_REMAINING_CAPACITY, swap_word_bytes)
+            full_charge_mah = self._read_u16(bus, REG_FULL_CHARGE_CAPACITY, swap_word_bytes)
+            voltage_mv = self._read_u16(bus, REG_VOLTAGE, swap_word_bytes)
+            current_raw = self._read_u16(bus, REG_AVERAGE_CURRENT, swap_word_bytes)
+
+        current_ma = self._to_s16(current_raw)
+
+        return BatteryData(
+            voltage=voltage_mv / 1000.0,
+            current_a=(current_ma * correction) / 1000.0,
+            remaining_capacity_ah=(remaining_mah * correction) / 1000.0,
+            max_capacity_ah=(full_charge_mah * correction) / 1000.0,
+            state_of_charge=max(0, min(100, int(soc_pct))),
+            error=None,
+        )
 
 
-def _run_standard_backend() -> dict[str, Any]:
-    script = Path(__file__).resolve().parent / "battery_standard.py"
-    cmd = [sys.executable, str(script), "--json", "--voltage-mode", "pack"]
-    proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip() or f"{script.name} exited with code {proc.returncode}")
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Read bq34z100 battery telemetry")
+    p.add_argument("--bus", type=int, default=1, help="I2C bus number (default: 1)")
+    p.add_argument("--address", type=lambda x: int(x, 0), default=DEFAULT_I2C_ADDR, help="I2C address, e.g. 0x55")
+    p.add_argument(
+        "--actual-rsense-mohm",
+        type=float,
+        default=12.5,
+        help="Actual SRP/SRN shunt resistor in milliohms",
+    )
+    p.add_argument(
+        "--configured-rsense-mohm",
+        type=float,
+        default=12.5,
+        help="Shunt value configured in gauge firmware (milliohms)",
+    )
+    p.add_argument(
+        "--swap-word-bytes",
+        action="store_true",
+        help="Swap high/low bytes for 16-bit commands",
+    )
+    return p
 
-    stdout = proc.stdout.strip()
-    if not stdout:
-        raise RuntimeError(f"{script.name} produced no output")
-    try:
-        return json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{script.name} returned non-JSON output: {stdout}") from exc
 
-
-def _from_payload(payload: dict[str, Any], inverted: bool) -> BatteryData:
-    voltage = float(payload.get("pack_voltage_est_v", payload.get("voltage_cmd_v", -1.0)))
-    raw_percent = int(payload.get("state_of_charge_pct", -1))
-    current = float(payload.get("current_a", 0.0))
-    remaining = float(payload.get("remaining_capacity_ah", 0.0))
-    full = float(payload.get("full_charge_capacity_ah", 0.0))
-
-    if inverted:
-        if raw_percent >= 0:
-            raw_percent = max(0, min(100, 100 - raw_percent))
-        current = -current
-        if full > 0.0:
-            remaining = max(0.0, full - remaining)
-
-    return BatteryData(
-        voltage=voltage,
-        percent=raw_percent,
-        charging=current > 0.05,
-        current_a=current,
-        remaining_capacity_ah=remaining,
-        full_charge_capacity_ah=full,
+def get_battery_data(
+    bus: int = 1,
+    address: int = DEFAULT_I2C_ADDR,
+    configured_rsense_mohm: float = 12.5,
+    actual_rsense_mohm: float = 12.5,
+    swap_word_bytes: bool = False,
+) -> BatteryData:
+    gauge = BQ34Z100(bus=bus, address=address)
+    return gauge.read(
+        configured_rsense_mohm=configured_rsense_mohm,
+        actual_rsense_mohm=actual_rsense_mohm,
+        swap_word_bytes=swap_word_bytes,
     )
 
 
-def get_battery_data() -> BatteryData:
-    payload = _run_standard_backend()
-    return _from_payload(payload, inverted=_mode_is_inverted())
+def main() -> int:
+    args = _build_parser().parse_args()
+
+    try:
+        data = get_battery_data(
+            bus=args.bus,
+            address=args.address,
+            configured_rsense_mohm=args.configured_rsense_mohm,
+            actual_rsense_mohm=args.actual_rsense_mohm,
+            swap_word_bytes=args.swap_word_bytes,
+        )
+    except Exception as exc:
+        data = BatteryData(
+            voltage=-1.0,
+            current_a=-1.0,
+            remaining_capacity_ah=-1.0,
+            max_capacity_ah=-1.0,
+            state_of_charge=-1,
+            error=str(exc),
+        )
+
+    payload = asdict(data)
+    if payload["error"] is None:
+        payload["voltage"] = round(float(payload["voltage"]), 3)
+        payload["current_a"] = round(float(payload["current_a"]), 3)
+        payload["remaining_capacity_ah"] = round(float(payload["remaining_capacity_ah"]), 3)
+        payload["max_capacity_ah"] = round(float(payload["max_capacity_ah"]), 3)
+
+    print(json.dumps(payload, separators=(",", ":")))
+    return 0
 
 
 if __name__ == "__main__":
-    try:
-        battery_data = get_battery_data()
-        result = {
-            "voltage": round(battery_data.voltage, 3),
-            "percent": battery_data.percent,
-            "charging": battery_data.charging,
-        }
-        if battery_data.current_a is not None:
-            result["current_a"] = round(battery_data.current_a, 3)
-        if battery_data.remaining_capacity_ah is not None:
-            result["remaining_capacity_ah"] = round(battery_data.remaining_capacity_ah, 3)
-        if battery_data.full_charge_capacity_ah is not None:
-            result["full_charge_capacity_ah"] = round(battery_data.full_charge_capacity_ah, 3)
-        print(json.dumps(result))
-    except Exception as e:
-        print(json.dumps({"voltage": -1.0, "percent": -1, "charging": False, "error": str(e)}))
+    raise SystemExit(main())
