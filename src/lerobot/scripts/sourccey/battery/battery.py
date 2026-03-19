@@ -7,6 +7,7 @@ Outputs only frontend-facing fields:
 - remaining_capacity_ah
 - max_capacity_ah
 - state_of_charge
+- max_error
 - error
 """
 
@@ -22,6 +23,7 @@ DEFAULT_I2C_ADDR = 0x55
 
 # bq34z100 standard command addresses.
 REG_STATE_OF_CHARGE = 0x02  # 1 byte (%)
+REG_MAX_ERROR = 0x03  # 1 byte (%)
 REG_REMAINING_CAPACITY = 0x04  # 2 bytes (mAh)
 REG_FULL_CHARGE_CAPACITY = 0x06  # 2 bytes (mAh)
 REG_VOLTAGE = 0x08  # 2 bytes (mV)
@@ -35,6 +37,7 @@ class BatteryData:
     remaining_capacity_ah: float
     max_capacity_ah: float
     state_of_charge: int
+    max_error: int
     error: str | None
 
 
@@ -78,6 +81,7 @@ class BQ34Z100:
         correction = configured_rsense_mohm / actual_rsense_mohm
         with self._open_bus(self._bus_num) as bus:
             soc_pct = self._read_u8(bus, REG_STATE_OF_CHARGE)
+            max_error_pct = self._read_u8(bus, REG_MAX_ERROR)
             remaining_mah = self._read_u16(bus, REG_REMAINING_CAPACITY, swap_word_bytes)
             full_charge_mah = self._read_u16(bus, REG_FULL_CHARGE_CAPACITY, swap_word_bytes)
             voltage_mv = self._read_u16(bus, REG_VOLTAGE, swap_word_bytes)
@@ -91,6 +95,7 @@ class BQ34Z100:
             remaining_capacity_ah=(remaining_mah * correction) / 1000.0,
             max_capacity_ah=(full_charge_mah * correction) / 1000.0,
             state_of_charge=max(0, min(100, int(soc_pct))),
+            max_error=max(0, min(100, int(max_error_pct))),
             error=None,
         )
 
@@ -152,6 +157,7 @@ def main() -> int:
             remaining_capacity_ah=-1.0,
             max_capacity_ah=-1.0,
             state_of_charge=-1,
+            max_error=-1,
             error=str(exc),
         )
 
