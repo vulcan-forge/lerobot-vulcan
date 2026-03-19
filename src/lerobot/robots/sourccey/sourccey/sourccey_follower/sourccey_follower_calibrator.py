@@ -167,16 +167,30 @@ class SourcceyFollowerCalibrator:
         # Create the calibration directory if it doesn't exist
         calibration_dir.mkdir(parents=True, exist_ok=True)
 
+        default_calibration = self._create_default_calibration(reverse)
+
         # If the calibration file doesn't exist, create it with default values
         if not calibration_file.exists():
             logger.info(f"Calibration file {calibration_file} not found. Creating default calibration...")
-            default_calibration = self._create_default_calibration(reverse)
             with open(calibration_file, "w") as f:
                 json.dump(default_calibration, f, indent=4)
             logger.info(f"Created default calibration file: {calibration_file}")
+            return default_calibration
 
-        with open(calibration_file, "r") as f:
-            return json.load(f)
+        try:
+            with open(calibration_file, "r") as f:
+                calibration_data = f.read().strip()
+            if not calibration_data:
+                raise ValueError("Calibration file is empty")
+            return json.loads(calibration_data)
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            logger.warning(
+                f"Default calibration file {calibration_file} is invalid ({e}). "
+                "Recreating it from built-in defaults."
+            )
+            with open(calibration_file, "w") as f:
+                json.dump(default_calibration, f, indent=4)
+            return default_calibration
 
     def _create_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
         """Create default calibration data for the robot."""
