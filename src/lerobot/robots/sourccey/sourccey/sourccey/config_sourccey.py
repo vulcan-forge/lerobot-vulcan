@@ -157,8 +157,8 @@ class SourcceyClientConfig(RobotConfig):
             "right": "d",
             "rotate_left": "z",
             "rotate_right": "x",
-            "up": "e",
-            "down": "q",
+            "up": "q",
+            "down": "e",
             # Speed control
             "speed_up": "r",
             "speed_down": "f",
