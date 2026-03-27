@@ -2,7 +2,6 @@ import json
 import socket
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 from lerobot.configs import parser
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
@@ -28,18 +27,17 @@ class ManualDriveBridgeConfig:
     stale_timeout_ms: int = 250
 
 
-def _connect_with_retry(robot: SourcceyClient, max_attempts: int = 20, delay_s: float = 0.25) -> None:
-    last_error: Optional[Exception] = None
-    for attempt in range(1, max_attempts + 1):
+def _connect_with_retry(robot: SourcceyClient, delay_s: float = 0.25) -> None:
+    attempt = 0
+    while True:
+        attempt += 1
         try:
             robot.connect()
+            print(f"Manual drive bridge connected after {attempt} attempt(s).")
             return
         except Exception as exc:
-            last_error = exc
-            print(f"Manual drive bridge connect attempt {attempt}/{max_attempts} failed: {exc}")
+            print(f"Manual drive bridge connect attempt {attempt} failed: {exc}")
             time.sleep(delay_s)
-    if last_error is not None:
-        raise last_error
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
