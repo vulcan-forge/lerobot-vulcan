@@ -81,6 +81,7 @@ def manual_drive_bridge(cfg: ManualDriveBridgeConfig):
     udp.setblocking(False)
 
     pressed_keys: set[str] = set()
+    arms_untorqued = False
     last_packet_time = time.monotonic()
     stale_timeout_s = max(float(cfg.stale_timeout_ms) / 1000.0, 0.05)
     last_observation: dict[str, object] = {}
@@ -127,21 +128,30 @@ def manual_drive_bridge(cfg: ManualDriveBridgeConfig):
                 else:
                     effective_keys = pressed_keys
 
+                # Explicit arm torque mode controls for kiosk UX:
+                # N => untorque both arms, M => torque both arms.
+                if "n" in packet_key_down_edges:
+                    arms_untorqued = True
+                if "m" in packet_key_down_edges:
+                    arms_untorqued = False
+
                 # Speed keys are handled as key-down edges in SourcceyClient. Process edges
                 # from each packet so short pulses are not lost if press+release arrives in one tick.
                 for key in sorted(packet_key_down_edges):
+                    if key in {"n", "m"}:
+                        continue
                     try:
                         robot.on_key_down(key)
                     except Exception:
                         pass
 
-                # N/M toggles are edge-triggered in _from_keyboard_to_base_action.
-                # Keep edge keys for one action frame so rapid pulses still toggle.
-                edge_toggle_keys = {key for key in packet_key_down_edges if key in {"n", "m"}}
-                action_keys = effective_keys | edge_toggle_keys
+                # Remove N/M from base keyboard mapping and drive untorque flags explicitly.
+                action_keys = {key for key in effective_keys if key not in {"n", "m"}}
 
                 z_obs_pos = _safe_float(last_observation.get("z.pos", 0.0), 0.0)
                 base_action = robot._from_keyboard_to_base_action(action_keys, z_obs_pos=z_obs_pos)
+                base_action["untorque_left"] = arms_untorqued
+                base_action["untorque_right"] = arms_untorqued
                 arm_hold_action = _build_arm_hold_action(last_observation)
 
                 action = {**arm_hold_action, **base_action}
@@ -156,6 +166,7 @@ def manual_drive_bridge(cfg: ManualDriveBridgeConfig):
                     pass
                 _connect_with_retry(robot)
                 pressed_keys = set()
+                arms_untorqued = False
                 last_packet_time = time.monotonic()
     except KeyboardInterrupt:
         print("Manual drive bridge interrupted, shutting down.")
