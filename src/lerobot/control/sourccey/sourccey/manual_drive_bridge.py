@@ -137,6 +137,12 @@ def manual_drive_bridge(cfg: ManualDriveBridgeConfig):
 
                 z_obs_pos = _safe_float(last_observation.get("z.pos", 0.0), 0.0)
                 base_action = robot._from_keyboard_to_base_action(effective_keys, z_obs_pos=z_obs_pos)
+                # Kiosk UX: make lift control binary for simple, reliable motion.
+                # Q drives to top endpoint, E drives to bottom endpoint.
+                if "q" in effective_keys and "e" not in effective_keys:
+                    base_action["z.pos"] = 100.0
+                elif "e" in effective_keys and "q" not in effective_keys:
+                    base_action["z.pos"] = -100.0
                 arm_hold_action = _build_arm_hold_action(last_observation)
 
                 action = {**arm_hold_action, **base_action}
