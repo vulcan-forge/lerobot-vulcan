@@ -76,7 +76,6 @@ def manual_drive_bridge(cfg: ManualDriveBridgeConfig):
     udp.setblocking(False)
 
     pressed_keys: set[str] = set()
-    prev_effective_keys: set[str] = set()
     last_packet_time = time.monotonic()
     stale_timeout_s = max(float(cfg.stale_timeout_ms) / 1000.0, 0.05)
     last_observation: dict[str, object] = {}
@@ -85,68 +84,74 @@ def manual_drive_bridge(cfg: ManualDriveBridgeConfig):
 
     try:
         while True:
-                try:
-                    loop_started = time.perf_counter()
+            try:
+                loop_started = time.perf_counter()
+                packet_key_down_edges: set[str] = set()
 
-                    while True:
-                        try:
-                            payload_bytes, _ = udp.recvfrom(4096)
-                        except BlockingIOError:
-                            break
-
-                        try:
-                            payload = json.loads(payload_bytes.decode("utf-8"))
-                        except Exception:
-                            continue
-
-                        packet_nickname = str(payload.get("nickname", "")).strip()
-                        if packet_nickname and packet_nickname != cfg.id:
-                            continue
-
-                        packet_keys = payload.get("pressed_keys", [])
-                        if isinstance(packet_keys, list):
-                            pressed_keys = _sanitize_pressed_keys(packet_keys)
-                            last_packet_time = time.monotonic()
+                while True:
+                    try:
+                        payload_bytes, _ = udp.recvfrom(4096)
+                    except BlockingIOError:
+                        break
 
                     try:
-                        observation = robot.get_observation()
-                        if isinstance(observation, dict) and observation:
-                            last_observation = observation
+                        payload = json.loads(payload_bytes.decode("utf-8"))
                     except Exception:
-                        observation = last_observation
+                        continue
 
-                    if time.monotonic() - last_packet_time > stale_timeout_s:
-                        effective_keys: set[str] = set()
-                    else:
-                        effective_keys = pressed_keys
+                    packet_nickname = str(payload.get("nickname", "")).strip()
+                    if packet_nickname and packet_nickname != cfg.id:
+                        continue
 
-                    # Speed keys are handled as key-down edges in SourcceyClient.
-                    key_down_edges = effective_keys - prev_effective_keys
-                    for key in sorted(key_down_edges):
-                        try:
-                            robot.on_key_down(key)
-                        except Exception:
-                            pass
-                    prev_effective_keys = set(effective_keys)
+                    packet_keys = payload.get("pressed_keys", [])
+                    if isinstance(packet_keys, list):
+                        next_keys = _sanitize_pressed_keys(packet_keys)
+                        packet_key_down_edges.update(next_keys - pressed_keys)
+                        pressed_keys = next_keys
+                        last_packet_time = time.monotonic()
 
-                    z_obs_pos = _safe_float(last_observation.get("z.pos", 0.0), 0.0)
-                    base_action = robot._from_keyboard_to_base_action(effective_keys, z_obs_pos=z_obs_pos)
-                    arm_hold_action = _build_arm_hold_action(last_observation)
+                try:
+                    observation = robot.get_observation()
+                    if isinstance(observation, dict) and observation:
+                        last_observation = observation
+                except Exception:
+                    observation = last_observation
 
-                    action = {**arm_hold_action, **base_action}
-                    robot.send_action(action)
+                if time.monotonic() - last_packet_time > stale_timeout_s:
+                    effective_keys: set[str] = set()
+                else:
+                    effective_keys = pressed_keys
 
-                    precise_sleep(max(1.0 / max(cfg.fps, 1) - (time.perf_counter() - loop_started), 0.0))
-                except Exception as exc:
-                    print(f"Manual drive bridge loop error: {exc}")
+                # Speed keys are handled as key-down edges in SourcceyClient. Process edges
+                # from each packet so short pulses are not lost if press+release arrives in one tick.
+                for key in sorted(packet_key_down_edges):
                     try:
-                        robot.disconnect()
+                        robot.on_key_down(key)
                     except Exception:
                         pass
-                    _connect_with_retry(robot)
-                    pressed_keys = set()
-                    prev_effective_keys = set()
-                    last_packet_time = time.monotonic()
+
+                # N/M toggles are edge-triggered in _from_keyboard_to_base_action.
+                # Keep edge keys for one action frame so rapid pulses still toggle.
+                edge_toggle_keys = {key for key in packet_key_down_edges if key in {"n", "m"}}
+                action_keys = effective_keys | edge_toggle_keys
+
+                z_obs_pos = _safe_float(last_observation.get("z.pos", 0.0), 0.0)
+                base_action = robot._from_keyboard_to_base_action(action_keys, z_obs_pos=z_obs_pos)
+                arm_hold_action = _build_arm_hold_action(last_observation)
+
+                action = {**arm_hold_action, **base_action}
+                robot.send_action(action)
+
+                precise_sleep(max(1.0 / max(cfg.fps, 1) - (time.perf_counter() - loop_started), 0.0))
+            except Exception as exc:
+                print(f"Manual drive bridge loop error: {exc}")
+                try:
+                    robot.disconnect()
+                except Exception:
+                    pass
+                _connect_with_retry(robot)
+                pressed_keys = set()
+                last_packet_time = time.monotonic()
     except KeyboardInterrupt:
         print("Manual drive bridge interrupted, shutting down.")
     finally:
