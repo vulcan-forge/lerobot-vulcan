@@ -72,7 +72,12 @@ def manual_drive_bridge(cfg: ManualDriveBridgeConfig):
     _connect_with_retry(robot)
 
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp.bind(("127.0.0.1", cfg.udp_port))
+    udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        udp.bind(("127.0.0.1", cfg.udp_port))
+    except Exception as exc:
+        print(f"Manual drive bridge failed to bind UDP port {cfg.udp_port}: {exc}")
+        raise
     udp.setblocking(False)
 
     pressed_keys: set[str] = set()
@@ -169,7 +174,10 @@ def manual_drive_bridge(cfg: ManualDriveBridgeConfig):
             udp.close()
         except Exception:
             pass
-        robot.disconnect()
+        try:
+            robot.disconnect()
+        except Exception:
+            pass
 
 
 def main():
