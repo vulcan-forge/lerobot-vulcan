@@ -130,9 +130,10 @@ def manual_drive_bridge(cfg: ManualDriveBridgeConfig):
 
                 # Explicit arm torque mode controls for kiosk UX:
                 # N => untorque both arms, M => torque both arms.
-                if "n" in packet_key_down_edges:
+                # Accept both edge events and currently held keys for robustness.
+                if "n" in packet_key_down_edges or "n" in effective_keys:
                     arms_untorqued = True
-                if "m" in packet_key_down_edges:
+                if "m" in packet_key_down_edges or "m" in effective_keys:
                     arms_untorqued = False
 
                 # Speed keys are handled as key-down edges in SourcceyClient. Process edges
