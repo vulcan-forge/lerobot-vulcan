@@ -7,7 +7,7 @@ from lerobot.configs import parser
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
 from lerobot.utils.robot_utils import precise_sleep
 
-ALLOWED_KEYS = {"w", "a", "s", "d", "z", "x", "q", "e", "r", "f", "n", "m"}
+ALLOWED_KEYS = {"w", "a", "s", "d", "z", "x", "q", "e", "r", "f"}
 ARM_JOINTS = (
     "shoulder_pan",
     "shoulder_lift",
@@ -135,12 +135,8 @@ def manual_drive_bridge(cfg: ManualDriveBridgeConfig):
                     except Exception:
                         pass
 
-                # Keep N/M edge keys for one action frame so toggle keys are not dropped.
-                edge_toggle_keys = {key for key in packet_key_down_edges if key in {"n", "m"}}
-                action_keys = effective_keys | edge_toggle_keys
-
                 z_obs_pos = _safe_float(last_observation.get("z.pos", 0.0), 0.0)
-                base_action = robot._from_keyboard_to_base_action(action_keys, z_obs_pos=z_obs_pos)
+                base_action = robot._from_keyboard_to_base_action(effective_keys, z_obs_pos=z_obs_pos)
                 arm_hold_action = _build_arm_hold_action(last_observation)
 
                 action = {**arm_hold_action, **base_action}
