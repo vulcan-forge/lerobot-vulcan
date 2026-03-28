@@ -1,0 +1,116 @@
+# Sourccey Camera Checks (Raspberry Pi)
+
+Use this guide to verify all four Sourccey cameras are detected and producing frames on the Pi.
+
+Sourccey uses stable device names (not just `/dev/video0`, `/dev/video1`, ...):
+
+- `/dev/cameraFrontLeft`
+- `/dev/cameraFrontRight`
+- `/dev/cameraWristLeft`
+- `/dev/cameraWristRight`
+
+These names come from the Sourccey camera config in:
+`src/lerobot/robots/sourccey/sourccey/sourccey/config_sourccey.py`
+
+## 1) Check that Sourccey camera device names exist
+
+```bash
+for cam in /dev/cameraFrontLeft /dev/cameraFrontRight /dev/cameraWristLeft /dev/cameraWristRight; do
+  if [ -e "$cam" ]; then
+    echo "OK: $cam -> $(readlink -f "$cam")"
+  else
+    echo "MISSING: $cam"
+  fi
+done
+```
+
+If any are missing, your camera udev mapping is not active or the camera is disconnected.
+
+## 2) Verify Linux sees video devices
+
+```bash
+ls -l /dev/video*
+v4l2-ctl --list-devices
+```
+
+If `v4l2-ctl` is missing:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y v4l-utils
+```
+
+## 3) Open each Sourccey camera and save one frame
+
+Run from the repo root on the Pi:
+
+```bash
+uv run python - <<'PY'
+from pathlib import Path
+import cv2
+
+cams = [
+    ("front_left", "/dev/cameraFrontLeft"),
+    ("front_right", "/dev/cameraFrontRight"),
+    ("wrist_left", "/dev/cameraWristLeft"),
+    ("wrist_right", "/dev/cameraWristRight"),
+]
+
+out_dir = Path("camera_health")
+out_dir.mkdir(exist_ok=True)
+
+all_ok = True
+for name, dev in cams:
+    cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
+    if not cap.isOpened():
+        print(f"FAIL open: {name} ({dev})")
+        all_ok = False
+        continue
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+    cap.set(cv2.CAP_PROP_FPS, 30)
+
+    ok, frame = cap.read()
+    cap.release()
+
+    if not ok or frame is None:
+        print(f"FAIL read: {name} ({dev})")
+        all_ok = False
+        continue
+
+    out_path = out_dir / f"{name}.jpg"
+    cv2.imwrite(str(out_path), frame)
+    print(f"PASS: {name} -> {out_path}")
+
+if not all_ok:
+    raise SystemExit(1)
+PY
+```
+
+If all cameras are healthy, you should see 4 `PASS` lines and 4 images in `camera_health/`.
+
+## 4) Optional: inspect camera format/caps for each Sourccey path
+
+```bash
+for cam in /dev/cameraFrontLeft /dev/cameraFrontRight /dev/cameraWristLeft /dev/cameraWristRight; do
+  echo
+  echo "=== $cam ==="
+  v4l2-ctl -d "$cam" --get-fmt-video
+  v4l2-ctl -d "$cam" --list-formats-ext | head -n 40
+done
+```
+
+## 5) If cameras are flaky, check Pi power and USB bus errors
+
+```bash
+vcgencmd get_throttled
+lsusb -t
+dmesg -T | egrep -i "uvc|usb|video|camera|error|fail|reset"
+```
+
+Notes:
+
+- `throttled=0x0` is ideal.
+- Repeated USB reset or I/O errors usually indicate cable, hub, or power issues.
+- If only one camera fails, swap ports/cables with a known-good camera to isolate hardware vs mapping.
