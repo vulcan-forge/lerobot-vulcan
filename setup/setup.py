@@ -6,8 +6,8 @@ This script sets up the development environment for the LeRobot Vulcan project.
 It checks for required dependencies and installs all necessary packages.
 
 Requirements:
-- Python 3.10+
-- uv (Python package manager) - optional but recommended
+- Project runtime Python 3.12 or 3.13 (managed via uv)
+- uv (Python package manager)
 - Git
 """
 
@@ -36,6 +36,9 @@ class Colors:
 
 
 class SetupScript:
+    SUPPORTED_PYTHON_MINORS = {12, 13}
+    DEFAULT_UV_PYTHON = "3.12"
+
     def __init__(self):
         self.project_root = Path(__file__).parent.parent
         self.errors = []
@@ -136,8 +139,54 @@ class SetupScript:
         except Exception as e:
             self.print_warning(f"Failed to set executable permissions for {path}: {e}")
 
+    def is_supported_project_python(self, major: int, minor: int) -> bool:
+        """Return whether the project supports this Python major/minor version."""
+        return major == 3 and minor in self.SUPPORTED_PYTHON_MINORS
+
+    def get_interpreter_version(self, python_path: Path) -> Optional[Tuple[int, int, int]]:
+        """Return (major, minor, micro) for a Python interpreter path."""
+        if not python_path.exists():
+            return None
+
+        try:
+            result = subprocess.run(
+                [str(python_path), "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=self.project_root,
+            )
+            if result.returncode != 0:
+                return None
+
+            parts = result.stdout.strip().split(".")
+            if len(parts) != 3:
+                return None
+            major, minor, micro = int(parts[0]), int(parts[1]), int(parts[2])
+            return major, minor, micro
+        except (ValueError, subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+            return None
+
+    def get_existing_venv_python_version(self) -> Optional[Tuple[int, int, int]]:
+        """Get Python version from the existing project virtual environment."""
+        return self.get_interpreter_version(self.get_venv_python_path())
+
+    def remove_existing_venv(self, reason: str) -> bool:
+        """Remove existing .venv directory."""
+        if not self.check_venv_exists():
+            return True
+
+        self.print_status(reason)
+        try:
+            shutil.rmtree(self.project_root / ".venv")
+            self.print_success("Existing .venv removed")
+            return True
+        except Exception as e:
+            self.print_error(f"Failed to remove existing .venv: {e}")
+            return False
+
     def check_python_version(self) -> bool:
-        """Check if Python 3.10+ is installed"""
+        """Check bootstrap Python version used to run setup."""
         self.print_status("Checking Python version...")
 
         version = sys.version_info
@@ -146,7 +195,15 @@ class SetupScript:
             self.print_error("Please install Python 3.10 or higher from https://python.org")
             return False
 
-        self.print_success(f"Python {version.major}.{version.minor}.{version.micro} is installed")
+        if self.is_supported_project_python(version.major, version.minor):
+            self.print_success(
+                f"Python {version.major}.{version.minor}.{version.micro} is installed and supported for the project"
+            )
+        else:
+            self.print_warning(
+                f"Host Python is {version.major}.{version.minor}.{version.micro}. "
+                "Project runtime requires Python 3.12 or 3.13; setup will use uv to provision Python 3.12 for .venv."
+            )
         return True
 
     def check_git(self) -> bool:
@@ -166,11 +223,12 @@ class SetupScript:
         return True
 
     def check_uv(self) -> bool:
-        """Check if uv is installed (optional but recommended)"""
-        self.print_status("Checking uv installation (optional)...")
+        """Check if uv is installed."""
+        self.print_status("Checking uv installation...")
 
         if not self.check_command_exists("uv"):
-            self.print_warning("uv is not installed (optional but recommended)")
+            self.print_warning("uv is not installed")
+            self.print_warning("uv is required to create a Python 3.12/3.13 virtual environment automatically.")
             self.print_warning("Install uv from https://docs.astral.sh/uv/getting-started/installation/")
             return False
 
@@ -215,21 +273,6 @@ class SetupScript:
         """Check if .venv directory exists"""
         return (self.project_root / '.venv').exists()
 
-    def handle_existing_venv(self) -> bool:
-        """Handle existing .venv directory - always delete and recreate"""
-        self.print_status("Removing existing venv...")
-        try:
-            shutil.rmtree(self.project_root / '.venv')
-            self.print_success("Existing venv removed")
-            return False  # venv no longer exists
-        except Exception as e:
-            self.print_error(f"Error removing .venv: {e}")
-            return True  # keep existing if can't remove
-
-    #################################################################
-    # Setup functions
-    #################################################################
-
     def install_uv(self) -> bool:
         """Install UV if not present"""
         self.print_status("Installing uv...")
@@ -261,67 +304,89 @@ class SetupScript:
         """Setup Python environment"""
         self.print_status("Setting up Python environment...")
 
-        # ALWAYS remove existing .venv to ensure clean installation
+        # Recreate .venv only when interpreter is unsupported or environment is broken.
         if self.check_venv_exists():
-            self.print_status("Removing existing virtual environment for clean installation...")
-            try:
-                shutil.rmtree(self.project_root / '.venv')
-                self.print_success("Existing .venv removed")
-            except Exception as e:
-                self.print_error(f"Failed to remove existing .venv: {e}")
-                return False
-
-        # Create fresh virtual environment
-        try:
-            # Check if uv is available
-            if self.check_command_exists("uv"):
-                self.print_status("Using uv for Python environment setup...")
-
-                # Create virtual environment with Python 3.10
-                subprocess.run(["uv", "venv"],
-                             check=True, cwd=self.project_root)
-                self.print_success("Virtual environment created with uv")
-
-                python_path = self.get_venv_python_path()
-                self.ensure_executable(python_path)
-
-                # Install dependencies with sourccey extras. On macOS/Windows we gracefully
-                # fall back if a stale resolver path still tries to pull vosk.
-                install_result = subprocess.run(
-                    ["uv", "pip", "install", "--python", str(python_path), "-e", ".[sourccey]"],
-                    capture_output=True,
-                    text=True,
-                    cwd=self.project_root,
-                )
-
-                if install_result.returncode == 0:
-                    self.print_success("LeRobot sourccey dependencies installed with uv")
-                else:
-                    resolver_output = f"{install_result.stdout or ''}\n{install_result.stderr or ''}".lower()
-                    if self.is_macos_or_windows() and "vosk" in resolver_output:
-                        self.print_warning(
-                            "vosk is not supported on this platform. "
-                            "Falling back to install without sourccey extra audio dependency."
-                        )
-                        subprocess.run(
-                            ["uv", "pip", "install", "--python", str(python_path), "-e", "."],
-                            check=True,
-                            cwd=self.project_root,
-                        )
-                        self.print_success("Installed core LeRobot dependencies with uv")
-                    else:
-                        raise subprocess.CalledProcessError(
-                            install_result.returncode,
-                            ["uv", "pip", "install", "--python", str(python_path), "-e", ".[sourccey]"],
-                            output=install_result.stdout,
-                            stderr=install_result.stderr,
-                        )
-
+            venv_version = self.get_existing_venv_python_version()
+            if venv_version is None:
+                self.print_warning("Existing .venv is missing a readable Python interpreter.")
+                if not self.remove_existing_venv("Recreating broken .venv..."):
+                    return False
             else:
+                major, minor, micro = venv_version
+                if self.is_supported_project_python(major, minor):
+                    self.print_success(f"Existing .venv uses supported Python {major}.{minor}.{micro}")
+                else:
+                    self.print_warning(
+                        f"Existing .venv uses Python {major}.{minor}.{micro}, but project requires Python 3.12 or 3.13."
+                    )
+                    if not self.remove_existing_venv("Recreating .venv with Python 3.12..."):
+                        return False
+
+        try:
+            if not self.check_command_exists("uv"):
                 self.print_error("uv not available")
                 self.print_error("Please install uv from https://docs.astral.sh/uv/getting-started/installation/")
                 self.print_error("Then run this script again.")
                 return False
+
+            if not self.check_venv_exists():
+                self.print_status("Creating .venv with uv and Python 3.12 (uv may download Python automatically)...")
+                subprocess.run(
+                    ["uv", "venv", "--python", self.DEFAULT_UV_PYTHON],
+                    check=True,
+                    cwd=self.project_root,
+                )
+                self.print_success("Virtual environment created with uv")
+
+            python_path = self.get_venv_python_path()
+            self.ensure_executable(python_path)
+
+            venv_version = self.get_existing_venv_python_version()
+            if venv_version is None:
+                self.print_error(f"Could not determine Python version for venv interpreter at {python_path}")
+                return False
+
+            major, minor, micro = venv_version
+            if not self.is_supported_project_python(major, minor):
+                self.print_error(
+                    f".venv Python is {major}.{minor}.{micro}, but project requires Python 3.12 or 3.13."
+                )
+                self.print_error("Please verify uv can install Python 3.12, then rerun setup.")
+                return False
+
+            self.print_success(f".venv is using supported Python {major}.{minor}.{micro}")
+
+            # Install dependencies with sourccey extras. On macOS/Windows we gracefully
+            # fall back if a stale resolver path still tries to pull vosk.
+            install_result = subprocess.run(
+                ["uv", "pip", "install", "--python", str(python_path), "-e", ".[sourccey]"],
+                capture_output=True,
+                text=True,
+                cwd=self.project_root,
+            )
+
+            if install_result.returncode == 0:
+                self.print_success("LeRobot sourccey dependencies installed with uv")
+            else:
+                resolver_output = f"{install_result.stdout or ''}\n{install_result.stderr or ''}".lower()
+                if self.is_macos_or_windows() and "vosk" in resolver_output:
+                    self.print_warning(
+                        "vosk is not supported on this platform. "
+                        "Falling back to install without sourccey extra audio dependency."
+                    )
+                    subprocess.run(
+                        ["uv", "pip", "install", "--python", str(python_path), "-e", "."],
+                        check=True,
+                        cwd=self.project_root,
+                    )
+                    self.print_success("Installed core LeRobot dependencies with uv")
+                else:
+                    raise subprocess.CalledProcessError(
+                        install_result.returncode,
+                        ["uv", "pip", "install", "--python", str(python_path), "-e", ".[sourccey]"],
+                        output=install_result.stdout,
+                        stderr=install_result.stderr,
+                    )
 
             return True
 
@@ -636,12 +701,14 @@ class SetupScript:
             self.check_project_structure(),
         ]
 
-        # Check uv (optional)
+        # Check uv
         uv_available = self.check_uv()
         if not uv_available:
             self.print_status("uv not found, attempting to install automatically...")
             if not self.install_uv():
-                self.print_warning("Failed to install uv, will use pip instead")
+                self.print_error("Failed to install uv automatically.")
+                self.print_error("uv is required for setup because project runtime Python is managed through uv.")
+                return False
             else:
                 # Exit so user can restart with uv in PATH
                 return True
