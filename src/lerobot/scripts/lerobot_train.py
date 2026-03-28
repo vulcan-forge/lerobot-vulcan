@@ -235,13 +235,27 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         logging.info("Creating env")
         eval_env = make_env(cfg.env, n_envs=cfg.eval.batch_size, use_async_envs=cfg.eval.use_async_envs)
 
+    # Policy loading can create large transient memory spikes (checkpoint read + tensor remap),
+    # so stagger rank initialization: main process first, then remaining ranks.
+    policy = None
     if is_main_process:
         logging.info("Creating policy")
-    policy = make_policy(
-        cfg=cfg.policy,
-        ds_meta=dataset.meta,
-        rename_map=cfg.rename_map,
-    )
+        policy = make_policy(
+            cfg=cfg.policy,
+            ds_meta=dataset.meta,
+            rename_map=cfg.rename_map,
+        )
+
+    accelerator.wait_for_everyone()
+
+    if not is_main_process:
+        policy = make_policy(
+            cfg=cfg.policy,
+            ds_meta=dataset.meta,
+            rename_map=cfg.rename_map,
+        )
+
+    assert policy is not None
 
     if cfg.peft is not None:
         logging.info("Using PEFT! Wrapping model.")

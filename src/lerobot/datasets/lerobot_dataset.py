@@ -16,6 +16,7 @@
 import concurrent.futures
 import contextlib
 import logging
+import os
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -68,6 +69,7 @@ from lerobot.datasets.utils import (
     write_tasks,
 )
 from lerobot.datasets.video_utils import (
+    FrameTimestampError,
     StreamingVideoEncoder,
     VideoFrame,
     concatenate_video_files,
@@ -81,6 +83,7 @@ from lerobot.datasets.video_utils import (
 from lerobot.utils.constants import HF_LEROBOT_HOME
 
 CODEBASE_VERSION = "v3.0"
+FRAME_TIMESTAMP_RETRY_LIMIT = 256
 
 
 class LeRobotDatasetMetadata:
@@ -1076,10 +1079,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             self.hf_dataset = self.load_hf_dataset()
             self._lazy_loading = False
 
-    def __len__(self):
-        return self.num_frames
-
-    def __getitem__(self, idx) -> dict:
+    def _getitem_once(self, idx: int) -> dict:
         # Ensure dataset is loaded when we actually need to read from it
         self._ensure_hf_dataset_loaded()
         item = self.hf_dataset[idx]
@@ -1116,6 +1116,32 @@ class LeRobotDataset(torch.utils.data.Dataset):
             item["subtask"] = self.meta.subtasks.iloc[subtask_idx].name
 
         return item
+
+    def __len__(self):
+        return self.num_frames
+
+    def __getitem__(self, idx) -> dict:
+        requested_idx = int(idx)
+        dataset_len = len(self)
+        replacement_idx = requested_idx
+        last_error: FrameTimestampError | None = None
+
+        for attempt in range(FRAME_TIMESTAMP_RETRY_LIMIT + 1):
+            try:
+                return self._getitem_once(replacement_idx)
+            except FrameTimestampError as exc:
+                last_error = exc
+                if attempt < 32:
+                    next_idx = (replacement_idx + 1) % dataset_len
+                else:
+                    # Escape local clusters of bad samples if failures spike.
+                    next_idx = (requested_idx + (attempt + 1) * 9973) % dataset_len
+                replacement_idx = next_idx
+
+        raise RuntimeError(
+            f"Failed to recover from FrameTimestampError after {FRAME_TIMESTAMP_RETRY_LIMIT + 1} attempts "
+            f"for dataset={self.repo_id} requested_idx={requested_idx}. Last error: {last_error}"
+        ) from last_error
 
     def __repr__(self):
         feature_keys = list(self.features)

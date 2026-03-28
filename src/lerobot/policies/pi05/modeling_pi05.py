@@ -440,7 +440,20 @@ class PaliGemmaWithExpertModel(
         if image.dtype != torch.float32:
             image = image.to(torch.float32)
         image_outputs = self.paligemma.model.get_image_features(image)
-        features = image_outputs.pooler_output * self.paligemma.config.text_config.hidden_size**0.5
+        if isinstance(image_outputs, torch.Tensor):
+            features = image_outputs
+        elif hasattr(image_outputs, "pooler_output"):
+            features = image_outputs.pooler_output
+        elif isinstance(image_outputs, (tuple, list)) and image_outputs:
+            features = image_outputs[0]
+        else:
+            raise TypeError(f"Unexpected image feature output type: {type(image_outputs)}")
+
+        # Keep shape convention [B, N, D] expected by embed_prefix.
+        if features.ndim == 2:
+            features = features.unsqueeze(1)
+
+        features = features * self.paligemma.config.text_config.hidden_size**0.5
         if features.dtype != out_dtype:
             features = features.to(out_dtype)
         return features
