@@ -93,13 +93,13 @@ Example:
 
 ```json
 {
-  "voltage": 13.245,
-  "current_a": -0.812,
-  "remaining_capacity_ah": 6.291,
-  "max_capacity_ah": 10.000,
-  "state_of_charge": 63,
-  "max_error": 2,
-  "error": null
+    "voltage": 13.245,
+    "current_a": -0.812,
+    "remaining_capacity_ah": 6.291,
+    "max_capacity_ah": 10.0,
+    "state_of_charge": 63,
+    "max_error": 2,
+    "error": null
 }
 ```
 
@@ -139,9 +139,9 @@ Then Calibrate the bi-manual teleoperator (leader arms):
 ```
 python src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
  --teleop.type=bi_sourccey_leader \
- --teleop.id=bisd_sourccey_leader \
- --teleop.left_arm_port="/dev/ttyACM0" \
- --teleop.right_arm_port="/dev/ttyACM1"
+ --teleop.id=bi_sourccey_leader \
+ --teleop.left_arm_port="COM17" \
+ --teleop.right_arm_port="COM18"
 ```
 
 python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --remote_ip="192.168.1.211" --left_arm_port="/dev/ttyACM1" --right_arm_port="/dev/ttyACM0" --keyboard_port="keyboard" --fps=30
