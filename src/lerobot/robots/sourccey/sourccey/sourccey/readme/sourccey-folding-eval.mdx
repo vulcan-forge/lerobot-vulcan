@@ -2,8 +2,8 @@
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.212" \
- --left_arm_port="/dev/ttyACM0" \
- --right_arm_port="/dev/ttyACM1" \
+ --left_arm_port="COM17" \
+ --right_arm_port="COM18" \
  --keyboard_port="keyboard" \
  --fps=30
 ```
@@ -12,10 +12,10 @@ python src/lerobot/control/sourccey/sourccey/teleoperate.py \
 python src/lerobot/control/sourccey/sourccey/record.py \
  --id="sourccey" \
  --remote_ip="192.168.1.212" \
- --left_arm_port="/dev/ttyACM0" \
- --right_arm_port="/dev/ttyACM1" \
- --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-light-green-c__long-set000__nickm" \
- --dataset.num_episodes=15 \
+ --left_arm_port="COM17" \
+ --right_arm_port="COM18" \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-light-green-d/sourccey-013__shirt-fold-light-green-d__set000__nickm" \
+ --dataset.num_episodes=1 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=5 \
  --dataset.task="Fold the shirt" \
@@ -196,10 +196,11 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1
 Training Single GPU:
 
 ```
+
 CUDA_VISIBLE_DEVICES=0 python src/lerobot/scripts/lerobot_train.py \
- --dataset.repo_id=sourccey-013/sourccey-013__shirt-fold-a-b-c-2-TEST-3__cmb000__nickm \
- --output_dir=outputs/train/xvla__sourccey-013__shirt-fold-a-b-c-2-TEST-3__cmb000__nickm \
- --job_name=xvla__sourccey-013__shirt-fold-a-b-c-2-TEST-3__cmb000__nickm \
+ --dataset.repo_id=sourccey-013/sourccey-013**shirt-fold-a-b-c-2-TEST-3**cmb000**nickm \
+ --output_dir=outputs/train/xvla**sourccey-013**shirt-fold-a-b-c-2-TEST-3**cmb000**nickm \
+ --job_name=xvla**sourccey-013**shirt-fold-a-b-c-2-TEST-3**cmb000\_\_nickm \
  --policy.path="lerobot/xvla-base" \
  --policy.dtype=float32 \
  --policy.action_mode=auto \
@@ -210,13 +211,15 @@ CUDA_VISIBLE_DEVICES=0 python src/lerobot/scripts/lerobot_train.py \
  --save_freq=50000 \
  --batch_size=2 \
  --wandb.enable=false
+
 ```
 
 ```
+
 CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
- --dataset.repo_id=sourccey-013/sourccey-013__shirt-fold-a-b-c__cmb000__nickm \
- --output_dir=outputs/train/xvla__sourccey-013__shirt-fold-a-b-c__cmb000__nickm \
- --job_name=xvla__sourccey-013__shirt-fold-a-b-c__cmb000__nickm \
+ --dataset.repo_id=sourccey-013/sourccey-013**shirt-fold-a-b-c**cmb000**nickm \
+ --output_dir=outputs/train/xvla**sourccey-013**shirt-fold-a-b-c**cmb000**nickm \
+ --job_name=xvla**sourccey-013**shirt-fold-a-b-c**cmb000\_\_nickm \
  --policy.path="lerobot/xvla-base" \
  --policy.dtype=float32 \
  --policy.action_mode=auto \
@@ -227,17 +230,19 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
  --save_freq=50000 \
  --batch_size=2 \
  --wandb.enable=false
+
 ```
 
 Training Multi GPU:
 
 ```
+
 LEROBOT_DISABLE_SDPA=1 accelerate launch \
  --multi_gpu --num_processes=2 --mixed_precision=no \
  $(which lerobot-train) \
- --dataset.repo_id=sourccey-013/sourccey-013__shirt-fold-b__cmb000__nickm \
- --output_dir=outputs/train/xvla__sourccey-013__shirt-fold-b__cmb000__nickm \
- --job_name=xvla__sourccey-013__shirt-fold-b__cmb000__nickm \
+ --dataset.repo_id=sourccey-013/sourccey-013**shirt-fold-b**cmb000**nickm \
+ --output_dir=outputs/train/xvla**sourccey-013**shirt-fold-b**cmb000**nickm \
+ --job_name=xvla**sourccey-013**shirt-fold-b**cmb000\_\_nickm \
  --policy.path="lerobot/xvla-base" \
  --policy.dtype=float32 \
  --policy.action_mode=auto \
@@ -253,6 +258,7 @@ LEROBOT_DISABLE_SDPA=1 accelerate launch \
 
 
 ```
+
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 accelerate launch \
  --multi_gpu --num_processes=2 --mixed_precision=no \
  $(which lerobot-train) \
@@ -284,12 +290,14 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 accelerate launch
 python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.212" \
- --model_path="outputs/train/xvla__sourccey-013__shirt-fold-a-b-c__cmb000__nickm/checkpoints/200000/pretrained_model" \
- --dataset.repo_id="sourccey-013/eval_xvla__sourccey-013__shirt-fold-a-b-c__cmb000__nickm" \
+ --model_path="outputs/train/xvla**sourccey-013**shirt-fold-a-b-c**cmb000**nickm/checkpoints/200000/pretrained_model" \
+ --dataset.repo_id="sourccey-013/eval_xvla**sourccey-013**shirt-fold-a-b-c**cmb000**nickm" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=10 \
  --dataset.task="Fold the shirt" \
  --dataset.fps=30
+
+```
 
 ```

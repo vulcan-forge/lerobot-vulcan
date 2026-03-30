@@ -332,6 +332,8 @@ def record_loop(
         postprocessor.reset()
 
     no_action_count = 0
+    slow_loop_warning_interval_s = 60.0
+    last_slow_loop_warning_t = events.get("last_slow_loop_warning_t")
     timestamp = 0
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
@@ -421,9 +423,16 @@ def record_loop(
 
         sleep_time_s: float = 1 / fps - dt_s
         if sleep_time_s < 0:
-            logging.warning(
-                f"Record loop is running slower ({1 / dt_s:.1f} Hz) than the target FPS ({fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
+            should_log = (
+                last_slow_loop_warning_t is None
+                or (start_loop_t - last_slow_loop_warning_t) >= slow_loop_warning_interval_s
             )
+            if should_log:
+                logging.warning(
+                    f"Record loop is running slower ({1 / dt_s:.1f} Hz) than the target FPS ({fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
+                )
+                last_slow_loop_warning_t = start_loop_t
+                events["last_slow_loop_warning_t"] = start_loop_t
 
         precise_sleep(max(sleep_time_s, 0.0))
 
