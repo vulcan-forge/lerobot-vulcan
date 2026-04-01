@@ -221,3 +221,6 @@ CLAUDE.md
 *.urdf
 *.xml
 *.part
+
+# Training Logs
+training_logs/

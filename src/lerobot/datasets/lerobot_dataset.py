@@ -16,7 +16,6 @@
 import concurrent.futures
 import contextlib
 import logging
-import os
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -35,6 +34,11 @@ from huggingface_hub import HfApi, snapshot_download
 from huggingface_hub.errors import RevisionNotFoundError
 
 from lerobot.datasets.compute_stats import aggregate_stats, compute_episode_stats
+from lerobot.datasets.data_error_logging import (
+    VideoDecodeError,
+    append_data_error_log,
+    is_known_data_error,
+)
 from lerobot.datasets.image_writer import AsyncImageWriter, write_image
 from lerobot.datasets.utils import (
     DEFAULT_EPISODES_PATH,
@@ -1064,7 +1068,16 @@ class LeRobotDataset(torch.utils.data.Dataset):
             shifted_query_ts = [from_timestamp + ts for ts in query_ts]
 
             video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)
-            frames = decode_video_frames(video_path, shifted_query_ts, self.tolerance_s, self.video_backend)
+            try:
+                frames = decode_video_frames(video_path, shifted_query_ts, self.tolerance_s, self.video_backend)
+            except Exception as exc:
+                raise VideoDecodeError(
+                    video_path=video_path,
+                    video_key=vid_key,
+                    ep_idx=ep_idx,
+                    shifted_query_ts=shifted_query_ts,
+                    cause=exc,
+                ) from exc
             item[vid_key] = frames.squeeze(0)
 
         return item
@@ -1124,22 +1137,61 @@ class LeRobotDataset(torch.utils.data.Dataset):
         requested_idx = int(idx)
         dataset_len = len(self)
         replacement_idx = requested_idx
-        last_error: FrameTimestampError | None = None
+        last_error: Exception | None = None
 
         for attempt in range(FRAME_TIMESTAMP_RETRY_LIMIT + 1):
             try:
                 return self._getitem_once(replacement_idx)
             except FrameTimestampError as exc:
                 last_error = exc
+                append_data_error_log(
+                    repo_id=self.repo_id,
+                    requested_idx=requested_idx,
+                    replacement_idx=replacement_idx,
+                    attempt=attempt,
+                    exc=exc,
+                )
                 if attempt < 32:
                     next_idx = (replacement_idx + 1) % dataset_len
                 else:
                     # Escape local clusters of bad samples if failures spike.
                     next_idx = (requested_idx + (attempt + 1) * 9973) % dataset_len
                 replacement_idx = next_idx
+            except VideoDecodeError as exc:
+                last_error = exc
+                append_data_error_log(
+                    repo_id=self.repo_id,
+                    requested_idx=requested_idx,
+                    replacement_idx=replacement_idx,
+                    attempt=attempt,
+                    exc=exc,
+                )
+                if attempt < 32:
+                    next_idx = (replacement_idx + 1) % dataset_len
+                else:
+                    # Escape local clusters of bad samples if failures spike.
+                    next_idx = (requested_idx + (attempt + 1) * 9973) % dataset_len
+                replacement_idx = next_idx
+            except Exception as exc:
+                # Optional hardened mode to keep training alive on known data issues.
+                if not is_known_data_error(exc):
+                    raise
+                last_error = exc
+                append_data_error_log(
+                    repo_id=self.repo_id,
+                    requested_idx=requested_idx,
+                    replacement_idx=replacement_idx,
+                    attempt=attempt,
+                    exc=exc,
+                )
+                if attempt < 32:
+                    next_idx = (replacement_idx + 1) % dataset_len
+                else:
+                    next_idx = (requested_idx + (attempt + 1) * 9973) % dataset_len
+                replacement_idx = next_idx
 
         raise RuntimeError(
-            f"Failed to recover from FrameTimestampError after {FRAME_TIMESTAMP_RETRY_LIMIT + 1} attempts "
+            f"Failed to recover from data errors after {FRAME_TIMESTAMP_RETRY_LIMIT + 1} attempts "
             f"for dataset={self.repo_id} requested_idx={requested_idx}. Last error: {last_error}"
         ) from last_error
 
