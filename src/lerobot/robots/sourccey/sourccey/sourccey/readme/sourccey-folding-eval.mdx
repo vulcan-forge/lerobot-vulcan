@@ -191,6 +191,34 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1
 
 --dataset.video_backend=pyav \
 
+
+```
+    --resume=true \   
+    --config_path="outputs/train/xvla__sourccey-D__shirt-fold-01__cmb__d__chrism__20260331__ft_from_1m/checkpoints/1150000/pretrained_model/train_config.json" \ 
+```
+
+
+Test Training Command
+```
+CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id="Combination/sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260332" \
+  --output_dir="outputs/train/xvla__sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260401" \
+  --job_name="xvla__sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260401" \
+  --policy.path="lerobot/xvla-base" \
+  --policy.dtype=bfloat16 \
+  --policy.action_mode=auto \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --policy.input_features=null \
+  --steps=100000 \
+  --save_freq=20000 \
+  --batch_size=10 \
+  --wandb.enable=false
+```
+
+
+
+
 ```
 
 Training Single GPU:
