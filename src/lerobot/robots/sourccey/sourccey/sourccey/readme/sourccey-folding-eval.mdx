@@ -196,6 +196,16 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1
     --config_path="outputs/train/xvla__sourccey-D__shirt-fold-01__cmb__d__chrism__20260331__ft_from_1m/checkpoints/1150000/pretrained_model/train_config.json" \
 ```
 
+```
+
+```
+
+```
+
+```
+
+````
+
 NEW TRAINING COMMANDS
 
 ```
@@ -236,6 +246,30 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --wandb.enable=false
 ```
 
+```
+CUDA_VISIBLE_DEVICES=0,1 LEROBOT_DISABLE_SDPA=1 accelerate launch \
+  --multi_gpu --num_processes=2 --mixed_precision=bf16 \
+  src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id="Combination/sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260332" \
+  --output_dir="outputs/train/xvla__sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260401__2gpu_bs8" \
+  --job_name="xvla__sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260401__2gpu_bs8" \
+  --policy.path="lerobot/xvla-base" \
+  --policy.dtype=bfloat16 \
+  --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --policy.input_features=null \
+  --policy.optimizer_lr=8e-06 \
+  --policy.scheduler_warmup_steps=10000 \
+  --policy.scheduler_decay_steps=500000 \
+  --policy.scheduler_decay_lr=1e-06 \
+  --steps=500000 \
+  --save_freq=100000 \
+  --batch_size=8 \
+  --wandb.enable=false
+```
+
 RESUME training command with larger learning rates
 
 ```
@@ -257,6 +291,20 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --save_freq=20000 \
   --batch_size=10 \
   --wandb.enable=false
+```
+
+
+
+
+
+````
+
+```
+
+```
+
+```
+
 ```
 
 ```
