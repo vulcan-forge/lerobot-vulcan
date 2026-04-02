@@ -1244,10 +1244,70 @@ class SerialMotorsBus(MotorsBusBase):
             )
 
         if not self._is_comm_success(comm) and raise_on_error:
-            raise ConnectionError(f"{err_msg} {self.packet_handler.getTxRxResult(comm)}")
+            txrx_result = self.packet_handler.getTxRxResult(comm)
+            diagnostic_msg = ""
+            if len(motor_ids) > 1:
+                diagnostic_msg = self._diagnose_sync_read_failure(addr, length, motor_ids)
+            raise ConnectionError(f"{err_msg} {txrx_result}{diagnostic_msg}")
 
         values = {id_: self.sync_reader.getData(id_, addr, length) for id_ in motor_ids}
         return values, comm
+
+    def _diagnose_sync_read_failure(self, addr: int, length: int, motor_ids: list[int]) -> str:
+        """Probe each queried motor once after sync-read failure to localize communication issues."""
+        responsive_ids: list[int] = []
+        no_response_ids: list[int] = []
+        packet_error_ids: list[int] = []
+
+        for motor_id in motor_ids:
+            _, comm, error = self._read(addr, length, motor_id, num_retry=0, raise_on_error=False)
+            if not self._is_comm_success(comm):
+                no_response_ids.append(motor_id)
+            elif self._is_error(error):
+                packet_error_ids.append(motor_id)
+            else:
+                responsive_ids.append(motor_id)
+
+        def _format_ids(ids: list[int]) -> list[str]:
+            labels: list[str] = []
+            for motor_id in ids:
+                motor_name = self._id_to_name_dict.get(motor_id)
+                if motor_name is None:
+                    labels.append(f"id={motor_id}")
+                else:
+                    labels.append(f"{motor_name}(id={motor_id})")
+            return labels
+
+        hint = ""
+        if responsive_ids and no_response_ids and not packet_error_ids:
+            no_response_set = set(no_response_ids)
+            failure_start_idx = next((i for i, id_ in enumerate(motor_ids) if id_ in no_response_set), None)
+            if failure_start_idx is not None:
+                prefix_ids = motor_ids[:failure_start_idx]
+                suffix_ids = motor_ids[failure_start_idx:]
+                if prefix_ids == responsive_ids and suffix_ids == no_response_ids:
+                    hint = (
+                        f" Possible daisy-chain break between id={motor_ids[failure_start_idx - 1]} "
+                        f"and id={motor_ids[failure_start_idx]}."
+                        if failure_start_idx > 0
+                        else " No queried motor responded to individual reads. "
+                        "Check power/data wiring before the first motor in the chain."
+                    )
+        elif not responsive_ids and no_response_ids and not packet_error_ids:
+            hint = (
+                " No queried motor responded to individual reads. "
+                "Check power/data wiring before the first motor in the chain."
+            )
+        elif responsive_ids and not no_response_ids and not packet_error_ids:
+            hint = " All queried motors responded to individual reads; the sync-read failure may be transient."
+
+        return (
+            " Diagnostic probe: "
+            f"responsive={_format_ids(responsive_ids)}, "
+            f"no_response={_format_ids(no_response_ids)}, "
+            f"packet_error={_format_ids(packet_error_ids)}."
+            f"{hint}"
+        )
 
     def _setup_sync_reader(self, motor_ids: list[int], addr: int, length: int) -> None:
         self.sync_reader.clearParam()
