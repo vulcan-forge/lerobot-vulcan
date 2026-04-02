@@ -330,6 +330,13 @@ class SourcceyFollowerCalibrator:
                 "search_positive": reverse,
                 "search_negative": not reverse
             },
+            "wrist_flex": {
+                "search_range": 1640, # ~105 degrees in steps
+                "search_step": base_step_size,
+                "max_current": self.robot.config.max_current_calibration_threshold,
+                "search_positive": True,
+                "search_negative": True
+            },
             "wrist_roll": {
                 "search_range": 1280, # Wrist should not roll around itself fully
                 "search_step": base_step_size,
