@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import time
 from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -357,6 +358,9 @@ class SerialMotorsBus(MotorsBusBase):
         self._id_to_model_dict = {m.id: m.model for m in self.motors.values()}
         self._id_to_name_dict = {m.id: motor for motor, m in self.motors.items()}
         self._model_nb_to_model_dict = {v: k for k, v in self.model_number_table.items()}
+        self._sync_read_warning_throttle_interval = 10.0
+        self._sync_read_warning_last_time: dict[tuple[int, int, tuple[int, ...]], float] = {}
+        self._sync_read_warning_suppressed_count: dict[tuple[int, int, tuple[int, ...]], int] = {}
 
         self._validate_motors()
 
@@ -1238,13 +1242,16 @@ class SerialMotorsBus(MotorsBusBase):
             comm = self.sync_reader.txRxPacket()
             if self._is_comm_success(comm):
                 break
-            logger.warning(
+            logger.debug(
                 f"Failed to sync read @{addr=} ({length=}) on {motor_ids=} ({n_try=}): "
                 + self.packet_handler.getTxRxResult(comm)
             )
 
-        if not self._is_comm_success(comm) and raise_on_error:
+        if not self._is_comm_success(comm):
             txrx_result = self.packet_handler.getTxRxResult(comm)
+            self._warn_sync_read_failure_throttled(addr, length, motor_ids, n_try, txrx_result)
+
+        if not self._is_comm_success(comm) and raise_on_error:
             diagnostic_msg = ""
             if len(motor_ids) > 1:
                 diagnostic_msg = self._diagnose_sync_read_failure(addr, length, motor_ids)
@@ -1308,6 +1315,29 @@ class SerialMotorsBus(MotorsBusBase):
             f"packet_error={_format_ids(packet_error_ids)}."
             f"{hint}"
         )
+
+    def _warn_sync_read_failure_throttled(
+        self,
+        addr: int,
+        length: int,
+        motor_ids: list[int],
+        n_try: int,
+        txrx_result: str,
+    ) -> None:
+        key = (addr, length, tuple(motor_ids))
+        now = time.monotonic()
+        last_time = self._sync_read_warning_last_time.get(key)
+        if last_time is not None and now - last_time < self._sync_read_warning_throttle_interval:
+            self._sync_read_warning_suppressed_count[key] = self._sync_read_warning_suppressed_count.get(key, 0) + 1
+            return
+
+        suppressed = self._sync_read_warning_suppressed_count.pop(key, 0)
+        suppressed_msg = f" (suppressed {suppressed} similar warnings)" if suppressed else ""
+        logger.warning(
+            f"Failed to sync read @{addr=} ({length=}) on {motor_ids=} ({n_try=}): "
+            f"{txrx_result}{suppressed_msg}"
+        )
+        self._sync_read_warning_last_time[key] = now
 
     def _setup_sync_reader(self, motor_ids: list[int], addr: int, length: int) -> None:
         self.sync_reader.clearParam()

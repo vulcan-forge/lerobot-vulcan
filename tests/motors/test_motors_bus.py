@@ -328,6 +328,25 @@ def test__diagnose_sync_read_failure_reports_unresponsive_suffix(dummy_motors):
     assert "Possible daisy-chain break between id=2 and id=3." in diagnostic
 
 
+def test__warn_sync_read_failure_throttled_suppresses_repeats(dummy_motors):
+    bus = MockMotorsBus("/dev/dummy-port", dummy_motors)
+    bus.connect(handshake=False)
+
+    with (
+        patch("lerobot.motors.motors_bus.time.monotonic", side_effect=[0.0, 1.0, 11.0]),
+        patch("lerobot.motors.motors_bus.logger.warning") as mock_warning,
+    ):
+        bus._warn_sync_read_failure_throttled(56, 2, [1, 2, 3], 5, "[TxRxResult] There is no status packet!")
+        bus._warn_sync_read_failure_throttled(56, 2, [1, 2, 3], 5, "[TxRxResult] There is no status packet!")
+        bus._warn_sync_read_failure_throttled(56, 2, [1, 2, 3], 5, "[TxRxResult] There is no status packet!")
+
+    assert mock_warning.call_count == 2
+    first_message = mock_warning.call_args_list[0].args[0]
+    second_message = mock_warning.call_args_list[1].args[0]
+    assert "suppressed" not in first_message
+    assert "suppressed 1 similar warnings" in second_message
+
+
 @pytest.mark.parametrize(
     "data_name, value",
     [
