@@ -289,6 +289,64 @@ def test_sync_read_by_none(data_name, ids_values, dummy_motors):
         mock__normalize.assert_called_once_with(ids_values)
 
 
+def test__diagnose_sync_read_failure_reports_unresponsive_suffix(dummy_motors):
+    bus = MockMotorsBus("/dev/dummy-port", dummy_motors)
+    bus.connect(handshake=False)
+    bus._comm_success = 0
+    bus._no_error = 0
+    addr, length = DUMMY_CTRL_TABLE_2["Present_Position"]
+    ids = [1, 2, 3]
+
+    read_results = {
+        1: (1337, 0, 0),
+        2: (42, 0, 0),
+        3: (0, 1, 0),
+    }
+
+    def fake_read(
+        address: int,
+        data_length: int,
+        motor_id: int,
+        *,
+        num_retry: int = 0,
+        raise_on_error: bool = True,
+        err_msg: str = "",
+    ) -> tuple[int, int, int]:
+        assert address == addr
+        assert data_length == length
+        assert num_retry == 0
+        assert not raise_on_error
+        assert err_msg == ""
+        return read_results[motor_id]
+
+    with patch.object(MockMotorsBus, "_read", side_effect=fake_read):
+        diagnostic = bus._diagnose_sync_read_failure(addr, length, ids)
+
+    assert "dummy_1(id=1)" in diagnostic
+    assert "dummy_2(id=2)" in diagnostic
+    assert "dummy_3(id=3)" in diagnostic
+    assert "Possible daisy-chain break between id=2 and id=3." in diagnostic
+
+
+def test__warn_sync_read_failure_throttled_suppresses_repeats(dummy_motors):
+    bus = MockMotorsBus("/dev/dummy-port", dummy_motors)
+    bus.connect(handshake=False)
+
+    with (
+        patch("lerobot.motors.motors_bus.time.monotonic", side_effect=[0.0, 1.0, 11.0]),
+        patch("lerobot.motors.motors_bus.logger.warning") as mock_warning,
+    ):
+        bus._warn_sync_read_failure_throttled(56, 2, [1, 2, 3], 5, "[TxRxResult] There is no status packet!")
+        bus._warn_sync_read_failure_throttled(56, 2, [1, 2, 3], 5, "[TxRxResult] There is no status packet!")
+        bus._warn_sync_read_failure_throttled(56, 2, [1, 2, 3], 5, "[TxRxResult] There is no status packet!")
+
+    assert mock_warning.call_count == 2
+    first_message = mock_warning.call_args_list[0].args[0]
+    second_message = mock_warning.call_args_list[1].args[0]
+    assert "suppressed" not in first_message
+    assert "suppressed 1 similar warnings" in second_message
+
+
 @pytest.mark.parametrize(
     "data_name, value",
     [

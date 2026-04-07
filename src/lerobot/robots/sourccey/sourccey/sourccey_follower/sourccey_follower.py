@@ -246,9 +246,10 @@ class SourcceyFollower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        try:
-            goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
+        goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
+        present_pos: dict[str, float] | None = None
 
+        try:
             # Check for NaN values and skip sending actions if any are found
             present_pos = self.bus.sync_read("Present_Position")
             if any(np.isnan(v) for v in goal_pos.values()) or any(np.isnan(v) for v in present_pos.values()):
@@ -276,5 +277,6 @@ class SourcceyFollower(Robot):
                 logger.warning(f"Status packet error during sync_read / sync_write in {self}: {e}. Returning present position.")
                 self._last_write_warning_time = current_time
             # Return present position instead of goal position when write fails
-            return {f"{motor}.pos": val for motor, val in present_pos.items()}
+            fallback_pos = present_pos if present_pos is not None else goal_pos
+            return {f"{motor}.pos": val for motor, val in fallback_pos.items()}
 
