@@ -178,14 +178,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--skip_invalid_new_datasets",
-        action="store_true",
-        help=(
-            "Append mode only. Skip new datasets that fail preflight checks "
-            "(e.g. zero-byte parquet or metadata load failure) instead of failing."
-        ),
-    )
-    parser.add_argument(
         "--no_auto_repair_source_clips",
         action="store_true",
         help="Disable auto-repair for source clips that fail decode validation.",
@@ -215,19 +207,15 @@ def main() -> None:
         valid_paths, invalid_paths = _validate_new_dataset_paths(new_dataset_paths)
         if invalid_paths:
             preview = "\n".join([f" - {repo_id}: {reason}" for repo_id, reason in invalid_paths[:10]])
-            if args.skip_invalid_new_datasets:
-                logging.warning(
-                    "Skipping %d invalid new datasets due to preflight failures:\n%s",
-                    len(invalid_paths),
-                    preview,
-                )
-                new_dataset_paths = valid_paths
-            else:
-                raise ValueError(
-                    "Invalid new datasets found during preflight checks. "
-                    "Fix/remove these datasets, or rerun with --skip_invalid_new_datasets.\n"
-                    f"{preview}"
-                )
+            logging.warning(
+                "Skipping %d invalid new datasets due to preflight failures:\n%s",
+                len(invalid_paths),
+                preview,
+            )
+            new_dataset_paths = valid_paths
+        if not new_dataset_paths:
+            logging.warning("No valid new datasets remain after preflight checks. Nothing to append.")
+            return
 
         append_datasets_full_validation(
             base_dataset_path=args.base_dataset_path,
@@ -235,7 +223,7 @@ def main() -> None:
             append_output_path=args.append_output_path,
             auto_repair_source_clips=auto_repair,
         )
-        if invalid_paths and args.skip_invalid_new_datasets:
+        if invalid_paths:
             skipped_list = "\n".join([f" - {repo_id}: {reason}" for repo_id, reason in invalid_paths])
             logging.warning("Combine completed but these files were not able to be appended:\n%s", skipped_list)
         return
@@ -249,11 +237,29 @@ def main() -> None:
 
     dataset_paths = _parse_dataset_paths(args.dataset_paths)
     logging.info("Parsed %d dataset paths", len(dataset_paths))
+
+    valid_paths, invalid_paths = _validate_new_dataset_paths(dataset_paths)
+    if invalid_paths:
+        preview = "\n".join([f" - {repo_id}: {reason}" for repo_id, reason in invalid_paths[:10]])
+        logging.warning(
+            "Skipping %d invalid datasets due to preflight failures:\n%s",
+            len(invalid_paths),
+            preview,
+        )
+        dataset_paths = valid_paths
+        if not dataset_paths:
+            raise ValueError(
+                "All provided datasets failed preflight checks; nothing left to combine."
+            )
+
     combine_datasets_full_validation(
         dataset_paths=dataset_paths,
         output_path=args.output_path,
         auto_repair_source_clips=auto_repair,
     )
+    if invalid_paths:
+        skipped_list = "\n".join([f" - {repo_id}: {reason}" for repo_id, reason in invalid_paths])
+        logging.warning("Combine completed but these datasets were skipped:\n%s", skipped_list)
 
 
 if __name__ == "__main__":
