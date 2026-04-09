@@ -422,6 +422,25 @@ class SARMEncodingProcessorStep(ProcessorStep):
         """Set evaluation mode (disable augmentations)."""
         return self.train(False)
 
+    @staticmethod
+    def _clip_output_to_tensor(output: Any) -> torch.Tensor:
+        """Convert CLIPModel feature outputs to a tensor across transformers versions."""
+        if isinstance(output, torch.Tensor):
+            return output
+
+        # transformers>=5 may return BaseModelOutputWithPooling with projected features
+        pooler = getattr(output, "pooler_output", None)
+        if isinstance(pooler, torch.Tensor):
+            return pooler
+
+        if isinstance(output, tuple):
+            # Prefer pooled features when present, otherwise fall back to first tensor entry.
+            for idx in (1, 0):
+                if idx < len(output) and isinstance(output[idx], torch.Tensor):
+                    return output[idx]
+
+        raise TypeError(f"Unsupported CLIP feature output type: {type(output)}")
+
     @torch.no_grad()
     def _encode_images_batch(self, images: np.ndarray) -> torch.Tensor:
         """Encode a batch of images using CLIP.
@@ -460,7 +479,8 @@ class SARMEncodingProcessorStep(ProcessorStep):
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
             # Get image embeddings
-            embeddings = self.clip_model.get_image_features(**inputs).detach().cpu()
+            clip_output = self.clip_model.get_image_features(**inputs)
+            embeddings = self._clip_output_to_tensor(clip_output).detach().cpu()
 
             # Handle single frame case
             if embeddings.dim() == 1:
@@ -487,7 +507,8 @@ class SARMEncodingProcessorStep(ProcessorStep):
         inputs = self.clip_processor.tokenizer([text], return_tensors="pt", padding=True, truncation=True)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-        text_embedding = self.clip_model.get_text_features(**inputs).detach().cpu()
+        clip_output = self.clip_model.get_text_features(**inputs)
+        text_embedding = self._clip_output_to_tensor(clip_output).detach().cpu()
         text_embedding = text_embedding.expand(batch_size, -1)
 
         return text_embedding

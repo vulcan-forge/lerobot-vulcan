@@ -12,9 +12,9 @@ python src/lerobot/control/sourccey/sourccey/teleoperate.py \
 python src/lerobot/control/sourccey/sourccey/record.py \
  --id="sourccey" \
  --remote_ip="192.168.1.212" \
- --left_arm_port="/dev/ttyACM0" \
- --right_arm_port="/dev/ttyACM1" \
- --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-dark-blue-d/nickm/sourccey-013__shirt-fold-dark-blue-d__set135__nickm" \
+ --left_arm_port="/dev/ttyACM1" \
+ --right_arm_port="/dev/ttyACM0" \
+ --dataset.repo_id="sourccey-012/sourccey-012__shirt-fold-green-d/colinm/sourccey-012__shirt-fold-green-d__set006__colinm" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=5 \
@@ -418,13 +418,13 @@ python src/lerobot/control/sourccey/sourccey/evaluate.py \
 
 ## SARM
 
-python src/lerobot/scripts/lerobot_train.py \
- --dataset.repo_id=your-username/your-dataset \
+CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
+ --dataset.repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
  --policy.type=sarm \
  --policy.annotation_mode=single_stage \
  --policy.image_keys='["observation.images.front_right","observation.images.front_left"]' \
  --output_dir=outputs/train/sarm_2cam \
  --batch_size=8 \
- --steps=5000 \
+ --steps=20000 \
  --wandb.enable=false \
  --policy.push_to_hub=false
