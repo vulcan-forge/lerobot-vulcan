@@ -87,7 +87,11 @@ class SARMConfig(PreTrainedConfig):
 
     pretrained_model_path: str | None = None
     device: str | None = None
-    image_key: str = OBS_IMAGES + ".top"  # Key for image used from the dataset
+    # Single-camera (legacy) or multi-camera image keys.
+    # If image_keys is provided, all keys are used as camera views in order.
+    # image_key is kept for backward compatibility and defaults to first camera.
+    image_key: str | None = OBS_IMAGES + ".top"
+    image_keys: list[str] | None = None
     state_key: str = OBS_STATE
 
     # Populated by the processor (video_features, state_features, text_features)
@@ -135,8 +139,19 @@ class SARMConfig(PreTrainedConfig):
         self.input_features = {}
         self.output_features = {}
 
-        if self.image_key:
-            self.input_features[self.image_key] = PolicyFeature(shape=(480, 640, 3), type=FeatureType.VISUAL)
+        # Resolve camera keys with backward compatibility.
+        if self.image_keys is not None and len(self.image_keys) > 0:
+            camera_keys = list(dict.fromkeys(self.image_keys))
+        elif self.image_key:
+            camera_keys = [self.image_key]
+        else:
+            raise ValueError("SARM requires at least one image key via `image_key` or `image_keys`.")
+
+        self.image_keys = camera_keys
+        self.image_key = camera_keys[0]
+
+        for key in self.image_keys:
+            self.input_features[key] = PolicyFeature(shape=(480, 640, 3), type=FeatureType.VISUAL)
 
         self.input_features[self.state_key] = PolicyFeature(
             shape=(self.max_state_dim,),
@@ -217,6 +232,16 @@ class SARMConfig(PreTrainedConfig):
     @property
     def max_length(self) -> int:
         return self.num_frames
+
+    @property
+    def camera_keys(self) -> list[str]:
+        """Ordered camera observation keys used by SARM."""
+        return self.image_keys or ([self.image_key] if self.image_key else [])
+
+    @property
+    def num_cameras(self) -> int:
+        """Number of camera views used by SARM."""
+        return len(self.camera_keys)
 
     @property
     def observation_delta_indices(self) -> list[int]:

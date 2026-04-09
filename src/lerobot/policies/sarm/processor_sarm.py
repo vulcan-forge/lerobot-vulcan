@@ -60,12 +60,22 @@ class SARMEncodingProcessorStep(ProcessorStep):
         self,
         config: SARMConfig,
         image_key: str | None = None,
+        image_keys: list[str] | None = None,
         dataset_meta=None,
         dataset_stats: dict | None = None,
     ):
         super().__init__()
         self.config = config
-        self.image_key = image_key or config.image_key
+        if image_keys is not None and len(image_keys) > 0:
+            self.image_keys = list(image_keys)
+        elif image_key is not None:
+            self.image_keys = [image_key]
+        else:
+            self.image_keys = list(config.camera_keys)
+        if len(self.image_keys) == 0:
+            raise ValueError("SARMEncodingProcessorStep requires at least one image key.")
+        # Kept for compatibility with helper scripts that expect a single key.
+        self.image_key = self.image_keys[0]
         self.dataset_meta = dataset_meta
         self.dataset_stats = dataset_stats
         self.annotation_mode = config.annotation_mode
@@ -191,19 +201,34 @@ class SARMEncodingProcessorStep(ProcessorStep):
         frame_indices = np.atleast_1d(np.asarray(from_tensor_to_numpy(frame_index)))
         episode_indices = self._get_episode_indices(frame_indices, episode_index)
 
-        image = observation.get(self.image_key)
-        if isinstance(image, torch.Tensor):
-            image = image.cpu().numpy()
+        camera_images = []
+        for key in self.image_keys:
+            image = observation.get(key)
+            if image is None:
+                raise ValueError(f"Image key '{key}' not found in observation")
+            if isinstance(image, torch.Tensor):
+                image = image.cpu().numpy()
 
-        # If 4D (T, C, H, W) from delta_timestamps, add batch dim
-        # If 3D (C, H, W) single frame, add batch and time dims
-        if image.ndim == 4:
-            image = image[np.newaxis, ...]  # (T, C, H, W) -> (1, T, C, H, W)
-        elif image.ndim == 3:
-            image = image[np.newaxis, np.newaxis, ...]  # (C, H, W) -> (1, 1, C, H, W)
+            # If 4D (T, C, H, W) from delta_timestamps, add batch dim.
+            # If 3D (C, H, W) single frame, add batch and time dims.
+            if image.ndim == 4:
+                image = image[np.newaxis, ...]  # (T, C, H, W) -> (1, T, C, H, W)
+            elif image.ndim == 3:
+                image = image[np.newaxis, np.newaxis, ...]  # (C, H, W) -> (1, 1, C, H, W)
+            elif image.ndim != 5:
+                raise ValueError(
+                    f"Unexpected image shape for key '{key}': {image.shape}. Expected 3D/4D/5D image tensor."
+                )
+            camera_images.append(image)
 
-        batch_size = image.shape[0]
-        total_frames = image.shape[1]  # Should be 13: 9 obs + 4 rewind placeholders
+        batch_size = camera_images[0].shape[0]
+        total_frames = camera_images[0].shape[1]  # Should be 13: 9 obs + 4 rewind placeholders
+        for key, image in zip(self.image_keys, camera_images, strict=True):
+            if image.shape[0] != batch_size or image.shape[1] != total_frames:
+                raise ValueError(
+                    f"All cameras must share batch/time dimensions. "
+                    f"Key '{key}' has shape {image.shape}, expected B={batch_size}, T={total_frames}."
+                )
         n_obs_steps = self.config.n_obs_steps
         max_rewind_steps = self.config.max_rewind_steps
         n_obs_frames = 1 + n_obs_steps  # 9 observation frames (including current)
@@ -227,15 +252,17 @@ class SARMEncodingProcessorStep(ProcessorStep):
         # Compute valid lengths: n_obs_frames + rewind_steps
         lengths = n_obs_frames + rewind_steps  # (B,)
 
-        # Apply rewind masking to images
-        # For frames beyond valid length, we mask with zeros (or copy last valid frame)
-        for b_idx in range(batch_size):
-            valid_len = lengths[b_idx].item()
-            if valid_len < total_frames:
-                image[b_idx, valid_len:] = 0  # Zero out frames beyond valid length
+        # Apply rewind masking to images for each camera.
+        # For frames beyond valid length, mask with zeros.
+        for image in camera_images:
+            for b_idx in range(batch_size):
+                valid_len = lengths[b_idx].item()
+                if valid_len < total_frames:
+                    image[b_idx, valid_len:] = 0
 
-        # Encode images with CLIP
-        video_features = self._encode_images_batch(image)
+        # Encode images with CLIP per camera then stack.
+        # Output: (B, N, T, 512), where N=num_cameras.
+        video_features = torch.stack([self._encode_images_batch(image) for image in camera_images], dim=1)
         observation["video_features"] = video_features
 
         state_key = self.config.state_key
@@ -470,7 +497,8 @@ class SARMEncodingProcessorStep(ProcessorStep):
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         """Add encoded features to the observation features."""
         features[PipelineFeatureType.OBSERVATION]["video_features"] = PolicyFeature(
-            type=FeatureType.VISUAL, shape=(self.config.num_frames, self.config.image_dim)
+            type=FeatureType.VISUAL,
+            shape=(self.config.num_cameras, self.config.num_frames, self.config.image_dim),
         )
         features[PipelineFeatureType.OBSERVATION]["text_features"] = PolicyFeature(
             type=FeatureType.LANGUAGE, shape=(self.config.text_dim,)

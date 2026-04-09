@@ -92,7 +92,7 @@ def load_sarm_resources(
     reward_model.config.device = device
     reward_model.to(device).eval()
 
-    image_key = reward_model.config.image_key
+    image_keys = reward_model.config.camera_keys
     state_key = reward_model.config.state_key
     delta_indices = reward_model.config.observation_delta_indices
 
@@ -100,12 +100,11 @@ def load_sarm_resources(
     temp_dataset = LeRobotDataset(dataset_repo_id, download_videos=True)
     fps = temp_dataset.fps
 
-    delta_timestamps = {
-        image_key: [idx / fps for idx in delta_indices],
-        state_key: [idx / fps for idx in delta_indices],
-    }
+    delta_timestamps = {key: [idx / fps for idx in delta_indices] for key in image_keys}
+    delta_timestamps[state_key] = [idx / fps for idx in delta_indices]
     dataset = LeRobotDataset(dataset_repo_id, delta_timestamps=delta_timestamps)
     logging.info(f"Dataset: {dataset.num_episodes} episodes, {dataset.num_frames} frames")
+    logging.info(f"SARM cameras: {image_keys}")
 
     preprocess, _ = make_sarm_pre_post_processors(
         config=reward_model.config,
@@ -237,7 +236,8 @@ def visualize_sarm_predictions(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    image_key = reward_model.config.image_key
+    image_keys = reward_model.config.camera_keys
+    primary_image_key = image_keys[0]
     state_key = reward_model.config.state_key
     dual_mode = reward_model.config.uses_dual_heads
     device = reward_model.device
@@ -280,7 +280,7 @@ def visualize_sarm_predictions(
         # Load display frames up-front (stride mode might skip them otherwise).
         for frame_idx in display_indices:
             sample = dataset[frame_idx]
-            viz_frames[frame_idx] = to_numpy_image(sample[image_key])
+            viz_frames[frame_idx] = to_numpy_image(sample[primary_image_key])
 
         # Initialize storage for each scheme
         scheme_data = {}
@@ -311,11 +311,12 @@ def visualize_sarm_predictions(
             sample = dataset[frame_idx]
 
             batch = {
-                image_key: sample[image_key],
                 "task": task,
                 "index": frame_idx,
                 "episode_index": episode_idx,
             }
+            for key in image_keys:
+                batch[key] = sample[key]
             if state_key in sample:
                 batch[state_key] = sample[state_key]
 
@@ -492,7 +493,7 @@ def compute_sarm_progress(
         if hasattr(step, "eval"):
             step.eval()
 
-    image_key = reward_model.config.image_key
+    image_keys = reward_model.config.camera_keys
     state_key = reward_model.config.state_key
     frame_gap = reward_model.config.frame_gap
     num_episodes = dataset.num_episodes
@@ -546,11 +547,12 @@ def compute_sarm_progress(
                 sample = dataset[query_idx]
 
                 batch = {
-                    image_key: sample[image_key],
                     "task": task,
                     "index": query_idx,
                     "episode_index": episode_idx,
                 }
+                for key in image_keys:
+                    batch[key] = sample[key]
                 if state_key in sample:
                     batch[state_key] = sample[state_key]
 

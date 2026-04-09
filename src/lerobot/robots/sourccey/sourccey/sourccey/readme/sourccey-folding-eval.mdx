@@ -8,14 +8,6 @@ python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --fps=30
 ```
 
-
-
-
-
-
-
-
-
 ```
 python src/lerobot/control/sourccey/sourccey/record.py \
  --id="sourccey" \
@@ -30,15 +22,6 @@ python src/lerobot/control/sourccey/sourccey/record.py \
  --dataset.fps=30 \
  --dataset.push_to_hub=false
 ```
-
-
-
-
-
-
-
-
-
 
 ```
 python src/lerobot/scripts/sourccey/dataset/combine_datasets.py \
@@ -260,15 +243,6 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --config_path="outputs/train/xvla__sourccey__shirt-fold__cmbF__d__chrism__20260403/checkpoints/050000/pretrained_model/train_config.json"
 ```
 
-<<<<<<< HEAD
-Regular RESUME training command
-
-```
-
-```
-
-
-=======
 ```
 CUDA_VISIBLE_DEVICES=0,1 LEROBOT_DISABLE_SDPA=1 accelerate launch \
   --multi_gpu --num_processes=2 --mixed_precision=bf16 \
@@ -292,7 +266,6 @@ CUDA_VISIBLE_DEVICES=0,1 LEROBOT_DISABLE_SDPA=1 accelerate launch \
   --wandb.enable=false
 ```
 
->>>>>>> main
 RESUME training command with larger learning rates
 
 ```
@@ -428,15 +401,9 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 accelerate launch
 
 python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
-<<<<<<< HEAD
- --remote_ip="192.168.1.212" \
- --model_path="outputs/train/xvla__sourccey__shirt-fold__cmbF__d__chrism__20260403/checkpoints/100000/pretrained_model" \
- --dataset.repo_id="sourccey-013/eval_xvla__sourccey__shirt-fold__cmbF__d__chrism__20260403/100000" \
-=======
  --remote_ip="192.168.1.214" \
- --model_path="outputs/train/xvla__sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260401__2gpu_bs8/checkpoints/100000/pretrained_model" \
- --dataset.repo_id="sourccey-013/eval_xvla__sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260401__2gpu_bs8_100000" \
->>>>>>> main
+ --model_path="outputs/train/xvla**sourccey-012_015**shirt-fold-01**cmb**d**chrism**20260401**2gpu_bs8/checkpoints/100000/pretrained_model" \
+ --dataset.repo_id="sourccey-013/eval_xvla**sourccey-012_015**shirt-fold-01**cmb**d**chrism**20260401**2gpu_bs8_100000" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=600 \
  --dataset.reset_time_s=10 \
@@ -446,3 +413,18 @@ python src/lerobot/control/sourccey/sourccey/evaluate.py \
 ```
 
 ```
+
+---
+
+## SARM
+
+python src/lerobot/scripts/lerobot_train.py \
+ --dataset.repo_id=your-username/your-dataset \
+ --policy.type=sarm \
+ --policy.annotation_mode=single_stage \
+ --policy.image_key=observation.images.base \
+ --output_dir=outputs/train/sarm_single \
+ --batch_size=8 \
+ --steps=5000 \
+ --wandb.enable=false \
+ --policy.repo_id=your-username/your-model-name
