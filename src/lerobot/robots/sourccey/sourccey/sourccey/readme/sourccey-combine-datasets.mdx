@@ -1,0 +1,92 @@
+# Sourccey Combine Datasets Guide
+
+This guide collects the main Sourccey dataset combine workflows in one place.
+
+- `combine_datasets.py` is now the default full-validation entrypoint.
+- `--validate_output` defaults to `true`.
+- Append mode always clones the base dataset first. In-place append is not supported.
+- The validated scripts no longer use `--skip_invalid_*` flags. Preflight validation and skip behavior are built in.
+
+## Main Commands
+
+### Default Combine Dataset
+
+Use this as the normal combine command. It validates metadata, decodes videos during combine, and can auto-repair source clips when needed.
+
+```bash
+python src/lerobot/scripts/sourccey/dataset/combine_datasets.py \
+  --dataset_paths='[
+    "sourccey-012/shirt/shirt-fold-01/sourccey-012__shirt-fold-01__set=001__l=d__c=lavender__op=chris",
+    "sourccey-012/shirt/shirt-fold-01/sourccey-012__shirt-fold-01__set=002__l=d__c=orange__op=chris",
+    "sourccey-015/shirt/sourccey-015__shirt-fold-bh-01__set009__chris"
+  ]' \
+  --output_path="Combination/sourccey-012_015__shirt-fold-01__cmbF__d__chris__20260403"
+```
+
+### Append New Datasets
+
+Use this when you want to preserve the base combined dataset and create a new appended copy.
+
+```bash
+python src/lerobot/scripts/sourccey/dataset/combine_datasets.py \
+  --base_dataset_path="Combination/sourccey-012_015__shirt-fold-01__cmbF__d__chris__20260403" \
+  --append_output_path="Combination/sourccey-012_015__shirt-fold-01__cmbF__d__chris__20260403__append__20260407" \
+  --new_dataset_paths='[
+    "sourccey-013/shirts-fold-1/sourccey-013__shirt-fold-3__set=018__l=d__c=green__op=chris",
+    "sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set000__chris",
+    "sourccey-013/sourccey-013__shirt-fold-dark-blue-d/nickm/sourccey-013__shirt-fold-dark-blue-d__set124__chris"
+  ]'
+```
+
+## Extra Commands
+
+### Raw Combine With No Full Verification
+
+Use this only when you intentionally want the old fast path and you trust the input datasets.
+
+```bash
+python src/lerobot/scripts/sourccey/dataset/combine_datasets.py \
+  --dataset_paths='[
+    "sourccey-012/sourccey-012__shorts-fold-b__set000__chris",
+    "sourccey-012/sourccey-012__shorts-fold-b__set001__chris",
+    "sourccey-012/sourccey-012__shorts-fold-a__set010__chris"
+  ]' \
+  --validate_output=false \
+  --output_path="Combination/sourccey-012__shorts-fold__cmb__20260408"
+```
+
+### Full Validation Without Auto-Repair
+
+Use this when you want full validation but you want bad source clips to fail instead of being repaired.
+
+```bash
+python src/lerobot/scripts/sourccey/dataset/combine_datasets.py \
+  --dataset_paths='[
+    "sourccey-013/shirts-fold-1/sourccey-013__shirt-fold-3__set=030__l=d__c=green__op=chris",
+    "sourccey-013/shirts-fold-1/sourccey-013__shirt-fold-3__set=031__l=d__c=green__op=chris"
+  ]' \
+  --output_path="Combination/sourccey-013__shirt-fold-3__strict__20260408" \
+  --no_auto_repair_source_clips
+```
+
+## Dataset Path Input Formats
+
+Both `--dataset_paths` and `--new_dataset_paths` accept either:
+
+- a JSON-style list in a single quoted string
+- a shell-style space-separated list
+
+Example shell-style input:
+
+```bash
+python src/lerobot/scripts/sourccey/dataset/combine_datasets.py \
+  --dataset_paths "sourccey-012/sourccey-012__shorts-fold-b__set000__chris sourccey-012/sourccey-012__shorts-fold-b__set001__chris" \
+  --output_path="Combination/sourccey-012__shorts-fold__shelllist__20260408"
+```
+
+### Practical Notes
+
+- Use `combine_datasets.py` for the normal safe default.
+- Use `--validate_output=false` only for trusted inputs where speed matters more than validation.
+- In append mode, `--base_dataset_path`, `--new_dataset_paths`, and `--append_output_path` are required.
+- Append mode always creates a new dataset clone before appending.
