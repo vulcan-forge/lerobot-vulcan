@@ -208,6 +208,44 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1
 
 NEW TRAINING COMMANDS
 
+
+-- Relative action dataset recompute
+```
+uv run lerobot-edit-dataset \
+  --repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
+  --operation.type=recompute_stats \
+  --operation.relative_action=true \
+  --operation.chunk_size=32 \
+  --operation.relative_exclude_joints='["gripper"]'
+```
+
+
+```
+CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
+  --output_dir="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
+  --job_name="xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
+  --policy.path="lerobot/xvla-base" \
+  --policy.dtype=bfloat16 \
+  --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
+  --policy.device=cuda \
+  --policy.use_relative_actions=true \
+  --policy.relative_exclude_joints='["gripper"]' \
+  --policy.push_to_hub=false \
+  --policy.input_features=null \
+  --policy.scheduler_warmup_steps=5000 \
+  --policy.scheduler_decay_steps=400000 \
+  --policy.scheduler_decay_lr=5e-06 \
+  --steps=400000 \
+  --save_freq=20000 \
+  --batch_size=8 \
+  --wandb.enable=false
+```
+
+
+===ABSOLUTE
+
 ```
 CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --dataset.repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
@@ -221,10 +259,10 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --policy.push_to_hub=false \
   --policy.input_features=null \
   --policy.scheduler_warmup_steps=5000 \
-  --policy.scheduler_decay_steps=300000 \
+  --policy.scheduler_decay_steps=400000 \
   --policy.scheduler_decay_lr=5e-06 \
-  --steps=300000 \
-  --save_freq=50000 \
+  --steps=400000 \
+  --save_freq=20000 \
   --batch_size=8 \
   --wandb.enable=false
 ```
