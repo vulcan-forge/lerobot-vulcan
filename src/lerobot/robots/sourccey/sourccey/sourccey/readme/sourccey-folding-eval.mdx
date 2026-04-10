@@ -210,18 +210,22 @@ NEW TRAINING COMMANDS
 
 ```
 CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
-  --dataset.repo_id="Combination/sourccey-012_015__shirt-fold-01__cmbF__d__chrism__20260403" \
-  --output_dir="outputs/train/xvla__sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260401" \
-  --job_name="xvla__sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260401" \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
+  --output_dir="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
+  --job_name="xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
   --policy.path="lerobot/xvla-base" \
   --policy.dtype=bfloat16 \
   --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
   --policy.device=cuda \
   --policy.push_to_hub=false \
   --policy.input_features=null \
-  --steps=100000 \
-  --save_freq=20000 \
-  --batch_size=10 \
+  --policy.scheduler_warmup_steps=5000 \
+  --policy.scheduler_decay_steps=300000 \
+  --policy.scheduler_decay_lr=5e-06 \
+  --steps=300000 \
+  --save_freq=50000 \
+  --batch_size=8 \
   --wandb.enable=false
 ```
 
@@ -270,24 +274,25 @@ RESUME training command with larger learning rates
 
 ```
 CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
-  --dataset.repo_id="Combination/sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260332" \
-  --output_dir="outputs/train/xvla__sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260401__phase2_from_060000" \
-  --job_name="xvla__sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260401__phase2_from_060000" \
-  --policy.path="outputs/train/xvla__sourccey-012_015__shirt-fold-01__cmb__d__chrism__20260401/checkpoints/060000/pretrained_model" \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
+  --output_dir="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
+  --job_name="xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
   --policy.dtype=bfloat16 \
   --policy.action_mode=auto \
   --policy.device=cuda \
   --policy.push_to_hub=false \
   --policy.input_features=null \
-  --policy.optimizer_lr=8e-06 \
-  --policy.scheduler_warmup_steps=2000 \
-  --policy.scheduler_decay_steps=80000 \
-  --policy.scheduler_decay_lr=1e-06 \
-  --steps=100000 \
+  --policy.scheduler_warmup_steps=5000 \
+  --policy.scheduler_decay_steps=300000 \
+  --policy.scheduler_decay_lr=5e-06 \
+  --steps=300000 \
   --save_freq=20000 \
-  --batch_size=10 \
-  --wandb.enable=false
+  --batch_size=8 \
+  --wandb.enable=false \
+  --resume=true \
+  --config_path="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408/checkpoints/200000/pretrained_model/train_config.json"
 ```
+
 
 
 
