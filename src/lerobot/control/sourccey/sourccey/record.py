@@ -1,11 +1,13 @@
+import shutil
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import hw_to_dataset_features
+from lerobot.datasets.feature_utils import hw_to_dataset_features
 from lerobot.processor import make_default_processors
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourccey_leader import BiSourcceyLeaderConfig
 from lerobot.utils.control_utils import init_keyboard_listener
+from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
 from lerobot.scripts.lerobot_record import record_loop
@@ -53,6 +55,11 @@ def record(cfg: SourcceyRecordConfig):
     action_features = hw_to_dataset_features(robot.action_features, "action")
     obs_features = hw_to_dataset_features(robot.observation_features, "observation")
     dataset_features = {**action_features, **obs_features}
+
+    dataset_root = HF_LEROBOT_HOME / cfg.dataset.repo_id
+    if dataset_root.exists():
+        log_say(f"Dataset path exists, overwriting: {dataset_root}")
+        shutil.rmtree(dataset_root)
 
     dataset = LeRobotDataset.create(
         repo_id=cfg.dataset.repo_id,
@@ -130,5 +137,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

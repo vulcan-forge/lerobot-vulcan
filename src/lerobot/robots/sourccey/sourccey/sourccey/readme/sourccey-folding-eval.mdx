@@ -1,9 +1,9 @@
 ```
 python src/lerobot/control/sourccey/sourccey/teleoperate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.214" \
- --left_arm_port="/dev/ttyACM1" \
- --right_arm_port="/dev/ttyACM0"
+ --remote_ip="192.168.1.212" \
+ --left_arm_port="/dev/ttyACM0" \
+ --right_arm_port="/dev/ttyACM1"
  --keyboard_port="keyboard" \
  --fps=30
 ```
@@ -12,9 +12,9 @@ python src/lerobot/control/sourccey/sourccey/teleoperate.py \
 python src/lerobot/control/sourccey/sourccey/record.py \
  --id="sourccey" \
  --remote_ip="192.168.1.212" \
- --left_arm_port="/dev/ttyACM1" \
- --right_arm_port="/dev/ttyACM0" \
- --dataset.repo_id="sourccey-012/sourccey-012__shirt-fold-green-d/colinm/sourccey-012__shirt-fold-green-d__set006__colinm" \
+ --left_arm_port="/dev/ttyACM0" \
+ --right_arm_port="/dev/ttyACM1" \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-dark-blue-d/nickm/sourccey-013__shirt-fold-dark-blue-d__set262__nickm" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=5 \
@@ -238,8 +238,8 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --policy.scheduler_decay_steps=400000 \
   --policy.scheduler_decay_lr=5e-06 \
   --steps=400000 \
-  --save_freq=20000 \
-  --batch_size=10 \
+  --save_freq=10000 \
+  --batch_size=8 \
   --wandb.enable=false
 ```
 
@@ -249,7 +249,7 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
 ```
 CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --dataset.repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
-  --output_dir="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
+  --output_dir="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408_2" \
   --job_name="xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
   --policy.path="lerobot/xvla-base" \
   --policy.dtype=bfloat16 \
@@ -262,7 +262,7 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --policy.scheduler_decay_steps=400000 \
   --policy.scheduler_decay_lr=5e-06 \
   --steps=400000 \
-  --save_freq=20000 \
+  --save_freq=1000 \
   --batch_size=8 \
   --wandb.enable=false
 ```
