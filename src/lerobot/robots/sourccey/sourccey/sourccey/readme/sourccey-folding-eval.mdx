@@ -212,7 +212,7 @@ NEW TRAINING COMMANDS
 -- Relative action dataset recompute
 ```
 uv run lerobot-edit-dataset \
-  --repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
+  --repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410" \
   --operation.type=recompute_stats \
   --operation.relative_action=true \
   --operation.chunk_size=32 \
@@ -222,9 +222,9 @@ uv run lerobot-edit-dataset \
 
 ```
 CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
-  --dataset.repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
-  --output_dir="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
-  --job_name="xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408" \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_relative" \
+  --output_dir="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_relative" \
+  --job_name="xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_relative" \
   --policy.path="lerobot/xvla-base" \
   --policy.dtype=bfloat16 \
   --policy.action_mode=auto \
@@ -239,7 +239,7 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --policy.scheduler_decay_lr=5e-06 \
   --steps=400000 \
   --save_freq=20000 \
-  --batch_size=8 \
+  --batch_size=10 \
   --wandb.enable=false
 ```
 

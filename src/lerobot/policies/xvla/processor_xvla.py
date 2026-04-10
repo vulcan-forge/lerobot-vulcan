@@ -14,12 +14,15 @@
 # limitations under the License.
 # ------------------------------------------------------------------------------
 
+import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
+from huggingface_hub import hf_hub_download
 
 from lerobot.configs.types import PipelineFeatureType, PolicyFeature
 from lerobot.datasets.factory import IMAGENET_STATS
@@ -51,6 +54,43 @@ from lerobot.utils.constants import (
 )
 
 _RANGE_CLAMP_WARNED_KEYS: set[str] = set()
+
+
+def _get_pretrained_tokenizer_max_length(pretrained_path: str | Path | None) -> int | None:
+    """Best-effort extraction of tokenizer max_length from a pretrained XVLA preprocessor config."""
+    if pretrained_path is None:
+        return None
+
+    config_filename = "policy_preprocessor.json"
+    try:
+        path = Path(pretrained_path)
+        if path.exists():
+            config_path = path / config_filename if path.is_dir() else path
+        else:
+            config_path = Path(
+                hf_hub_download(
+                    repo_id=str(pretrained_path),
+                    filename=config_filename,
+                )
+            )
+    except Exception as exc:
+        logging.debug("Failed to resolve pretrained processor config for '%s': %s", pretrained_path, exc)
+        return None
+
+    try:
+        with config_path.open() as f:
+            config = json.load(f)
+    except Exception as exc:
+        logging.debug("Failed to read pretrained processor config '%s': %s", config_path, exc)
+        return None
+
+    for step in config.get("steps", []):
+        if step.get("registry_name") != "tokenizer_processor":
+            continue
+        max_length = step.get("config", {}).get("max_length")
+        if isinstance(max_length, int) and max_length > 0:
+            return max_length
+    return None
 
 
 def _warn_clamp_once(
@@ -125,6 +165,20 @@ def make_xvla_pre_post_processors(
     """
     Build the LeRobot processor pipelines for XVLA.
     """
+    tokenizer_max_length = config.tokenizer_max_length
+    pretrained_tokenizer_max_length = _get_pretrained_tokenizer_max_length(getattr(config, "pretrained_path", None))
+    if (
+        config.use_relative_actions
+        and pretrained_tokenizer_max_length is not None
+        and tokenizer_max_length > pretrained_tokenizer_max_length
+    ):
+        logging.warning(
+            "XVLA relative-actions preprocessor uses tokenizer_max_length=%s from pretrained processors "
+            "(requested=%s) to preserve sequence budget.",
+            pretrained_tokenizer_max_length,
+            tokenizer_max_length,
+        )
+        tokenizer_max_length = pretrained_tokenizer_max_length
 
     features = {**config.input_features, **config.output_features}
     relative_step = RelativeActionsProcessorStep(
@@ -140,7 +194,7 @@ def make_xvla_pre_post_processors(
         AddBatchDimensionProcessorStep(),
         TokenizerProcessorStep(
             tokenizer_name=config.tokenizer_name,
-            max_length=config.tokenizer_max_length,
+            max_length=tokenizer_max_length,
             padding=config.pad_language_to,
             padding_side=config.tokenizer_padding_side,
         ),

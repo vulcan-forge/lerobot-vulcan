@@ -41,10 +41,6 @@ from lerobot.datasets.utils import (
     DEFAULT_EPISODES_PATH,
     DEFAULT_VIDEO_FILE_SIZE_IN_MB,
     DEFAULT_VIDEO_PATH,
-    get_file_size_in_mb,
-    get_hf_features_from_features,
-    get_parquet_file_size_in_mb,
-    to_parquet_with_hf_images,
     update_chunk_file_indices,
 )
 from lerobot.datasets.video_utils import concatenate_video_files, get_video_duration_in_s
