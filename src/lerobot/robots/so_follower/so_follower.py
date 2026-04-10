@@ -24,8 +24,7 @@ from lerobot.motors.feetech import (
     FeetechMotorsBus,
     OperatingMode,
 )
-from lerobot.processor import RobotAction, RobotObservation
-from lerobot.robots.so_follower.so_follower_calibrator import SOFollowerCalibrator
+from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..robot import Robot
@@ -62,11 +61,6 @@ class SOFollower(Robot):
             calibration=self.calibration,
         )
         self.cameras = make_cameras_from_configs(config.cameras)
-
-        # Initialize calibrator
-        self.calibrator = SOFollowerCalibrator(
-            robot=self
-        )
 
     @property
     def _motors_ft(self) -> dict[str, type]:

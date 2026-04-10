@@ -24,7 +24,16 @@ import pandas as pd
 import tqdm
 
 from lerobot.datasets.compute_stats import aggregate_stats
-from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
+from lerobot.datasets.feature_utils import get_hf_features_from_features
+from lerobot.datasets.io_utils import (
+    get_file_size_in_mb,
+    get_parquet_file_size_in_mb,
+    to_parquet_with_hf_images,
+    write_info,
+    write_stats,
+    write_tasks,
+)
 from lerobot.datasets.utils import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_DATA_FILE_SIZE_IN_MB,
@@ -37,9 +46,6 @@ from lerobot.datasets.utils import (
     get_parquet_file_size_in_mb,
     to_parquet_with_hf_images,
     update_chunk_file_indices,
-    write_info,
-    write_stats,
-    write_tasks,
 )
 from lerobot.datasets.video_utils import concatenate_video_files, get_video_duration_in_s
 
