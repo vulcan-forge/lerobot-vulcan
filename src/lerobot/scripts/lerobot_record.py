@@ -348,15 +348,15 @@ def record_loop(
     # Pre-compute action key order outside the hot loop — it won't change mid-episode.
     action_keys = sorted(robot.action_features) if use_interpolation else []
 
-    no_action_count = 0
+    # Warning control
     slow_loop_warning_interval_s = 60.0
     last_slow_loop_warning_t = events.get("last_slow_loop_warning_t")
+
+    no_action_count = 0
     timestamp = 0
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
-        act_processed_policy = None
-        act_processed_teleop = None
 
         if events["exit_early"]:
             events["exit_early"] = False
@@ -425,8 +425,6 @@ def record_loop(
                 action_values = robot_action_to_send
 
         elif policy is None and isinstance(teleop, Teleoperator):
-            if robot.name == "unitree_g1":
-                teleop.send_feedback(obs)
             act = teleop.get_action()
             if robot.name == "unitree_g1":
                 teleop.send_feedback(obs)
@@ -445,6 +443,8 @@ def record_loop(
             )
             act = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
             act_processed_teleop = teleop_action_processor((act, obs))
+            action_values = act_processed_teleop
+            robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
         else:
             no_action_count += 1
             if no_action_count == 1 or no_action_count % 10 == 0:
