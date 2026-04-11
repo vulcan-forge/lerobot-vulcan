@@ -18,7 +18,7 @@ class SourcceyTeleoperateConfig:
     remote_ip: str = "192.168.1.243"
     left_arm_port: str = "COM4"
     right_arm_port: str = "COM3"
-    keyboard_port: str = "keyboard"
+    keyboard_port: str | None = None
     fps: int = 30
 
 @parser.wrap()
@@ -26,11 +26,14 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
     # Create the robot and teleoperator configurations
     robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
     teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port=cfg.left_arm_port, right_arm_port=cfg.right_arm_port, id=cfg.id)
-    keyboard_config = KeyboardTeleopConfig(id=cfg.keyboard_port)
+    use_keyboard = cfg.keyboard_port is not None
+    keyboard_teleop = None
+    if use_keyboard:
+        keyboard_config = KeyboardTeleopConfig(id=cfg.keyboard_port)
+        keyboard_teleop = KeyboardTeleop(keyboard_config)
 
     robot = SourcceyClient(robot_config)
     leader_arm = BiSourcceyLeader(teleop_arm_config)
-    keyboard = KeyboardTeleop(keyboard_config)
 
     robot.connect()
 
@@ -40,11 +43,12 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
         print(f"Teleoperating without leader arm")
         pass
 
-    try:
-        keyboard.connect()
-    except Exception as e:
-        print(f"Teleoperating without keyboard")
-        pass
+    if keyboard_teleop is not None:
+        try:
+            keyboard_teleop.connect()
+        except Exception:
+            print("Teleoperating without keyboard")
+            keyboard_teleop = None
 
 
 
@@ -58,7 +62,8 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
     except Exception:
         pass
 
-    start_speed_listener(robot)
+    if keyboard_teleop is not None:
+        start_speed_listener(robot)
     init_rerun(session_name="sourccey_teleop")
 
 
@@ -71,7 +76,7 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
 
         observation = robot.get_observation()
         arm_action = leader_arm.get_action()
-        keyboard_keys = keyboard.get_action()
+        keyboard_keys = keyboard_teleop.get_action() if keyboard_teleop is not None else {}
 
         z_obs_pos = observation.get("z.pos", None)
         base_action = robot._from_keyboard_to_base_action(keyboard_keys, z_obs_pos=z_obs_pos)
