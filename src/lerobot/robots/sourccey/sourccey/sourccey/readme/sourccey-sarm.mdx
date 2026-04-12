@@ -1,0 +1,55 @@
+###
+
+This is an MD file for implement the stage aware reward model for datasets
+
+###
+
+###
+
+Training the model
+
+```
+CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
+ --dataset.repo_id="Combination/sarm_2cam__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
+ --policy.type=sarm \
+ --policy.annotation_mode=single_stage \
+ --policy.image_keys='["observation.images.front_right","observation.images.front_left"]' \
+ --output_dir=outputs/train/sarm_2cam \
+ --batch_size=8 \
+ --steps=20000 \
+ --wandb.enable=false \
+ --policy.push_to_hub=false
+```
+
+###
+
+Compute the RABC Weights
+
+###
+
+Visualize Dryrun
+
+```
+python src/lerobot/policies/sarm/compute_rabc_weights.py \
+ --dataset-repo-id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
+ --reward-model-path=outputs/train/sarm_2cam__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01/checkpoints/100000/pretrained_model \
+ --head-mode=sparse \
+ --device=cuda \
+ --num-visualizations=10 \
+ --output-dir="./outputs/sarm_viz" \
+ --stride=30 \
+ --visualize-only
+```
+
+Generatoe RA-BC progress
+
+```
+uv run python src/lerobot/policies/sarm/compute_rabc_weights.py \
+ --dataset-repo-id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
+ --reward-model-path="outputs/train/sarm_2cam__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01/checkpoints/100000/pretrained_model" \
+ --head-mode=sparse \
+ --device=cuda \
+ --num-visualizations=1 \
+ --output-dir="./outputs/sarm_viz_weights" \
+ --stride=30
+```
