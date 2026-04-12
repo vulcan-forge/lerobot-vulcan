@@ -14,8 +14,8 @@ python src/lerobot/control/sourccey/sourccey/record.py \
  --remote_ip="192.168.1.212" \
  --left_arm_port="/dev/ttyACM0" \
  --right_arm_port="/dev/ttyACM1" \
- --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-dark-blue-d/nickm/sourccey-013__shirt-fold-dark-blue-d__set262__nickm" \
- --dataset.num_episodes=1 \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-dark-blue-d/colinm/sourccey-013__shirt-fold-dark-blue-d__set015__colinm" \
+ --dataset.num_episodes=5 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=5 \
  --dataset.task="Fold the shirt" \
@@ -238,7 +238,7 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --policy.scheduler_decay_steps=400000 \
   --policy.scheduler_decay_lr=5e-06 \
   --steps=400000 \
-  --save_freq=10000 \
+  --save_freq=20000 \
   --batch_size=8 \
   --wandb.enable=false
 ```
@@ -330,6 +330,30 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
   --resume=true \
   --config_path="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260407__append__20260408/checkpoints/200000/pretrained_model/train_config.json"
 ```
+
+```
+CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_relative" \
+  --output_dir="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_relative" \
+  --job_name="xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_relative" \
+  --policy.dtype=bfloat16 \
+  --policy.action_mode=auto \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --policy.use_relative_actions=true \
+  --policy.relative_exclude_joints='["gripper"]' \
+  --policy.input_features=null \
+  --policy.scheduler_warmup_steps=5000 \
+  --policy.scheduler_decay_steps=400000 \
+  --policy.scheduler_decay_lr=5e-06 \
+  --steps=400000 \
+  --save_freq=20000 \
+  --batch_size=8 \
+  --wandb.enable=false \
+  --resume=true \
+  --config_path="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_relative/checkpoints/020000/pretrained_model/train_config.json"
+```
+
 
 
 
