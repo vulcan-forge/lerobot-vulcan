@@ -212,7 +212,7 @@ NEW TRAINING COMMANDS
 -- Relative action dataset recompute
 ```
 uv run lerobot-edit-dataset \
-  --repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410" \
+  --repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
   --operation.type=recompute_stats \
   --operation.relative_action=true \
   --operation.chunk_size=30 \
@@ -221,10 +221,12 @@ uv run lerobot-edit-dataset \
 
 
 ```
-CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
-  --dataset.repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_relative" \
-  --output_dir="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_relative" \
-  --job_name="xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_relative" \
+CUDA_VISIBLE_DEVICES=1 uv run python src/lerobot/scripts/lerobot_train_retry.py \
+  --max-attempts=10 \
+  --retry-delay-seconds=20 \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01_relative" \
+  --output_dir="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01_relative" \
+  --job_name="xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01_relative" \
   --policy.path="lerobot/xvla-base" \
   --policy.dtype=bfloat16 \
   --policy.action_mode=auto \

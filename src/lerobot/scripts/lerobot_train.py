@@ -346,6 +346,11 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     step = 0  # number of policy updates (forward + backward + optim)
 
     if cfg.resume:
+        if cfg.checkpoint_path is None:
+            raise ValueError(
+                "Cannot resume training because `checkpoint_path` is not set. "
+                "Please provide `--config_path=.../checkpoints/last/pretrained_model/train_config.json`."
+            )
         step, optimizer, lr_scheduler = load_training_state(cfg.checkpoint_path, optimizer, lr_scheduler)
 
     num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
