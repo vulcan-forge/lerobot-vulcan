@@ -44,12 +44,12 @@ python src/lerobot/policies/sarm/compute_rabc_weights.py \
 Generatoe RA-BC progress
 
 ```
-uv run python src/lerobot/policies/sarm/compute_rabc_weights.py \
+python src/lerobot/policies/sarm/compute_rabc_weights.py \
  --dataset-repo-id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
  --reward-model-path="outputs/train/sarm_2cam__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01/checkpoints/100000/pretrained_model" \
  --head-mode=sparse \
  --device=cuda \
- --num-visualizations=1 \
+ --num-visualizations=10 \
  --output-dir="./outputs/sarm_viz_weights" \
  --stride=30
 ```
