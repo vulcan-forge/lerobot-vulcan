@@ -471,9 +471,9 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 accelerate launch
 ```
 python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
- --remote_ip="192.168.1.214" \
- --model_path="outputs/train/xvla__sourccey-shirt-fold-01cmbFdchrism20260409append20260410_01_relative/checkpoints/300000/pretrained_model" \
- --dataset.repo_id="sourccey-013/eval_xvla__sourccey-shirt-fold-01cmbFdchrism20260409append20260410_01_relative" \
+ --remote_ip="192.168.1.212" \
+ --model_path="outputs/train/xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01_relative/checkpoints/400000/pretrained_model" \
+ --dataset.repo_id="sourccey-013/eval_xvla__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01_relative" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=600 \
  --dataset.reset_time_s=10 \

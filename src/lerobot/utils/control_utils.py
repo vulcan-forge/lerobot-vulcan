@@ -35,6 +35,7 @@ from lerobot.policies.utils import prepare_observation_for_inference
 from lerobot.processor import PolicyProcessorPipeline
 from lerobot.robots import Robot
 from lerobot.types import PolicyAction
+from lerobot.utils.constants import ACTION
 
 
 @cache
@@ -63,6 +64,39 @@ def is_headless():
         traceback.print_exc()
         print()
         return True
+
+
+def _get_action_queue_len(policy: PreTrainedPolicy) -> int | None:
+    queues = getattr(policy, "_queues", None)
+    if not isinstance(queues, dict):
+        return None
+    action_queue = queues.get(ACTION)
+    if action_queue is None:
+        return None
+    try:
+        return len(action_queue)
+    except TypeError:
+        return None
+
+
+def _prime_relative_anchor_states_for_chunk(
+    preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
+    postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction],
+    generated_count: int,
+) -> None:
+    """Prime anchor states so queued relative actions keep the state they were predicted from."""
+    from lerobot.processor.relative_action_processor import (
+        AbsoluteActionsProcessorStep,
+        RelativeActionsProcessorStep,
+    )
+
+    relative_step = next((s for s in preprocessor.steps if isinstance(s, RelativeActionsProcessorStep)), None)
+    absolute_step = next((s for s in postprocessor.steps if isinstance(s, AbsoluteActionsProcessorStep)), None)
+    if relative_step is None or absolute_step is None:
+        return
+    if not relative_step.enabled or not absolute_step.enabled:
+        return
+    relative_step.prime_absolute_anchor_states(generated_count)
 
 def predict_action(
     observation: dict[str, np.ndarray],
@@ -106,9 +140,19 @@ def predict_action(
         observation = prepare_observation_for_inference(observation, device, task, robot_type)
         observation = preprocessor(observation)
 
-        # Compute the next action with the policy
-        # based on the current observation
+        # Compute the next action with the policy based on the current observation.
+        # For relative-actions policies with action queues (n_action_steps > 1), all
+        # actions in the generated chunk are anchored to the same observation state.
+        # We prime that anchor so postprocessing can keep absolute conversion aligned
+        # while the policy queue is being drained over subsequent control ticks.
+        action_queue_len_before = _get_action_queue_len(policy)
         action = policy.select_action(observation)
+        action_queue_len_after = _get_action_queue_len(policy)
+        if action_queue_len_before in (None, 0):
+            generated_count = 1
+            if action_queue_len_before == 0 and action_queue_len_after is not None:
+                generated_count = max(1, action_queue_len_after + 1)
+            _prime_relative_anchor_states_for_chunk(preprocessor, postprocessor, generated_count)
 
         action = postprocessor(action)
 

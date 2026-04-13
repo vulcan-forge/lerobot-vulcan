@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -102,6 +103,7 @@ class RelativeActionsProcessorStep(ProcessorStep):
     exclude_joints: list[str] = field(default_factory=list)
     action_names: list[str] | None = None
     _last_state: torch.Tensor | None = field(default=None, init=False, repr=False)
+    _absolute_anchor_states: deque[torch.Tensor] = field(default_factory=deque, init=False, repr=False)
 
     def _build_mask(self, action_dim: int) -> list[bool]:
         if not self.exclude_joints or self.action_names is None:
@@ -141,6 +143,28 @@ class RelativeActionsProcessorStep(ProcessorStep):
         mask = self._build_mask(action.shape[-1])
         new_transition[TransitionKey.ACTION] = to_relative_actions(action, state, mask)
         return new_transition
+
+    def prime_absolute_anchor_states(self, count: int) -> None:
+        """Queue copies of the current state for future absolute conversion calls.
+
+        Relative chunk predictions (n_action_steps > 1) are all anchored to the same
+        observation state. During execution, postprocessing is called one action at a
+        time, so we need to preserve that anchor state across the queued actions.
+        """
+        if count <= 0 or self._last_state is None:
+            return
+        for _ in range(count):
+            self._absolute_anchor_states.append(self._last_state.detach().clone())
+
+    def pop_absolute_anchor_state(self) -> torch.Tensor | None:
+        """Return queued anchor state if available, otherwise latest cached state."""
+        if self._absolute_anchor_states:
+            return self._absolute_anchor_states.popleft()
+        return self._last_state
+
+    def reset(self) -> None:
+        self._last_state = None
+        self._absolute_anchor_states.clear()
 
     def get_config(self) -> dict[str, Any]:
         return {
@@ -182,7 +206,8 @@ class AbsoluteActionsProcessorStep(ProcessorStep):
                 "but relative_step is None. Ensure relative_step is set when constructing the postprocessor."
             )
 
-        if self.relative_step._last_state is None:
+        state_for_absolute = self.relative_step.pop_absolute_anchor_state()
+        if state_for_absolute is None:
             raise RuntimeError(
                 "AbsoluteActionsProcessorStep requires state from RelativeActionsProcessorStep "
                 "but no state has been cached. Ensure the preprocessor runs before the postprocessor."
@@ -195,7 +220,7 @@ class AbsoluteActionsProcessorStep(ProcessorStep):
 
         mask = self.relative_step._build_mask(action.shape[-1])
         new_transition[TransitionKey.ACTION] = to_absolute_actions(
-            action, self.relative_step._last_state, mask
+            action, state_for_absolute, mask
         )
         return new_transition
 
