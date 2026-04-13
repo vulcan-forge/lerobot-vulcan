@@ -215,6 +215,45 @@ def write_ranking_csv(metrics: list[EpisodeMetrics], output_path: Path) -> None:
             )
 
 
+def _resolve_selection_size(total_episodes: int, k_value: int) -> int:
+    """Interpret k as absolute count."""
+    if total_episodes <= 0 or k_value <= 0:
+        return 0
+    return min(total_episodes, k_value)
+
+
+def write_selection_csv(metrics: list[EpisodeMetrics], output_path: Path, selection_label: str) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "selection_rank",
+        "overall_rank",
+        "episode_index",
+        "selection",
+        "score",
+        "max",
+        "mean",
+        "up",
+        "stab",
+    ]
+    with output_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for selection_rank, m in enumerate(metrics, start=1):
+            writer.writerow(
+                {
+                    "selection_rank": selection_rank,
+                    "overall_rank": m.rank,
+                    "episode_index": m.episode_index,
+                    "selection": selection_label,
+                    "score": f"{m.quality_score:.6f}",
+                    "max": f"{m.max_progress:.4f}" if np.isfinite(m.max_progress) else "nan",
+                    "mean": f"{m.mean_progress:.4f}" if np.isfinite(m.mean_progress) else "nan",
+                    "up": f"{m.upward_ratio:.4f}" if np.isfinite(m.upward_ratio) else "nan",
+                    "stab": f"{m.stability_score:.4f}",
+                }
+            )
+
+
 def select_episodes_to_drop(
     metrics: list[EpisodeMetrics],
     quality_below: float | None,
@@ -438,8 +477,34 @@ def main() -> int:
     parser.add_argument("--weight-upward", type=float, default=0.20, help="Weight for upward ratio")
     parser.add_argument("--weight-stability", type=float, default=0.15, help="Weight for stability score")
 
-    parser.add_argument("--top-k", type=int, default=25, help="How many top episodes to print")
-    parser.add_argument("--bottom-k", type=int, default=25, help="How many bottom episodes to print")
+    parser.add_argument(
+        "--preview-top-k",
+        "--top-k",
+        dest="preview_top_k",
+        type=int,
+        default=25,
+        help="How many top episodes to print in console preview (alias: --top-k)",
+    )
+    parser.add_argument(
+        "--preview-bottom-k",
+        "--bottom-k",
+        dest="preview_bottom_k",
+        type=int,
+        default=25,
+        help="How many bottom episodes to print in console preview (alias: --bottom-k)",
+    )
+    parser.add_argument(
+        "--file-top-k",
+        type=int,
+        default=300,
+        help="How many top episodes to export in top-selection CSV",
+    )
+    parser.add_argument(
+        "--file-bottom-k",
+        type=int,
+        default=300,
+        help="How many bottom episodes to export in bottom-selection CSV",
+    )
     parser.add_argument(
         "--save-charts",
         action=argparse.BooleanOptionalAction,
@@ -521,10 +586,37 @@ def main() -> int:
         weight_stability=args.weight_stability,
     )
 
-    ranking_csv = output_dir / "episode_ranking_progress_stability.csv"
+    ranking_csv = output_dir / "episode_ranking_progress.csv"
     write_ranking_csv(metrics, ranking_csv)
     logging.info("Saved ranking CSV: %s", ranking_csv)
-    _print_preview(metrics, top_k=max(args.top_k, 1), bottom_k=max(args.bottom_k, 1))
+
+    preview_top_count = _resolve_selection_size(len(metrics), args.preview_top_k)
+    preview_bottom_count = _resolve_selection_size(len(metrics), args.preview_bottom_k)
+
+    top_selection_count = _resolve_selection_size(len(metrics), args.file_top_k)
+    bottom_selection_count = _resolve_selection_size(len(metrics), args.file_bottom_k)
+
+    top_selection = metrics[:top_selection_count]
+    bottom_selection = list(reversed(metrics[-bottom_selection_count:])) if bottom_selection_count > 0 else []
+
+    top_selection_csv = output_dir / f"episodes_top{top_selection_count}_progress.csv"
+    bottom_selection_csv = output_dir / f"episodes_bottom{bottom_selection_count}_progress.csv"
+    write_selection_csv(top_selection, top_selection_csv, selection_label="top")
+    write_selection_csv(bottom_selection, bottom_selection_csv, selection_label="bottom")
+    logging.info(
+        "Saved top-selection CSV (%d episodes, from --file-top-k=%d): %s",
+        top_selection_count,
+        args.file_top_k,
+        top_selection_csv,
+    )
+    logging.info(
+        "Saved bottom-selection CSV (%d episodes, from --file-bottom-k=%d): %s",
+        bottom_selection_count,
+        args.file_bottom_k,
+        bottom_selection_csv,
+    )
+
+    _print_preview(metrics, top_k=max(preview_top_count, 1), bottom_k=max(preview_bottom_count, 1))
 
     if args.save_charts:
         chart_dir = (
@@ -551,16 +643,13 @@ def main() -> int:
         max_drawdown_above=args.max_drawdown_above,
     )
     if episodes_to_drop:
-        drop_json = output_dir / "episodes_to_drop_progress_stability.json"
-        drop_txt = output_dir / "episodes_to_drop_progress_stability.txt"
+        drop_json = output_dir / "episodes_to_drop_progress.json"
         drop_json.write_text(json.dumps(episodes_to_drop))
-        drop_txt.write_text(str(episodes_to_drop))
         logging.info("Marked %d episodes to drop", len(episodes_to_drop))
         logging.info("Saved: %s", drop_json)
-        logging.info("Saved: %s", drop_txt)
 
         if args.dataset_repo_id:
-            new_repo_id = args.new_repo_id or f"{args.dataset_repo_id}_filtered_progress_stability"
+            new_repo_id = args.new_repo_id or f"{args.dataset_repo_id}_filtered_progress"
             logging.info("Delete command preview:")
             logging.info(
                 "uv run lerobot-edit-dataset --repo_id \"%s\" --new_repo_id \"%s\" "

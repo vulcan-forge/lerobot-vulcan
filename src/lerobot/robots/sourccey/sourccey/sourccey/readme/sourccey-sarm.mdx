@@ -94,7 +94,7 @@ This ranking excludes final progress from the score and prioritizes:
 - stable trajectory (low drawdown / low sudden drops)
 
 ```
-uv run python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_rank_sarm_progress.py \
+python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_rank_sarm_progress.py \
  --dataset-repo-id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
  --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01/sarm_progress.parquet" \
  --head-mode=sparse \
@@ -103,8 +103,10 @@ uv run python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_ran
  --weight-mean=0.25 \
  --weight-upward=0.20 \
  --weight-stability=0.15 \
- --top-k=25 \
- --bottom-k=25 \
+ --preview-top-k=25 \
+ --preview-bottom-k=25 \
+ --file-top-k=300 \
+ --file-bottom-k=300 \
  --save-charts \
  --chart-top-k=10 \
  --chart-bottom-k=10 \
