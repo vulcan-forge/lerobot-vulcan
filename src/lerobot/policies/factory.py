@@ -60,7 +60,9 @@ from lerobot.utils.constants import (
 
 
 def _reconnect_relative_absolute_steps(
-    preprocessor: PolicyProcessorPipeline, postprocessor: PolicyProcessorPipeline
+    preprocessor: PolicyProcessorPipeline,
+    postprocessor: PolicyProcessorPipeline,
+    policy_cfg: PreTrainedConfig | None = None,
 ) -> None:
     """Wire AbsoluteActionsProcessorStep.relative_step to the RelativeActionsProcessorStep after deserialization.
 
@@ -80,6 +82,11 @@ def _reconnect_relative_absolute_steps(
     for step in postprocessor.steps:
         if isinstance(step, AbsoluteActionsProcessorStep) and step.relative_step is None:
             step.relative_step = relative_step
+
+    if isinstance(policy_cfg, XVLAConfig):
+        from lerobot.policies.xvla.processor_xvla import upgrade_xvla_relative_processors
+
+        upgrade_xvla_relative_processors(preprocessor, postprocessor)
 
 
 def get_policy_class(name: str) -> type[PreTrainedPolicy]:
@@ -271,6 +278,10 @@ def make_pre_post_processors(
             policy configuration type.
     """
     if pretrained_path:
+        if isinstance(policy_cfg, XVLAConfig):
+            # Ensure XVLA-specific processor step classes are registered before deserializing.
+            from lerobot.policies.xvla import processor_xvla as _xvla_processor  # noqa: F401
+
         # TODO(Steven): Temporary patch, implement correctly the processors for Gr00t
         if isinstance(policy_cfg, GrootConfig):
             # GROOT handles normalization in groot_pack_inputs_v3 step
@@ -310,7 +321,7 @@ def make_pre_post_processors(
             to_transition=policy_action_to_transition,
             to_output=transition_to_policy_action,
         )
-        _reconnect_relative_absolute_steps(preprocessor, postprocessor)
+        _reconnect_relative_absolute_steps(preprocessor, postprocessor, policy_cfg)
         return preprocessor, postprocessor
 
     # Create a new processor based on policy type

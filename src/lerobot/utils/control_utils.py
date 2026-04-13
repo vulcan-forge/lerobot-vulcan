@@ -80,11 +80,21 @@ def _get_action_queue_len(policy: PreTrainedPolicy) -> int | None:
 
 
 def _prime_relative_anchor_states_for_chunk(
+    policy: PreTrainedPolicy,
     preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction],
     generated_count: int,
 ) -> None:
-    """Prime anchor states so queued relative actions keep the state they were predicted from."""
+    """Prime chunk-anchor states for supported relative-actions policies."""
+    policy_type = getattr(getattr(policy, "config", None), "type", None)
+    if policy_type == "xvla":
+        from lerobot.policies.xvla.processor_xvla import prime_xvla_relative_anchor_states
+
+        if prime_xvla_relative_anchor_states(preprocessor, postprocessor, generated_count):
+            return
+
+    # Backward-compatible fallback if the policy does not expose model-specific
+    # priming hooks or old checkpoint processors are still generic.
     from lerobot.processor.relative_action_processor import (
         AbsoluteActionsProcessorStep,
         RelativeActionsProcessorStep,
@@ -152,7 +162,7 @@ def predict_action(
             generated_count = 1
             if action_queue_len_before == 0 and action_queue_len_after is not None:
                 generated_count = max(1, action_queue_len_after + 1)
-            _prime_relative_anchor_states_for_chunk(preprocessor, postprocessor, generated_count)
+            _prime_relative_anchor_states_for_chunk(policy, preprocessor, postprocessor, generated_count)
 
         action = postprocessor(action)
 

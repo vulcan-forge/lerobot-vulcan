@@ -6,11 +6,13 @@ import torch
 from lerobot.datasets.factory import IMAGENET_STATS
 from lerobot.policies.xvla.configuration_xvla import XVLAConfig
 from lerobot.policies.xvla.processor_xvla import (
+    XVLAAbsoluteActionsProcessorStep,
     XVLAImageNetNormalizeProcessorStep,
     XVLAImageToFloatProcessorStep,
+    XVLARelativeActionsProcessorStep,
+    prime_xvla_relative_anchor_states,
     make_xvla_pre_post_processors,
 )
-from lerobot.processor import AbsoluteActionsProcessorStep, RelativeActionsProcessorStep
 from lerobot.processor.core import TransitionKey
 from lerobot.utils.constants import OBS_IMAGES, OBS_STATE
 
@@ -146,7 +148,7 @@ def _get_relative_and_absolute_steps(
     use_relative_actions: bool,
     relative_exclude_joints: list[str] | None = None,
     action_feature_names: list[str] | None = None,
-) -> tuple[RelativeActionsProcessorStep, AbsoluteActionsProcessorStep]:
+) -> tuple[XVLARelativeActionsProcessorStep, XVLAAbsoluteActionsProcessorStep]:
     config = XVLAConfig(
         use_relative_actions=use_relative_actions,
         relative_exclude_joints=relative_exclude_joints or ["gripper"],
@@ -155,10 +157,10 @@ def _get_relative_and_absolute_steps(
     preprocessor, postprocessor = make_xvla_pre_post_processors(config=config, dataset_stats=None)
 
     relative_step = next(
-        step for step in preprocessor.steps if isinstance(step, RelativeActionsProcessorStep)
+        step for step in preprocessor.steps if isinstance(step, XVLARelativeActionsProcessorStep)
     )
     absolute_step = next(
-        step for step in postprocessor.steps if isinstance(step, AbsoluteActionsProcessorStep)
+        step for step in postprocessor.steps if isinstance(step, XVLAAbsoluteActionsProcessorStep)
     )
     return relative_step, absolute_step
 
@@ -225,3 +227,36 @@ def test_xvla_relative_actions_disabled_is_noop() -> None:
 
     recovered_transition = absolute_step({TransitionKey.ACTION: actions.clone()})
     torch.testing.assert_close(recovered_transition[TransitionKey.ACTION], actions)
+
+
+def test_xvla_relative_actions_chunk_anchor_queue_stability() -> None:
+    config = XVLAConfig(use_relative_actions=True)
+    preprocessor, postprocessor = make_xvla_pre_post_processors(config=config, dataset_stats=None)
+    relative_step = next(
+        step for step in preprocessor.steps if isinstance(step, XVLARelativeActionsProcessorStep)
+    )
+    absolute_step = next(
+        step for step in postprocessor.steps if isinstance(step, XVLAAbsoluteActionsProcessorStep)
+    )
+
+    state0 = torch.tensor([[10.0, 20.0]], dtype=torch.float32)
+    state1 = torch.tensor([[100.0, 200.0]], dtype=torch.float32)
+    relative_action = torch.tensor([[1.5, -2.0]], dtype=torch.float32)
+
+    # Simulate chunk generation at state0.
+    relative_step({TransitionKey.OBSERVATION: {OBS_STATE: state0}})
+    prime_xvla_relative_anchor_states(preprocessor, postprocessor, generated_count=2)
+
+    # Observation changes while draining queued chunk.
+    relative_step({TransitionKey.OBSERVATION: {OBS_STATE: state1}})
+
+    out1 = absolute_step({TransitionKey.ACTION: relative_action})[TransitionKey.ACTION]
+    out2 = absolute_step({TransitionKey.ACTION: relative_action})[TransitionKey.ACTION]
+    expected_state0 = relative_action + state0
+    torch.testing.assert_close(out1, expected_state0)
+    torch.testing.assert_close(out2, expected_state0)
+
+    # After queue drain, latest state is used.
+    out3 = absolute_step({TransitionKey.ACTION: relative_action})[TransitionKey.ACTION]
+    expected_state1 = relative_action + state1
+    torch.testing.assert_close(out3, expected_state1)
