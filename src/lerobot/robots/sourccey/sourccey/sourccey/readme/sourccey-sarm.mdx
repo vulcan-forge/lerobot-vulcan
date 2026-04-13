@@ -51,5 +51,78 @@ python src/lerobot/policies/sarm/compute_rabc_weights.py \
  --device=cuda \
  --num-visualizations=10 \
  --output-dir="./outputs/sarm_viz_weights" \
- --stride=30
+ --stride=30 \
+ --no-push-to-hub
+```
+
+###
+
+Rank Episodes with Sourccey Custom Script
+
+```
+python src/lerobot/robots/sourccey/sourccey/sourccey/sourccey_rank_sarm_progress.py \
+  --dataset-repo-id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
+  --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01/sarm_progress.parquet" \
+  --head-mode=sparse \
+  --output-dir="outputs/sarm_episode_ranking_progress" \
+  --weight-max=0.40 \
+  --weight-mean=0.25 \
+  --weight-upward=0.20 \
+  --weight-stability=0.15 \
+  --bottom-quality-quantile=0.10
+```
+
+
+
+
+
+Output artifacts:
+- `outputs/sarm_episode_ranking/episode_ranking.csv`
+- `outputs/sarm_episode_ranking/episodes_to_drop.json`
+- `outputs/sarm_episode_ranking/episodes_to_drop.txt`
+
+Use `episodes_to_drop.txt` with `lerobot-edit-dataset --operation.type delete_episodes` to trim low-quality episodes.
+
+###
+
+Rank Episodes by Progress + Stability (No Final-Score Term)
+
+This ranking excludes final progress from the score and prioritizes:
+- high max progress
+- high mean progress
+- high upward ratio
+- stable trajectory (low drawdown / low sudden drops)
+
+```
+uv run python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_rank_sarm_progress.py \
+ --dataset-repo-id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
+ --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01/sarm_progress.parquet" \
+ --head-mode=sparse \
+ --output-dir="outputs/sarm_episode_ranking_progress" \
+ --weight-max=0.40 \
+ --weight-mean=0.25 \
+ --weight-upward=0.20 \
+ --weight-stability=0.15 \
+ --top-k=25 \
+ --bottom-k=25 \
+ --save-charts \
+ --chart-top-k=10 \
+ --chart-bottom-k=10 \
+ --chart-rolling-window=61 \
+ --chart-dpi=160 \
+ --bottom-quality-quantile=0.10
+```
+
+###
+
+Debug One Episode Ranking (Chart)
+
+```
+python src/lerobot/robots/sourccey/sourccey/sourccey/sourccey_plot_sarm_episode.py \
+ --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01/sarm_progress.parquet" \
+ --episode-index=850 \
+ --head-mode=sparse \
+ --ranking-csv="outputs/sarm_episode_ranking/episode_ranking.csv" \
+ --output-path="outputs/sarm_episode_ranking/episode_850_sparse_debug.png"
+```
 ```
