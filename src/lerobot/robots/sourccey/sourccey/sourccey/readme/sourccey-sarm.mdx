@@ -10,16 +10,35 @@ Training the model
 
 ```
 CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
- --dataset.repo_id="Combination/sarm_2cam__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
+ --dataset.repo_id="Combination/sourccey-shirt-aggregate-2" \
  --policy.type=sarm \
  --policy.annotation_mode=single_stage \
  --policy.image_keys='["observation.images.front_right","observation.images.front_left"]' \
- --output_dir=outputs/train/sarm_2cam \
+ --output_dir=outputs/train/sarm_2cam_sourccey-shirt-aggregate-2 \
  --batch_size=8 \
- --steps=20000 \
+ --steps=100000 \
+ --save_freq=10000 \
  --wandb.enable=false \
  --policy.push_to_hub=false
 ```
+
+
+### Debug
+
+CUDA_VISIBLE_DEVICES=0 uv run python src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id="Combination/sourccey-shirt-aggregate-2" \
+  --policy.type=sarm \
+  --policy.annotation_mode=single_stage \
+  --policy.image_keys='["observation.images.front_right","observation.images.front_left"]' \
+  --dataset.video_backend=pyav \
+  --num_workers=0 \
+  --batch_size=1 \
+  --log_freq=1 \
+  --steps=4000 \
+  --output_dir=outputs/train/sarm_2cam_sourccey-shirt-aggregate-2_debug \
+  --wandb.enable=false \
+  --policy.push_to_hub=false
+
 
 ###
 
