@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Dump comprehensive bq34z100 diagnostics as JSON.
+"""Dump bq34z100 diagnostics as JSON.
 
-This script is read-only. It combines:
-- Runtime telemetry (voltage/current/capacity/SOC)
-- Raw standard-command registers
-- Control subcommand info (device/fw/chem/status)
-- Data-flash field values from configure_bq34z100.py
-- Raw data-flash block bytes for the blocks containing known fields
+This script is read-only.
+
+Default output is compact and operator-focused:
+- voltage/current/SOC/capacity
+- pack config + detected series-cell count
+- key gauge health/config values
+
+Use ``--full`` for a detailed dump with raw registers/fields/blocks.
 """
 
 from __future__ import annotations
@@ -179,6 +181,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Include raw 32-byte data-flash blocks containing known fields (default: enabled)",
     )
     p.add_argument(
+        "--full",
+        action="store_true",
+        help="Output full diagnostic payload (default: compact summary)",
+    )
+    p.add_argument(
         "--pretty",
         action="store_true",
         help="Pretty-print JSON (default is compact JSON)",
@@ -189,7 +196,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = _build_parser().parse_args()
 
-    payload: dict[str, Any] = {
+    base_payload: dict[str, Any] = {
         "chip": "bq34z100",
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "i2c": {
@@ -207,6 +214,12 @@ def main() -> int:
     gauge = BQ34Z100R2(bus_num=args.bus, address=args.address)
     section_errors: dict[str, str] = {}
 
+    telemetry_out: dict[str, Any] | None = None
+    control_info: dict[str, Any] | None = None
+    data_flash_fields: dict[str, Any] | None = None
+    raw_standard_registers: dict[str, Any] | None = None
+    data_flash_blocks: list[dict[str, Any]] | None = None
+
     try:
         telemetry = get_battery_data(
             bus=args.bus,
@@ -215,7 +228,7 @@ def main() -> int:
             actual_rsense_mohm=args.actual_rsense_mohm,
             swap_word_bytes=args.swap_word_bytes,
         )
-        payload["telemetry"] = {
+        telemetry_out = {
             "voltage": round(float(telemetry.voltage), 3),
             "current_a": round(float(telemetry.current_a), 3),
             "remaining_capacity_ah": round(float(telemetry.remaining_capacity_ah), 3),
@@ -227,7 +240,7 @@ def main() -> int:
         section_errors["telemetry"] = str(exc)
 
     try:
-        payload["raw_standard_registers"] = _read_raw_standard_registers(
+        raw_standard_registers = _read_raw_standard_registers(
             gauge,
             swap_word_bytes=args.swap_word_bytes,
         )
@@ -235,20 +248,83 @@ def main() -> int:
         section_errors["raw_standard_registers"] = str(exc)
 
     try:
-        payload["control_info"] = _read_control_info(gauge)
+        control_info = _read_control_info(gauge)
     except Exception as exc:  # noqa: BLE001
         section_errors["control_info"] = str(exc)
 
     try:
-        payload["data_flash_fields"] = _read_data_flash_fields(gauge)
+        data_flash_fields = _read_data_flash_fields(gauge)
     except Exception as exc:  # noqa: BLE001
         section_errors["data_flash_fields"] = str(exc)
 
-    if args.include_block_dump:
+    if args.full and args.include_block_dump:
         try:
-            payload["data_flash_blocks"] = _read_data_flash_blocks(gauge)
+            data_flash_blocks = _read_data_flash_blocks(gauge)
         except Exception as exc:  # noqa: BLE001
             section_errors["data_flash_blocks"] = str(exc)
+
+    if args.full:
+        payload: dict[str, Any] = dict(base_payload)
+        if telemetry_out is not None:
+            payload["telemetry"] = telemetry_out
+        if raw_standard_registers is not None:
+            payload["raw_standard_registers"] = raw_standard_registers
+        if control_info is not None:
+            payload["control_info"] = control_info
+        if data_flash_fields is not None:
+            payload["data_flash_fields"] = data_flash_fields
+        if data_flash_blocks is not None:
+            payload["data_flash_blocks"] = data_flash_blocks
+    else:
+        summary: dict[str, Any] = dict(base_payload)
+        if telemetry_out is not None:
+            summary["telemetry"] = telemetry_out
+
+        pack_summary: dict[str, Any] = {}
+        if data_flash_fields is not None:
+            def _field_int(name: str) -> int | None:
+                item = data_flash_fields.get(name)
+                return None if item is None else int(item["value_int"])
+
+            pack_cfg = _field_int("pack_configuration")
+            if pack_cfg is not None:
+                msb = (pack_cfg >> 8) & 0xFF
+                pack_summary["pack_configuration"] = f"0x{pack_cfg:04X}"
+                pack_summary["voltsel_enabled"] = bool(msb & (1 << 3))
+            series_cells = _field_int("number_of_series_cells")
+            if series_cells is not None:
+                pack_summary["series_cells"] = series_cells
+            voltage_divider = _field_int("voltage_divider")
+            if voltage_divider is not None:
+                pack_summary["voltage_divider"] = voltage_divider
+            update_status = _field_int("update_status")
+            if update_status is not None:
+                pack_summary["update_status"] = f"0x{update_status:02X}"
+            design_capacity = _field_int("design_capacity_mah")
+            if design_capacity is not None:
+                pack_summary["design_capacity_mah"] = design_capacity
+            qmax = _field_int("qmax_cell0_mah")
+            if qmax is not None:
+                pack_summary["qmax_cell0_mah"] = qmax
+
+        if control_info is not None:
+            chip_info = {
+                "device_type": control_info["device_type"]["hex"],
+                "fw_version": control_info["fw_version"]["hex"],
+                "chem_id": control_info["chem_id"]["hex"],
+                "control_status": control_info["control_status"]["hex"],
+            }
+            summary["chip_info"] = chip_info
+
+        if pack_summary:
+            summary["pack"] = pack_summary
+
+        if raw_standard_registers is not None:
+            summary["raw_current_ma_signed"] = raw_standard_registers["average_current_ma_raw"][
+                "normalized_signed"
+            ]
+
+        payload = summary
 
     if section_errors:
         payload["errors"] = section_errors
