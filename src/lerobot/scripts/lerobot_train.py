@@ -14,9 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import dataclasses
+import json
 import logging
 import time
 from contextlib import nullcontext
+from pathlib import Path
 from pprint import pformat
 from typing import Any
 
@@ -54,6 +56,52 @@ from lerobot.utils.utils import (
     init_logging,
     inside_slurm,
 )
+
+
+def _load_processor_step_keys(config_path: Path) -> set[str]:
+    """Load valid step keys (registry_name or class name) from a saved processor config."""
+    if not config_path.exists():
+        return set()
+    try:
+        with config_path.open(encoding="utf-8") as f:
+            payload = json.load(f)
+        steps = payload.get("steps", [])
+        keys = set()
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            key = step.get("registry_name")
+            if key is None and "class" in step:
+                key = str(step["class"]).rsplit(".", 1)[-1]
+            if key:
+                keys.add(key)
+        return keys
+    except Exception as e:
+        logging.warning("Failed to parse processor config %s: %s", config_path, e)
+        return set()
+
+
+def _filter_processor_overrides(
+    overrides: dict[str, Any],
+    available_keys: set[str],
+    pipeline_name: str,
+) -> dict[str, Any]:
+    """Drop overrides that don't exist in the saved pipeline to avoid strict-key errors."""
+    if not overrides:
+        return overrides
+    if not available_keys:
+        return overrides
+
+    kept = {k: v for k, v in overrides.items() if k in available_keys}
+    dropped = sorted(set(overrides) - set(kept))
+    if dropped:
+        logging.warning(
+            "Skipping %s override(s) not present in saved %s pipeline: %s",
+            len(dropped),
+            pipeline_name,
+            dropped,
+        )
+    return kept
 
 
 def update_policy(
@@ -290,7 +338,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         processor_kwargs["dataset_meta"] = dataset.meta
 
     if processor_pretrained_path is not None:
-        processor_kwargs["preprocessor_overrides"] = {
+        preprocessor_overrides = {
             "device_processor": {"device": device.type},
             "normalizer_processor": {
                 "stats": dataset.meta.stats,
@@ -298,16 +346,42 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 "norm_map": policy.config.normalization_mapping,
             },
         }
-        processor_kwargs["preprocessor_overrides"]["rename_observations_processor"] = {
+        preprocessor_overrides["rename_observations_processor"] = {
             "rename_map": cfg.rename_map
         }
-        postprocessor_kwargs["postprocessor_overrides"] = {
+        # Backward-compat for older saved SARM processor configs that may not persist
+        # constructor-required fields for SARMEncodingProcessorStep.
+        if cfg.policy.type == "sarm":
+            preprocessor_overrides["SARMEncodingProcessorStep"] = {
+                "config": cfg.policy,
+                "image_key": getattr(cfg.policy, "image_key", None),
+                "image_keys": getattr(cfg.policy, "image_keys", None),
+                "dataset_meta": dataset.meta,
+                "dataset_stats": dataset.meta.stats,
+            }
+        postprocessor_overrides = {
             "unnormalizer_processor": {
                 "stats": dataset.meta.stats,
                 "features": policy.config.output_features,
                 "norm_map": policy.config.normalization_mapping,
             },
         }
+
+        # In resume mode, saved processor configs can differ across versions.
+        # Filter overrides to keys that actually exist in the saved pipeline.
+        if cfg.resume:
+            pretrained_dir = Path(processor_pretrained_path)
+            pre_keys = _load_processor_step_keys(pretrained_dir / "policy_preprocessor.json")
+            post_keys = _load_processor_step_keys(pretrained_dir / "policy_postprocessor.json")
+            preprocessor_overrides = _filter_processor_overrides(
+                preprocessor_overrides, pre_keys, "preprocessor"
+            )
+            postprocessor_overrides = _filter_processor_overrides(
+                postprocessor_overrides, post_keys, "postprocessor"
+            )
+
+        processor_kwargs["preprocessor_overrides"] = preprocessor_overrides
+        postprocessor_kwargs["postprocessor_overrides"] = postprocessor_overrides
 
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=cfg.policy,

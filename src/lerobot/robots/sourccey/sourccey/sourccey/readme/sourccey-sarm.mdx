@@ -22,6 +22,15 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
  --policy.push_to_hub=false
 ```
 
+### Resume Training
+
+```
+CUDA_VISIBLE_DEVICES=1 uv run python src/lerobot/scripts/lerobot_train.py \
+  --resume=true \
+  --config_path=outputs/train/sarm_2cam_sourccey-shirt-aggregate-2/checkpoints/last/pretrained_model/train_config.json
+
+```
+
 
 ### Debug
 
@@ -50,8 +59,8 @@ Visualize Dryrun
 
 ```
 python src/lerobot/policies/sarm/compute_rabc_weights.py \
- --dataset-repo-id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
- --reward-model-path=outputs/train/sarm_2cam__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01/checkpoints/100000/pretrained_model \
+ --dataset-repo-id="Combination/sourccey-shirt-aggregate-2" \
+ --reward-model-path=outputs/train/sarm_2cam_sourccey-shirt-aggregate-2/checkpoints/060000/pretrained_model \
  --head-mode=sparse \
  --device=cuda \
  --num-visualizations=10 \
@@ -64,8 +73,8 @@ Generatoe RA-BC progress
 
 ```
 python src/lerobot/policies/sarm/compute_rabc_weights.py \
- --dataset-repo-id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
- --reward-model-path="outputs/train/sarm_2cam__sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01/checkpoints/100000/pretrained_model" \
+ --dataset-repo-id="Combination/sourccey-shirt-aggregate-2" \
+ --reward-model-path="outputs/train/sarm_2cam_sourccey-shirt-aggregate-2/checkpoints/060000/pretrained_model" \
  --head-mode=sparse \
  --device=cuda \
  --num-visualizations=10 \
@@ -79,9 +88,9 @@ python src/lerobot/policies/sarm/compute_rabc_weights.py \
 Rank Episodes with Sourccey Custom Script
 
 ```
-python src/lerobot/robots/sourccey/sourccey/sourccey/sourccey_rank_sarm_progress.py \
-  --dataset-repo-id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
-  --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01/sarm_progress.parquet" \
+python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_rank_sarm_progress.py \
+  --dataset-repo-id="Combination/sourccey-shirt-aggregate-2" \
+  --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-aggregate-2/sarm_progress.parquet" \
   --head-mode=sparse \
   --output-dir="outputs/sarm_episode_ranking_progress" \
   --weight-max=0.40 \
@@ -101,6 +110,17 @@ Output artifacts:
 - `outputs/sarm_episode_ranking/episodes_to_drop.txt`
 
 Use `episodes_to_drop.txt` with `lerobot-edit-dataset --operation.type delete_episodes` to trim low-quality episodes.
+
+If re-encoding hits corrupted video packets, enable automatic cleanup of affected episodes:
+
+```bash
+uv run lerobot-edit-dataset \
+  --repo_id "Combination/sourccey-shirt-aggregate-2" \
+  --new_repo_id "Combination/sourccey-shirt-aggregate-2_filtered_progress" \
+  --operation.type delete_episodes \
+  --operation.auto_delete_corrupted_video_episodes true \
+  --operation.episode_indices "$(cat outputs/sarm_episode_ranking_progress/episodes_to_drop_progress.json)"
+```
 
 ###
 
