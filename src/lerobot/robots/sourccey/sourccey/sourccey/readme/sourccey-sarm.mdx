@@ -89,8 +89,8 @@ Rank Episodes with Sourccey Custom Script
 
 ```
 python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_rank_sarm_progress.py \
-  --dataset-repo-id="Combination/sourccey-shirt-aggregate-2" \
-  --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-aggregate-2/sarm_progress.parquet" \
+  --dataset-repo-id="Combination/sourccey-shirt-aggregate-2-hq" \
+  --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-aggregate-2-hq/sarm_progress.parquet" \
   --head-mode=sparse \
   --output-dir="outputs/sarm_episode_ranking_progress" \
   --weight-max=0.40 \
@@ -124,11 +124,12 @@ uv run lerobot-edit-dataset \
 
 
 Output artifacts:
-- `outputs/sarm_episode_ranking/episode_ranking.csv`
-- `outputs/sarm_episode_ranking/episodes_to_drop.json`
-- `outputs/sarm_episode_ranking/episodes_to_drop.txt`
+- `outputs/sarm_episode_ranking_progress/episode_ranking_progress.csv`
+- `outputs/sarm_episode_ranking_progress/episodes_top300_progress.csv`
+- `outputs/sarm_episode_ranking_progress/episodes_bottom300_progress.csv`
+- `outputs/sarm_episode_ranking_progress/episodes_to_drop_progress.json`
 
-Use `episodes_to_drop.txt` with `lerobot-edit-dataset --operation.type delete_episodes` to trim low-quality episodes.
+Use `episodes_to_drop_progress.json` with `lerobot-edit-dataset --operation.type delete_episodes` to trim low-quality episodes.
 
 ###
 
@@ -167,15 +168,17 @@ python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_rank_sarm_
 Debug One Episode Ranking (Chart)
 
 ```
-python src/lerobot/robots/sourccey/sourccey/sourccey/sourccey_plot_sarm_episode.py \
- --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01/sarm_progress.parquet" \
- --episode-index=850 \
+python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_plot_sarm_episode.py \
+ --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-aggregate-2-hq/sarm_progress.parquet" \
+ --episode-index=872 \
  --head-mode=sparse \
- --ranking-csv="outputs/sarm_episode_ranking/episode_ranking.csv" \
- --output-path="outputs/sarm_episode_ranking/episode_850_sparse_debug.png"
-```
+ --ranking-csv="outputs/sarm_episode_ranking_progress/episode_ranking_progress.csv" \
+ --output-path="outputs/sarm_episode_ranking_progress/episode_872_sparse_debug.png"
 ```
 
 
+###
+Dataset Checker
 ```
+
 ```

@@ -1,0 +1,66 @@
+```bash
+# 1) Audit a subset first (smoke check)
+uv run lerobot-audit-video-decode-errors \
+  --dataset-repo-id Combination/sourccey-shirt-aggregate-2-hq \
+  --max-files 100 \
+  --workers 8 \
+  --output-dir outputs/video_audit_batch_001
+
+# 2) Repair all files listed by the audit (dry-run first)
+bash src/lerobot/scripts/sourccey/dataset/repair_bad_videos_from_audit.sh \
+  --bad-files-txt outputs/video_audit_batch_001/Combination__sourccey-shirt-aggregate-2-hq_bad_files.txt \
+  --dataset-repo-id Combination/sourccey-shirt-aggregate-2-hq \
+  --dry-run
+
+# 3) Apply the repair
+bash src/lerobot/scripts/sourccey/dataset/repair_bad_videos_from_audit.sh \
+  --bad-files-txt outputs/video_audit_batch_001/Combination__sourccey-shirt-aggregate-2-hq_bad_files.txt \
+  --dataset-repo-id Combination/sourccey-shirt-aggregate-2-hq
+
+# 4) Re-audit to verify fixes
+uv run lerobot-audit-video-decode-errors \
+  --dataset-repo-id Combination/sourccey-shirt-aggregate-2-hq \
+  --max-files 100 \
+  --workers 8 \
+  --output-dir outputs/video_audit_batch_001_post_repair
+
+# 5) Full scan (after workflow is validated on subsets)
+uv run lerobot-audit-video-decode-errors \
+  --dataset-repo-id Combination/sourccey-shirt-aggregate-2-hq \
+  --workers 8 \
+  --output-dir outputs/video_audit_full
+```
+
+
+
+### Dataset repair
+
+## Fine dataset errors
+
+```
+uv run lerobot-audit-video-decode-errors \
+  --dataset-repo-id Combination/sourccey-shirt-aggregate-2-hq \
+  --file-start 300 \
+  --max-files 200 \
+  --workers 8 \
+  --output-dir outputs/video_audit_batch_003_post_repair
+
+```
+
+## Repair Dataset:
+
+```
+bash src/lerobot/scripts/sourccey/dataset/repair_bad_videos_from_audit.sh \
+  --bad-files-txt outputs/video_audit_batch_005/Combination__sourccey-shirt-aggregate-2-hq_bad_files.txt \
+  --dataset-repo-id Combination/sourccey-shirt-aggregate-2-hq
+```
+
+
+# full audit
+```
+uv run lerobot-audit-video-decode-errors \
+  --dataset-repo-id Combination/sourccey-shirt-aggregate-2-hq \
+  --workers 8 \
+  --output-dir outputs/video_audit_full
+
+```
