@@ -1,0 +1,104 @@
+# Sourccey Battery Scripts (Raspberry Pi)
+
+Use this page to run the bq34z100 battery scripts from this repository.
+
+Run all commands from the repository root on the Pi.
+
+## Script Paths
+
+- `src/lerobot/scripts/sourccey/battery/battery.py` (quick telemetry)
+- `src/lerobot/scripts/sourccey/battery/check_bq34z100.py` (diagnostics)
+- `src/lerobot/scripts/sourccey/battery/configure_bq34z100.py` (configuration/writes)
+
+## 1) Quick Read: Live Telemetry
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/battery.py
+```
+
+You should get JSON like:
+
+```json
+{
+    "voltage": 13.245,
+    "current_a": -0.812,
+    "remaining_capacity_ah": 6.291,
+    "max_capacity_ah": 10.0,
+    "state_of_charge": 63,
+    "max_error": 2,
+    "error": null
+}
+```
+
+## 2) Read-Only Diagnostics (Recommended First)
+
+Compact operator view:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/check_bq34z100.py --pretty
+```
+
+Full diagnostic dump:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/check_bq34z100.py --full --pretty
+```
+
+Save full output to a file:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/check_bq34z100.py --full --pretty > bq_diag_full.json
+```
+
+## 3) Configure the Gauge (Writes to Data Flash)
+
+Show all options:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py --help
+```
+
+Read basic chip info:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py info
+```
+
+Apply default 4S LiFePO4 profile:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py setup-4s-lifepo4
+```
+
+Set divider from resistor values:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py set-divider \
+  --top-ohm 249000 \
+  --bottom-ohm 16500 \
+  --enable-voltsel
+```
+
+Dry-run any write command first:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py setup-4s-lifepo4 --dry-run
+```
+
+## 4) Common Validation Checks
+
+After running diagnostics, confirm:
+
+- `telemetry.error` is `null`
+- `pack.series_cells` matches your pack (usually `4`)
+- `pack.voltsel_enabled` is `true` when using an external divider
+- `telemetry.state_of_charge` is in `0..100`
+- `telemetry.max_error` is reasonably low
+
+## 5) Troubleshooting
+
+If you see an I2C/open-bus failure:
+
+- Make sure `/dev/i2c-1` exists on the Pi.
+- Ensure no other process is holding the gauge bus at the same time.
+- Verify wiring and gauge address (default `0x55`).
