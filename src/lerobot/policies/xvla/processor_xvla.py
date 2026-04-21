@@ -14,18 +14,23 @@
 # limitations under the License.
 # ------------------------------------------------------------------------------
 
+import json
 import logging
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
+from huggingface_hub import hf_hub_download
 
 from lerobot.configs.types import PipelineFeatureType, PolicyFeature
 from lerobot.datasets.factory import IMAGENET_STATS
 from lerobot.policies.xvla.configuration_xvla import XVLAConfig
 from lerobot.policies.xvla.utils import rotate6d_to_axis_angle
 from lerobot.processor import (
+    AbsoluteActionsProcessorStep,
     AddBatchDimensionProcessorStep,
     DeviceProcessorStep,
     NormalizerProcessorStep,
@@ -34,9 +39,11 @@ from lerobot.processor import (
     PolicyProcessorPipeline,
     ProcessorStep,
     ProcessorStepRegistry,
+    RelativeActionsProcessorStep,
     RenameObservationsProcessorStep,
     TokenizerProcessorStep,
     UnnormalizerProcessorStep,
+    to_absolute_actions,
 )
 from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
 from lerobot.types import EnvTransition, TransitionKey
@@ -49,6 +56,43 @@ from lerobot.utils.constants import (
 )
 
 _RANGE_CLAMP_WARNED_KEYS: set[str] = set()
+
+
+def _get_pretrained_tokenizer_max_length(pretrained_path: str | Path | None) -> int | None:
+    """Best-effort extraction of tokenizer max_length from a pretrained XVLA preprocessor config."""
+    if pretrained_path is None:
+        return None
+
+    config_filename = "policy_preprocessor.json"
+    try:
+        path = Path(pretrained_path)
+        if path.exists():
+            config_path = path / config_filename if path.is_dir() else path
+        else:
+            config_path = Path(
+                hf_hub_download(
+                    repo_id=str(pretrained_path),
+                    filename=config_filename,
+                )
+            )
+    except Exception as exc:
+        logging.debug("Failed to resolve pretrained processor config for '%s': %s", pretrained_path, exc)
+        return None
+
+    try:
+        with config_path.open() as f:
+            config = json.load(f)
+    except Exception as exc:
+        logging.debug("Failed to read pretrained processor config '%s': %s", config_path, exc)
+        return None
+
+    for step in config.get("steps", []):
+        if step.get("registry_name") != "tokenizer_processor":
+            continue
+        max_length = step.get("config", {}).get("max_length")
+        if isinstance(max_length, int) and max_length > 0:
+            return max_length
+    return None
 
 
 def _warn_clamp_once(
@@ -113,6 +157,136 @@ def _clamp_unit_range_or_raise(
     return tensor.clamp(0.0, 1.0)
 
 
+@ProcessorStepRegistry.register("xvla_delta_actions_processor")
+@dataclass
+class XVLARelativeActionsProcessorStep(RelativeActionsProcessorStep):
+    """XVLA-specific relative action step carrying chunk-anchor state queue."""
+
+    _absolute_anchor_states: deque[torch.Tensor] = field(default_factory=deque, init=False, repr=False)
+
+    def prime_absolute_anchor_states(self, count: int) -> None:
+        if count <= 0 or self._last_state is None:
+            return
+        for _ in range(count):
+            self._absolute_anchor_states.append(self._last_state.detach().clone())
+
+    def pop_absolute_anchor_state(self) -> torch.Tensor | None:
+        if self._absolute_anchor_states:
+            return self._absolute_anchor_states.popleft()
+        return self._last_state
+
+    def reset(self) -> None:
+        self._last_state = None
+        self._absolute_anchor_states.clear()
+
+
+@ProcessorStepRegistry.register("xvla_absolute_actions_processor")
+@dataclass
+class XVLAAbsoluteActionsProcessorStep(AbsoluteActionsProcessorStep):
+    """XVLA-specific absolute step that consumes chunk-anchor state queue."""
+
+    relative_step: XVLARelativeActionsProcessorStep | None = field(default=None, repr=False)
+
+    def __call__(self, transition: EnvTransition) -> EnvTransition:
+        if not self.enabled:
+            return transition
+
+        if self.relative_step is None:
+            raise RuntimeError(
+                "XVLAAbsoluteActionsProcessorStep requires a paired XVLARelativeActionsProcessorStep."
+            )
+
+        state_for_absolute = self.relative_step.pop_absolute_anchor_state()
+        if state_for_absolute is None:
+            raise RuntimeError(
+                "XVLAAbsoluteActionsProcessorStep requires cached state but none is available. "
+                "Ensure preprocessor runs before postprocessor."
+            )
+
+        new_transition = transition.copy()
+        action = new_transition.get(TransitionKey.ACTION)
+        if action is None:
+            return new_transition
+
+        mask = self.relative_step._build_mask(action.shape[-1])
+        new_transition[TransitionKey.ACTION] = to_absolute_actions(action, state_for_absolute, mask)
+        return new_transition
+
+
+def prime_xvla_relative_anchor_states(
+    preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
+    postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction],
+    generated_count: int,
+) -> bool:
+    """Prime chunk-anchor states for XVLA postprocessing."""
+    if generated_count <= 0:
+        return False
+
+    relative_step = next(
+        (s for s in preprocessor.steps if isinstance(s, XVLARelativeActionsProcessorStep)), None
+    )
+    absolute_step = next(
+        (s for s in postprocessor.steps if isinstance(s, XVLAAbsoluteActionsProcessorStep)), None
+    )
+    if relative_step is None or absolute_step is None:
+        return False
+    if not relative_step.enabled or not absolute_step.enabled:
+        return False
+    if absolute_step.relative_step is not relative_step:
+        absolute_step.relative_step = relative_step
+
+    relative_step.prime_absolute_anchor_states(generated_count)
+    return True
+
+
+def upgrade_xvla_relative_processors(
+    preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
+    postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction],
+) -> None:
+    """Upgrade deserialized generic relative/absolute steps to XVLA-specialized steps."""
+    rel_idx, rel_step = next(
+        (
+            (i, s)
+            for i, s in enumerate(preprocessor.steps)
+            if isinstance(s, RelativeActionsProcessorStep)
+        ),
+        (None, None),
+    )
+    abs_idx, abs_step = next(
+        (
+            (i, s)
+            for i, s in enumerate(postprocessor.steps)
+            if isinstance(s, AbsoluteActionsProcessorStep)
+        ),
+        (None, None),
+    )
+    if rel_idx is None or rel_step is None or abs_idx is None or abs_step is None:
+        return
+
+    if isinstance(rel_step, XVLARelativeActionsProcessorStep):
+        xvla_rel = rel_step
+    else:
+        xvla_rel = XVLARelativeActionsProcessorStep(
+            enabled=rel_step.enabled,
+            exclude_joints=list(rel_step.exclude_joints),
+            action_names=list(rel_step.action_names) if rel_step.action_names is not None else None,
+        )
+        xvla_rel._last_state = rel_step._last_state
+        if hasattr(rel_step, "_absolute_anchor_states"):
+            for state in rel_step._absolute_anchor_states:
+                xvla_rel._absolute_anchor_states.append(state)
+        preprocessor.steps[rel_idx] = xvla_rel
+
+    if isinstance(abs_step, XVLAAbsoluteActionsProcessorStep):
+        abs_step.relative_step = xvla_rel
+    else:
+        abs_enabled = getattr(abs_step, "enabled", True)
+        postprocessor.steps[abs_idx] = XVLAAbsoluteActionsProcessorStep(
+            enabled=abs_enabled,
+            relative_step=xvla_rel,
+        )
+
+
 def make_xvla_pre_post_processors(
     config: XVLAConfig,
     dataset_stats: dict[str, dict[str, torch.Tensor]] | None = None,
@@ -123,14 +297,36 @@ def make_xvla_pre_post_processors(
     """
     Build the LeRobot processor pipelines for XVLA.
     """
+    tokenizer_max_length = config.tokenizer_max_length
+    pretrained_tokenizer_max_length = _get_pretrained_tokenizer_max_length(getattr(config, "pretrained_path", None))
+    if (
+        config.use_relative_actions
+        and pretrained_tokenizer_max_length is not None
+        and tokenizer_max_length > pretrained_tokenizer_max_length
+    ):
+        logging.warning(
+            "XVLA relative-actions preprocessor uses tokenizer_max_length=%s from pretrained processors "
+            "(requested=%s) to preserve sequence budget.",
+            pretrained_tokenizer_max_length,
+            tokenizer_max_length,
+        )
+        tokenizer_max_length = pretrained_tokenizer_max_length
 
     features = {**config.input_features, **config.output_features}
+    relative_step = XVLARelativeActionsProcessorStep(
+        enabled=config.use_relative_actions,
+        exclude_joints=getattr(config, "relative_exclude_joints", []),
+        action_names=getattr(config, "action_feature_names", None),
+    )
+
+    # OpenPI-style relative-actions flow for actions:
+    # raw -> relative -> normalize -> model -> unnormalize -> absolute
     input_steps = [
         RenameObservationsProcessorStep(rename_map={}),
         AddBatchDimensionProcessorStep(),
         TokenizerProcessorStep(
             tokenizer_name=config.tokenizer_name,
-            max_length=config.tokenizer_max_length,
+            max_length=tokenizer_max_length,
             padding=config.pad_language_to,
             padding_side=config.tokenizer_padding_side,
         ),
@@ -138,6 +334,7 @@ def make_xvla_pre_post_processors(
         XVLAImageNetNormalizeProcessorStep(),
         XVLAAddDomainIdProcessorStep(),
         DeviceProcessorStep(device=config.device),
+        relative_step,
         NormalizerProcessorStep(
             features=features, norm_map=config.normalization_mapping, stats=dataset_stats
         ),
@@ -149,6 +346,7 @@ def make_xvla_pre_post_processors(
             norm_map=config.normalization_mapping,
             stats=dataset_stats,
         ),
+        XVLAAbsoluteActionsProcessorStep(enabled=config.use_relative_actions, relative_step=relative_step),
         DeviceProcessorStep(device="cpu"),
     ]
 

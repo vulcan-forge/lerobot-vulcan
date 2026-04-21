@@ -140,8 +140,8 @@ Then Calibrate the bi-manual teleoperator (leader arms):
 python src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
  --teleop.type=bi_sourccey_leader \
  --teleop.id=bi_sourccey_leader \
- --teleop.left_arm_port="COM17" \
- --teleop.right_arm_port="COM18"
+ --teleop.left_arm_port="/dev/ttyACM0" \
+ --teleop.right_arm_port="/dev/ttyACM1"
 ```
 
 python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --remote_ip="192.168.1.211" --left_arm_port="/dev/ttyACM1" --right_arm_port="/dev/ttyACM0" --keyboard_port="keyboard" --fps=30
@@ -365,131 +365,18 @@ uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.py
 
 ### Combining Datasets
 
-Combine multiple datasets into one:
-
-```
-
-python src/lerobot/scripts/sourccey/dataset/combine_datasets.py \
- --dataset_paths='[
-"sourccey-012/sourccey-012__shorts-fold-b__set000__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set001__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set002__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set003__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set004__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set005__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set006__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set007__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set008__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set009__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set010__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set011__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set012__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set013__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set014__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set015__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set016__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set017__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set018__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-b__set019__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set010__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set011__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set012__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set013__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set014__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set015__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set016__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set017__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set018__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set019__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set020__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set021__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set022__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set023__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set024__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set025__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set026__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set027__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set028__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set029__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set030__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set031__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set032__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set033__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set034__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set035__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set036__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set037__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set038__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set039__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set040__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set041__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set042__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set043__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set044__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set045__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set046__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set047__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set048__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set049__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set050__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set051__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set052__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set053__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set054__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set055__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set056__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set057__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set058__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set059__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set060__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set061__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set062__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set063__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set064__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set065__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set066__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set067__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set068__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set069__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set070__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set071__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set072__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set073__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set074__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-a__set075__mylesr",
-"sourccey-009/sourccey-009__shorts-fold-a__set000__mylesr",
-"sourccey-009/sourccey-009__shorts-fold-a__set001__mylesr",
-"sourccey-009/sourccey-009__shorts-fold-a__set002__mylesr",
-"sourccey-009/sourccey-009__shorts-fold-a__set003__mylesr",
-"sourccey-009/sourccey-009__shorts-fold-a__set004__mylesr",
-"sourccey-009/sourccey-009__shorts-fold-a__set005__mylesr",
-"sourccey-009/sourccey-009__shorts-fold-a__set006__mylesr",
-"sourccey-009/sourccey-009__shorts-fold-a__set007__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set000__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set001__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set002__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set003__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set004__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set005__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set006__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set007__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set008__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set009__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set010__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set011__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set012__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set013__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set014__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set015__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set016__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set017__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set018__mylesr",
-"sourccey-012/sourccey-012__shorts-fold-c__set019__mylesr"
-
-]' \
- --output_path="sourccey-009-012__shorts-fold__cmb__001__mylesr"
-```
-
+uv run lerobot-edit-dataset \
+  --new_repo_id="Combination/sourccey-013__shirt-fold-dark-blue-a__set000-006__nickm" \
+  --operation.type=merge \
+  --operation.repo_ids="[
+    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set000__nickm',
+    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set001__nickm',
+    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set002__nickm',
+    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set003__nickm',
+    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set004__nickm',
+    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set005__nickm',
+    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set006__nickm'
+  ]"
 ## **⚠️ Important:** Do not include trailing commas in the `--dataset_paths` array, as this will cause errors.
 
 ## Workflow Summary

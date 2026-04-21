@@ -241,7 +241,21 @@ class DatasetReader:
             shifted_query_ts = [from_timestamp + ts for ts in query_ts]
 
             video_path = self.root / self._meta.get_video_file_path(ep_idx, vid_key)
-            frames = decode_video_frames(video_path, shifted_query_ts, self._tolerance_s, self._video_backend)
+            try:
+                frames = decode_video_frames(
+                    video_path,
+                    shifted_query_ts,
+                    self._tolerance_s,
+                    self._video_backend,
+                )
+            except Exception as e:
+                raise RuntimeError(
+                    "Video decode failed while reading dataset item. "
+                    f"ep_idx={ep_idx}, video_key={vid_key}, video_path={video_path}, "
+                    f"from_timestamp={from_timestamp}, query_timestamps={query_ts}, "
+                    f"shifted_query_timestamps={shifted_query_ts}, "
+                    f"tolerance_s={self._tolerance_s}, backend={self._video_backend}"
+                ) from e
             item[vid_key] = frames.squeeze(0)
 
         return item

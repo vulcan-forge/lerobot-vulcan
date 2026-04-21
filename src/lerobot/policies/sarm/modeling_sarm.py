@@ -390,7 +390,7 @@ class SARMRewardModel(PreTrainedPolicy):
             n_layers=config.num_layers,
             n_heads=config.num_heads,
             dropout=config.dropout,
-            num_cameras=1,  # Single camera for now
+            num_cameras=config.num_cameras,
             num_classes_sparse=config.num_sparse_stages,
             num_classes_dense=config.num_dense_stages or config.num_sparse_stages,
         )
@@ -403,7 +403,7 @@ class SARMRewardModel(PreTrainedPolicy):
             n_layers=config.num_layers,
             n_heads=config.num_heads,
             dropout=config.dropout,
-            num_cameras=1,
+            num_cameras=config.num_cameras,
         )
 
         self.stage_model.to(self.device)
@@ -492,7 +492,9 @@ class SARMRewardModel(PreTrainedPolicy):
 
         Args:
             text_embeddings: Encoded text representations (batch_size, 512)
-            video_embeddings: Encoded video representations (batch_size, num_frames, 512)
+            video_embeddings: Encoded video representations.
+                - Single-camera: (batch_size, num_frames, 512)
+                - Multi-camera: (batch_size, num_cameras, num_frames, 512)
             state_features: Joint state features (batch_size, num_frames, state_dim)
             lengths: Valid sequence lengths (batch_size,)
             return_all_frames: If True, return rewards for all frames
@@ -512,17 +514,48 @@ class SARMRewardModel(PreTrainedPolicy):
             state_features = torch.tensor(state_features, dtype=torch.float32)
 
         # Handle single sample case
-        if text_embeddings.dim() == 1:
+        single_sample = text_embeddings.dim() == 1
+        if single_sample:
             text_embeddings = text_embeddings.unsqueeze(0)
-            video_embeddings = video_embeddings.unsqueeze(0)
-            if state_features is not None:
-                state_features = state_features.unsqueeze(0)
-            single_sample = True
-        else:
-            single_sample = False
 
-        batch_size = video_embeddings.shape[0]
-        seq_len = video_embeddings.shape[1]
+        # Normalize video tensor shape.
+        if video_embeddings.dim() == 2:
+            # (T, D) -> (1, T, D)
+            video_embeddings = video_embeddings.unsqueeze(0)
+        elif (
+            video_embeddings.dim() == 3
+            and self.config.num_cameras > 1
+            and video_embeddings.shape[0] == self.config.num_cameras
+            and text_embeddings.shape[0] == 1
+        ):
+            # (N, T, D) -> (1, N, T, D)
+            video_embeddings = video_embeddings.unsqueeze(0)
+
+        if video_embeddings.dim() == 3 and self.config.num_cameras > 1:
+            raise ValueError(
+                "Multi-camera SARM expects video_embeddings with shape (B, N, T, D). "
+                f"Got {tuple(video_embeddings.shape)} with config.num_cameras={self.config.num_cameras}."
+            )
+
+        if video_embeddings.dim() == 3:
+            # Single-camera: (B, T, D) -> (B, 1, T, D)
+            batch_size = video_embeddings.shape[0]
+            seq_len = video_embeddings.shape[1]
+            img_seq = video_embeddings.unsqueeze(1).to(self.device)
+        elif video_embeddings.dim() == 4:
+            # Multi-camera: (B, N, T, D)
+            batch_size = video_embeddings.shape[0]
+            num_cameras = video_embeddings.shape[1]
+            seq_len = video_embeddings.shape[2]
+            if num_cameras != self.config.num_cameras:
+                raise ValueError(
+                    f"Expected {self.config.num_cameras} cameras, got {num_cameras} in video_embeddings."
+                )
+            img_seq = video_embeddings.to(self.device)
+        else:
+            raise ValueError(
+                f"video_embeddings must have shape (B, T, D) or (B, N, T, D), got {tuple(video_embeddings.shape)}."
+            )
 
         scheme = head_mode
 
@@ -532,10 +565,12 @@ class SARMRewardModel(PreTrainedPolicy):
         elif isinstance(lengths, np.ndarray):
             lengths = torch.tensor(lengths, dtype=torch.int32)
 
-        # Reshape video to (B, N, T, D) for multi-camera format
-        # Currently single camera: (B, T, D) -> (B, 1, T, D)
-        img_seq = video_embeddings.unsqueeze(1).to(self.device)
         lang_emb = text_embeddings.to(self.device)
+
+        if state_features is not None and state_features.dim() == 2:
+            # (T, D) -> (1, T, D) for single sample usage.
+            state_features = state_features.unsqueeze(0)
+
         state = (
             state_features.to(self.device)
             if state_features is not None
@@ -712,7 +747,7 @@ class SARMRewardModel(PreTrainedPolicy):
 
         Args:
             batch: Dictionary with 'observation' containing:
-                - 'video_features': (B, T, 512) pre-encoded video features
+                - 'video_features': (B, T, 512) or (B, N, T, 512) pre-encoded video features
                 - 'text_features': (B, 512) or (B, T, 512) text features
                 - 'state_features': (B, T, state_dim) joint state features
                 - 'lengths': (B,) valid sequence lengths
@@ -732,7 +767,29 @@ class SARMRewardModel(PreTrainedPolicy):
             state_features = state_features.to(self.device)
 
         batch_size = video_features.shape[0]
-        seq_len = video_features.shape[1]
+        if video_features.dim() == 3 and self.config.num_cameras > 1:
+            raise ValueError(
+                "Multi-camera SARM expects video_features with shape (B, N, T, D) from the processor. "
+                f"Got {tuple(video_features.shape)} with config.num_cameras={self.config.num_cameras}."
+            )
+
+        if video_features.dim() == 3:
+            # Legacy single-camera shape: (B, T, D)
+            seq_len = video_features.shape[1]
+            img_emb = video_features.unsqueeze(1)
+        elif video_features.dim() == 4:
+            # Multi-camera shape: (B, N, T, D)
+            num_cameras = video_features.shape[1]
+            seq_len = video_features.shape[2]
+            if num_cameras != self.config.num_cameras:
+                raise ValueError(
+                    f"Expected {self.config.num_cameras} cameras, got {num_cameras} in video_features."
+                )
+            img_emb = video_features
+        else:
+            raise ValueError(
+                f"video_features must have shape (B, T, D) or (B, N, T, D), got {tuple(video_features.shape)}."
+            )
 
         # Get lengths (default to full sequence)
         lengths = observation.get("lengths")
@@ -740,9 +797,6 @@ class SARMRewardModel(PreTrainedPolicy):
             lengths = torch.full((batch_size,), seq_len, dtype=torch.int32, device=self.device)
         else:
             lengths = lengths.to(self.device)
-
-        # Reshape video to (B, N, T, D) - single camera
-        img_emb = video_features.unsqueeze(1)
 
         # Pad state to max_state_dim
         if state_features is None:

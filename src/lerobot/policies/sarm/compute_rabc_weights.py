@@ -46,7 +46,10 @@ The output is saved to the dataset's local cache directory as 'sarm_progress.par
 """
 
 import argparse
+import json
 import logging
+import re
+import shutil
 from pathlib import Path
 
 import matplotlib.gridspec as gridspec
@@ -61,6 +64,110 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.sarm.modeling_sarm import SARMRewardModel
 from lerobot.policies.sarm.processor_sarm import make_sarm_pre_post_processors
 from lerobot.policies.sarm.sarm_utils import normalize_stage_tau
+
+_PART_FILE_RE = re.compile(r"episode_(\d+)\.parquet$")
+
+
+def _get_parts_dir(output_path: Path) -> Path:
+    return output_path.parent / f"{output_path.name}.parts"
+
+
+def _episode_part_path(parts_dir: Path, episode_idx: int) -> Path:
+    return parts_dir / f"episode_{episode_idx:06d}.parquet"
+
+
+def _atomic_write_table(table: pa.Table, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    pq.write_table(table, tmp_path)
+    tmp_path.replace(output_path)
+
+
+def _write_parts_manifest(
+    parts_dir: Path,
+    *,
+    dataset_repo_id: str,
+    reward_model_path: str,
+    head_mode: str,
+    stride: int,
+    compute_sparse: bool,
+    compute_dense: bool,
+    num_episodes: int,
+    reset_parts: bool,
+) -> None:
+    if reset_parts and parts_dir.exists():
+        shutil.rmtree(parts_dir)
+    parts_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = parts_dir / "manifest.json"
+    expected = {
+        "dataset_repo_id": dataset_repo_id,
+        "reward_model_path": reward_model_path,
+        "head_mode": head_mode,
+        "stride": stride,
+        "compute_sparse": compute_sparse,
+        "compute_dense": compute_dense,
+        "num_episodes": num_episodes,
+    }
+
+    if manifest_path.exists():
+        existing = json.loads(manifest_path.read_text())
+        if existing != expected:
+            raise ValueError(
+                f"Existing partial results at {parts_dir} were created with different settings. "
+                "Use --reset-parts to start over or choose a different --output-path."
+            )
+    else:
+        manifest_path.write_text(json.dumps(expected, indent=2))
+
+
+def _list_completed_episodes(parts_dir: Path) -> set[int]:
+    if not parts_dir.exists():
+        return set()
+    episodes = set()
+    for path in parts_dir.glob("episode_*.parquet"):
+        match = _PART_FILE_RE.match(path.name)
+        if match:
+            episodes.add(int(match.group(1)))
+    return episodes
+
+
+def _merge_parts_to_output(
+    *,
+    parts_dir: Path,
+    output_path: Path,
+    reward_model_path: str,
+    expected_num_episodes: int,
+) -> pa.Table:
+    part_files = [_episode_part_path(parts_dir, i) for i in range(expected_num_episodes)]
+    missing = [p for p in part_files if not p.exists()]
+    if missing:
+        missing_episodes = [int(_PART_FILE_RE.match(p.name).group(1)) for p in missing]
+        preview = missing_episodes[:10]
+        suffix = "..." if len(missing_episodes) > 10 else ""
+        raise RuntimeError(
+            f"Missing {len(missing_episodes)} episode part files ({preview}{suffix}). "
+            "Re-run the command to resume from the missing episodes."
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_merged_path = output_path.with_suffix(output_path.suffix + ".merge_tmp")
+    writer: pq.ParquetWriter | None = None
+    try:
+        for part_path in part_files:
+            table = pq.read_table(part_path)
+            if writer is None:
+                schema = table.schema
+                metadata = dict(schema.metadata or {})
+                metadata[b"reward_model_path"] = reward_model_path.encode()
+                writer = pq.ParquetWriter(temp_merged_path, schema.with_metadata(metadata))
+            writer.write_table(table)
+    finally:
+        if writer is not None:
+            writer.close()
+
+    temp_merged_path.replace(output_path)
+    return pq.read_table(output_path)
 
 
 def get_reward_model_path_from_parquet(parquet_path: Path) -> str | None:
@@ -92,7 +199,7 @@ def load_sarm_resources(
     reward_model.config.device = device
     reward_model.to(device).eval()
 
-    image_key = reward_model.config.image_key
+    image_keys = reward_model.config.camera_keys
     state_key = reward_model.config.state_key
     delta_indices = reward_model.config.observation_delta_indices
 
@@ -100,12 +207,11 @@ def load_sarm_resources(
     temp_dataset = LeRobotDataset(dataset_repo_id, download_videos=True)
     fps = temp_dataset.fps
 
-    delta_timestamps = {
-        image_key: [idx / fps for idx in delta_indices],
-        state_key: [idx / fps for idx in delta_indices],
-    }
+    delta_timestamps = {key: [idx / fps for idx in delta_indices] for key in image_keys}
+    delta_timestamps[state_key] = [idx / fps for idx in delta_indices]
     dataset = LeRobotDataset(dataset_repo_id, delta_timestamps=delta_timestamps)
     logging.info(f"Dataset: {dataset.num_episodes} episodes, {dataset.num_frames} frames")
+    logging.info(f"SARM cameras: {image_keys}")
 
     preprocess, _ = make_sarm_pre_post_processors(
         config=reward_model.config,
@@ -237,7 +343,8 @@ def visualize_sarm_predictions(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    image_key = reward_model.config.image_key
+    image_keys = reward_model.config.camera_keys
+    primary_image_key = image_keys[0]
     state_key = reward_model.config.state_key
     dual_mode = reward_model.config.uses_dual_heads
     device = reward_model.device
@@ -280,7 +387,7 @@ def visualize_sarm_predictions(
         # Load display frames up-front (stride mode might skip them otherwise).
         for frame_idx in display_indices:
             sample = dataset[frame_idx]
-            viz_frames[frame_idx] = to_numpy_image(sample[image_key])
+            viz_frames[frame_idx] = to_numpy_image(sample[primary_image_key])
 
         # Initialize storage for each scheme
         scheme_data = {}
@@ -311,11 +418,12 @@ def visualize_sarm_predictions(
             sample = dataset[frame_idx]
 
             batch = {
-                image_key: sample[image_key],
                 "task": task,
                 "index": frame_idx,
                 "episode_index": episode_idx,
             }
+            for key in image_keys:
+                batch[key] = sample[key]
             if state_key in sample:
                 batch[state_key] = sample[state_key]
 
@@ -469,6 +577,7 @@ def compute_sarm_progress(
     num_visualizations: int = 5,
     output_dir: str = "./sarm_viz",
     stride: int = 1,
+    reset_parts: bool = False,
 ):
     """
     Compute SARM progress predictions for all frames in a dataset.
@@ -482,6 +591,7 @@ def compute_sarm_progress(
         num_visualizations: Number of episodes to visualize (0 to skip)
         output_dir: Directory to save visualizations
         stride: Compute progress every N frames, interpolate the rest (default: 1 = every frame)
+        reset_parts: If True, clears previous partial results and starts from scratch
     """
     dataset, reward_model, preprocess = load_sarm_resources(dataset_repo_id, reward_model_path, device)
 
@@ -492,7 +602,7 @@ def compute_sarm_progress(
         if hasattr(step, "eval"):
             step.eval()
 
-    image_key = reward_model.config.image_key
+    image_keys = reward_model.config.camera_keys
     state_key = reward_model.config.state_key
     frame_gap = reward_model.config.frame_gap
     num_episodes = dataset.num_episodes
@@ -504,18 +614,39 @@ def compute_sarm_progress(
     compute_sparse = head_mode in ("sparse", "both") or not dual_mode
     compute_dense = head_mode in ("dense", "both") and dual_mode
 
-    # Storage arrays
-    all_indices = []
-    all_episode_indices = []
-    all_frame_indices = []
-    all_progress_sparse = [] if compute_sparse else None
-    all_progress_dense = [] if compute_dense else None
+    # Determine output path and setup resumable episode parts.
+    output_path = Path(dataset.root) / "sarm_progress.parquet" if output_path is None else Path(output_path)
+    parts_dir = _get_parts_dir(output_path)
+    _write_parts_manifest(
+        parts_dir,
+        dataset_repo_id=dataset_repo_id,
+        reward_model_path=reward_model_path,
+        head_mode=head_mode,
+        stride=stride,
+        compute_sparse=compute_sparse,
+        compute_dense=compute_dense,
+        num_episodes=num_episodes,
+        reset_parts=reset_parts,
+    )
+    completed_episodes = _list_completed_episodes(parts_dir)
+    if completed_episodes:
+        logging.info(
+            "Resuming from partial results in %s (%d/%d episodes already completed)",
+            parts_dir,
+            len(completed_episodes),
+            num_episodes,
+        )
+    else:
+        logging.info("No prior partial results found. Starting fresh.")
 
     if stride > 1:
         logging.info(f"Using stride={stride}: computing every {stride} frames, interpolating the rest")
 
     # Process all episodes
     for episode_idx in tqdm(range(num_episodes), desc="Episodes"):
+        if episode_idx in completed_episodes:
+            continue
+
         ep = dataset.meta.episodes[episode_idx]
         ep_start = ep["dataset_from_index"]
         ep_end = ep["dataset_to_index"]
@@ -546,11 +677,12 @@ def compute_sarm_progress(
                 sample = dataset[query_idx]
 
                 batch = {
-                    image_key: sample[image_key],
                     "task": task,
                     "index": query_idx,
                     "episode_index": episode_idx,
                 }
+                for key in image_keys:
+                    batch[key] = sample[key]
                 if state_key in sample:
                     batch[state_key] = sample[state_key]
 
@@ -624,69 +756,82 @@ def compute_sarm_progress(
             interp_sparse = computed_sparse if compute_sparse else None
             interp_dense = computed_dense if compute_dense else None
 
+        # Episode-local storage.
+        episode_indices: list[int] = []
+        episode_episode_indices: list[int] = []
+        episode_frame_indices: list[int] = []
+        episode_progress_sparse: list[float] = []
+        episode_progress_dense: list[float] = []
+
         # Store results for all frames
         for i, frame_idx in enumerate(all_frame_idx_array):
             local_idx = frame_idx - ep_start
-            all_indices.append(frame_idx)
-            all_episode_indices.append(episode_idx)
-            all_frame_indices.append(local_idx)
+            episode_indices.append(frame_idx)
+            episode_episode_indices.append(episode_idx)
+            episode_frame_indices.append(local_idx)
             if compute_sparse:
                 if stride > 1 and len(computed_indices) > 1:
-                    all_progress_sparse.append(float(interp_sparse[i]))
+                    episode_progress_sparse.append(float(interp_sparse[i]))
                 elif frame_idx in frame_results:
-                    all_progress_sparse.append(frame_results[frame_idx][0])
+                    episode_progress_sparse.append(frame_results[frame_idx][0])
                 else:
-                    all_progress_sparse.append(np.nan)
+                    episode_progress_sparse.append(np.nan)
             if compute_dense:
                 if stride > 1 and len(computed_indices) > 1:
-                    all_progress_dense.append(float(interp_dense[i]))
+                    episode_progress_dense.append(float(interp_dense[i]))
                 elif frame_idx in frame_results:
-                    all_progress_dense.append(frame_results[frame_idx][1])
+                    episode_progress_dense.append(frame_results[frame_idx][1])
                 else:
-                    all_progress_dense.append(np.nan)
+                    episode_progress_dense.append(np.nan)
 
-    # Create output table
-    table_data = {
-        "index": np.array(all_indices, dtype=np.int64),
-        "episode_index": np.array(all_episode_indices, dtype=np.int64),
-        "frame_index": np.array(all_frame_indices, dtype=np.int64),
-    }
-    if compute_sparse:
-        table_data["progress_sparse"] = np.array(all_progress_sparse, dtype=np.float32)
-    if compute_dense:
-        table_data["progress_dense"] = np.array(all_progress_dense, dtype=np.float32)
+        episode_table_data = {
+            "index": np.array(episode_indices, dtype=np.int64),
+            "episode_index": np.array(episode_episode_indices, dtype=np.int64),
+            "frame_index": np.array(episode_frame_indices, dtype=np.int64),
+        }
+        if compute_sparse:
+            episode_table_data["progress_sparse"] = np.array(episode_progress_sparse, dtype=np.float32)
+        if compute_dense:
+            episode_table_data["progress_dense"] = np.array(episode_progress_dense, dtype=np.float32)
 
-    # Sort by index
-    df = pa.table(table_data).to_pandas()
-    df = df.sort_values("index").reset_index(drop=True)
-    final_table = pa.Table.from_pandas(df, preserve_index=False)
+        episode_table = pa.table(episode_table_data)
+        metadata = {b"reward_model_path": reward_model_path.encode()}
+        episode_table = episode_table.replace_schema_metadata(metadata)
+        _atomic_write_table(episode_table, _episode_part_path(parts_dir, episode_idx))
 
-    # Add metadata with reward model path
-    metadata = {b"reward_model_path": reward_model_path.encode()}
-    final_table = final_table.replace_schema_metadata(metadata)
-
-    # Determine output path
-    output_path = Path(dataset.root) / "sarm_progress.parquet" if output_path is None else Path(output_path)
-
-    # Save
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(final_table, output_path)
-    logging.info(f"Saved {len(final_table)} frame progress values to {output_path}")
+    # Merge all episode parts into final output parquet.
+    final_table = _merge_parts_to_output(
+        parts_dir=parts_dir,
+        output_path=output_path,
+        reward_model_path=reward_model_path,
+        expected_num_episodes=num_episodes,
+    )
+    logging.info("Saved %d frame progress values to %s", len(final_table), output_path)
 
     # Print statistics
-    if "progress_sparse" in df.columns:
-        valid = df["progress_sparse"].dropna()
-        logging.info(
-            f"Sparse progress: mean={valid.mean():.4f}, std={valid.std():.4f}, "
-            f"min={valid.min():.4f}, max={valid.max():.4f}"
-        )
+    if "progress_sparse" in final_table.column_names:
+        sparse_values = final_table["progress_sparse"].to_numpy(zero_copy_only=False)
+        valid = sparse_values[np.isfinite(sparse_values)]
+        if valid.size > 0:
+            logging.info(
+                "Sparse progress: mean=%.4f, std=%.4f, min=%.4f, max=%.4f",
+                float(valid.mean()),
+                float(valid.std()),
+                float(valid.min()),
+                float(valid.max()),
+            )
 
-    if "progress_dense" in df.columns:
-        valid = df["progress_dense"].dropna()
-        logging.info(
-            f"Dense progress: mean={valid.mean():.4f}, std={valid.std():.4f}, "
-            f"min={valid.min():.4f}, max={valid.max():.4f}"
-        )
+    if "progress_dense" in final_table.column_names:
+        dense_values = final_table["progress_dense"].to_numpy(zero_copy_only=False)
+        valid = dense_values[np.isfinite(dense_values)]
+        if valid.size > 0:
+            logging.info(
+                "Dense progress: mean=%.4f, std=%.4f, min=%.4f, max=%.4f",
+                float(valid.mean()),
+                float(valid.std()),
+                float(valid.min()),
+                float(valid.max()),
+            )
 
     # Visualize episodes after processing
     if num_visualizations > 0:
@@ -775,15 +920,20 @@ Examples:
     )
     parser.add_argument(
         "--push-to-hub",
-        action="store_true",
-        help="Upload progress file to the dataset repo on HuggingFace Hub",
-        default=True,
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Upload progress file to the dataset repo on HuggingFace Hub (default: disabled)",
     )
     parser.add_argument(
         "--stride",
         type=int,
         default=1,
         help="Compute progress every N frames, interpolate the rest (default: 1 = every frame)",
+    )
+    parser.add_argument(
+        "--reset-parts",
+        action="store_true",
+        help="Discard any existing episode part checkpoints and recompute from scratch",
     )
 
     args = parser.parse_args()
@@ -833,6 +983,7 @@ Examples:
         num_visualizations=args.num_visualizations,
         output_dir=args.output_dir,
         stride=args.stride,
+        reset_parts=args.reset_parts,
     )
 
     print(f"\nSARM progress values saved to: {output_path}")
@@ -840,25 +991,42 @@ Examples:
     # Upload to Hub if requested
     if args.push_to_hub:
         from huggingface_hub import HfApi
+        from huggingface_hub.errors import HfHubHTTPError, RepositoryNotFoundError
 
         api = HfApi()
         hub_path = "sarm_progress.parquet"
 
-        print(f"\nUploading to Hub: {args.dataset_repo_id}/{hub_path}")
-        api.upload_file(
-            path_or_fileobj=str(output_path),
-            path_in_repo=hub_path,
-            repo_id=args.dataset_repo_id,
-            repo_type="dataset",
-        )
-        print(
-            f"Successfully uploaded to: https://huggingface.co/datasets/{args.dataset_repo_id}/blob/main/{hub_path}"
-        )
+        try:
+            print(f"\nUploading to Hub: {args.dataset_repo_id}/{hub_path}")
+            api.upload_file(
+                path_or_fileobj=str(output_path),
+                path_in_repo=hub_path,
+                repo_id=args.dataset_repo_id,
+                repo_type="dataset",
+            )
+            print(
+                f"Successfully uploaded to: https://huggingface.co/datasets/{args.dataset_repo_id}/blob/main/{hub_path}"
+            )
 
-        print("\nTo use in training, add to your config:")
-        print("  use_rabc: true")
-        print(f"  rabc_progress_path: hf://datasets/{args.dataset_repo_id}/{hub_path}")
-        print("  rabc_head_mode: sparse  # or dense")
+            print("\nTo use in training, add to your config:")
+            print("  use_rabc: true")
+            print(f"  rabc_progress_path: hf://datasets/{args.dataset_repo_id}/{hub_path}")
+            print("  rabc_head_mode: sparse  # or dense")
+        except RepositoryNotFoundError as e:
+            logging.error("Upload skipped: dataset repo not found (%s)", args.dataset_repo_id)
+            logging.error("Hub error: %s", e)
+            print("\nLocal progress file is already saved and can be used directly.")
+            print("To use in training, add to your config:")
+            print("  use_rabc: true")
+            print(f"  rabc_progress_path: {output_path}")
+            print("  rabc_head_mode: sparse  # or dense")
+        except HfHubHTTPError as e:
+            logging.error("Upload failed due to Hub HTTP error: %s", e)
+            print("\nLocal progress file is already saved and can be used directly.")
+            print("To use in training, add to your config:")
+            print("  use_rabc: true")
+            print(f"  rabc_progress_path: {output_path}")
+            print("  rabc_head_mode: sparse  # or dense")
     else:
         print("\nTo use in training, add to your config:")
         print("  use_rabc: true")

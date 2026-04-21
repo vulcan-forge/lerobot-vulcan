@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
+from pathlib import Path
+import shutil
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import hw_to_dataset_features
+from lerobot.datasets.feature_utils import hw_to_dataset_features
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 from lerobot.processor import make_default_processors
@@ -10,6 +12,7 @@ from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
 from lerobot.scripts.lerobot_record import record_loop
 from lerobot.configs import parser
+from lerobot.utils.constants import HF_LEROBOT_HOME
 
 @dataclass
 class DatasetEvaluateConfig:
@@ -49,10 +52,19 @@ def evaluate(cfg: SourcceyEvaluateConfig):
     dataset_features = {**action_features, **obs_features}
 
     # Create the dataset
+    dataset_root = Path(HF_LEROBOT_HOME) / cfg.dataset.repo_id
+    if dataset_root.exists():
+        if dataset_root.is_dir():
+            shutil.rmtree(dataset_root)
+        else:
+            dataset_root.unlink()
+        print(f"Existing dataset directory removed: {dataset_root}")
+
     dataset = LeRobotDataset.create(
         repo_id=cfg.dataset.repo_id,
         fps=cfg.dataset.fps,
         features=dataset_features,
+        root=dataset_root,
         robot_type=robot.name,
         use_videos=True,
         image_writer_threads=4,

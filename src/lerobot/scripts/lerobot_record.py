@@ -348,9 +348,11 @@ def record_loop(
     # Pre-compute action key order outside the hot loop — it won't change mid-episode.
     action_keys = sorted(robot.action_features) if use_interpolation else []
 
-    no_action_count = 0
+    # Warning control
     slow_loop_warning_interval_s = 60.0
     last_slow_loop_warning_t = events.get("last_slow_loop_warning_t")
+
+    no_action_count = 0
     timestamp = 0
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
@@ -423,8 +425,6 @@ def record_loop(
                 action_values = robot_action_to_send
 
         elif policy is None and isinstance(teleop, Teleoperator):
-            if robot.name == "unitree_g1":
-                teleop.send_feedback(obs)
             act = teleop.get_action()
             if robot.name == "unitree_g1":
                 teleop.send_feedback(obs)
@@ -443,20 +443,8 @@ def record_loop(
             )
             act = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
             act_processed_teleop = teleop_action_processor((act, obs))
-        else:
-            no_action_count += 1
-            if no_action_count == 1 or no_action_count % 10 == 0:
-                logging.warning(
-                    "No policy or teleoperator provided, skipping action generation. "
-                    "This is likely to happen when resetting the environment without a teleop device. "
-                    "The robot won't be at its rest position at the start of the next episode."
-                )
-            continue
-
-        # Applies a pipeline to the action, default is IdentityProcessor
-        if policy is not None and act_processed_policy is not None:
-            action_values = act_processed_policy
-            robot_action_to_send = robot_action_processor((act_processed_policy, obs))
+            action_values = act_processed_teleop
+            robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
         else:
             no_action_count += 1
             if no_action_count == 1 or no_action_count % 10 == 0:
