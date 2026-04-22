@@ -114,7 +114,12 @@ class SourcceyFollowerCalibrator:
         self.robot.bus.disable_torque()
 
         # Step 4: Create calibration dictionary
-        self.robot.calibration = self._create_calibration_dict(homing_offsets, detected_ranges["min"], detected_ranges["max"])
+        self.robot.calibration = self._create_calibration_dict(
+            homing_offsets,
+            detected_ranges["min"],
+            detected_ranges["max"],
+            apply_gripper_range_extension=True,
+        )
 
         # Step 5: Write calibration to motors and save
         self.robot.bus.write_calibration(self.robot.calibration)
@@ -122,15 +127,20 @@ class SourcceyFollowerCalibrator:
         logger.info(f"Automatic calibration completed and saved to {self.robot.calibration_fpath}")
         return self.robot.calibration
 
-    def _create_calibration_dict(self, homing_offsets: Dict[str, int],
-                                range_mins: Dict[str, Any], range_maxes: Dict[str, int] = None) -> Dict[str, MotorCalibration]:
+    def _create_calibration_dict(
+        self,
+        homing_offsets: Dict[str, int],
+        range_mins: Dict[str, Any],
+        range_maxes: Dict[str, int] = None,
+        apply_gripper_range_extension: bool = False,
+    ) -> Dict[str, MotorCalibration]:
         calibration = {}
         for motor, m in self.robot.bus.motors.items():
             drive_mode = 1 if (motor == "shoulder_lift" or motor == "gripper") else 0
 
             range_min = range_mins[motor]
             range_max = range_maxes[motor]
-            if motor == "gripper":
+            if motor == "gripper" and apply_gripper_range_extension:
                 if self.robot.config.orientation == "right":
                     range_max += self.GRIPPER_RANGE_EXTENSION
                 else:
@@ -160,9 +170,9 @@ class SourcceyFollowerCalibrator:
         calibration_dir = current_dir.parent / "sourccey" / "defaults"
 
         if reverse:
-            calibration_file = calibration_dir / "left_arm_default_calibration.json"
-        else:
             calibration_file = calibration_dir / "right_arm_default_calibration.json"
+        else:
+            calibration_file = calibration_dir / "left_arm_default_calibration.json"
 
         # Create the calibration directory if it doesn't exist
         calibration_dir.mkdir(parents=True, exist_ok=True)
@@ -194,7 +204,7 @@ class SourcceyFollowerCalibrator:
 
     def _create_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
         """Create default calibration data for the robot."""
-        if reverse:
+        if not reverse:
             # Left arm calibration (IDs 1-6)
             return {
                 "shoulder_pan": {
