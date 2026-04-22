@@ -70,6 +70,13 @@ Apply default 4S LiFePO4 profile:
 uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py setup-4s-lifepo4
 ```
 
+By default, this also sends `IT_ENABLE (0x0021)` so the gauge starts learning.
+If you need to skip that behavior:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py setup-4s-lifepo4 --no-enable-it
+```
+
 Set divider from resistor values:
 
 ```bash

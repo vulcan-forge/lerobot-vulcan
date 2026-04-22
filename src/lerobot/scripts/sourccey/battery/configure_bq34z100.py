@@ -39,6 +39,7 @@ CTRL_DEVICE_TYPE = 0x0001
 CTRL_FW_VERSION = 0x0002
 CTRL_CHEM_ID = 0x0008
 CTRL_SEAL = 0x0020
+CTRL_IT_ENABLE = 0x0021
 
 # TRM default unseal key bytes shown as 0x36720414 (two 16-bit writes)
 DEFAULT_UNSEAL_KEY1 = 0x0414
@@ -478,6 +479,10 @@ def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
     )
     apply_writes(gauge, writes, verify=not args.no_verify, dry_run=args.dry_run)
 
+    if args.enable_it and not args.dry_run:
+        print("Sending IT_ENABLE (0x0021) to start learning.")
+        gauge.send_control_subcmd(CTRL_IT_ENABLE)
+
     if args.seal_after and not args.dry_run:
         gauge.send_control_subcmd(CTRL_SEAL)
     return 0
@@ -567,6 +572,12 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Set UpdateStatus=0x00 for a fresh learning cycle (default: enabled)",
+    )
+    p_setup.add_argument(
+        "--enable-it",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Send IT_ENABLE (0x0021) after setup writes (default: enabled)",
     )
 
     return p
