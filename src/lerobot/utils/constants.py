@@ -78,6 +78,21 @@ HF_LEROBOT_CALIBRATION = Path(os.getenv("HF_LEROBOT_CALIBRATION", default_calibr
 default_configuration_path = HF_LEROBOT_HOME / "configuration"
 HF_LEROBOT_CONFIGURATION = Path(os.getenv("HF_LEROBOT_CONFIGURATION", default_configuration_path)).expanduser()
 
+# Default dataset feature schema used across legacy and lightweight utility imports.
+DEFAULT_FEATURES = {
+    "timestamp": {"dtype": "float32", "shape": (1,), "names": None},
+    "frame_index": {"dtype": "int64", "shape": (1,), "names": None},
+    "episode_index": {"dtype": "int64", "shape": (1,), "names": None},
+    "index": {"dtype": "int64", "shape": (1,), "names": None},
+    "task_index": {"dtype": "int64", "shape": (1,), "names": None},
+}
+
+# Image normalization stats re-exported for callers that still import from utils.
+IMAGENET_STATS = {
+    "mean": [0.485, 0.456, 0.406],
+    "std": [0.229, 0.224, 0.225],
+}
+
 # streaming datasets
 LOOKBACK_BACKTRACKTABLE = 100
 LOOKAHEAD_BACKTRACKTABLE = 100
