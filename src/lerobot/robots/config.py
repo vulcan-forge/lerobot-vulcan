@@ -15,10 +15,8 @@
 import abc
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import draccus
-from lerobot.utils.constants import HF_LEROBOT_CONFIGURATION
 
 
 @dataclass(kw_only=True)
@@ -27,9 +25,6 @@ class RobotConfig(draccus.ChoiceRegistry, abc.ABC):
     id: str | None = None
     # Directory to store calibration file
     calibration_dir: Path | None = None
-
-    def __init__(self, **kwargs):
-        pass
 
     def __post_init__(self):
         if hasattr(self, "cameras") and self.cameras:
