@@ -76,8 +76,8 @@ def _build_resume_args(train_args: list[str], config_path: Path) -> list[str]:
 
 
 def _run_train(train_args: list[str]) -> int:
-    train_script = Path(__file__).resolve().with_name("lerobot_train.py")
-    cmd = [sys.executable, str(train_script), *train_args]
+    # Run as a module so relative imports inside lerobot_train.py resolve correctly.
+    cmd = [sys.executable, "-m", "lerobot.scripts.lerobot_train", *train_args]
     logging.info("Launching command: %s", " ".join(shlex.quote(part) for part in cmd))
     return subprocess.run(cmd, check=False).returncode
 
