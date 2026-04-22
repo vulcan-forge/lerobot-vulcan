@@ -101,12 +101,11 @@ LIBERO supports two control modes — `relative` (default) and `absolute`. Diffe
 - `observation.images.image2` — wrist camera view (`robot0_eye_in_hand_image`), HWC uint8
 
 <Tip warning={true}>
-    LeRobot enforces the `.images.*` prefix for visual features. Ensure your
-    policy config `input_features` use the same naming keys, and that your
-    dataset metadata keys follow this convention. If your data contains
-    different keys, you must rename the observations to match what the policy
-    expects, since naming keys are encoded inside the normalization statistics
-    layer.
+  LeRobot enforces the `.images.*` prefix for visual features. Ensure your
+  policy config `input_features` use the same naming keys, and that your dataset
+  metadata keys follow this convention. If your data contains different keys,
+  you must rename the observations to match what the policy expects, since
+  naming keys are encoded inside the normalization statistics layer.
 </Tip>
 
 **Actions:**

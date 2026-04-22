@@ -38,7 +38,11 @@ import draccus
 import grpc
 import torch
 
+<<<<<<< HEAD
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
+=======
+from lerobot.policies import get_policy_class, make_pre_post_processors
+>>>>>>> upstream/main
 from lerobot.processor import PolicyProcessorPipeline
 from lerobot.transport import (
     services_pb2,  # type: ignore

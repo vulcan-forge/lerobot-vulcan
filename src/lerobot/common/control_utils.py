@@ -27,12 +27,6 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import torch
 
-<<<<<<< HEAD:src/lerobot/utils/control_utils.py
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import DEFAULT_FEATURES
-from lerobot.policies.pretrained import PreTrainedPolicy
-from lerobot.policies.utils import prepare_observation_for_inference
-=======
 from lerobot.policies import PreTrainedPolicy, prepare_observation_for_inference
 from lerobot.utils.import_utils import _deepdiff_available, require_package
 
@@ -43,7 +37,6 @@ else:
 
 if TYPE_CHECKING:
     from lerobot.datasets import LeRobotDataset
->>>>>>> upstream/main:src/lerobot/common/control_utils.py
 from lerobot.processor import PolicyProcessorPipeline
 from lerobot.robots import Robot
 from lerobot.types import PolicyAction
@@ -75,6 +68,7 @@ def is_headless():
         traceback.print_exc()
         print()
         return True
+
 
 def predict_action(
     observation: dict[str, np.ndarray],

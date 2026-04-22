@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -20,7 +19,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
+from lerobot.configs import PipelineFeatureType, PolicyFeature
 from lerobot.types import EnvTransition, TransitionKey
 from lerobot.utils.constants import OBS_STATE
 

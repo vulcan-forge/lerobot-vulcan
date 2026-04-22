@@ -17,6 +17,8 @@
 """
 Edit LeRobot datasets using various transformation tools.
 
+Requires: pip install 'lerobot[dataset]'
+
 This script allows you to delete episodes, split datasets, merge datasets,
 remove features, modify tasks, recompute stats, and convert image datasets to video format.
 When new_repo_id is specified, creates a new dataset.
@@ -175,6 +177,33 @@ Show dataset information without feature details:
         --operation.type info \
         --operation.show_features false
 
+Recompute dataset statistics:
+    lerobot-edit-dataset \
+        --repo_id lerobot/pusht \
+        --operation.type recompute_stats
+
+Recompute stats for relative actions and push to hub:
+    lerobot-edit-dataset \
+        --repo_id lerobot/pusht \
+        --operation.type recompute_stats \
+        --operation.relative_action true \
+        --operation.chunk_size 50 \
+        --operation.relative_exclude_joints "['gripper']" \
+        --operation.num_workers 4 \
+        --push_to_hub true
+
+Show dataset information:
+    lerobot-edit-dataset \
+        --repo_id lerobot/pusht_image \
+        --operation.type info \
+        --operation.show_features true
+
+Show dataset information without feature details:
+    lerobot-edit-dataset \
+        --repo_id lerobot/pusht_image \
+        --operation.type info \
+        --operation.show_features false
+
 Using JSON config file:
     lerobot-edit-dataset \
         --config_path path/to/edit_config.json
@@ -190,7 +219,8 @@ from pathlib import Path
 import draccus
 
 from lerobot.configs import parser
-from lerobot.datasets.dataset_tools import (
+from lerobot.datasets import (
+    LeRobotDataset,
     convert_image_to_video_dataset,
     delete_episodes,
     merge_datasets,
@@ -199,7 +229,6 @@ from lerobot.datasets.dataset_tools import (
     remove_feature,
     split_dataset,
 )
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.utils import init_logging
 

@@ -10,6 +10,8 @@ import numpy as np
 import pytest
 import torch
 
+pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
+
 from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
 from lerobot.datasets.compute_stats import get_feature_stats
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -344,32 +346,3 @@ def test_state_not_modified_by_relative_processor(dataset, action_dim):
 
     result_state = result[TransitionKey.OBSERVATION][OBS_STATE]
     torch.testing.assert_close(result_state, original_state)
-
-
-def test_absolute_processor_uses_chunk_anchor_state_queue():
-    """Queued relative actions must be converted using the chunk's original anchor state."""
-    relative_step = RelativeActionsProcessorStep(enabled=True)
-    absolute_step = AbsoluteActionsProcessorStep(enabled=True, relative_step=relative_step)
-
-    state0 = torch.tensor([[10.0, 20.0]])
-    state1 = torch.tensor([[100.0, 200.0]])
-    relative_action = torch.tensor([[1.5, -2.0]])
-
-    # Simulate preprocessing at chunk generation time (anchor = state0).
-    relative_step({TransitionKey.OBSERVATION: {OBS_STATE: state0}})
-    relative_step.prime_absolute_anchor_states(2)
-
-    # Next control tick observes a different state while still draining the old chunk.
-    relative_step({TransitionKey.OBSERVATION: {OBS_STATE: state1}})
-
-    # First two actions from the queued chunk should still use state0.
-    out1 = absolute_step({TransitionKey.ACTION: relative_action})[TransitionKey.ACTION]
-    out2 = absolute_step({TransitionKey.ACTION: relative_action})[TransitionKey.ACTION]
-    expected_state0 = relative_action + state0
-    torch.testing.assert_close(out1, expected_state0)
-    torch.testing.assert_close(out2, expected_state0)
-
-    # Once queue is drained, conversion should use the latest observed state.
-    out3 = absolute_step({TransitionKey.ACTION: relative_action})[TransitionKey.ACTION]
-    expected_state1 = relative_action + state1
-    torch.testing.assert_close(out3, expected_state1)

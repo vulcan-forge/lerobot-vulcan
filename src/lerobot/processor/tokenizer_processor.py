@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
-from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
+from lerobot.configs import FeatureType, PipelineFeatureType, PolicyFeature
 from lerobot.types import EnvTransition, RobotObservation, TransitionKey
 from lerobot.utils.constants import (
     ACTION_TOKEN_MASK,
@@ -138,32 +138,6 @@ class TokenizerProcessorStep(ObservationProcessorStep):
             return [task]
         elif isinstance(task, (list, tuple)) and all(isinstance(t, str) for t in task):
             return list(task)
-
-        return None
-
-    def get_subtask(self, transition: EnvTransition) -> list[str] | None:
-        """
-        Extracts the subtask from the transition's complementary data.
-
-        Args:
-            transition: The environment transition.
-
-        Returns:
-            A list of subtask strings, or None if the subtask key is not found or the value is None.
-        """
-        complementary_data = transition.get(TransitionKey.COMPLEMENTARY_DATA)
-        if complementary_data is None:
-            return None
-
-        subtask = complementary_data.get("subtask")
-        if subtask is None:
-            return None
-
-        # Standardize to a list of strings for the tokenizer
-        if isinstance(subtask, str):
-            return [subtask]
-        elif isinstance(subtask, list) and all(isinstance(t, str) for t in subtask):
-            return subtask
 
         return None
 

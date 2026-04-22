@@ -25,10 +25,7 @@ import numpy as np
 import torch
 from huggingface_hub import hf_hub_download
 
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
-from lerobot.datasets.factory import IMAGENET_STATS
-from lerobot.policies.xvla.configuration_xvla import XVLAConfig
-from lerobot.policies.xvla.utils import rotate6d_to_axis_angle
+from lerobot.configs import PipelineFeatureType, PolicyFeature
 from lerobot.processor import (
     AbsoluteActionsProcessorStep,
     AddBatchDimensionProcessorStep,
@@ -44,10 +41,12 @@ from lerobot.processor import (
     TokenizerProcessorStep,
     UnnormalizerProcessorStep,
     to_absolute_actions,
+    policy_action_to_transition,
+    transition_to_policy_action,
 )
-from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
 from lerobot.types import EnvTransition, TransitionKey
 from lerobot.utils.constants import (
+    IMAGENET_STATS,
     OBS_IMAGES,
     OBS_PREFIX,
     OBS_STATE,
@@ -55,8 +54,10 @@ from lerobot.utils.constants import (
     POLICY_PREPROCESSOR_DEFAULT_NAME,
 )
 
-_RANGE_CLAMP_WARNED_KEYS: set[str] = set()
+from .configuration_xvla import XVLAConfig
+from .utils import rotate6d_to_axis_angle
 
+_RANGE_CLAMP_WARNED_KEYS: set[str] = set()
 
 def _get_pretrained_tokenizer_max_length(pretrained_path: str | Path | None) -> int | None:
     """Best-effort extraction of tokenizer max_length from a pretrained XVLA preprocessor config."""

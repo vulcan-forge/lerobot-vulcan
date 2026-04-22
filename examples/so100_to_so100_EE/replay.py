@@ -17,10 +17,10 @@
 
 import time
 
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets import LeRobotDataset
 from lerobot.model.kinematics import RobotKinematics
-from lerobot.processor import RobotProcessorPipeline
-from lerobot.processor.converters import (
+from lerobot.processor import (
+    RobotProcessorPipeline,
     robot_action_observation_to_transition,
     transition_to_robot_action,
 )
@@ -79,11 +79,7 @@ def main():
 
         print("Starting replay loop...")
         log_say(f"Replaying episode {EPISODE_IDX}")
-<<<<<<< HEAD
-        for idx in range(len(episode_frames)):
-=======
         for idx in range(dataset.num_frames):
->>>>>>> upstream/main
             t0 = time.perf_counter()
 
             # Get recorded action from dataset

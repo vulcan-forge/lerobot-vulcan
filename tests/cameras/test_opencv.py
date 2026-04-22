@@ -63,58 +63,6 @@ class MockLoopingVideoCapture:
         return getattr(self._real_vc, name)
 
 
-class MockReconnectVideoCapture:
-    instance_count = 0
-    frame = np.full((120, 160, 3), 127, dtype=np.uint8)
-
-    def __init__(self, *args, **kwargs):
-        del args, kwargs
-        type(self).instance_count += 1
-        self.instance_id = type(self).instance_count
-        self._is_open = True
-        self._width = self.frame.shape[1]
-        self._height = self.frame.shape[0]
-        self._fps = 30.0
-
-    def isOpened(self):
-        return self._is_open
-
-    def read(self):
-        if not self._is_open:
-            return False, None
-
-        if self.instance_id == 1:
-            return False, None
-
-        return True, self.frame.copy()
-
-    def release(self):
-        self._is_open = False
-
-    def set(self, prop, value):
-        if prop == cv2.CAP_PROP_FRAME_WIDTH:
-            self._width = int(value)
-        elif prop == cv2.CAP_PROP_FRAME_HEIGHT:
-            self._height = int(value)
-        elif prop == cv2.CAP_PROP_FPS:
-            self._fps = float(value)
-        return True
-
-    def get(self, prop):
-        if prop == cv2.CAP_PROP_FRAME_WIDTH:
-            return float(self._width)
-        if prop == cv2.CAP_PROP_FRAME_HEIGHT:
-            return float(self._height)
-        if prop == cv2.CAP_PROP_FPS:
-            return self._fps
-        if prop == cv2.CAP_PROP_FOURCC:
-            return 0.0
-        return 0.0
-
-    def getBackendName(self):
-        return "MOCK"
-
-
 @pytest.fixture(autouse=True)
 def patch_opencv_videocapture():
     """

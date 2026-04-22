@@ -22,8 +22,12 @@ from typing import Any
 
 import torch
 
+<<<<<<< HEAD
 from lerobot.configs.types import PolicyFeature
 from lerobot.datasets.feature_utils import build_dataset_frame, hw_to_dataset_features
+=======
+from lerobot.configs import PolicyFeature
+>>>>>>> upstream/main
 
 # NOTE: Configs need to be loaded for the client to be able to instantiate the policy config
 from lerobot.policies import (  # noqa: F401
@@ -36,6 +40,7 @@ from lerobot.policies import (  # noqa: F401
 )
 from lerobot.robots.robot import Robot
 from lerobot.utils.constants import OBS_IMAGES, OBS_STATE, OBS_STR
+from lerobot.utils.feature_utils import build_dataset_frame, hw_to_dataset_features
 from lerobot.utils.utils import init_logging
 
 Action = torch.Tensor
