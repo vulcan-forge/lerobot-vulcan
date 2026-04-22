@@ -14,7 +14,7 @@ python src/lerobot/control/sourccey/sourccey/record.py \
  --remote_ip="192.168.1.212" \
  --left_arm_port="/dev/ttyACM0" \
  --right_arm_port="/dev/ttyACM1" \
- --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-d/nickm/sourccey-013__shirt-fold-dark-blue-d__set327__nickm" \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-d/nickm/sourccey-013__shirt-fold-blue-d__set327__nickm" \
  --dataset.num_episodes=5 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=5 \
@@ -30,7 +30,7 @@ python src/lerobot/control/sourccey/sourccey/record.py \
  --remote_ip="192.168.1.212" \
  --left_arm_port="/dev/ttyACM0" \
  --right_arm_port="/dev/ttyACM1" \
- --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set006__nickm" \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set004__nickm" \
  --dataset.num_episodes=10 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=5 \
@@ -44,15 +44,14 @@ python src/lerobot/control/sourccey/sourccey/record.py \
 NEW COMBINE DATASET
 
 uv run lerobot-edit-dataset \
-  --new_repo_id="Combination/sourccey-shirt-fold-aggregate-multi-blue-a" \
+  --new_repo_id="Combination/sourccey-shirt-fold-a-000" \
   --operation.type=merge \
   --operation.repo_ids="[
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set000__nickm',
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set001__nickm',
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set002__nickm',
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set003__nickm',
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set004__nickm',
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set005__nickm'
+    'sourccey-013/sourccey-013__shirt-fold-blue-a/nickm/sourccey-013__shirt-fold-blue-a__set000__nickm',
+    'sourccey-013/sourccey-013__shirt-fold-blue-a/nickm/sourccey-013__shirt-fold-blue-a__set001__nickm',
+    'sourccey-013/sourccey-013__shirt-fold-blue-a/nickm/sourccey-013__shirt-fold-blue-a__set002__nickm',
+    'sourccey-013/sourccey-013__shirt-fold-blue-a/nickm/sourccey-013__shirt-fold-blue-a__set003__nickm',
+    'sourccey-013/sourccey-013__shirt-fold-blue-a/nickm/sourccey-013__shirt-fold-blue-a__set004__nickm',
   ]"
 
 NEW TRAINING COMMANDS
@@ -148,10 +147,10 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train_retry.py \
 CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --max-attempts=30 \
   --retry-delay-seconds=20 \
-  --dataset.repo_id="Combination/sourccey-shirt-fold-aggregate-multi-blue-a" \
-  --output_dir="outputs/train/xvla__sourccey-shirt-fold-aggregate-multi-blue-a__ft_from_200k" \
-  --job_name="xvla__sourccey-shirt-fold-aggregate-multi-blue-a__ft_from_200k" \
-  --policy.path="outputs/train/xvla__sourccey-shirt-fold-a-b-aggregate-multi/checkpoints/200000/pretrained_model" \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-a-000" \
+  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-a-000" \
+  --job_name="xvla_s_sourccey-shirt-fold-a-000" \
+  --policy.path="outputs/train/xvla__sourccey-shirt-aggregate-2-hq/checkpoints/1000000/pretrained_model" \
   --policy.dtype=bfloat16 \
   --policy.action_mode=auto \
   --policy.max_action_dim=20 \
@@ -160,7 +159,7 @@ CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --policy.input_features=null \
   --policy.scheduler_warmup_steps=1000 \
   --policy.scheduler_decay_steps=100000 \
-  --policy.scheduler_decay_lr=2e-06 \
+  --policy.scheduler_decay_lr=5e-06 \
   --steps=100000 \
   --save_freq=20000 \
   --batch_size=8 \
