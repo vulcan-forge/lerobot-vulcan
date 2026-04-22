@@ -736,85 +736,10 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 gripper_percent=float(sample.gripper_value),
             )
             return self._merge_base_with_action(action_ctrl, base=sample.base)
-            """
 
             # Discourage elbow going down past soft stop (≈ quarter range from lower)
-            ELBOW_IDX = int(self.tune["elbow_soft_stop"]["index"])  # shoulder_pan, shoulder_lift, elbow_flex, ...
-            soft_stop = self._elbow_soft_stop
-            if soft_stop is not None:
-                if solution_rad[ELBOW_IDX] < soft_stop:
-                    # Below soft stop: allow only small downward steps and clamp near soft stop
-                    small_step = _np.deg2rad(float(self.tune["elbow_soft_stop"]["below_small_step_deg"]))
-                    margin = _np.deg2rad(float(self.tune["elbow_soft_stop"]["below_margin_deg"]))
-                    allowed = max(solution_rad[ELBOW_IDX], self._prev_q[ELBOW_IDX] - small_step)
-                    solution_rad[ELBOW_IDX] = max(allowed, soft_stop - margin)
-                else:
-                    # Above soft stop: allow more generous downward motion for responsiveness
-                    max_down_per_call = _np.deg2rad(float(self.tune["elbow_soft_stop"]["above_max_down_deg"]))
-                    solution_rad[ELBOW_IDX] = max(
-                        solution_rad[ELBOW_IDX],
-                        self._prev_q[ELBOW_IDX] - max_down_per_call,
-                    )
-            else:
-                # Fallback if no limits known
-                max_down_per_call = _np.deg2rad(25.0)
-                solution_rad[ELBOW_IDX] = max(
-                    solution_rad[ELBOW_IDX],
-                    self._prev_q[ELBOW_IDX] - max_down_per_call,
-                )
 
-            # Gentle overhand bias on wrist roll
-            WRIST_ROLL_IDX = 4
-            overhand_roll_target = 0.0  # rad
-            solution_rad[WRIST_ROLL_IDX] = 0.95 * solution_rad[WRIST_ROLL_IDX] + 0.05 * overhand_roll_target
 
-            # Per-joint delta scaling (sensitivity)
-            for j_idx, scale in self.tune["delta_scale"].items():
-                j = int(j_idx)
-                s = float(scale)
-                if 0 <= j < len(solution_rad) and s != 1.0:
-                    delta = solution_rad[j] - self._prev_q[j]
-                    solution_rad[j] = self._prev_q[j] + s * delta
-
-            # Per-joint fixed-rate limiter (velocity clamp per update)
-            if self.tune.get("fixed_rate", {}).get("enabled", False):
-                joints_cfg = self.tune["fixed_rate"].get("joints", {})
-                for j_idx, cfg in joints_cfg.items():
-                    j = int(j_idx)
-                    if 0 <= j < len(solution_rad):
-                        step = float(cfg.get("step_deg", 2.0))
-                        deadband = float(cfg.get("deadband_deg", 0.0))
-                        step_rad = _np.deg2rad(step)
-                        deadband_rad = _np.deg2rad(deadband)
-                        target = float(solution_rad[j])
-                        prev = float(self._prev_q[j])
-                        error = target - prev
-                        if abs(error) <= deadband_rad:
-                            solution_rad[j] = prev
-                        else:
-                            direction = 1.0 if error > 0 else -1.0
-                            solution_rad[j] = prev + direction * min(step_rad, abs(error))
-
-            # Strongly prevent elbow from moving "backwards" from initial (12:00) position
-            if self.tune["elbow_back_block"]["enabled"]:
-                ELBOW_IDX = int(self.tune["elbow_back_block"]["index"]) 
-                if self._elbow_back_limit is None:
-                    self._elbow_back_limit = float(solution_rad[ELBOW_IDX])
-                back_margin = _np.deg2rad(float(self.tune["elbow_back_block"]["tolerance_deg"]))
-                direction = str(self.tune["elbow_back_block"]["direction"]).lower()
-                if direction == "decrease":
-                    solution_rad[ELBOW_IDX] = max(solution_rad[ELBOW_IDX], self._elbow_back_limit - back_margin)
-                else:
-                    solution_rad[ELBOW_IDX] = min(solution_rad[ELBOW_IDX], self._elbow_back_limit + back_margin)
-
-            self._prev_q = solution_rad
-
-            # Update visualization (expects radians)
-            if self.config.enable_visualization and self.urdf_vis:
-                self.urdf_vis.update_cfg(solution_rad)
-
-            # Convert to degrees (phone teleoperator always uses degrees, robot is auto-configured)
-            solution_final = np.rad2deg(solution_rad)
 
             # Apply Sourccey-specific transformations for calibration system
             # Based on Sourccey V2 Beta robot configuration
@@ -827,82 +752,10 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             #   (axis is +X and rpy now embeds the old –90° roll)
 
             # Apply joint-level reversals based on arm side
-            if self.arm_side == "right":
-                # Right arm needs comprehensive joint reversals for proper mirroring
-                if len(solution_final) > 0:  # shoulder_pan
-                    solution_final[0] = -solution_final[0]
-                if len(solution_final) > 1:  # shoulder_lift  
-                    solution_final[1] = -solution_final[1]
-                if len(solution_final) > 2:  # elbow_flex
-                    solution_final[2] = -solution_final[2]
-                if len(solution_final) > 3:  # wrist_flex
-                    solution_final[3] = -solution_final[3]
-                if len(solution_final) > 4:  # wrist_roll
-                    solution_final[4] = -solution_final[4]
-            else:
-                # Left arm: only wrist_roll flip for consistency
-                if len(solution_final) > 4:
-                    solution_final[4] = -solution_final[4]
-
-            # Apply optional per-joint offsets (degrees)
-            if getattr(self.config, "joint_offsets_deg", None):
-                offsets = self.config.joint_offsets_deg or {}
-                name_by_index = [
-                    "shoulder_pan",
-                    "shoulder_lift",
-                    "elbow_flex",
-                    "wrist_flex",
-                    "wrist_roll",
-                    "gripper",
-                ]
-                for i, name in enumerate(name_by_index):
-                    if i < len(solution_final) and name in offsets and name != "gripper":
-                        solution_final[i] += float(offsets[name])
 
 
-            # Update gripper state - convert percentage (0-100) to gripper position
-            # gripper_value is 0-100, we need to map it to configured range
-            gripper_range = self.config.gripper_max_pos - self.config.gripper_min_pos
-            gripper_position = self.config.gripper_min_pos + (gripper_value / 100.0) * gripper_range
-            solution_final[-1] = gripper_position
-            
-            # Update teleop state and apply right arm initial position reversal when teleop starts
-            prev_start_teleop = getattr(self, 'start_teleop', False)
-            self.start_teleop = switch_state
-            
-            # Apply right arm initial position mirroring when teleop becomes active
-            if self.arm_side == "right" and not prev_start_teleop and self.start_teleop:
-                # Mirror the right arm's initial position when teleop starts
-                # Apply comprehensive right arm reversals to match movement reversals
-                self.current_t_R = self._original_right_position.copy()
-                # Mirror position: flip Y (left-right) and potentially Z (up-down)
-                self.current_t_R[1] = -self.current_t_R[1]  # Flip Y coordinate (left-right)
-                
-                # Also apply quaternion mirroring for right arm orientation
-                self.current_q_R = self._original_right_quat.copy()
-                # Mirror orientation by flipping Y and Z components of quaternion
-                self.current_q_R[2] = -self.current_q_R[2]  # Flip Y component
-                self.current_q_R[3] = -self.current_q_R[3]  # Flip Z component
-                
-                logger.info("Applied comprehensive right arm initial position and orientation mirroring for teleop")
-
-            # Format action for selected arm
-            action_ctrl = self._format_action_dict(
-                solution_final,
-                gripper_percent=float(gripper_value),
-            )
-            if self.arm_side == "right":
-                # Mirror left->right if not at rest or resetting handled below
-                action_ctrl = {k.replace("left_", "right_"): v for k, v in action_ctrl.items()}
-
-            # If only emitting controlled arm, return now
-            if not getattr(self.config, "emit_both_arms", True):
-                return self._merge_base_with_action(action_ctrl, base=data.get("base"))
-
-            # Only emit the controlled arm - no commands for the other arm
-            return self._merge_base_with_action(action_ctrl, base=data.get("base"))
-
-            """
+            # Legacy monolithic post-IK shaping is archived in
+            # `legacy_sourccey_vr_reference.py`.
         except Exception as e:
             logger.error(f"Error getting action from {self}: {e}")
             # Return current positions on error (safer than rest pose)
