@@ -16,10 +16,7 @@
 import json
 import logging
 from pathlib import Path
-<<<<<<< HEAD
-=======
 from typing import Any
->>>>>>> upstream/main
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +36,6 @@ def load_json(fpath: Path) -> Any:
         return json.load(f)
 
 
-<<<<<<< HEAD
-=======
 def write_json(data: dict, fpath: Path) -> None:
     """Write data to a JSON file.
 
@@ -95,7 +90,6 @@ def write_video(video_path: str | Path, stacked_frames: list, fps: int) -> None:
             container.mux(packet)
 
 
->>>>>>> upstream/main
 def deserialize_json_into_object[T: JsonLike](fpath: Path, obj: T) -> T:
     """
     Loads the JSON data from `fpath` and recursively fills `obj` with the

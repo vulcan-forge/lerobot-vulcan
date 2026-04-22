@@ -25,24 +25,9 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import numpy as np
 
-<<<<<<< HEAD
-from lerobot.cameras.utils import make_cameras_from_configs
-from lerobot.robots.unitree_g1.g1_kinematics import G1_29_ArmIK
-from lerobot.robots.unitree_g1.g1_utils import (
-    REMOTE_AXES,
-    REMOTE_KEYS,
-    G1_29_JointArmIndex,
-    G1_29_JointIndex,
-    default_remote_input,
-    make_locomotion_controller,
-)
-from lerobot.types import RobotAction, RobotObservation
-from lerobot.utils.import_utils import _unitree_sdk_available
-=======
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.import_utils import _unitree_sdk_available, require_package
->>>>>>> upstream/main
 
 from ..robot import Robot
 from .config_unitree_g1 import UnitreeG1Config
@@ -327,11 +312,7 @@ class UnitreeG1(Robot):
     def connect(self, calibrate: bool = True) -> None:  # connect to DDS
         # Initialize DDS channel and simulation environment
         if self.config.is_simulation:
-<<<<<<< HEAD
-            from lerobot.envs.factory import make_env
-=======
             from lerobot.envs import make_env
->>>>>>> upstream/main
 
             self._ChannelFactoryInitialize(0, "lo")
             self._env_wrapper = make_env("lerobot/unitree-g1-mujoco", trust_remote_code=True)

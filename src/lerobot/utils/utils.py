@@ -27,11 +27,7 @@ from copy import copy, deepcopy
 from datetime import datetime
 from pathlib import Path
 from statistics import mean
-<<<<<<< HEAD
-from typing import TYPE_CHECKING
-=======
 from typing import TYPE_CHECKING, Any
->>>>>>> upstream/main
 
 import numpy as np
 
@@ -291,16 +287,6 @@ class SuppressProgressBars:
     """
 
     def __enter__(self):
-<<<<<<< HEAD
-        from datasets.utils.logging import disable_progress_bar
-
-        disable_progress_bar()
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        from datasets.utils.logging import enable_progress_bar
-
-        enable_progress_bar()
-=======
         try:
             from datasets.utils.logging import disable_progress_bar
 
@@ -317,7 +303,6 @@ class SuppressProgressBars:
             enable_progress_bar()
         except ImportError:
             pass
->>>>>>> upstream/main
 
 
 class TimerManager:

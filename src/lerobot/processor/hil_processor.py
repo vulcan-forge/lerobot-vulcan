@@ -24,11 +24,7 @@ import numpy as np
 import torch
 import torchvision.transforms.functional as F  # noqa: N812
 
-<<<<<<< HEAD
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
-=======
 from lerobot.configs import PipelineFeatureType, PolicyFeature
->>>>>>> upstream/main
 from lerobot.teleoperators.utils import TeleopEvents
 
 if TYPE_CHECKING:
