@@ -15,7 +15,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from lerobot.teleoperators.config import TeleoperatorConfig
 from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import sourccey_motor_models
@@ -33,11 +32,15 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     grpc_port: int = 8765  # Default port to match phone app
     grpc_timeout: float = 100.0
     
-    # Robot model paths - same as SO100
-    urdf_path: str = "lerobot/robots/sourccey/sourccey_v2beta/model/Arm.urdf"
-    mesh_path: str | None = "lerobot/robots/sourccey/sourccey_v2beta/model/meshes"
-    calibration_path_left: str = "lerobot/robots/sourccey/sourccey/sourccey/left_arm_default_calibration.json"
-    calibration_path_right: str = "lerobot/robots/sourccey/sourccey/sourccey/right_arm_default_calibration.json"
+    # Robot model paths
+    urdf_path: str = "src/lerobot/robots/sourccey/sourccey/sourccey/model/Arm.urdf"
+    mesh_path: str | None = "src/lerobot/robots/sourccey/sourccey/sourccey/model/meshes"
+    calibration_path_left: str = (
+        "src/lerobot/robots/sourccey/sourccey/sourccey/defaults/left_arm_default_calibration.json"
+    )
+    calibration_path_right: str = (
+        "src/lerobot/robots/sourccey/sourccey/sourccey/defaults/right_arm_default_calibration.json"
+    )
     motor_models: dict[str, str] = field(default_factory=sourccey_motor_models)
     
     # IK solver settings - same as SO100
@@ -90,7 +93,7 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     })
 
     # Output controls
-    # If True, the teleop will emit both arms' keys. The non-controlled arm will be set to rest.
+    # Reserved for future dual-arm emission; current implementation emits only the controlled arm.
     emit_both_arms: bool = True
     # Whether incoming observations from the host are already in degrees (True) or normalized [-100,100] (False).
     observation_uses_degrees: bool = False
@@ -102,8 +105,6 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     # Gripper settings - same as SO100
     gripper_min_pos: float = 0.0    # Gripper closed position (0% slider)
     gripper_max_pos: float = 50.0   # Gripper open position (100% slider)
-
-    # Remove duplicate joint_offsets_deg - already defined above on line 78
 
     # Base control via phone (optional)
     enable_base_from_phone: bool = True

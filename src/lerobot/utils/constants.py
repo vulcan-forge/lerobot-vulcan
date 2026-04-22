@@ -78,6 +78,15 @@ HF_LEROBOT_CALIBRATION = Path(os.getenv("HF_LEROBOT_CALIBRATION", default_calibr
 default_configuration_path = HF_LEROBOT_HOME / "configuration"
 HF_LEROBOT_CONFIGURATION = Path(os.getenv("HF_LEROBOT_CONFIGURATION", default_configuration_path)).expanduser()
 
+# Backward-compatible default dataset feature schema.
+DEFAULT_FEATURES = {
+    "timestamp": {"dtype": "float32", "shape": (1,), "names": None},
+    "frame_index": {"dtype": "int64", "shape": (1,), "names": None},
+    "episode_index": {"dtype": "int64", "shape": (1,), "names": None},
+    "index": {"dtype": "int64", "shape": (1,), "names": None},
+    "task_index": {"dtype": "int64", "shape": (1,), "names": None},
+}
+
 # streaming datasets
 LOOKBACK_BACKTRACKTABLE = 100
 LOOKAHEAD_BACKTRACKTABLE = 100
