@@ -156,8 +156,8 @@ class SourcceyFollowerCalibrator:
         """Load default calibration from file."""
         # Get the directory of the current file
         current_dir = Path(__file__).parent
-        # Navigate to the sourccey directory where the calibration files are located
-        calibration_dir = current_dir.parent / "sourccey"
+        # Navigate to the sourccey defaults directory where the calibration files are located
+        calibration_dir = current_dir.parent / "sourccey" / "defaults"
 
         if reverse:
             calibration_file = calibration_dir / "left_arm_default_calibration.json"
