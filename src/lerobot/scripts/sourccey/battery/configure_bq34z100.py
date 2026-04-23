@@ -400,6 +400,22 @@ def cmd_set_divider(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
     return 0
 
 
+def wait_for_update_status(
+    gauge: BQ34Z100R2,
+    expected_value: int,
+    timeout_s: float,
+    poll_interval_s: float = 0.2,
+) -> int:
+    spec = FIELDS["update_status"]
+    timeout = max(0.0, float(timeout_s))
+    deadline = time.monotonic() + timeout
+    last_value = gauge.read_field(spec)
+    while last_value != expected_value and time.monotonic() < deadline:
+        time.sleep(poll_interval_s)
+        last_value = gauge.read_field(spec)
+    return last_value
+
+
 def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
     maybe_unseal(gauge, args, writing=True)
 
@@ -482,6 +498,20 @@ def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
     if args.enable_it and not args.dry_run:
         print("Sending IT_ENABLE (0x0021) to start learning.")
         gauge.send_control_subcmd(CTRL_IT_ENABLE)
+        if args.verify_update_status:
+            observed_update_status = wait_for_update_status(
+                gauge=gauge,
+                expected_value=0x04,
+                timeout_s=args.update_status_timeout_s,
+            )
+            if observed_update_status != 0x04:
+                raise RuntimeError(
+                    "Expected UpdateStatus=0x04 after IT_ENABLE but observed "
+                    f"0x{observed_update_status:02X}. Check gauge state and learning preconditions."
+                )
+            print("Learning start confirmed: UpdateStatus=0x04.")
+    elif args.verify_update_status and not args.dry_run:
+        print("Skipping UpdateStatus verification because --enable-it is disabled.")
 
     if args.seal_after and not args.dry_run:
         gauge.send_control_subcmd(CTRL_SEAL)
@@ -578,6 +608,18 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Send IT_ENABLE (0x0021) after setup writes (default: enabled)",
+    )
+    p_setup.add_argument(
+        "--verify-update-status",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="After IT_ENABLE, require UpdateStatus to become 0x04 (default: enabled)",
+    )
+    p_setup.add_argument(
+        "--update-status-timeout-s",
+        type=float,
+        default=4.0,
+        help="Seconds to wait for UpdateStatus=0x04 after IT_ENABLE (default: 4.0)",
     )
 
     return p
