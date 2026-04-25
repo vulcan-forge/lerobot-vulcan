@@ -491,6 +491,7 @@ def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
 
     print(
         f"Profile: {args.series_cells}S LiFePO4, design_capacity={args.design_capacity_mah}mAh, "
+        f"charge_voltage={args.pack_charge_voltage_mv}mV, taper_current={args.taper_current_ma}mA, "
         f"divider={divider}, voltsel={'on' if args.set_voltsel else 'unchanged'}"
     )
     apply_writes(gauge, writes, verify=not args.no_verify, dry_run=args.dry_run)
@@ -578,7 +579,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Enable external-divider mode (default: enabled)",
     )
-    p_setup.add_argument("--taper-current-ma", type=int, default=None, help="Optional taper current")
+    p_setup.add_argument(
+        "--taper-current-ma",
+        type=int,
+        default=150,
+        help=(
+            "Taper current in mA (default: 150). "
+            "Tune to your charger's end-of-charge tail current."
+        ),
+    )
     p_setup.add_argument(
         "--cell-terminate-voltage-mv",
         type=int,
@@ -588,8 +597,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument(
         "--pack-charge-voltage-mv",
         type=int,
-        default=14600,
-        help="Pack charge voltage; sets all three cell charge-voltage fields equally (default: 14600)",
+        default=14300,
+        help=(
+            "Pack charge voltage in mV; sets all three cell charge-voltage fields equally "
+            "(default: 14300 for Sourccey 4S charger behavior)."
+        ),
     )
     p_setup.add_argument(
         "--set-qmax-from-capacity",
