@@ -343,6 +343,8 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
 
     if cfg.resume:
         step, optimizer, lr_scheduler = load_training_state(cfg.checkpoint_path, optimizer, lr_scheduler)
+        if is_main_process:
+            logging.info("Resumed training state from %s at step %d", cfg.checkpoint_path, step)
 
     num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     num_total_params = sum(p.numel() for p in policy.parameters())
@@ -420,7 +422,8 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
 
     if is_main_process:
         progbar = tqdm(
-            total=cfg.steps - step,
+            total=cfg.steps,
+            initial=step,
             desc="Training",
             unit="step",
             disable=inside_slurm(),
@@ -431,123 +434,161 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             f"Start offline training on a fixed dataset, with effective batch size: {effective_batch_size}"
         )
 
-    for _ in range(step, cfg.steps):
-        start_time = time.perf_counter()
-        batch = next(dl_iter)
-        for cam_key in dataset.meta.camera_keys:
-            if cam_key in batch and batch[cam_key].dtype == torch.uint8:
-                batch[cam_key] = batch[cam_key].to(dtype=torch.float32) / 255.0
-        batch = preprocessor(batch)
-        train_tracker.dataloading_s = time.perf_counter() - start_time
+    def save_emergency_checkpoint(reason: str) -> None:
+        if not cfg.save_checkpoint or not is_main_process:
+            return
+        if step <= 0:
+            logging.warning("Skipping emergency checkpoint save: no completed training steps yet.")
+            return
 
-        train_tracker, output_dict = update_policy(
-            train_tracker,
-            policy,
-            batch,
-            optimizer,
-            cfg.optimizer.grad_clip_norm,
-            accelerator=accelerator,
-            lr_scheduler=lr_scheduler,
-            rabc_weights_provider=rabc_weights,
-        )
-
-        # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
-        # increment `step` here.
-        step += 1
-        if is_main_process:
-            progbar.update(1)
-        train_tracker.step()
-        is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0 and is_main_process
-        is_saving_step = step % cfg.save_freq == 0 or step == cfg.steps
-        is_eval_step = cfg.eval_freq > 0 and step % cfg.eval_freq == 0
-
-        if is_log_step:
-            logging.info(train_tracker)
+        try:
+            checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
+            logging.warning(
+                "Attempting emergency checkpoint save at step %d due to %s",
+                step,
+                reason,
+            )
+            save_checkpoint(
+                checkpoint_dir=checkpoint_dir,
+                step=step,
+                cfg=cfg,
+                policy=accelerator.unwrap_model(policy),
+                optimizer=optimizer,
+                scheduler=lr_scheduler,
+                preprocessor=preprocessor,
+                postprocessor=postprocessor,
+            )
+            update_last_checkpoint(checkpoint_dir)
             if wandb_logger:
-                wandb_log_dict = train_tracker.to_dict()
-                if output_dict:
-                    wandb_log_dict.update(output_dict)
-                # Log RA-BC statistics if enabled
-                if rabc_weights is not None:
-                    rabc_stats = rabc_weights.get_stats()
-                    wandb_log_dict.update(
-                        {
-                            "rabc_delta_mean": rabc_stats["delta_mean"],
-                            "rabc_delta_std": rabc_stats["delta_std"],
-                            "rabc_num_frames": rabc_stats["num_frames"],
-                        }
-                    )
-                wandb_logger.log_dict(wandb_log_dict, step)
-            train_tracker.reset_averages()
+                wandb_logger.log_policy(checkpoint_dir)
+            logging.warning("Emergency checkpoint saved to %s", checkpoint_dir)
+        except Exception:
+            logging.exception("Emergency checkpoint save failed.")
 
-        if cfg.save_checkpoint and is_saving_step:
+    try:
+        for _ in range(step, cfg.steps):
+            start_time = time.perf_counter()
+            batch = next(dl_iter)
+            for cam_key in dataset.meta.camera_keys:
+                if cam_key in batch and batch[cam_key].dtype == torch.uint8:
+                    batch[cam_key] = batch[cam_key].to(dtype=torch.float32) / 255.0
+            batch = preprocessor(batch)
+            train_tracker.dataloading_s = time.perf_counter() - start_time
+
+            train_tracker, output_dict = update_policy(
+                train_tracker,
+                policy,
+                batch,
+                optimizer,
+                cfg.optimizer.grad_clip_norm,
+                accelerator=accelerator,
+                lr_scheduler=lr_scheduler,
+                rabc_weights_provider=rabc_weights,
+            )
+
+            # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
+            # increment `step` here.
+            step += 1
             if is_main_process:
-                logging.info(f"Checkpoint policy after step {step}")
-                checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
-                save_checkpoint(
-                    checkpoint_dir=checkpoint_dir,
-                    step=step,
-                    cfg=cfg,
-                    policy=accelerator.unwrap_model(policy),
-                    optimizer=optimizer,
-                    scheduler=lr_scheduler,
-                    preprocessor=preprocessor,
-                    postprocessor=postprocessor,
-                )
-                update_last_checkpoint(checkpoint_dir)
+                progbar.update(1)
+            train_tracker.step()
+            is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0 and is_main_process
+            is_saving_step = step % cfg.save_freq == 0 or step == cfg.steps
+            is_eval_step = cfg.eval_freq > 0 and step % cfg.eval_freq == 0
+
+            if is_log_step:
+                logging.info(train_tracker)
                 if wandb_logger:
-                    wandb_logger.log_policy(checkpoint_dir)
+                    wandb_log_dict = train_tracker.to_dict()
+                    if output_dict:
+                        wandb_log_dict.update(output_dict)
+                    # Log RA-BC statistics if enabled
+                    if rabc_weights is not None:
+                        rabc_stats = rabc_weights.get_stats()
+                        wandb_log_dict.update(
+                            {
+                                "rabc_delta_mean": rabc_stats["delta_mean"],
+                                "rabc_delta_std": rabc_stats["delta_std"],
+                                "rabc_num_frames": rabc_stats["num_frames"],
+                            }
+                        )
+                    wandb_logger.log_dict(wandb_log_dict, step)
+                train_tracker.reset_averages()
 
-            accelerator.wait_for_everyone()
-
-        if cfg.env and is_eval_step:
-            if is_main_process:
-                step_id = get_step_identifier(step, cfg.steps)
-                logging.info(f"Eval policy at step {step}")
-                with torch.no_grad(), accelerator.autocast():
-                    eval_info = eval_policy_all(
-                        envs=eval_env,  # dict[suite][task_id] -> vec_env
+            if cfg.save_checkpoint and is_saving_step:
+                if is_main_process:
+                    logging.info(f"Checkpoint policy after step {step}")
+                    checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
+                    save_checkpoint(
+                        checkpoint_dir=checkpoint_dir,
+                        step=step,
+                        cfg=cfg,
                         policy=accelerator.unwrap_model(policy),
-                        env_preprocessor=env_preprocessor,
-                        env_postprocessor=env_postprocessor,
+                        optimizer=optimizer,
+                        scheduler=lr_scheduler,
                         preprocessor=preprocessor,
                         postprocessor=postprocessor,
-                        n_episodes=cfg.eval.n_episodes,
-                        videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
-                        max_episodes_rendered=4,
-                        start_seed=cfg.seed,
-                        max_parallel_tasks=cfg.env.max_parallel_tasks,
                     )
-                # overall metrics (suite-agnostic)
-                aggregated = eval_info["overall"]
+                    update_last_checkpoint(checkpoint_dir)
+                    if wandb_logger:
+                        wandb_logger.log_policy(checkpoint_dir)
 
-                # optional: per-suite logging
-                for suite, suite_info in eval_info.items():
-                    logging.info("Suite %s aggregated: %s", suite, suite_info)
+                accelerator.wait_for_everyone()
 
-                # meters/tracker
-                eval_metrics = {
-                    "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
-                    "pc_success": AverageMeter("success", ":.1f"),
-                    "eval_s": AverageMeter("eval_s", ":.3f"),
-                }
-                eval_tracker = MetricsTracker(
-                    cfg.batch_size,
-                    dataset.num_frames,
-                    dataset.num_episodes,
-                    eval_metrics,
-                    initial_step=step,
-                    accelerator=accelerator,
-                )
-                eval_tracker.eval_s = aggregated.pop("eval_s")
-                eval_tracker.avg_sum_reward = aggregated.pop("avg_sum_reward")
-                eval_tracker.pc_success = aggregated.pop("pc_success")
-                if wandb_logger:
-                    wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
-                    wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
-                    wandb_logger.log_video(eval_info["overall"]["video_paths"][0], step, mode="eval")
+            if cfg.env and is_eval_step:
+                if is_main_process:
+                    step_id = get_step_identifier(step, cfg.steps)
+                    logging.info(f"Eval policy at step {step}")
+                    with torch.no_grad(), accelerator.autocast():
+                        eval_info = eval_policy_all(
+                            envs=eval_env,  # dict[suite][task_id] -> vec_env
+                            policy=accelerator.unwrap_model(policy),
+                            env_preprocessor=env_preprocessor,
+                            env_postprocessor=env_postprocessor,
+                            preprocessor=preprocessor,
+                            postprocessor=postprocessor,
+                            n_episodes=cfg.eval.n_episodes,
+                            videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
+                            max_episodes_rendered=4,
+                            start_seed=cfg.seed,
+                            max_parallel_tasks=cfg.env.max_parallel_tasks,
+                        )
+                    # overall metrics (suite-agnostic)
+                    aggregated = eval_info["overall"]
 
-            accelerator.wait_for_everyone()
+                    # optional: per-suite logging
+                    for suite, suite_info in eval_info.items():
+                        logging.info("Suite %s aggregated: %s", suite, suite_info)
+
+                    # meters/tracker
+                    eval_metrics = {
+                        "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
+                        "pc_success": AverageMeter("success", ":.1f"),
+                        "eval_s": AverageMeter("eval_s", ":.3f"),
+                    }
+                    eval_tracker = MetricsTracker(
+                        cfg.batch_size,
+                        dataset.num_frames,
+                        dataset.num_episodes,
+                        eval_metrics,
+                        initial_step=step,
+                        accelerator=accelerator,
+                    )
+                    eval_tracker.eval_s = aggregated.pop("eval_s")
+                    eval_tracker.avg_sum_reward = aggregated.pop("avg_sum_reward")
+                    eval_tracker.pc_success = aggregated.pop("pc_success")
+                    if wandb_logger:
+                        wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
+                        wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
+                        wandb_logger.log_video(eval_info["overall"]["video_paths"][0], step, mode="eval")
+
+                accelerator.wait_for_everyone()
+    except KeyboardInterrupt:
+        save_emergency_checkpoint("KeyboardInterrupt")
+        raise
+    except Exception:
+        save_emergency_checkpoint("an uncaught exception")
+        raise
 
     if is_main_process:
         progbar.close()

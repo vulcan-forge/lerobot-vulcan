@@ -1,0 +1,132 @@
+### Sourccey Dataset: Combine + Audit
+
+Use this workflow to merge all local datasets found under:
+
+- `/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-c/nickm`
+- `/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-a/nickm`
+
+Then run video decode audit (and optional repair) on the merged dataset.
+
+### Reusable Combine Script
+
+Default merge (uses the two shirt-fold blue parent folders configured in `combine.py`):
+
+```bash
+uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/combine.py
+```
+
+Default output dataset in `combine.py`:
+
+```python
+DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-001"
+```
+
+Preview only (no merge write):
+
+```bash
+uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/combine.py \
+  --dry-run
+```
+
+List discovered roots only:
+
+```bash
+uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/combine.py \
+  --list-only
+```
+
+Use custom parent folders (future reuse):
+
+```bash
+uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/combine.py \
+  --parent "/path/to/parent_a" \
+  --parent "/path/to/parent_b"
+```
+
+Use custom output repo id:
+
+```bash
+uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/combine.py \
+  --out-repo "Combination/sourccey-013__shirt-fold-blue-ac__nickm__manual_001"
+```
+
+Combine into a stable default dataset id (easy to re-audit / re-repair later):
+
+```bash
+DEFAULT_DATASET_REPO="Combination/sourccey-shirt-fold-c-001"
+DEFAULT_DATASET_ROOT="/home/sourccey/.cache/huggingface/lerobot/${DEFAULT_DATASET_REPO}"
+
+uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/combine.py \
+  --out-repo "$DEFAULT_DATASET_REPO" \
+  --out-root "$DEFAULT_DATASET_ROOT"
+```
+
+Use both custom repo id and exact output root:
+
+```bash
+uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/combine.py \
+  --out-repo "Combination/my_dataset_merge" \
+  --out-root "/home/sourccey/.cache/huggingface/lerobot/Combination/my_dataset_merge"
+```
+
+Set defaults for edit/audit/repair commands:
+
+```bash
+DEFAULT_DATASET_REPO="Combination/sourccey-shirt-fold-c-001"
+DEFAULT_DATASET_ROOT="/home/sourccey/.cache/huggingface/lerobot/${DEFAULT_DATASET_REPO}"
+
+# If OUT_REPO/OUT_ROOT are exported from a fresh combine run, they override defaults.
+DATASET_REPO="${OUT_REPO:-$DEFAULT_DATASET_REPO}"
+DATASET_ROOT="${OUT_ROOT:-$DEFAULT_DATASET_ROOT}"
+STAMP="$(date +%Y%m%d_%H%M%S)"
+SAFE_DATASET_REPO="${DATASET_REPO//\//__}"
+BAD_FILES_TXT="outputs/video_audit_${STAMP}_full/${SAFE_DATASET_REPO}_bad_files.txt"
+```
+
+### Quick Sanity Check
+
+```bash
+uv run lerobot-edit-dataset \
+  --repo_id "$DATASET_REPO" \
+  --root "$DATASET_ROOT" \
+  --operation.type info \
+  --operation.show_features true
+```
+
+### Video Decode Audit
+
+```bash
+# 1) Smoke check first
+uv run lerobot-audit-video-decode-errors \
+  --dataset-repo-id "$DATASET_REPO" \
+  --max-files 100 \
+  --workers 8 \
+  --output-dir "outputs/video_audit_${STAMP}_smoke"
+
+# 2) Full audit
+uv run lerobot-audit-video-decode-errors \
+  --dataset-repo-id "$DATASET_REPO" \
+  --workers 8 \
+  --output-dir "outputs/video_audit_${STAMP}_full"
+```
+
+### Optional Repair (if audit finds bad files)
+
+```bash
+# Dry run
+bash src/lerobot/scripts/sourccey/dataset/repair_bad_videos_from_audit.sh \
+  --bad-files-txt "$BAD_FILES_TXT" \
+  --dataset-repo-id "$DATASET_REPO" \
+  --dry-run
+
+# Apply repair
+bash src/lerobot/scripts/sourccey/dataset/repair_bad_videos_from_audit.sh \
+  --bad-files-txt "$BAD_FILES_TXT" \
+  --dataset-repo-id "$DATASET_REPO"
+
+# Re-audit after repair
+uv run lerobot-audit-video-decode-errors \
+  --dataset-repo-id "$DATASET_REPO" \
+  --workers 8 \
+  --output-dir "outputs/video_audit_${STAMP}_post_repair"
+```
