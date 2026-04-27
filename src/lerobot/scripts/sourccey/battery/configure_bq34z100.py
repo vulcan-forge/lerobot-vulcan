@@ -94,6 +94,7 @@ FIELDS: dict[str, FieldSpec] = {
         "cell_charge_voltage_t3_t4_mv", 48, 21, "U2", "Cell Charge Voltage T3-T4 (mV)"
     ),
     "taper_current_ma": FieldSpec("taper_current_ma", 36, 0, "I2", "Taper Current (mA)"),
+    "quit_current_ma": FieldSpec("quit_current_ma", 81, 4, "I2", "Quit Current (mA)"),
     "cell_terminate_voltage_mv": FieldSpec(
         "cell_terminate_voltage_mv", 80, 53, "I2", "Cell Terminate Voltage (mV)"
     ),
@@ -443,11 +444,16 @@ def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
         old_energy = gauge.read_field(spec_energy)
         writes.append(PendingWrite(spec=spec_energy, old_value=old_energy, new_value=design_energy_cwh))
 
-    # Optional taper current and terminate voltage
+    # Current thresholds and terminate voltage
     if args.taper_current_ma is not None:
         spec_taper = FIELDS["taper_current_ma"]
         old_taper = gauge.read_field(spec_taper)
         writes.append(PendingWrite(spec=spec_taper, old_value=old_taper, new_value=args.taper_current_ma))
+
+    if args.quit_current_ma is not None:
+        spec_quit = FIELDS["quit_current_ma"]
+        old_quit = gauge.read_field(spec_quit)
+        writes.append(PendingWrite(spec=spec_quit, old_value=old_quit, new_value=args.quit_current_ma))
 
     if args.cell_terminate_voltage_mv is not None:
         spec_term = FIELDS["cell_terminate_voltage_mv"]
@@ -491,7 +497,8 @@ def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
 
     print(
         f"Profile: {args.series_cells}S LiFePO4, design_capacity={args.design_capacity_mah}mAh, "
-        f"charge_voltage={args.pack_charge_voltage_mv}mV, taper_current={args.taper_current_ma}mA, "
+        f"charge_voltage={args.pack_charge_voltage_mv}mV, "
+        f"taper_current={args.taper_current_ma}mA, quit_current={args.quit_current_ma}mA, "
         f"divider={divider}, voltsel={'on' if args.set_voltsel else 'unchanged'}"
     )
     apply_writes(gauge, writes, verify=not args.no_verify, dry_run=args.dry_run)
@@ -586,6 +593,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Taper current in mA (default: 150). "
             "Tune to your charger's end-of-charge tail current."
+        ),
+    )
+    p_setup.add_argument(
+        "--quit-current-ma",
+        type=int,
+        default=10,
+        help=(
+            "Quit current in mA (default: 10). "
+            "FC requires current to stay above this threshold while below taper."
         ),
     )
     p_setup.add_argument(

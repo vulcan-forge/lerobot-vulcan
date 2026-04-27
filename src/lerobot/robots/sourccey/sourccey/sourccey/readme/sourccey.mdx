@@ -64,13 +64,15 @@ Run the default 4S LiFePO4 setup profile:
 uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py setup-4s-lifepo4
 ```
 
-Default setup writes a `14.3V` pack charge target and `150mA` taper current.
-If your charger terminates differently, override both values:
+Default setup writes a `14.3V` pack charge target, `150mA` taper current,
+and `10mA` quit current.
+If your charger terminates differently, override these values:
 
 ```bash
 uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py setup-4s-lifepo4 \
   --pack-charge-voltage-mv <actual_cv_mv> \
-  --taper-current-ma <tail_current_ma>
+  --taper-current-ma <tail_current_ma> \
+  --quit-current-ma <quit_current_ma>
 ```
 
 If your divider values are custom, set them explicitly:
