@@ -7,6 +7,7 @@ Default output is compact and operator-focused:
 - voltage/current/SOC/capacity
 - pack config + detected series-cell count
 - key gauge health/config values
+- FC-learning thresholds + live gate snapshot
 
 Use ``--full`` for a detailed dump with raw registers/fields/blocks.
 """
@@ -153,6 +154,20 @@ def _read_data_flash_blocks(gauge: BQ34Z100R2) -> list[dict[str, Any]]:
     return blocks
 
 
+def _read_learning_thresholds(gauge: BQ34Z100R2) -> dict[str, int]:
+    # Gas Gauging Current Thresholds live in subclass 81:
+    # 0: Dsg Current Threshold, 2: Chg Current Threshold, 4: Quit Current.
+    def _read_i16(subclass: int, offset: int) -> int:
+        raw = gauge.read_df_bytes(subclass, offset, 2)
+        return int.from_bytes(raw, byteorder="big", signed=True)
+
+    return {
+        "dsg_current_threshold_ma": _read_i16(81, 0),
+        "chg_current_threshold_ma": _read_i16(81, 2),
+        "quit_current_ma": _read_i16(81, 4),
+    }
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Dump detailed bq34z100 diagnostics as JSON")
     p.add_argument("--bus", type=int, default=1, help="I2C bus number (default: 1)")
@@ -219,6 +234,7 @@ def main() -> int:
     data_flash_fields: dict[str, Any] | None = None
     raw_standard_registers: dict[str, Any] | None = None
     data_flash_blocks: list[dict[str, Any]] | None = None
+    learning_thresholds: dict[str, int] | None = None
 
     try:
         telemetry = get_battery_data(
@@ -257,6 +273,11 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         section_errors["data_flash_fields"] = str(exc)
 
+    try:
+        learning_thresholds = _read_learning_thresholds(gauge)
+    except Exception as exc:  # noqa: BLE001
+        section_errors["learning_thresholds"] = str(exc)
+
     if args.full and args.include_block_dump:
         try:
             data_flash_blocks = _read_data_flash_blocks(gauge)
@@ -273,6 +294,8 @@ def main() -> int:
             payload["control_info"] = control_info
         if data_flash_fields is not None:
             payload["data_flash_fields"] = data_flash_fields
+        if learning_thresholds is not None:
+            payload["learning_thresholds"] = learning_thresholds
         if data_flash_blocks is not None:
             payload["data_flash_blocks"] = data_flash_blocks
     else:
@@ -323,6 +346,60 @@ def main() -> int:
             summary["raw_current_ma_signed"] = raw_standard_registers["average_current_ma_raw"][
                 "normalized_signed"
             ]
+
+        learning_summary: dict[str, Any] = {}
+        if data_flash_fields is not None:
+            def _field_int(name: str) -> int | None:
+                item = data_flash_fields.get(name)
+                return None if item is None else int(item["value_int"])
+
+            series_cells = _field_int("number_of_series_cells")
+            taper_current_ma = _field_int("taper_current_ma")
+            charge_cell_mv = _field_int("cell_charge_voltage_t2_t3_mv")
+
+            if taper_current_ma is not None:
+                learning_summary["taper_current_ma"] = taper_current_ma
+            if series_cells is not None:
+                learning_summary["series_cells"] = series_cells
+            if charge_cell_mv is not None:
+                learning_summary["charge_voltage_per_cell_mv"] = charge_cell_mv
+            if series_cells is not None and charge_cell_mv is not None:
+                charge_target_mv = series_cells * charge_cell_mv
+                learning_summary["charge_voltage_target_mv"] = charge_target_mv
+                learning_summary["charge_voltage_window_mv"] = [charge_target_mv - 100, charge_target_mv + 100]
+
+        if learning_thresholds is not None:
+            learning_summary.update(learning_thresholds)
+
+        current_now_ma: int | None = None
+        voltage_now_mv: int | None = None
+        if raw_standard_registers is not None:
+            current_now_ma = int(raw_standard_registers["average_current_ma_raw"]["normalized_signed"])
+            learning_summary["current_now_ma"] = current_now_ma
+        if telemetry_out is not None:
+            voltage_now_mv = int(round(float(telemetry_out["voltage"]) * 1000.0))
+            learning_summary["voltage_now_mv"] = voltage_now_mv
+
+        charge_target_mv = learning_summary.get("charge_voltage_target_mv")
+        taper_current_ma = learning_summary.get("taper_current_ma")
+        quit_current_ma = learning_summary.get("quit_current_ma")
+
+        if charge_target_mv is not None and voltage_now_mv is not None:
+            learning_summary["voltage_within_100mv"] = abs(int(voltage_now_mv) - int(charge_target_mv)) <= 100
+        if taper_current_ma is not None and current_now_ma is not None:
+            learning_summary["current_below_taper"] = int(current_now_ma) < int(taper_current_ma)
+        if quit_current_ma is not None and current_now_ma is not None:
+            learning_summary["current_above_quit"] = int(current_now_ma) > int(quit_current_ma)
+
+        if all(k in learning_summary for k in ("voltage_within_100mv", "current_below_taper", "current_above_quit")):
+            learning_summary["fc_conditions_now"] = bool(
+                learning_summary["voltage_within_100mv"]
+                and learning_summary["current_below_taper"]
+                and learning_summary["current_above_quit"]
+            )
+
+        if learning_summary:
+            summary["learning"] = learning_summary
 
         payload = summary
 
