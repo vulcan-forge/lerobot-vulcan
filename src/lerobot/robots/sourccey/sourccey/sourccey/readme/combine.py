@@ -13,7 +13,7 @@ DEFAULT_PARENTS = [
 ]
 HF_LEROBOT_HOME = Path("/home/sourccey/.cache/huggingface/lerobot")
 # Default output dataset path under HF_LEROBOT_HOME.
-DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-001"
+DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-002"
 
 
 def is_dataset_root(path: Path) -> bool:
