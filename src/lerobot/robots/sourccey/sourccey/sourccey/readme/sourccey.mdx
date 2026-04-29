@@ -155,7 +155,16 @@ python src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
  --teleop.right_arm_port="/dev/ttyACM1"
 ```
 
-python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --remote_ip="192.168.1.211" --left_arm_port="/dev/ttyACM1" --right_arm_port="/dev/ttyACM0" --keyboard_port="keyboard" --fps=30
+uv run lerobot-teleoperate \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.211" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop.left_arm_port="/dev/ttyACM1" \
+ --teleop.right_arm_port="/dev/ttyACM0" \
+ --fps=30 \
+ --display_data=true
 
 For single-arm teleoperator:
 
@@ -209,17 +218,29 @@ source .venv/Scripts/activate
 # On Windows Then run:
 
 ```
-python src/lerobot/control/sourccey/sourccey/teleoperate.py \
- --id="sourccey" \
- --remote_ip="192.168.1.212" \
- --left_arm_port="COM17" \
- --right_arm_port="COM18" \
- --keyboard_port="keyboard" \
- --fps=30
+uv run lerobot-teleoperate \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.212" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop.left_arm_port="COM17" \
+ --teleop.right_arm_port="COM18" \
+ --fps=30 \
+ --display_data=true
 ```
 
 ```
-python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --remote_ip="192.168.1.212" --left_arm_port="/dev/ttyACM1" --right_arm_port="/dev/ttyACM0" --keyboard_port="keyboard" --fps=30
+uv run lerobot-teleoperate \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.212" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop.left_arm_port="/dev/ttyACM1" \
+ --teleop.right_arm_port="/dev/ttyACM0" \
+ --fps=30 \
+ --display_data=true
 ```
 
 **Parameters:**
@@ -234,16 +255,19 @@ python src/lerobot/control/sourccey/sourccey/teleoperate.py --id="sourccey" --re
 Record demonstration data for training:
 
 ```
-python src/lerobot/control/sourccey/sourccey/record.py \
- --id="sourccey" \
- --remote_ip="192.168.1.214" \
- --left_arm_port="/dev/ttyACM1" \
- --right_arm_port="/dev/ttyACM0" \
+uv run lerobot-record \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.214" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop.left_arm_port="/dev/ttyACM1" \
+ --teleop.right_arm_port="/dev/ttyACM0" \
  --dataset.repo_id="sourccey-012/sourccey-012__shorts-fold-c__set019__mylesr" \
  --dataset.num_episodes=5 \
  --dataset.episode_time_s=200 \
  --dataset.reset_time_s=5 \
- --dataset.task="Fold the shorts" \
+ --dataset.single_task="Fold the shorts" \
  --dataset.fps=30 \
  --dataset.push_to_hub=false
 ```
@@ -254,7 +278,7 @@ python src/lerobot/control/sourccey/sourccey/record.py \
 - `--dataset.num_episodes`: Number of episodes to record
 - `--dataset.episode_time_s`: Duration of each episode in seconds
 - `--dataset.reset_time_s`: Time between episodes for reset
-- `--dataset.task`: Task description for the dataset
+- `--dataset.single_task`: Task description for the dataset
 
 ---
 
@@ -335,7 +359,7 @@ uv run python src/lerobot/control/sourccey/sourccey/inference.py \
 Evaluate a trained model on the robot:
 
 ```
-uv run src/lerobot/control/sourccey/sourccey/evaluate.py \
+uv run python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.211" \
  --model_path="outputs/train/xvla__sourccey-012__shorts-fold__cmb__005__mylesr/checkpoints/100000/pretrained_model" \
@@ -355,11 +379,12 @@ uv run src/lerobot/control/sourccey/sourccey/evaluate.py \
 Replay previously recorded episodes:
 
 ```
-python src/lerobot/control/sourccey/sourccey/replay.py \
- --id="sourccey" \
- --remote_ip="192.168.1.166" \
- --dataset.dataset="sourccey-011/sourccey-011__set_table-a__set000__name" \
- --dataset.episode=0
+uv run lerobot-replay \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.166" \
+ --dataset.repo_id="sourccey-011/sourccey-011__set_table-a__set000__name" \
+ --dataset.episode=0 \
  --dataset.fps=30
 ```
 

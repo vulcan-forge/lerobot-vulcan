@@ -1,30 +1,36 @@
 ```
-python src/lerobot/control/sourccey/sourccey/teleoperate.py \
- --id="sourccey" \
- --remote_ip="192.168.1.212" \
- --left_arm_port="/dev/ttyACM0" \
- --right_arm_port="/dev/ttyACM1"
- --keyboard_port="keyboard" \
- --fps=30
+uv run lerobot-teleoperate \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.212" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop.left_arm_port="/dev/ttyACM0" \
+ --teleop.right_arm_port="/dev/ttyACM1" \
+ --fps=30 \
+ --display_data=true
 ```
 
 ```
-python src/lerobot/control/sourccey/sourccey/record.py \
- --id="sourccey" \
- --remote_ip="192.168.1.212" \
- --left_arm_port="/dev/ttyACM0" \
- --right_arm_port="/dev/ttyACM1" \
- --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-c/nickm/sourccey-013__shirt-fold-blue-c__set300__nickm" \
+uv run lerobot-record \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.212" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop.left_arm_port="/dev/ttyACM0" \
+ --teleop.right_arm_port="/dev/ttyACM1" \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-c/nickm/sourccey-013__shirt-fold-blue-c__set301__nickm" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=5 \
- --dataset.task="Fold the shirt" \
+ --dataset.single_task="Fold the shirt" \
  --dataset.fps=30 \
  --dataset.push_to_hub=false
 ```
 
 ```
-CUDA_VISIBLE_DEVICES=1 python src/lerobot/control/sourccey/sourccey/evaluate.py \
+CUDA_VISIBLE_DEVICES=1 uv run python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.212" \
  --model_path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
@@ -36,18 +42,34 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/control/sourccey/sourccey/evaluate.py 
  --dataset.fps=30
 ```
 
-
 ```
-python src/lerobot/control/sourccey/sourccey/record.py \
+CUDA_VISIBLE_DEVICES=0 uv run python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.212" \
- --left_arm_port="/dev/ttyACM0" \
- --right_arm_port="/dev/ttyACM1" \
+ --model_path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/0600000/pretrained_model" \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-c/robot/eval_xvla_s_sourccey-shirt-fold-c-004" \
+ --dataset.num_episodes=1 \
+ --dataset.episode_time_s=600 \
+ --dataset.reset_time_s=10 \
+ --dataset.task="Fold the shirt" \
+ --dataset.fps=30
+```
+
+
+```
+uv run lerobot-record \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.212" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop.left_arm_port="/dev/ttyACM0" \
+ --teleop.right_arm_port="/dev/ttyACM1" \
  --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set004__nickm" \
  --dataset.num_episodes=10 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=5 \
- --dataset.task="Fold the shirt" \
+ --dataset.single_task="Fold the shirt" \
  --dataset.fps=30 \
  --dataset.push_to_hub=false
 ```
@@ -375,7 +397,7 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 accelerate launch
 ```
 
 ```
-CUDA_VISIBLE_DEVICES=1 python src/lerobot/control/sourccey/sourccey/evaluate.py \
+CUDA_VISIBLE_DEVICES=1 uv run python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.212" \
  --model_path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/0340000/pretrained_model" \

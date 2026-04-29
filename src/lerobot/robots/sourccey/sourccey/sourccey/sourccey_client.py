@@ -100,6 +100,11 @@ class SourcceyClient(Robot):
         # Stored target position (what we "expect" z to be at while holding keys).
         self._z_pos_cmd = 0.0
 
+        # Log-throttle repeated poll timeouts to avoid terminal spam in teleop loops.
+        self._no_data_log_interval_s = 5.0
+        self._last_no_data_log_ts = 0.0
+        self._suppressed_no_data_logs = 0
+
     ###################################################################
     # Properties and Attributes
     ###################################################################
@@ -142,6 +147,16 @@ class SourcceyClient(Robot):
     @cached_property
     def action_features(self) -> dict[str, type]:
         return self._state_ft
+
+    @cached_property
+    def cameras(self) -> dict[str, Any]:
+        """Expose configured remote cameras for CLI compatibility.
+
+        SourcceyClient receives camera frames over the network (it does not own
+        local camera device objects), but several generic scripts inspect
+        ``len(robot.cameras)`` to size image-writer workers.
+        """
+        return self.config.cameras
 
     @property
     def is_connected(self) -> bool:
@@ -344,7 +359,20 @@ class SourcceyClient(Robot):
             return None
 
         if self.zmq_observation_socket not in socks:
-            logging.info("No new data available within timeout.")
+            now = time.monotonic()
+            elapsed = now - self._last_no_data_log_ts
+            if elapsed >= self._no_data_log_interval_s:
+                if self._suppressed_no_data_logs > 0:
+                    logging.info(
+                        "No new data available within timeout. (suppressed %d similar messages)",
+                        self._suppressed_no_data_logs,
+                    )
+                    self._suppressed_no_data_logs = 0
+                else:
+                    logging.info("No new data available within timeout.")
+                self._last_no_data_log_ts = now
+            else:
+                self._suppressed_no_data_logs += 1
             return None
 
         last_msg = None

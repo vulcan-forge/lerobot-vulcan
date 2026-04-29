@@ -218,7 +218,6 @@ def record_loop(
     control_time_s: int | None = None,
     single_task: str | None = None,
     display_data: bool = False,
-    interpolator: ActionInterpolator | None = None,
     display_compressed_images: bool = False,
 ):
     if dataset is not None and dataset.fps != fps:
