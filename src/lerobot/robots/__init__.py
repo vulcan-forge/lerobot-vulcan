@@ -21,3 +21,5 @@ from .utils import make_robot_from_config
 # Import sourccey robots
 from .sourccey.sourccey.sourccey.sourccey import Sourccey
 from .sourccey.sourccey.sourccey_follower.sourccey_follower import SourcceyFollower
+
+__all__ = ["Robot", "RobotConfig", "make_robot_from_config"]

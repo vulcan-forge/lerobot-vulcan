@@ -19,7 +19,7 @@ from typing import Any, Dict
 import warnings
 from collections.abc import Callable
 
-from lerobot.utils.utils import format_big_number
+from .utils import format_big_number
 
 
 class AverageMeter:

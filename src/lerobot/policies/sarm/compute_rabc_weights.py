@@ -60,10 +60,11 @@ import pyarrow.parquet as pq
 import torch
 from tqdm import tqdm
 
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.policies.sarm.modeling_sarm import SARMRewardModel
-from lerobot.policies.sarm.processor_sarm import make_sarm_pre_post_processors
-from lerobot.policies.sarm.sarm_utils import normalize_stage_tau
+from lerobot.datasets import LeRobotDataset
+
+from .modeling_sarm import SARMRewardModel
+from .processor_sarm import make_sarm_pre_post_processors
+from .sarm_utils import normalize_stage_tau
 
 _PART_FILE_RE = re.compile(r"episode_(\d+)\.parquet$")
 

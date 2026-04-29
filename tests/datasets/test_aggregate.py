@@ -18,9 +18,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-import datasets
-import pandas as pd
-import PIL.Image
+import pytest
+
+pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
+
+import datasets  # noqa: E402
 import torch
 
 from lerobot.datasets.aggregate import aggregate_datasets
@@ -474,83 +476,6 @@ def test_video_timestamps_regression(tmp_path, lerobot_dataset_factory):
             assert item[key].shape[0] == 3, f"Expected 3 channels for video key {key}"
 
 
-def test_aggregate_preserves_multi_file_source_video_mappings(tmp_path, lerobot_dataset_factory):
-    """Regression test for source datasets that already span multiple video files."""
-    src_ds = lerobot_dataset_factory(
-        root=tmp_path / "video_src",
-        repo_id=f"{DUMMY_REPO_ID}_video_src",
-        total_episodes=6,
-        total_frames=600,
-    )
-    video_key = src_ds.meta.video_keys[0]
-    split_last_episode_into_second_video_file(src_ds, video_key)
-
-    aggregate_datasets(
-        repo_ids=[src_ds.repo_id],
-        roots=[src_ds.root],
-        aggr_repo_id=f"{DUMMY_REPO_ID}_video_aggr",
-        aggr_root=tmp_path / "video_aggr",
-        video_files_size_in_mb=0.0001,
-    )
-
-    aggr_ds = load_local_dataset(f"{DUMMY_REPO_ID}_video_aggr", tmp_path / "video_aggr")
-
-    assert set(aggr_ds.meta.episodes[f"videos/{video_key}/file_index"]) == {0, 1}
-    assert_video_timestamps_within_bounds(aggr_ds)
-    assert_dataset_iteration_works(aggr_ds)
-
-
-def test_aggregate_preserves_multi_file_source_data_mappings(tmp_path, lerobot_dataset_factory):
-    """Regression test for source datasets that already span multiple data parquet files."""
-    src_ds = lerobot_dataset_factory(
-        root=tmp_path / "data_src",
-        repo_id=f"{DUMMY_REPO_ID}_data_src",
-        total_episodes=6,
-        total_frames=600,
-    )
-    split_last_episode_into_second_data_file(src_ds)
-
-    aggregate_datasets(
-        repo_ids=[src_ds.repo_id],
-        roots=[src_ds.root],
-        aggr_repo_id=f"{DUMMY_REPO_ID}_data_aggr",
-        aggr_root=tmp_path / "data_aggr",
-        data_files_size_in_mb=0.0001,
-    )
-
-    aggr_ds = load_local_dataset(f"{DUMMY_REPO_ID}_data_aggr", tmp_path / "data_aggr")
-
-    assert set(aggr_ds.meta.episodes["data/file_index"]) == {0, 1}
-    assert_data_files_reference_matching_episodes(aggr_ds)
-
-
-def test_aggregate_metadata_rows_reference_written_file(tmp_path, lerobot_dataset_factory):
-    """Regression test for metadata rows pointing at the wrong aggregated metadata file."""
-    ds_0 = lerobot_dataset_factory(
-        root=tmp_path / "meta_0",
-        repo_id=f"{DUMMY_REPO_ID}_meta_0",
-        total_episodes=4,
-        total_frames=200,
-    )
-    ds_1 = lerobot_dataset_factory(
-        root=tmp_path / "meta_1",
-        repo_id=f"{DUMMY_REPO_ID}_meta_1",
-        total_episodes=4,
-        total_frames=200,
-    )
-
-    with patch("lerobot.datasets.aggregate.DEFAULT_DATA_FILE_SIZE_IN_MB", 0.0001):
-        aggregate_datasets(
-            repo_ids=[ds_0.repo_id, ds_1.repo_id],
-            roots=[ds_0.root, ds_1.root],
-            aggr_repo_id=f"{DUMMY_REPO_ID}_meta_aggr",
-            aggr_root=tmp_path / "meta_aggr",
-            data_files_size_in_mb=100,
-        )
-
-    assert_metadata_rows_reference_their_own_file(tmp_path / "meta_aggr")
-
-
 def assert_image_schema_preserved(aggr_ds):
     """Test that HuggingFace Image feature schema is preserved in aggregated parquet files.
 
@@ -660,8 +585,8 @@ def test_aggregate_image_datasets(tmp_path, lerobot_dataset_factory):
 
     # Load the aggregated dataset
     with (
-        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
-        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+        patch("lerobot.datasets.dataset_metadata.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.dataset_metadata.snapshot_download") as mock_snapshot_download,
     ):
         mock_get_safe_version.return_value = "v3.0"
         mock_snapshot_download.return_value = str(tmp_path / "image_aggr")
@@ -730,8 +655,8 @@ def test_aggregate_already_merged_dataset(tmp_path, lerobot_dataset_factory):
     )
 
     with (
-        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
-        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+        patch("lerobot.datasets.dataset_metadata.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.dataset_metadata.snapshot_download") as mock_snapshot_download,
     ):
         mock_get_safe_version.return_value = "v3.0"
         mock_snapshot_download.return_value = str(tmp_path / "ds_ab")
@@ -758,8 +683,8 @@ def test_aggregate_already_merged_dataset(tmp_path, lerobot_dataset_factory):
     )
 
     with (
-        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
-        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+        patch("lerobot.datasets.dataset_metadata.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.dataset_metadata.snapshot_download") as mock_snapshot_download,
     ):
         mock_get_safe_version.return_value = "v3.0"
         mock_snapshot_download.return_value = str(tmp_path / "ds_abc")

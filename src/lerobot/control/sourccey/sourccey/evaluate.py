@@ -2,12 +2,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import shutil
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.feature_utils import hw_to_dataset_features
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 from lerobot.processor import make_default_processors
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClientConfig, SourcceyClient
-from lerobot.utils.control_utils import init_keyboard_listener
+from lerobot.common.control_utils import init_keyboard_listener
+from lerobot.utils.feature_utils import hw_to_dataset_features
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
 from lerobot.scripts.lerobot_record import record_loop

@@ -29,7 +29,10 @@ from datasets.table import embed_table_storage
 from PIL import Image as PILImage
 from torchvision import transforms
 
-from lerobot.datasets.utils import (
+from lerobot.utils.io_utils import load_json, write_json
+from lerobot.utils.utils import SuppressProgressBars, flatten_dict, unflatten_dict
+
+from .utils import (
     DEFAULT_DATA_FILE_SIZE_IN_MB,
     DEFAULT_EPISODES_PATH,
     DEFAULT_SUBTASKS_PATH,
@@ -37,11 +40,8 @@ from lerobot.datasets.utils import (
     EPISODES_DIR,
     INFO_PATH,
     STATS_PATH,
-    flatten_dict,
     serialize_dict,
-    unflatten_dict,
 )
-from lerobot.utils.utils import SuppressProgressBars
 
 
 def get_parquet_file_size_in_mb(parquet_path: str | Path) -> float:

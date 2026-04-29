@@ -80,8 +80,6 @@ RUN uv sync --locked --extra all --no-cache
 
 RUN chmod +x /lerobot/.venv/lib/python${PYTHON_VERSION}/site-packages/triton/backends/nvidia/bin/ptxas
 
-RUN chmod +x /lerobot/.venv/lib/python${PYTHON_VERSION}/site-packages/triton/backends/nvidia/bin/ptxas
-
 # Copy the rest of the application source code
 # Make sure to have the git-LFS files for testing
 COPY --chown=user_lerobot:user_lerobot . .

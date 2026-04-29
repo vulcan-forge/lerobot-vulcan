@@ -43,7 +43,7 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import make_robot_action
 from lerobot.processor import make_default_processors
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
-from lerobot.utils.control_utils import init_keyboard_listener, predict_action
+from lerobot.common.control_utils import init_keyboard_listener, predict_action
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import get_safe_torch_device, init_logging, log_say
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data

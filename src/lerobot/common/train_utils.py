@@ -19,12 +19,6 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from lerobot.configs.train import TrainPipelineConfig
-<<<<<<< HEAD:src/lerobot/utils/train_utils.py
-from lerobot.datasets.io_utils import load_json, write_json
-from lerobot.optim.optimizers import load_optimizer_state, save_optimizer_state
-from lerobot.optim.schedulers import load_scheduler_state, save_scheduler_state
-from lerobot.policies.pretrained import PreTrainedPolicy
-=======
 from lerobot.optim import (
     load_optimizer_state,
     load_scheduler_state,
@@ -32,7 +26,6 @@ from lerobot.optim import (
     save_scheduler_state,
 )
 from lerobot.policies import PreTrainedPolicy
->>>>>>> upstream/main:src/lerobot/common/train_utils.py
 from lerobot.processor import PolicyProcessorPipeline
 from lerobot.utils.constants import (
     CHECKPOINTS_DIR,
@@ -70,19 +63,8 @@ def update_last_checkpoint(checkpoint_dir: Path) -> Path:
     if last_checkpoint_dir.is_symlink():
         last_checkpoint_dir.unlink()
     relative_target = checkpoint_dir.relative_to(checkpoint_dir.parent)
-    try:
-        last_checkpoint_dir.symlink_to(relative_target)
-    except OSError:
-        # Windows fix: Copy instead of symlink if symlinks are not supported
-        if last_checkpoint_dir.exists():
-            shutil.rmtree(last_checkpoint_dir)
-        # Ensure absolute paths are used
-        absolute_target = checkpoint_dir.resolve()
-        # Check if the source directory exists before copying
-        if absolute_target.exists():
-            shutil.copytree(str(absolute_target), str(last_checkpoint_dir))
-        else:
-            print(f"Warning: Checkpoint directory {absolute_target} does not exist. Skipping copy.")
+    last_checkpoint_dir.symlink_to(relative_target)
+
 
 def save_checkpoint(
     checkpoint_dir: Path,
@@ -119,16 +101,7 @@ def save_checkpoint(
         preprocessor: The preprocessor/pipeline to save. Defaults to None.
     """
     pretrained_dir = checkpoint_dir / PRETRAINED_MODEL_DIR
-
-    # Handle DistributedDataParallel wrapped models
-    if hasattr(policy, 'module'):
-        # If policy is wrapped with DDP, access the underlying module
-        actual_policy = policy.module
-    else:
-        # If policy is not wrapped, use it directly
-        actual_policy = policy
-
-    actual_policy.save_pretrained(pretrained_dir)
+    policy.save_pretrained(pretrained_dir)
     cfg.save_pretrained(pretrained_dir)
     if cfg.peft is not None:
         # When using PEFT, policy.save_pretrained will only write the adapter weights + config, not the
