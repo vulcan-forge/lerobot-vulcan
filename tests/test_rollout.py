@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import dataclasses
+import io
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -102,6 +104,125 @@ def test_sentry_config_defaults():
     cfg = SentryStrategyConfig()
     assert cfg.upload_every_n_episodes == 5
     assert cfg.target_video_file_size_mb is None
+
+
+def test_rollout_logging_config_defaults():
+    from lerobot.rollout import RolloutLoggingConfig
+
+    cfg = RolloutLoggingConfig()
+    assert cfg.throttle_spam is True
+    assert cfg.throttle_interval_s == 5.0
+
+
+def test_rollout_spam_throttle_suppresses_and_reports():
+    from lerobot.rollout.log_throttle import RolloutSpamThrottleFilter
+
+    class FakeClock:
+        def __init__(self):
+            self.t = 0.0
+
+        def __call__(self):
+            return self.t
+
+    def make_record(msg: str) -> logging.LogRecord:
+        return logging.LogRecord(
+            name="test.rollout",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg=msg,
+            args=(),
+            exc_info=None,
+        )
+
+    clock = FakeClock()
+    filt = RolloutSpamThrottleFilter(throttle_interval_s=5.0, clock=clock)
+
+    msg = "No new data available within timeout."
+    rec1 = make_record(msg)
+    rec2 = make_record(msg)
+    rec3 = make_record(msg)
+
+    assert filt.filter(rec1) is True
+    assert rec1.getMessage() == msg
+
+    assert filt.filter(rec2) is False
+
+    clock.t = 5.1
+    assert filt.filter(rec3) is True
+    assert "suppressed 1 similar messages" in rec3.getMessage()
+
+
+def test_rollout_spam_throttle_non_matching_message_passes():
+    from lerobot.rollout.log_throttle import RolloutSpamThrottleFilter
+
+    record = logging.LogRecord(
+        name="test.rollout",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="This is a normal informational event.",
+        args=(),
+        exc_info=None,
+    )
+    filt = RolloutSpamThrottleFilter(throttle_interval_s=5.0)
+    assert filt.filter(record) is True
+
+
+def test_rollout_spam_throttle_disabled_passthrough():
+    from lerobot.rollout.log_throttle import RolloutSpamThrottleFilter
+
+    msg = "Record loop is running slower (20.0 Hz) than the target FPS (30.0 Hz)."
+    rec1 = logging.LogRecord("test.rollout", logging.WARNING, __file__, 1, msg, (), None)
+    rec2 = logging.LogRecord("test.rollout", logging.WARNING, __file__, 1, msg, (), None)
+
+    filt = RolloutSpamThrottleFilter(throttle_interval_s=5.0, enabled=False)
+    assert filt.filter(rec1) is True
+    assert filt.filter(rec2) is True
+
+
+def test_configure_rollout_log_throttling_filters_named_loggers():
+    from lerobot.rollout.log_throttle import configure_rollout_log_throttling
+
+    class FakeClock:
+        def __init__(self):
+            self.t = 0.0
+
+        def __call__(self):
+            return self.t
+
+    root = logging.getLogger()
+    old_handlers = list(root.handlers)
+    old_level = root.level
+    old_filters = list(root.filters)
+
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    root.handlers = [handler]
+    root.setLevel(logging.INFO)
+    root.filters = []
+
+    logger = logging.getLogger("lerobot.rollout.strategies.base")
+    logger.setLevel(logging.INFO)
+
+    try:
+        clock = FakeClock()
+        configure_rollout_log_throttling(enabled=True, throttle_interval_s=5.0, clock=clock)
+
+        msg = "Record loop is running slower (20.0 Hz) than the target FPS (30.0 Hz)."
+        logger.warning(msg)
+        logger.warning(msg)
+        clock.t = 5.1
+        logger.warning(msg)
+
+        lines = [line.strip() for line in stream.getvalue().splitlines() if line.strip()]
+        assert len(lines) == 2
+        assert "suppressed 1 similar messages" in lines[-1]
+    finally:
+        root.handlers = old_handlers
+        root.setLevel(old_level)
+        root.filters = old_filters
 
 
 # ---------------------------------------------------------------------------

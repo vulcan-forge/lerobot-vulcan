@@ -98,7 +98,12 @@ class SourcceyClient(Robot):
         self._z_units_per_s = (self._z_max - self._z_min) / self._z_full_travel_s
 
         # Stored target position (what we "expect" z to be at while holding keys).
-        self._z_pos_cmd = 0.0
+        self._z_pos_cmd = 100.0
+
+        # Log-throttle repeated poll timeouts to avoid terminal spam in teleop loops.
+        self._no_data_log_interval_s = 5.0
+        self._last_no_data_log_ts = 0.0
+        self._suppressed_no_data_logs = 0
 
     ###################################################################
     # Properties and Attributes
@@ -142,6 +147,16 @@ class SourcceyClient(Robot):
     @cached_property
     def action_features(self) -> dict[str, type]:
         return self._state_ft
+
+    @cached_property
+    def cameras(self) -> dict[str, Any]:
+        """Expose configured remote cameras for CLI compatibility.
+
+        SourcceyClient receives camera frames over the network (it does not own
+        local camera device objects), but several generic scripts inspect
+        ``len(robot.cameras)`` to size image-writer workers.
+        """
+        return self.config.cameras
 
     @property
     def is_connected(self) -> bool:
@@ -200,8 +215,11 @@ class SourcceyClient(Robot):
 
     def _send_relax_command(self) -> None:
         """
-        Best-effort final command before disconnect: stop base and untorque both arms.
-        """
+        Best-effort final command before disconnect.
+
+        Always stops base motion. Arm untorque is controlled by
+        ``config.untorque_on_disconnect``.
+        """        
         relax_action = {
             "x.vel": 0.0,
             "y.vel": 0.0,
@@ -221,7 +239,7 @@ class SourcceyClient(Robot):
                 "SourcceyClient is not connected. You need to run `robot.connect()` before disconnecting."
             )
         try:
-            self._send_relax_command()
+            pass
         except zmq.Again:
             logging.debug("Could not send final relax command before disconnect: socket not ready.")
         except Exception as e:
@@ -270,6 +288,19 @@ class SourcceyClient(Robot):
             raise DeviceNotConnectedError(
                 "ManipulatorRobot is not connected. You need to run `robot.connect()`."
             )
+
+        # Fill keyboard-owned / optional controls when teleop provides arm-only
+        # actions (e.g. bi_sourccey_leader in lerobot-record). Mutate in-place so
+        # upstream callers that reuse the dict (dataset logging) see complete keys.
+        if "z.pos" not in action:
+            z_hold = self.last_remote_state.get("z.pos", self._z_pos_cmd)
+            action["z.pos"] = float(z_hold)
+        if "x.vel" not in action:
+            action["x.vel"] = 0.0
+        if "y.vel" not in action:
+            action["y.vel"] = 0.0
+        if "theta.vel" not in action:
+            action["theta.vel"] = 0.0
 
         # Convert action to protobuf and send
         robot_action = self.protobuf_converter.action_to_protobuf(action)
@@ -341,7 +372,20 @@ class SourcceyClient(Robot):
             return None
 
         if self.zmq_observation_socket not in socks:
-            logging.info("No new data available within timeout.")
+            now = time.monotonic()
+            elapsed = now - self._last_no_data_log_ts
+            if elapsed >= self._no_data_log_interval_s:
+                if self._suppressed_no_data_logs > 0:
+                    logging.info(
+                        "No new data available within timeout. (suppressed %d similar messages)",
+                        self._suppressed_no_data_logs,
+                    )
+                    self._suppressed_no_data_logs = 0
+                else:
+                    logging.info("No new data available within timeout.")
+                self._last_no_data_log_ts = now
+            else:
+                self._suppressed_no_data_logs += 1
             return None
 
         last_msg = None
@@ -514,4 +558,3 @@ class SourcceyClient(Robot):
         if delta < -max_step:
             return current - max_step
         return target
-

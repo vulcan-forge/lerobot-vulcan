@@ -19,8 +19,6 @@ tool — no policy inference.  For deploying trained policies, use
 
 Requires: pip install 'lerobot[core_scripts]'  (includes dataset + hardware + viz extras)
 
-Requires: pip install 'lerobot[core_scripts]'  (includes dataset + hardware + viz extras)
-
 Example:
 
 ```shell
@@ -96,7 +94,6 @@ from lerobot.processor import (
     RobotObservation,
     RobotProcessorPipeline,
     make_default_processors,
-    rename_stats,
 )
 from lerobot.robots import (  # noqa: F401
     Robot,
@@ -138,8 +135,6 @@ from lerobot.utils.utils import (
     log_say,
 )
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
-from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.sourccey_leader import SourcceyLeader
-from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
 
 
 @dataclass
@@ -160,9 +155,6 @@ class RecordConfig:
     play_sounds: bool = True
     # Resume recording on an existing dataset.
     resume: bool = False
-    # Action interpolation multiplier for smoother policy control (1=off, 2=2x, 3=3x)
-    # Only applies when using a policy (not teleop)
-    interpolation_multiplier: int = 1
 
     def __post_init__(self):
         if self.teleop is None:
@@ -218,7 +210,6 @@ def record_loop(
     control_time_s: int | None = None,
     single_task: str | None = None,
     display_data: bool = False,
-    interpolator: ActionInterpolator | None = None,
     display_compressed_images: bool = False,
 ):
     if dataset is not None and dataset.fps != fps:
@@ -233,16 +224,21 @@ def record_loop(
                 for t in teleop
                 if isinstance(
                     t,
-                    (so_leader.SO100Leader | so_leader.SO101Leader | koch_leader.KochLeader | omx_leader.OmxLeader | SourcceyLeader | BiSourcceyLeader),
+                    (
+                        so_leader.SO100Leader
+                        | so_leader.SO101Leader
+                        | koch_leader.KochLeader
+                        | omx_leader.OmxLeader
+                    ),
                 )
             ),
             None,
         )
 
-        # if not (teleop_arm and teleop_keyboard and len(teleop) == 2 and robot.name == "lekiwi_client"):
-        #     raise ValueError(
-        #         "For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. Currently only supported for LeKiwi robot."
-        #     )
+        if not (teleop_arm and teleop_keyboard and len(teleop) == 2 and robot.name == "lekiwi_client"):
+            raise ValueError(
+                "For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. Currently only supported for LeKiwi robot."
+            )
 
     control_interval = 1 / fps
 
@@ -278,11 +274,9 @@ def record_loop(
 
         elif isinstance(teleop, list):
             arm_action = teleop_arm.get_action()
+            arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
             keyboard_action = teleop_keyboard.get_action()
-            z_obs_pos = obs.get("z.pos", None)
-            base_action = robot._from_keyboard_to_base_action(
-                keyboard_action, z_obs_pos=z_obs_pos
-            )
+            base_action = robot._from_keyboard_to_base_action(keyboard_action)
             act = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
             act_processed_teleop = teleop_action_processor((act, obs))
             action_values = act_processed_teleop
@@ -303,8 +297,8 @@ def record_loop(
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
         _sent_action = robot.send_action(robot_action_to_send)
 
-        # Write to dataset (only on real policy frames, not interpolated-only iterations)
-        if dataset is not None and is_record_frame:
+        # Write to dataset
+        if dataset is not None:
             action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
             frame = {**observation_frame, **action_frame, "task": single_task}
             dataset.add_frame(frame)
@@ -417,10 +411,6 @@ def record(
                 encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
                 encoder_threads=cfg.dataset.encoder_threads,
             )
-            # Create interpolator for smoother policy control
-            if cfg.interpolation_multiplier > 1:
-                interpolator = ActionInterpolator(multiplier=cfg.interpolation_multiplier)
-                logging.info(f"Action interpolation enabled: {cfg.interpolation_multiplier}x control rate")
 
         robot.connect()
         if teleop is not None:
@@ -449,7 +439,6 @@ def record(
                     control_time_s=cfg.dataset.episode_time_s,
                     single_task=cfg.dataset.single_task,
                     display_data=cfg.display_data,
-                    interpolator=interpolator,
                     display_compressed_images=display_compressed_images,
                 )
 

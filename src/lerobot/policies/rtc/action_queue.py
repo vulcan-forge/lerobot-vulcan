@@ -236,11 +236,14 @@ class ActionQueue:
         if action_index_before_inference is not None:
             indexes_diff = max(0, self.last_index - action_index_before_inference)
             if indexes_diff != real_delay:
-                logger.warning(
-                    "Indexes diff is not equal to real delay. indexes_diff=%d, real_delay=%d",
+                # Prefer observed queue consumption over latency-derived delay.
+                # This avoids off-by-one churn caused by ceil(latency / dt) and
+                # keeps the queue aligned with what was actually executed.
+                logger.debug(
+                    "Delay mismatch resolved using observed queue consumption: indexes_diff=%d, real_delay=%d",
                     indexes_diff,
                     real_delay,
                 )
-                return real_delay
+                return indexes_diff
 
         return effective_delay

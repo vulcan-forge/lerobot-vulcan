@@ -456,12 +456,13 @@ class DAggerStrategy(RolloutStrategy):
                         teleop_action = teleop.get_action()
                         processed_teleop = ctx.processors.teleop_action_processor((teleop_action, obs))
                         robot_action_to_send = ctx.processors.robot_action_processor((processed_teleop, obs))
-                        robot.send_action(robot_action_to_send)
-                        last_action = robot_action_to_send
+                        sent_action = robot.send_action(robot_action_to_send)
+                        action_for_record = sent_action if isinstance(sent_action, dict) else robot_action_to_send
+                        last_action = action_for_record
                         self._log_telemetry(obs_processed, processed_teleop, ctx.runtime)
                         if record_tick % record_stride == 0:
                             obs_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
-                            action_frame = build_dataset_frame(features, processed_teleop, prefix=ACTION)
+                            action_frame = build_dataset_frame(features, action_for_record, prefix=ACTION)
                             frame = {
                                 **obs_frame,
                                 **action_frame,
@@ -634,13 +635,14 @@ class DAggerStrategy(RolloutStrategy):
                         teleop_action = teleop.get_action()
                         processed_teleop = ctx.processors.teleop_action_processor((teleop_action, obs))
                         robot_action_to_send = ctx.processors.robot_action_processor((processed_teleop, obs))
-                        robot.send_action(robot_action_to_send)
-                        last_action = robot_action_to_send
+                        sent_action = robot.send_action(robot_action_to_send)
+                        action_for_record = sent_action if isinstance(sent_action, dict) else robot_action_to_send
+                        last_action = action_for_record
                         self._log_telemetry(obs_processed, processed_teleop, ctx.runtime)
 
                         if record_tick % record_stride == 0:
                             obs_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
-                            action_frame = build_dataset_frame(features, processed_teleop, prefix=ACTION)
+                            action_frame = build_dataset_frame(features, action_for_record, prefix=ACTION)
                             dataset.add_frame(
                                 {
                                     **obs_frame,

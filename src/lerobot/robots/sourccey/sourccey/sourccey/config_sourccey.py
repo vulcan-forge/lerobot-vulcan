@@ -134,7 +134,7 @@ class SourcceyHostConfig:
     connection_time_s: int = 86400
 
     # Watchdog: if command stream stalls, immediately stop base and release arm torque.
-    watchdog_timeout_ms: int = 500
+    watchdog_timeout_ms: int = 60000
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30

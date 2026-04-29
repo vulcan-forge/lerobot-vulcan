@@ -437,8 +437,20 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     )
 
     if is_main_process:
+        progress_total = cfg.steps
+        progress_initial = step
+        if step > cfg.steps:
+            logging.warning(
+                "Resume step (%d) is greater than configured target steps (%d). "
+                "Showing progress with current step as total.",
+                step,
+                cfg.steps,
+            )
+            progress_total = step
+
         progbar = tqdm(
-            total=cfg.steps - step,
+            total=progress_total,
+            initial=progress_initial,
             desc="Training",
             unit="step",
             disable=inside_slurm(),
