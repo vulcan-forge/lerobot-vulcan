@@ -98,13 +98,13 @@ Corrections-only mode:
 uv run lerobot-rollout \
   --strategy.type=dagger \
   --strategy.num_episodes=20 \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/0600000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --teleop.type=bi_sourccey_leader \
   --teleop.left_arm_port=/dev/ttyACM0 \
   --teleop.right_arm_port=/dev/ttyACM1 \
-  --dataset.repo_id="HF_USER/rollout_sourccey_dagger" \
+  --dataset.repo_id="sourccey-013/rollout_sourccey_dagger/dagger-000" \
   --dataset.single_task="Fold the shirt" \
   --fps=30
 ```

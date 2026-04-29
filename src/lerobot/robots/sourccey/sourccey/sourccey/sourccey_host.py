@@ -109,10 +109,8 @@ def main():
             if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
                 logging.debug(
                     f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. "
-                    "Stopping base and releasing arm torque."
                 )
                 watchdog_active = True
-                robot.watchdog_stop_and_relax()
 
             if observation is not None and observation != {}:
                 previous_observation = observation

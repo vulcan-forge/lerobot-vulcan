@@ -398,6 +398,7 @@ class Sourccey(Robot):
     def watchdog_stop_and_relax(self) -> None:
         """
         Host watchdog fail-safe: stop mobile + z motion and fully release arm torque.
+        This is unused at the moment as we wont want the robot relaxing while its supposed to be active
         """
         self.stop_base()
         try:
