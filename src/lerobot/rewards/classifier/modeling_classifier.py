@@ -21,9 +21,6 @@ from lerobot.rewards.classifier.configuration_classifier import RewardClassifier
 from lerobot.rewards.pretrained import PreTrainedRewardModel
 from lerobot.utils.constants import OBS_IMAGE, REWARD
 
-from ...pretrained import PreTrainedPolicy
-from .configuration_classifier import RewardClassifierConfig
-
 
 class ClassifierOutput:
     """Wrapper for classifier outputs with additional metadata."""
