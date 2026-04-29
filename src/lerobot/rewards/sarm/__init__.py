@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from lerobot.policies.sarm.configuration_sarm import SARMConfig
-from lerobot.policies.sarm.modeling_sarm import SARMRewardModel
-from lerobot.policies.sarm.processor_sarm import make_sarm_pre_post_processors
+from .configuration_sarm import SARMConfig
+from .modeling_sarm import SARMRewardModel
+from .processor_sarm import make_sarm_pre_post_processors
 
 __all__ = ["SARMConfig", "SARMRewardModel", "make_sarm_pre_post_processors"]

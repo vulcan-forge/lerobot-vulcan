@@ -46,6 +46,8 @@ else:
     _gated_residual = None
     layernorm_forward = None
     PaliGemmaForConditionalGenerationWithPiGemma = None
+
+
 from lerobot.configs import PreTrainedConfig
 from lerobot.utils.constants import (
     ACTION,

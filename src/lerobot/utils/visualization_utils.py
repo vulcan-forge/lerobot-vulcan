@@ -70,6 +70,15 @@ def shutdown_rerun() -> None:
     rr.rerun_shutdown()
 
 
+def shutdown_rerun() -> None:
+    """Shuts down the Rerun SDK gracefully."""
+
+    require_package("rerun-sdk", extra="viz", import_name="rerun")
+    import rerun as rr
+
+    rr.rerun_shutdown()
+
+
 def _is_scalar(x):
     return isinstance(x, (float | numbers.Real | np.integer | np.floating)) or (
         isinstance(x, np.ndarray) and x.ndim == 0

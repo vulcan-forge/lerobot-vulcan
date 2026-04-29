@@ -17,7 +17,6 @@
 import logging
 from functools import cached_property
 
-from lerobot.robots.so_follower import SOFollower, SOFollowerRobotConfig
 from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 

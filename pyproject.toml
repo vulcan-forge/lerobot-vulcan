@@ -318,10 +318,13 @@ lerobot-train-tokenizer="lerobot.scripts.lerobot_train_tokenizer:main"
 lerobot-dataset-viz="lerobot.scripts.lerobot_dataset_viz:main"
 lerobot-info="lerobot.scripts.lerobot_info:main"
 lerobot-find-joint-limits="lerobot.scripts.lerobot_find_joint_limits:main"
-lerobot-audit-video-decode-errors="lerobot.scripts.sourccey.dataset.audit_video_decode_errors:main"
 lerobot-imgtransform-viz="lerobot.scripts.lerobot_imgtransform_viz:main"
 lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
 lerobot-setup-can="lerobot.scripts.lerobot_setup_can:main"
+lerobot-rollout="lerobot.scripts.lerobot_rollout:main"
+
+# ---------------- Custom Commands ----------------
+lerobot-audit-video-decode-errors="lerobot.scripts.sourccey.dataset.audit_video_decode_errors:main"
 
 # ---------------- Tool Configurations ----------------
 [tool.setuptools.package-data]

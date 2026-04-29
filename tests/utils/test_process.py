@@ -24,7 +24,7 @@ import pytest
 
 pytest.importorskip("grpc")
 
-from lerobot.rl.process import ProcessSignalHandler  # noqa: E402
+from lerobot.utils.process import ProcessSignalHandler  # noqa: E402
 
 
 # Fixture to reset shutdown_event_counter and original signal handlers before and after each test
@@ -72,7 +72,7 @@ def test_setup_process_handlers_event_with_processes():
             marks=pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="SIGHUP not available"),
         ),
         pytest.param(
-            "SIGQUIT", 
+            "SIGQUIT",
             marks=pytest.mark.skipif(not hasattr(signal, "SIGQUIT"), reason="SIGQUIT not available"),
         ),
     ],
@@ -82,7 +82,7 @@ def test_signal_handler_sets_event(use_threads, sig):
     # Convert string signal name to actual signal if needed
     if isinstance(sig, str):
         sig = getattr(signal, sig)
-    
+
     handler = ProcessSignalHandler(use_threads=use_threads)
     shutdown_event = handler.shutdown_event
 

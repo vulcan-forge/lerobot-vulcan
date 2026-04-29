@@ -15,27 +15,27 @@
 # This workflow uploads the documentation preview built for a PR and comments the link on the PR.
 name: Documentation PR Upload
 permissions:
-  contents: read
-  pull-requests: write
+    contents: read
+    pull-requests: write
 
 on:
-  # Triggered by the completion of the main 'Documentation' workflow.
-  workflow_run: # zizmor: ignore[dangerous-triggers] We follow the same pattern as in Transformers
-    workflows: ["Documentation"]
-    types:
-      - completed
+    # Triggered by the completion of the main 'Documentation' workflow.
+    workflow_run: # zizmor: ignore[dangerous-triggers] We follow the same pattern as in Transformers
+        workflows: ["Documentation"]
+        types:
+            - completed
 
 jobs:
-  # This job uploads a preview of the documentation for a pull request.
-  upload_and_comment:
-    name: Upload Preview and Comment
-    if: >
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.repository == 'huggingface/lerobot'
-    uses: huggingface/doc-builder/.github/workflows/upload_pr_documentation.yml@9ad2de8582b56c017cb530c1165116d40433f1c6  # main
-    with:
-      package_name: lerobot
-    secrets:
-      hf_token: ${{ secrets.HF_DOC_BUILD_PUSH }}
-      comment_bot_token: ${{ secrets.COMMENT_BOT_TOKEN }}
+    # This job uploads a preview of the documentation for a pull request.
+    upload_and_comment:
+        name: Upload Preview and Comment
+        if: >
+            github.event.workflow_run.event == 'pull_request' &&
+            github.event.workflow_run.conclusion == 'success' &&
+            github.repository == 'huggingface/lerobot'
+        uses: huggingface/doc-builder/.github/workflows/upload_pr_documentation.yml@2430c1ec91d04667414e2fa31ecfc36c153ea391 # main
+        with:
+            package_name: lerobot
+        secrets:
+            hf_token: ${{ secrets.HF_DOC_BUILD_PUSH }}
+            comment_bot_token: ${{ secrets.COMMENT_BOT_TOKEN }}

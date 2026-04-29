@@ -62,27 +62,6 @@ else:
     hg_LowState = None
     CRC = None
 
-if TYPE_CHECKING or _unitree_sdk_available:
-    from unitree_sdk2py.core.channel import (
-        ChannelFactoryInitialize as _SDKChannelFactoryInitialize,
-        ChannelPublisher as _SDKChannelPublisher,
-        ChannelSubscriber as _SDKChannelSubscriber,
-    )
-    from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
-    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import (
-        LowCmd_ as hg_LowCmd,
-        LowState_ as hg_LowState,
-    )
-    from unitree_sdk2py.utils.crc import CRC
-else:
-    _SDKChannelFactoryInitialize = None
-    _SDKChannelPublisher = None
-    _SDKChannelSubscriber = None
-    unitree_hg_msg_dds__LowCmd_ = None
-    hg_LowCmd = None
-    hg_LowState = None
-    CRC = None
-
 logger = logging.getLogger(__name__)
 
 
