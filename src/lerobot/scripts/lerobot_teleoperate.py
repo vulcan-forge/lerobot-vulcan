@@ -100,8 +100,6 @@ from lerobot.teleoperators import (  # noqa: F401
     so_leader,
     unitree_g1,
 )
-from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import BiSourcceyLeader
-from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.sourccey_leader import SourcceyLeader
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
