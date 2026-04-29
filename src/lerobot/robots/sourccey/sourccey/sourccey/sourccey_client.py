@@ -98,7 +98,7 @@ class SourcceyClient(Robot):
         self._z_units_per_s = (self._z_max - self._z_min) / self._z_full_travel_s
 
         # Stored target position (what we "expect" z to be at while holding keys).
-        self._z_pos_cmd = 0.0
+        self._z_pos_cmd = 100.0
 
         # Log-throttle repeated poll timeouts to avoid terminal spam in teleop loops.
         self._no_data_log_interval_s = 5.0
@@ -288,6 +288,19 @@ class SourcceyClient(Robot):
             raise DeviceNotConnectedError(
                 "ManipulatorRobot is not connected. You need to run `robot.connect()`."
             )
+
+        # Fill keyboard-owned / optional controls when teleop provides arm-only
+        # actions (e.g. bi_sourccey_leader in lerobot-record). Mutate in-place so
+        # upstream callers that reuse the dict (dataset logging) see complete keys.
+        if "z.pos" not in action:
+            z_hold = self.last_remote_state.get("z.pos", self._z_pos_cmd)
+            action["z.pos"] = float(z_hold)
+        if "x.vel" not in action:
+            action["x.vel"] = 0.0
+        if "y.vel" not in action:
+            action["y.vel"] = 0.0
+        if "theta.vel" not in action:
+            action["theta.vel"] = 0.0
 
         # Convert action to protobuf and send
         robot_action = self.protobuf_converter.action_to_protobuf(action)

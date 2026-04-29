@@ -14,15 +14,15 @@ Assumptions:
 ```bash
 uv run lerobot-rollout \
   --strategy.type=base \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/0640000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --logging.throttle_spam=true \
   --logging.throttle_interval_s=30.0 \
   --task="Fold the shirt" \
+  --display_data=true \
   --duration=600 \
-  --fps=30 \
-  --display_data=true
+  --fps=30
 ```
 
 To disable throttling and show every message:
@@ -38,7 +38,7 @@ CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
   --inference.type=rtc \
   --inference.rtc.execution_horizon=10 \
   --inference.rtc.max_guidance_weight=10.0 \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/0600000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --task="Fold the shirt" \
@@ -55,7 +55,7 @@ CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
 uv run lerobot-rollout \
   --strategy.type=sentry \
   --strategy.upload_every_n_episodes=5 \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/0600000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --dataset.repo_id="sourccey-013/rollout_sourccey_sentry/sentry-000" \
@@ -81,7 +81,7 @@ uv run lerobot-rollout \
   --strategy.ring_buffer_seconds=30 \
   --strategy.save_key=s \
   --strategy.push_key=h \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/0600000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --dataset.repo_id="sourccey-013/rollout_sourccey_highlight/highlight-000" \
@@ -99,7 +99,7 @@ Corrections-only mode:
 uv run lerobot-rollout \
   --strategy.type=dagger \
   --strategy.num_episodes=20 \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/0600000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --teleop.type=bi_sourccey_leader \
