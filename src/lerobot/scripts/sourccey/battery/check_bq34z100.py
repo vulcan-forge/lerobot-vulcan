@@ -8,15 +8,20 @@ Default output is compact and operator-focused:
 - pack config + detected series-cell count
 - key gauge health/config values
 - FC-learning thresholds + live gate snapshot
+- decoded status bits (FC/VOK/RUP_DIS/QEN)
 
 Use ``--full`` for a detailed dump with raw registers/fields/blocks.
+Use ``--watch`` for 5-10s learning-cycle monitoring with optional CSV/JSONL logs.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from lerobot.scripts.sourccey.battery.battery import (
@@ -37,6 +42,8 @@ from lerobot.scripts.sourccey.battery.configure_bq34z100 import (
     FIELDS,
     BQ34Z100R2,
 )
+
+REG_FLAGS = 0x0E
 
 
 def _word_views(value: int) -> dict[str, Any]:
@@ -86,6 +93,7 @@ def _read_raw_standard_registers(
             "full_charge_capacity_mah_raw": REG_FULL_CHARGE_CAPACITY,
             "voltage_mv_raw": REG_VOLTAGE,
             "average_current_ma_raw": REG_AVERAGE_CURRENT,
+            "flags_raw": REG_FLAGS,
         }
         for name, reg in word_regs.items():
             raw = int(bus.read_word_data(gauge.address, reg))
@@ -112,6 +120,25 @@ def _read_control_info(gauge: BQ34Z100R2) -> dict[str, Any]:
         "fw_version": _word_views(fw_version),
         "chem_id": _word_views(chem_id),
         "control_status": _word_views(control_status),
+    }
+
+
+def _decode_control_status_flags(control_status: int) -> dict[str, bool]:
+    # CONTROL_STATUS low-byte bits from TI docs:
+    # bit0=QEN, bit1=VOK, bit2=RUP_DIS
+    value = int(control_status) & 0xFFFF
+    return {
+        "QEN": bool(value & (1 << 0)),
+        "VOK": bool(value & (1 << 1)),
+        "RUP_DIS": bool(value & (1 << 2)),
+    }
+
+
+def _decode_operation_flags(flags_word: int) -> dict[str, bool]:
+    # Flags() bit9: FC (Full Charge detected)
+    value = int(flags_word) & 0xFFFF
+    return {
+        "FC": bool(value & (1 << 9)),
     }
 
 
@@ -205,12 +232,51 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Pretty-print JSON (default is compact JSON)",
     )
+    p.add_argument(
+        "--watch",
+        action="store_true",
+        help="Continuously sample until interrupted (Ctrl+C)",
+    )
+    p.add_argument(
+        "--interval-s",
+        type=float,
+        default=5.0,
+        help="Watch-mode sampling period in seconds (default: 5)",
+    )
+    p.add_argument(
+        "--df-every-s",
+        type=float,
+        default=300.0,
+        help="How often to include slower data-flash snapshots in watch mode (default: 300)",
+    )
+    p.add_argument(
+        "--log-csv",
+        type=Path,
+        default=None,
+        help="Optional path for CSV time-series log",
+    )
+    p.add_argument(
+        "--log-jsonl",
+        type=Path,
+        default=None,
+        help="Optional path for JSONL payload log",
+    )
     return p
 
 
-def main() -> int:
-    args = _build_parser().parse_args()
+def _field_int(data_flash_fields: dict[str, Any] | None, name: str) -> int | None:
+    if data_flash_fields is None:
+        return None
+    item = data_flash_fields.get(name)
+    return None if item is None else int(item["value_int"])
 
+
+def _collect_payload(
+    args: argparse.Namespace,
+    *,
+    include_df_snapshot: bool = False,
+    include_df_blocks: bool = False,
+) -> dict[str, Any]:
     base_payload: dict[str, Any] = {
         "chip": "bq34z100",
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -252,7 +318,7 @@ def main() -> int:
             "state_of_charge": int(telemetry.state_of_charge),
             "max_error": int(telemetry.max_error),
         }
-    except Exception as exc:  # noqa: BLE001 - script should keep going
+    except Exception as exc:  # noqa: BLE001
         section_errors["telemetry"] = str(exc)
 
     try:
@@ -278,7 +344,7 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         section_errors["learning_thresholds"] = str(exc)
 
-    if args.full and args.include_block_dump:
+    if include_df_blocks and args.include_block_dump:
         try:
             data_flash_blocks = _read_data_flash_blocks(gauge)
         except Exception as exc:  # noqa: BLE001
@@ -304,69 +370,67 @@ def main() -> int:
             summary["telemetry"] = telemetry_out
 
         pack_summary: dict[str, Any] = {}
-        if data_flash_fields is not None:
-            def _field_int(name: str) -> int | None:
-                item = data_flash_fields.get(name)
-                return None if item is None else int(item["value_int"])
-
-            pack_cfg = _field_int("pack_configuration")
-            if pack_cfg is not None:
-                msb = (pack_cfg >> 8) & 0xFF
-                pack_summary["pack_configuration"] = f"0x{pack_cfg:04X}"
-                pack_summary["voltsel_enabled"] = bool(msb & (1 << 3))
-            series_cells = _field_int("number_of_series_cells")
-            if series_cells is not None:
-                pack_summary["series_cells"] = series_cells
-            voltage_divider = _field_int("voltage_divider")
-            if voltage_divider is not None:
-                pack_summary["voltage_divider"] = voltage_divider
-            update_status = _field_int("update_status")
-            if update_status is not None:
-                pack_summary["update_status"] = f"0x{update_status:02X}"
-            design_capacity = _field_int("design_capacity_mah")
-            if design_capacity is not None:
-                pack_summary["design_capacity_mah"] = design_capacity
-            qmax = _field_int("qmax_cell0_mah")
-            if qmax is not None:
-                pack_summary["qmax_cell0_mah"] = qmax
+        pack_cfg = _field_int(data_flash_fields, "pack_configuration")
+        if pack_cfg is not None:
+            msb = (pack_cfg >> 8) & 0xFF
+            pack_summary["pack_configuration"] = f"0x{pack_cfg:04X}"
+            pack_summary["voltsel_enabled"] = bool(msb & (1 << 3))
+        series_cells = _field_int(data_flash_fields, "number_of_series_cells")
+        if series_cells is not None:
+            pack_summary["series_cells"] = series_cells
+        voltage_divider = _field_int(data_flash_fields, "voltage_divider")
+        if voltage_divider is not None:
+            pack_summary["voltage_divider"] = voltage_divider
+        update_status = _field_int(data_flash_fields, "update_status")
+        if update_status is not None:
+            pack_summary["update_status"] = f"0x{update_status:02X}"
+        design_capacity = _field_int(data_flash_fields, "design_capacity_mah")
+        if design_capacity is not None:
+            pack_summary["design_capacity_mah"] = design_capacity
+        qmax = _field_int(data_flash_fields, "qmax_cell0_mah")
+        if qmax is not None:
+            pack_summary["qmax_cell0_mah"] = qmax
 
         if control_info is not None:
-            chip_info = {
+            summary["chip_info"] = {
                 "device_type": control_info["device_type"]["hex"],
                 "fw_version": control_info["fw_version"]["hex"],
                 "chem_id": control_info["chem_id"]["hex"],
                 "control_status": control_info["control_status"]["hex"],
             }
-            summary["chip_info"] = chip_info
+
+        control_flags: dict[str, Any] = {}
+        if control_info is not None:
+            control_status_int = int(control_info["control_status"]["int"])
+            control_flags.update(_decode_control_status_flags(control_status_int))
+            control_flags["CONTROL_STATUS_hex"] = control_info["control_status"]["hex"]
+        if raw_standard_registers is not None:
+            flags_word = int(raw_standard_registers["flags_raw"]["normalized_word"]["int"])
+            control_flags.update(_decode_operation_flags(flags_word))
+            control_flags["FLAGS_hex"] = raw_standard_registers["flags_raw"]["normalized_word"]["hex"]
+        if control_flags:
+            summary["control_flags"] = control_flags
 
         if pack_summary:
             summary["pack"] = pack_summary
 
         if raw_standard_registers is not None:
-            summary["raw_current_ma_signed"] = raw_standard_registers["average_current_ma_raw"][
-                "normalized_signed"
-            ]
+            summary["raw_current_ma_signed"] = raw_standard_registers["average_current_ma_raw"]["normalized_signed"]
 
         learning_summary: dict[str, Any] = {}
-        if data_flash_fields is not None:
-            def _field_int(name: str) -> int | None:
-                item = data_flash_fields.get(name)
-                return None if item is None else int(item["value_int"])
+        taper_current_ma = _field_int(data_flash_fields, "taper_current_ma")
+        charge_cell_mv = _field_int(data_flash_fields, "cell_charge_voltage_t2_t3_mv")
 
-            series_cells = _field_int("number_of_series_cells")
-            taper_current_ma = _field_int("taper_current_ma")
-            charge_cell_mv = _field_int("cell_charge_voltage_t2_t3_mv")
-
-            if taper_current_ma is not None:
-                learning_summary["taper_current_ma"] = taper_current_ma
-            if series_cells is not None:
-                learning_summary["series_cells"] = series_cells
-            if charge_cell_mv is not None:
-                learning_summary["charge_voltage_per_cell_mv"] = charge_cell_mv
-            if series_cells is not None and charge_cell_mv is not None:
-                charge_target_mv = series_cells * charge_cell_mv
-                learning_summary["charge_voltage_target_mv"] = charge_target_mv
-                learning_summary["charge_voltage_window_mv"] = [charge_target_mv - 100, charge_target_mv + 100]
+        if taper_current_ma is not None:
+            learning_summary["taper_current_ma"] = taper_current_ma
+        if series_cells is not None:
+            learning_summary["series_cells"] = series_cells
+        if charge_cell_mv is not None:
+            learning_summary["charge_voltage_per_cell_mv"] = charge_cell_mv
+        if series_cells is not None and charge_cell_mv is not None:
+            charge_target_mv = series_cells * charge_cell_mv
+            learning_summary["charge_voltage_target_mv"] = charge_target_mv
+            learning_summary["charge_voltage_window_mv"] = [charge_target_mv - 100, charge_target_mv + 100]
 
         if learning_thresholds is not None:
             learning_summary.update(learning_thresholds)
@@ -381,7 +445,6 @@ def main() -> int:
             learning_summary["voltage_now_mv"] = voltage_now_mv
 
         charge_target_mv = learning_summary.get("charge_voltage_target_mv")
-        taper_current_ma = learning_summary.get("taper_current_ma")
         quit_current_ma = learning_summary.get("quit_current_ma")
 
         if charge_target_mv is not None and voltage_now_mv is not None:
@@ -392,24 +455,198 @@ def main() -> int:
             learning_summary["current_above_quit"] = int(current_now_ma) > int(quit_current_ma)
 
         if all(k in learning_summary for k in ("voltage_within_100mv", "current_below_taper", "current_above_quit")):
-            learning_summary["fc_conditions_now"] = bool(
+            fc_now = bool(
                 learning_summary["voltage_within_100mv"]
                 and learning_summary["current_below_taper"]
                 and learning_summary["current_above_quit"]
             )
+            learning_summary["fc_conditions_now"] = fc_now
+            learning_summary["fc_conditions_now_source"] = "derived"
 
         if learning_summary:
             summary["learning"] = learning_summary
+
+        if include_df_snapshot and data_flash_fields is not None:
+            summary["df_snapshot"] = {
+                "data_flash_fields": data_flash_fields,
+                "data_flash_blocks": data_flash_blocks if data_flash_blocks is not None else [],
+            }
 
         payload = summary
 
     if section_errors:
         payload["errors"] = section_errors
+    return payload
 
-    if args.pretty:
+
+CSV_COLUMNS = [
+    "timestamp_utc",
+    "voltage_v",
+    "current_a",
+    "soc_pct",
+    "fcc_ah",
+    "remaining_ah",
+    "max_error_pct",
+    "update_status_hex",
+    "control_status_hex",
+    "flags_hex",
+    "FC",
+    "VOK",
+    "RUP_DIS",
+    "QEN",
+    "charge_voltage_target_mv",
+    "voltage_now_mv",
+    "voltage_within_100mv",
+    "taper_current_ma",
+    "current_now_ma",
+    "current_below_taper",
+    "quit_current_ma",
+    "current_above_quit",
+    "derived_fc_conditions_now",
+    "df_snapshot",
+    "event_markers",
+]
+
+
+def _extract_log_row(payload: dict[str, Any], *, df_snapshot: bool, event_markers: str) -> dict[str, Any]:
+    telemetry = payload.get("telemetry", {})
+    learning = payload.get("learning", {})
+    pack = payload.get("pack", {})
+    control_flags = payload.get("control_flags", {})
+    return {
+        "timestamp_utc": payload.get("timestamp_utc"),
+        "voltage_v": telemetry.get("voltage"),
+        "current_a": telemetry.get("current_a"),
+        "soc_pct": telemetry.get("state_of_charge"),
+        "fcc_ah": telemetry.get("max_capacity_ah"),
+        "remaining_ah": telemetry.get("remaining_capacity_ah"),
+        "max_error_pct": telemetry.get("max_error"),
+        "update_status_hex": pack.get("update_status"),
+        "control_status_hex": control_flags.get("CONTROL_STATUS_hex"),
+        "flags_hex": control_flags.get("FLAGS_hex"),
+        "FC": control_flags.get("FC"),
+        "VOK": control_flags.get("VOK"),
+        "RUP_DIS": control_flags.get("RUP_DIS"),
+        "QEN": control_flags.get("QEN"),
+        "charge_voltage_target_mv": learning.get("charge_voltage_target_mv"),
+        "voltage_now_mv": learning.get("voltage_now_mv"),
+        "voltage_within_100mv": learning.get("voltage_within_100mv"),
+        "taper_current_ma": learning.get("taper_current_ma"),
+        "current_now_ma": learning.get("current_now_ma"),
+        "current_below_taper": learning.get("current_below_taper"),
+        "quit_current_ma": learning.get("quit_current_ma"),
+        "current_above_quit": learning.get("current_above_quit"),
+        "derived_fc_conditions_now": learning.get("fc_conditions_now"),
+        "df_snapshot": df_snapshot,
+        "event_markers": event_markers,
+    }
+
+
+def _transition_events(prev_row: dict[str, Any] | None, row: dict[str, Any]) -> list[str]:
+    if prev_row is None:
+        return []
+    events: list[str] = []
+    if prev_row.get("FC") is False and row.get("FC") is True:
+        events.append("FC false->true")
+    if prev_row.get("VOK") is True and row.get("VOK") is False:
+        events.append("VOK true->false")
+    if prev_row.get("RUP_DIS") is False and row.get("RUP_DIS") is True:
+        events.append("RUP_DIS false->true")
+    prev_us = prev_row.get("update_status_hex")
+    cur_us = row.get("update_status_hex")
+    if prev_us is not None and cur_us is not None and prev_us != cur_us:
+        events.append(f"update_status {prev_us}->{cur_us}")
+    return events
+
+
+def _print_watch_line(row: dict[str, Any], events: list[str]) -> None:
+    stamp = row.get("timestamp_utc")
+    msg = (
+        f"[{stamp}] V={row.get('voltage_v')}V I={row.get('current_a')}A SOC={row.get('soc_pct')}% "
+        f"US={row.get('update_status_hex')} FC={row.get('FC')} VOK={row.get('VOK')} "
+        f"RUP_DIS={row.get('RUP_DIS')} QEN={row.get('QEN')} "
+        f"derived_fc={row.get('derived_fc_conditions_now')}"
+    )
+    if events:
+        msg += f" events={';'.join(events)}"
+    print(msg)
+
+
+def _emit_json(payload: dict[str, Any], *, pretty: bool) -> None:
+    if pretty:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+
+
+def main() -> int:
+    args = _build_parser().parse_args()
+
+    if args.interval_s <= 0:
+        raise SystemExit("--interval-s must be > 0")
+    if args.df_every_s <= 0:
+        raise SystemExit("--df-every-s must be > 0")
+
+    if not args.watch:
+        payload = _collect_payload(
+            args,
+            include_df_snapshot=False,
+            include_df_blocks=args.full and args.include_block_dump,
+        )
+        _emit_json(payload, pretty=bool(args.pretty))
+        return 0
+
+    if args.log_csv is not None:
+        args.log_csv.parent.mkdir(parents=True, exist_ok=True)
+    if args.log_jsonl is not None:
+        args.log_jsonl.parent.mkdir(parents=True, exist_ok=True)
+
+    csv_file = open(args.log_csv, "a", newline="", encoding="utf-8") if args.log_csv is not None else None
+    jsonl_file = open(args.log_jsonl, "a", encoding="utf-8") if args.log_jsonl is not None else None
+    csv_writer: csv.DictWriter | None = None
+    if csv_file is not None:
+        csv_writer = csv.DictWriter(csv_file, fieldnames=CSV_COLUMNS)
+        if csv_file.tell() == 0:
+            csv_writer.writeheader()
+            csv_file.flush()
+
+    prev_row: dict[str, Any] | None = None
+    last_df_snapshot_monotonic = 0.0
+    try:
+        while True:
+            now_mono = time.monotonic()
+            include_df_snapshot = (now_mono - last_df_snapshot_monotonic) >= float(args.df_every_s)
+            payload = _collect_payload(
+                args,
+                include_df_snapshot=include_df_snapshot,
+                include_df_blocks=include_df_snapshot and args.include_block_dump,
+            )
+            if include_df_snapshot:
+                last_df_snapshot_monotonic = now_mono
+
+            row = _extract_log_row(payload, df_snapshot=include_df_snapshot, event_markers="")
+            events = _transition_events(prev_row, row)
+            event_markers = ";".join(events)
+            row["event_markers"] = event_markers
+
+            _print_watch_line(row, events)
+
+            if csv_writer is not None and csv_file is not None:
+                csv_writer.writerow(row)
+                csv_file.flush()
+            if jsonl_file is not None:
+                jsonl_file.write(json.dumps(payload, sort_keys=True) + "\n")
+                jsonl_file.flush()
+
+            prev_row = row
+            time.sleep(float(args.interval_s))
+    except KeyboardInterrupt:
+        print("Stopped watch mode.")
+    finally:
+        if csv_file is not None:
+            csv_file.close()
+        if jsonl_file is not None:
+            jsonl_file.close()
     return 0
 
 
