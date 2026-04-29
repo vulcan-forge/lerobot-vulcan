@@ -22,6 +22,7 @@ way via ``notify_observation``.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import math
 import time
@@ -128,6 +129,9 @@ class RTCInferenceEngine(InferenceEngine):
         self._rtc_error = Event()
         self._global_shutdown_event = shutdown_event
         self._rtc_thread: Thread | None = None
+        self._supports_inference_delay_kwarg = False
+        self._supports_prev_chunk_left_over_kwarg = False
+        self._accepts_variadic_kwargs = False
 
         if not self._use_torch_compile:
             self._compile_warmup_done.set()
@@ -157,6 +161,10 @@ class RTCInferenceEngine(InferenceEngine):
                         k for k in robot_wrapper.action_features if k.endswith(".pos")
                     ]
             logger.info("Relative actions enabled: RTC prefix will be re-anchored")
+
+        # Compatibility: some policies (e.g. XVLA) do not accept RTC-specific kwargs.
+        # We only pass supported kwargs to predict_action_chunk.
+        self._configure_predict_action_chunk_signature_support()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -244,6 +252,51 @@ class RTCInferenceEngine(InferenceEngine):
     # RTC: background inference thread
     # ------------------------------------------------------------------
 
+    def _configure_predict_action_chunk_signature_support(self) -> None:
+        """Inspect predict_action_chunk signature to enable compatible RTC kwargs."""
+        try:
+            params = inspect.signature(self._policy.predict_action_chunk).parameters.values()
+        except (TypeError, ValueError):
+            logger.debug("Could not inspect predict_action_chunk signature; falling back to batch-only call")
+            return
+
+        self._accepts_variadic_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
+        if self._accepts_variadic_kwargs:
+            self._supports_inference_delay_kwarg = True
+            self._supports_prev_chunk_left_over_kwarg = True
+        else:
+            param_names = {p.name for p in params}
+            self._supports_inference_delay_kwarg = "inference_delay" in param_names
+            self._supports_prev_chunk_left_over_kwarg = "prev_chunk_left_over" in param_names
+
+        # If a policy cannot consume RTC overlap kwargs, queue replacement mode
+        # can introduce jerk by repeatedly dropping/restarting chunks. Fall back
+        # to append mode for smoother control (lower responsiveness, higher latency).
+        supports_full_rtc_overlap = (
+            self._supports_inference_delay_kwarg and self._supports_prev_chunk_left_over_kwarg
+        )
+        if not supports_full_rtc_overlap and self._rtc_config.enabled:
+            logger.warning(
+                "Policy '%s' does not support RTC overlap kwargs (inference_delay/prev_chunk_left_over). "
+                "Falling back to append-queue mode for smoother rollout (equivalent to --inference.rtc.enabled=false).",
+                type(self._policy).__name__,
+            )
+            self._rtc_config.enabled = False
+
+    def _predict_action_chunk_with_compatible_kwargs(
+        self,
+        preprocessed: dict[str, Any],
+        *,
+        delay: int,
+        prev_actions: torch.Tensor | None,
+    ) -> torch.Tensor:
+        kwargs: dict[str, Any] = {}
+        if self._supports_inference_delay_kwarg:
+            kwargs["inference_delay"] = delay
+        if self._supports_prev_chunk_left_over_kwarg:
+            kwargs["prev_chunk_left_over"] = prev_actions
+        return self._policy.predict_action_chunk(preprocessed, **kwargs)
+
     def _rtc_loop(self) -> None:
         """Background thread that generates action chunks via RTC."""
         try:
@@ -304,8 +357,10 @@ class RTCInferenceEngine(InferenceEngine):
                                 prev_actions, target_steps=self._rtc_config.execution_horizon
                             )
 
-                        actions = self._policy.predict_action_chunk(
-                            preprocessed, inference_delay=delay, prev_chunk_left_over=prev_actions
+                        actions = self._predict_action_chunk_with_compatible_kwargs(
+                            preprocessed,
+                            delay=delay,
+                            prev_actions=prev_actions,
                         )
 
                         original = actions.squeeze(0).clone()

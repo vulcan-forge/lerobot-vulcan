@@ -18,7 +18,7 @@ uv run lerobot-rollout \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --logging.throttle_spam=true \
-  --logging.throttle_interval_s=5.0 \
+  --logging.throttle_interval_s=30.0 \
   --task="Fold the shirt" \
   --duration=600 \
   --fps=30
@@ -37,11 +37,11 @@ CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
   --inference.type=rtc \
   --inference.rtc.execution_horizon=10 \
   --inference.rtc.max_guidance_weight=10.0 \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/0600000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --task="Fold the shirt" \
-  --duration=300 \
+  --duration=60 \
   --fps=30 \
   --device=cuda
 ```
@@ -54,14 +54,15 @@ CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
 uv run lerobot-rollout \
   --strategy.type=sentry \
   --strategy.upload_every_n_episodes=5 \
-  --policy.path="HF_USER/sourccey-policy" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/0600000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
-  --dataset.repo_id="HF_USER/rollout_sourccey_sentry" \
+  --dataset.repo_id="sourccey-013/rollout_sourccey_sentry/sentry-000" \
   --dataset.single_task="Fold the shirt" \
   --dataset.streaming_encoding=true \
   --duration=3600 \
-  --fps=30
+  --fps=30 \
+  --dataset.push_to_hub=false
 ```
 
 ---
@@ -79,10 +80,10 @@ uv run lerobot-rollout \
   --strategy.ring_buffer_seconds=30 \
   --strategy.save_key=s \
   --strategy.push_key=h \
-  --policy.path="HF_USER/sourccey-policy" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/0600000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
-  --dataset.repo_id="HF_USER/rollout_sourccey_highlight" \
+  --dataset.repo_id="sourccey-013/rollout_sourccey_highlight/highlight-000" \
   --dataset.single_task="Fold the shirt" \
   --fps=30
 ```
