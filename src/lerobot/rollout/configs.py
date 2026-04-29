@@ -161,6 +161,19 @@ class DAggerStrategyConfig(RolloutStrategyConfig):
 
 
 # ---------------------------------------------------------------------------
+# Logging config
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RolloutLoggingConfig:
+    """Logging behavior for rollout CLI."""
+
+    throttle_spam: bool = True
+    throttle_interval_s: float = 5.0
+
+
+# ---------------------------------------------------------------------------
 # Top-level rollout config
 # ---------------------------------------------------------------------------
 
@@ -189,6 +202,9 @@ class RolloutConfig:
 
     # Dataset (required for sentry, highlight, dagger; None for base)
     dataset: DatasetRecordConfig | None = None
+
+    # Rollout logging controls
+    logging: RolloutLoggingConfig = field(default_factory=RolloutLoggingConfig)
 
     # Runtime
     fps: float = 30.0
@@ -317,6 +333,9 @@ class RolloutConfig:
             else:
                 self.device = auto_select_torch_device().type
                 logger.info("No policy config to resolve device from; auto-selected device: %s", self.device)
+
+        if self.logging.throttle_interval_s <= 0:
+            raise ValueError("--logging.throttle_interval_s must be > 0")
 
     @classmethod
     def __get_path_fields__(cls) -> list[str]:
