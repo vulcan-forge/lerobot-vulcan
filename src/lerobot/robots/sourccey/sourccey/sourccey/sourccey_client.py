@@ -200,8 +200,11 @@ class SourcceyClient(Robot):
 
     def _send_relax_command(self) -> None:
         """
-        Best-effort final command before disconnect: stop base and untorque both arms.
-        """
+        Best-effort final command before disconnect.
+
+        Always stops base motion. Arm untorque is controlled by
+        ``config.untorque_on_disconnect``.
+        """        
         relax_action = {
             "x.vel": 0.0,
             "y.vel": 0.0,
@@ -221,7 +224,7 @@ class SourcceyClient(Robot):
                 "SourcceyClient is not connected. You need to run `robot.connect()` before disconnecting."
             )
         try:
-            self._send_relax_command()
+            pass
         except zmq.Again:
             logging.debug("Could not send final relax command before disconnect: socket not ready.")
         except Exception as e:
@@ -514,4 +517,3 @@ class SourcceyClient(Robot):
         if delta < -max_step:
             return current - max_step
         return target
-
