@@ -18,7 +18,8 @@ class SourcceyTeleoperateConfig:
     remote_ip: str = "192.168.1.243"
     left_arm_port: str = "COM4"
     right_arm_port: str = "COM3"
-    keyboard_port: str | None = None
+    # Keep keyboard teleop on by default so base + z controls (WASD/QE/ZX/etc.) work out of the box.
+    keyboard_port: str | None = "keyboard"
     fps: int = 30
 
 @parser.wrap()
@@ -26,11 +27,13 @@ def teleoperate(cfg: SourcceyTeleoperateConfig):
     # Create the robot and teleoperator configurations
     robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
     teleop_arm_config = BiSourcceyLeaderConfig(left_arm_port=cfg.left_arm_port, right_arm_port=cfg.right_arm_port, id=cfg.id)
-    use_keyboard = cfg.keyboard_port is not None
+    use_keyboard = bool(cfg.keyboard_port)
     keyboard_teleop = None
     if use_keyboard:
         keyboard_config = KeyboardTeleopConfig(id=cfg.keyboard_port)
         keyboard_teleop = KeyboardTeleop(keyboard_config)
+    else:
+        print("Keyboard teleop disabled: base and z controls (WASD/QE/ZX) are unavailable.")
 
     robot = SourcceyClient(robot_config)
     leader_arm = BiSourcceyLeader(teleop_arm_config)

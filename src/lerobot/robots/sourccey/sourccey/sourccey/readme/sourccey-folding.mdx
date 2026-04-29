@@ -14,13 +14,26 @@ python src/lerobot/control/sourccey/sourccey/record.py \
  --remote_ip="192.168.1.212" \
  --left_arm_port="/dev/ttyACM0" \
  --right_arm_port="/dev/ttyACM1" \
- --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-c/nickm/sourccey-013__shirt-fold-blue-c__set206__nickm" \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-c/nickm/sourccey-013__shirt-fold-blue-c__set300__nickm" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=5 \
  --dataset.task="Fold the shirt" \
  --dataset.fps=30 \
  --dataset.push_to_hub=false
+```
+
+```
+CUDA_VISIBLE_DEVICES=1 python src/lerobot/control/sourccey/sourccey/evaluate.py \
+ --id="sourccey" \
+ --remote_ip="192.168.1.212" \
+ --model_path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-c/robot/eval_xvla_s_sourccey-shirt-fold-c-004" \
+ --dataset.num_episodes=1 \
+ --dataset.episode_time_s=600 \
+ --dataset.reset_time_s=10 \
+ --dataset.task="Fold the shirt" \
+ --dataset.fps=30
 ```
 
 
@@ -144,13 +157,13 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train_retry.py \
 
 #Fine tune
 ```
-CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-train-retry \
   --max-attempts=30 \
   --retry-delay-seconds=20 \
-  --dataset.repo_id="Combination/sourccey-shirt-fold-c-000" \
-  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-000" \
-  --job_name="xvla_s_sourccey-shirt-fold-c-000" \
-  --policy.path="outputs/train/xvla__sourccey-shirt-aggregate-2-hq/checkpoints/1000000/pretrained_model" \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-c-002" \
+  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-0012" \
+  --job_name="xvla_s_sourccey-shirt-fold-c-002" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
   --policy.dtype=bfloat16 \
   --policy.action_mode=auto \
   --policy.max_action_dim=20 \
@@ -169,14 +182,14 @@ CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
 
 
 ```
-CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-train-retry \
   --max-attempts=30 \
   --retry-delay-seconds=20 \
-  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-000" \
+  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-001" \
   --steps=1000000 \
   --save_freq=20000 \
   --resume=true \
-  --config_path="outputs/train/xvla_s_sourccey-shirt-fold-c-000/checkpoints/last/pretrained_model/train_config.json"
+  --config_path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/last/pretrained_model/train_config.json"
 
 ```
 
@@ -362,11 +375,11 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 LEROBOT_DISABLE_SDPA=1 accelerate launch
 ```
 
 ```
-python src/lerobot/control/sourccey/sourccey/evaluate.py \
+CUDA_VISIBLE_DEVICES=1 python src/lerobot/control/sourccey/sourccey/evaluate.py \
  --id="sourccey" \
  --remote_ip="192.168.1.212" \
- --model_path="outputs/train/xvla_s_sourccey-shirt-fold-c-000/checkpoints/0140000/pretrained_model" \
- --dataset.repo_id="sourccey-013/eval_xvla_s_sourccey-shirt-fold-c-004" \
+ --model_path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/0340000/pretrained_model" \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-c/robot/eval_xvla_s_sourccey-shirt-fold-c-007" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=600 \
  --dataset.reset_time_s=10 \
