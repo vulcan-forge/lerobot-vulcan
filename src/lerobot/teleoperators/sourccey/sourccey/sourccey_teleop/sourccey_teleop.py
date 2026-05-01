@@ -21,6 +21,7 @@ from functools import cached_property
 from typing import Any, Mapping, Sequence, Tuple
 
 import numpy as np
+from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation as R
 
 
@@ -254,7 +255,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 5: 1.0,
             },
             "wrist_roll_overhand_bias": {
-                "enabled": True,
+                "enabled": False,
                 "index": 4,
                 "target": 0.0,   # radians
                 "blend": 0.05,   # 0..1 small bias
@@ -292,6 +293,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         self._last_target_position: np.ndarray | None = None
         self._last_target_wxyz: np.ndarray | None = None
         self._last_ik_solution_rad: np.ndarray | None = None
+        self._last_wrist_refined_solution_rad: np.ndarray | None = None
         self._last_postprocessed_solution_rad: np.ndarray | None = None
         self._last_action_snapshot: dict[str, Any] | None = None
 
@@ -409,6 +411,9 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             "ik_solution_deg": None
             if self._last_ik_solution_rad is None
             else self._round_vector(np.rad2deg(self._last_ik_solution_rad)),
+            "wrist_refined_deg": None
+            if self._last_wrist_refined_solution_rad is None
+            else self._round_vector(np.rad2deg(self._last_wrist_refined_solution_rad)),
             "postprocessed_deg": None
             if self._last_postprocessed_solution_rad is None
             else self._round_vector(np.rad2deg(self._last_postprocessed_solution_rad)),
@@ -797,6 +802,108 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         self._sync_pose_mapper_state()
         logger.info("Applied comprehensive right arm initial position and orientation mirroring for teleop")
 
+    def _wrap_to_pi(self, angle_rad: float) -> float:
+        return float(np.arctan2(np.sin(angle_rad), np.cos(angle_rad)))
+
+    def _get_joint_limit_rad(self, joint_name: str, default: tuple[float, float]) -> tuple[float, float]:
+        if self.urdf is None:
+            return default
+        lower, upper = _get_joint_limit_rad(self.urdf, joint_name)
+        if lower is None or upper is None:
+            return default
+        lower_f = float(lower)
+        upper_f = float(upper)
+        if upper_f < lower_f:
+            lower_f, upper_f = upper_f, lower_f
+        return lower_f, upper_f
+
+    def _refine_wrist_orientation(
+        self,
+        solution_rad: np.ndarray,
+        *,
+        target_position: np.ndarray,
+        target_wxyz: np.ndarray,
+        reference_q_rad: np.ndarray | None = None,
+    ) -> np.ndarray:
+        if not bool(getattr(self.config, "wrist_refinement_enabled", True)):
+            return solution_rad
+        if len(solution_rad) < 5:
+            return solution_rad
+
+        target_rotation = R.from_quat(np.array([target_wxyz[1], target_wxyz[2], target_wxyz[3], target_wxyz[0]]))
+        base_solution = np.array(solution_rad, dtype=float, copy=True)
+        initial = np.array([base_solution[3], self._wrap_to_pi(base_solution[4])], dtype=float)
+
+        if reference_q_rad is not None and len(reference_q_rad) >= 5:
+            regularization_target = np.array(
+                [float(reference_q_rad[3]), self._wrap_to_pi(float(reference_q_rad[4]))],
+                dtype=float,
+            )
+        else:
+            regularization_target = initial.copy()
+
+        flex_bounds = self._get_joint_limit_rad("wrist_flex", (-np.pi / 2.0, np.pi / 2.0))
+        roll_bounds = self._get_joint_limit_rad("wrist_roll", (-np.pi, np.pi))
+        lower = np.array([flex_bounds[0], roll_bounds[0]], dtype=float)
+        upper = np.array([flex_bounds[1], roll_bounds[1]], dtype=float)
+        initial = np.clip(initial, lower, upper)
+
+        orientation_weight = float(getattr(self.config, "wrist_refinement_orientation_weight", 1.0))
+        position_weight = float(getattr(self.config, "wrist_refinement_position_weight", 35.0))
+        regularization_weight = float(getattr(self.config, "wrist_refinement_regularization_weight", 0.05))
+        max_nfev = int(getattr(self.config, "wrist_refinement_max_nfev", 10))
+
+        def residual(x: np.ndarray) -> np.ndarray:
+            candidate = base_solution.copy()
+            candidate[3] = float(x[0])
+            candidate[4] = self._wrap_to_pi(float(x[1]))
+            pose = self._compute_robot_pose_from_solver_radians(candidate)
+            if pose is None:
+                return np.full(8, 1e3, dtype=float)
+
+            candidate_position, candidate_wxyz = pose
+            candidate_rotation = R.from_quat(
+                np.array([candidate_wxyz[1], candidate_wxyz[2], candidate_wxyz[3], candidate_wxyz[0]])
+            )
+            rot_error = (target_rotation * candidate_rotation.inv()).as_rotvec()
+            pos_error = np.asarray(candidate_position, dtype=float) - np.asarray(target_position, dtype=float)
+            reg_error = np.array(
+                [
+                    float(x[0]) - float(regularization_target[0]),
+                    self._wrap_to_pi(float(x[1]) - float(regularization_target[1])),
+                ],
+                dtype=float,
+            )
+            return np.concatenate(
+                (
+                    orientation_weight * rot_error,
+                    position_weight * pos_error,
+                    regularization_weight * reg_error,
+                )
+            )
+
+        baseline_residual = residual(initial)
+        try:
+            result = least_squares(
+                residual,
+                x0=initial,
+                bounds=(lower, upper),
+                method="trf",
+                max_nfev=max(1, max_nfev),
+            )
+        except Exception:
+            return base_solution
+
+        refined_x = result.x if result.success else initial
+        refined_residual = residual(refined_x)
+        if float(np.linalg.norm(refined_residual)) >= float(np.linalg.norm(baseline_residual)):
+            return base_solution
+
+        refined = base_solution.copy()
+        refined[3] = float(refined_x[0])
+        refined[4] = self._wrap_to_pi(float(refined_x[1]))
+        return refined
+
     def get_action(self, observation: dict[str, Any] | None = None) -> dict[str, Any]:
         """
         Get the current action from phone input.
@@ -815,6 +922,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         self._last_target_position = None
         self._last_target_wxyz = None
         self._last_ik_solution_rad = None
+        self._last_wrist_refined_solution_rad = None
         self._last_postprocessed_solution_rad = None
         self._last_action_snapshot = None
         if controlled_observation is not None:
@@ -1005,8 +1113,15 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             self._last_target_position = np.array(t_robot, dtype=float, copy=True)
             self._last_target_wxyz = np.array(q_robot, dtype=float, copy=True)
 
-            solution_rad = np.asarray(self._solve_ik(t_robot, q_robot), dtype=float)
-            self._last_ik_solution_rad = np.array(solution_rad, dtype=float, copy=True)
+            raw_solution_rad = np.asarray(self._solve_ik(t_robot, q_robot), dtype=float)
+            self._last_ik_solution_rad = np.array(raw_solution_rad, dtype=float, copy=True)
+            solution_rad = self._refine_wrist_orientation(
+                raw_solution_rad,
+                target_position=t_robot,
+                target_wxyz=q_robot,
+                reference_q_rad=current_joint_pos_solver_rad,
+            )
+            self._last_wrist_refined_solution_rad = np.array(solution_rad, dtype=float, copy=True)
             self.postprocessor.sync_from_legacy_tune(self.tune)
             self.postprocessor.set_reference_state(
                 self._match_joint_vector_length(current_joint_pos_solver_rad, len(solution_rad))

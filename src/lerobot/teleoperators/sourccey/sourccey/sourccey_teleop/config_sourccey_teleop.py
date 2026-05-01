@@ -126,3 +126,10 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     diagnostics_enabled: bool = True
     diagnostics_interval_s: float = 2.0
     diagnostics_include_action: bool = True
+
+    # Wrist refinement
+    wrist_refinement_enabled: bool = True
+    wrist_refinement_orientation_weight: float = 1.0
+    wrist_refinement_position_weight: float = 35.0
+    wrist_refinement_regularization_weight: float = 0.05
+    wrist_refinement_max_nfev: int = 10
