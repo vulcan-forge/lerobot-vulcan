@@ -285,6 +285,15 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         # Connection timeout tracking
         self.last_phone_data_time = None
         self.phone_disconnection_timeout = 3.0  # seconds without data before considering disconnected
+        self._last_diagnostic_time = 0.0
+        self._last_diagnostic_reason = ""
+        self._last_pose_source = "startup"
+        self._last_sample: VRTeleopSample | None = None
+        self._last_target_position: np.ndarray | None = None
+        self._last_target_wxyz: np.ndarray | None = None
+        self._last_ik_solution_rad: np.ndarray | None = None
+        self._last_postprocessed_solution_rad: np.ndarray | None = None
+        self._last_action_snapshot: dict[str, Any] | None = None
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -317,6 +326,122 @@ class PhoneTeleoperatorSourccey(Teleoperator):
     def is_calibrated(self) -> bool:
         """Phone teleoperator doesn't require calibration."""
         return True
+
+    @staticmethod
+    def _round_scalar(value: Any, *, digits: int = 4) -> float | None:
+        if value is None:
+            return None
+        try:
+            return round(float(value), digits)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _round_vector(
+        cls,
+        value: Sequence[float] | np.ndarray | None,
+        *,
+        digits: int = 4,
+    ) -> list[float] | None:
+        if value is None:
+            return None
+        try:
+            return [round(float(item), digits) for item in value]
+        except (TypeError, ValueError):
+            return None
+
+    def _sample_snapshot(self, sample: VRTeleopSample | None) -> dict[str, Any] | None:
+        if sample is None:
+            return None
+        return {
+            "position": self._round_vector(sample.position),
+            "rotation_wxyz": self._round_vector(sample.rotation_wxyz),
+            "gripper": self._round_scalar(sample.gripper_value),
+            "teleop_active": bool(sample.teleop_active),
+            "precision_mode": bool(sample.precision_mode),
+            "reset_mapping": bool(sample.reset_mapping),
+            "is_resetting": bool(sample.is_resetting),
+            "base": {
+                "x": self._round_scalar(sample.base.x),
+                "y": self._round_scalar(sample.base.y),
+                "theta": self._round_scalar(sample.base.theta),
+                "active": bool(sample.base.active),
+            },
+        }
+
+    def _action_snapshot(self, action: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if action is None:
+            return None
+
+        snapshot: dict[str, Any] = {}
+        prefix = "left_" if self.arm_side == "left" else "right_"
+        for joint_name in (*self._joint_names, "gripper"):
+            key = f"{prefix}{joint_name}.pos"
+            if key in action:
+                snapshot[key] = self._round_scalar(action[key])
+        for key in ("x.vel", "y.vel", "theta.vel"):
+            if key in action:
+                snapshot[key] = self._round_scalar(action[key])
+        return snapshot
+
+    def _build_diagnostic_snapshot(
+        self,
+        *,
+        reason: str,
+        observation_deg: Sequence[float] | None,
+    ) -> dict[str, Any]:
+        now = time.time()
+        teleop_elapsed = None if self.teleop_start_time is None else max(0.0, now - self.teleop_start_time)
+        phone_age = None if self.last_phone_data_time is None else max(0.0, now - self.last_phone_data_time)
+
+        snapshot: dict[str, Any] = {
+            "reason": reason,
+            "arm_side": self.arm_side,
+            "connected": bool(self._is_connected),
+            "phone_connected": bool(self._phone_connected),
+            "teleop_active": bool(self.start_teleop),
+            "prev_is_resetting": bool(self.prev_is_resetting),
+            "pose_source": self._last_pose_source,
+            "observation_deg": self._round_vector(observation_deg),
+            "sample": self._sample_snapshot(self._last_sample),
+            "target_position": self._round_vector(self._last_target_position),
+            "target_wxyz": self._round_vector(self._last_target_wxyz),
+            "ik_solution_deg": None
+            if self._last_ik_solution_rad is None
+            else self._round_vector(np.rad2deg(self._last_ik_solution_rad)),
+            "postprocessed_deg": None
+            if self._last_postprocessed_solution_rad is None
+            else self._round_vector(np.rad2deg(self._last_postprocessed_solution_rad)),
+            "mapper_position": self._round_vector(self.current_t_R),
+            "mapper_wxyz": self._round_vector(self.current_q_R),
+            "mapping_translation": self._round_vector(self.translation_RP),
+            "teleop_elapsed_s": self._round_scalar(teleop_elapsed),
+            "phone_data_age_s": self._round_scalar(phone_age),
+        }
+        if bool(getattr(self.config, "diagnostics_include_action", True)):
+            snapshot["action"] = self._action_snapshot(self._last_action_snapshot)
+        return snapshot
+
+    def _emit_diagnostic(
+        self,
+        *,
+        reason: str,
+        observation_deg: Sequence[float] | None,
+        level: int = logging.INFO,
+        force: bool = False,
+    ) -> None:
+        if not bool(getattr(self.config, "diagnostics_enabled", True)):
+            return
+
+        now = time.time()
+        interval = max(0.0, float(getattr(self.config, "diagnostics_interval_s", 2.0)))
+        if not force and interval > 0.0 and (now - self._last_diagnostic_time) < interval:
+            return
+
+        self._last_diagnostic_time = now
+        self._last_diagnostic_reason = reason
+        snapshot = self._build_diagnostic_snapshot(reason=reason, observation_deg=observation_deg)
+        logger.log(level, "VR teleop snapshot %s", json.dumps(snapshot, separators=(",", ":")))
 
     def connect(self, calibrate: bool = True) -> None:
         """Establish connection with phone via gRPC and initialize robot model."""
@@ -502,6 +627,10 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 rotation_wxyz=np.array([1.0, 0.0, 0.0, 0.0], dtype=float),
                 gripper_value=0.0,
             )
+            self._last_pose_source = "wait_timeout_default"
+        else:
+            self._last_pose_source = "wait_initial"
+        self._last_sample = sample
         self.start_teleop = sample.teleop_active
         self.pose_mapper.open_session(sample.position, sample.rotation_wxyz)
         self._sync_pose_mapper_state()
@@ -683,6 +812,11 @@ class PhoneTeleoperatorSourccey(Teleoperator):
 
         current_joint_pos_deg = None
         controlled_observation = self.observation_selector.extract(observation)
+        self._last_target_position = None
+        self._last_target_wxyz = None
+        self._last_ik_solution_rad = None
+        self._last_postprocessed_solution_rad = None
+        self._last_action_snapshot = None
         if controlled_observation is not None:
             current_joint_pos_deg = controlled_observation.joint_positions_deg
 
@@ -698,9 +832,23 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 try:
                     latest_sample = self.pose_stream.read_latest()
                     if latest_sample is not None:
-                        return self._merge_base_with_action({}, base=latest_sample.base)
+                        self._last_pose_source = "latest_missing_observation"
+                        self._last_sample = latest_sample
+                        action = self._merge_base_with_action({}, base=latest_sample.base)
+                        self._last_action_snapshot = action
+                        self._emit_diagnostic(
+                            reason="missing_observation_base_only",
+                            observation_deg=current_joint_pos_deg,
+                            level=logging.WARNING,
+                        )
+                        return action
                 except Exception:
                     pass
+                self._emit_diagnostic(
+                    reason="missing_observation_no_action",
+                    observation_deg=current_joint_pos_deg,
+                    level=logging.WARNING,
+                )
                 return {}
 
         if not self.initial_positions_shown:
@@ -721,6 +869,8 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             if fresh_sample is not None:
                 self.last_phone_data_time = current_time
                 sample = fresh_sample
+                self._last_pose_source = "fresh"
+                self._last_sample = fresh_sample
                 if not self._phone_connected and not self.start_teleop:
                     logger.info("Phone reconnected - resuming normal operation")
             else:
@@ -735,15 +885,33 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     self.teleop_start_time = None
                     self.motor_positions_read = False
                     self.postprocessor.reset()
-                    return self._format_rest_action()
+                    action = self._format_rest_action()
+                    self._last_action_snapshot = action
+                    self._emit_diagnostic(
+                        reason="phone_timeout_rest",
+                        observation_deg=current_joint_pos_deg,
+                        level=logging.WARNING,
+                    )
+                    return action
 
                 sample = self.pose_stream.read_latest()
+                if sample is not None:
+                    self._last_pose_source = "latest"
+                    self._last_sample = sample
 
             if not self._phone_connected:
                 curr_qpos_rad = np.deg2rad(current_joint_pos_deg)
                 self.quat_RP, self.translation_RP = self._open_phone_connection(curr_qpos_rad)
                 self._phone_connected = True
                 sample = self.pose_stream.read_latest() or sample
+                if sample is not None:
+                    self._last_pose_source = "latest_after_open"
+                    self._last_sample = sample
+                self._emit_diagnostic(
+                    reason="phone_connected",
+                    observation_deg=current_joint_pos_deg,
+                    force=True,
+                )
 
             prev_start_teleop = bool(self.start_teleop)
             switch_state = sample.teleop_active if sample is not None else False
@@ -756,8 +924,17 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 self.postprocessor.reset()
                 rest_action = self._format_rest_action()
                 if getattr(self.config, "base_allow_when_inactive", True):
-                    return self._merge_base_with_action(rest_action, base=sample.base if sample is not None else None)
-                return rest_action
+                    action = self._merge_base_with_action(rest_action, base=sample.base if sample is not None else None)
+                else:
+                    action = rest_action
+                self._last_action_snapshot = action
+                if prev_start_teleop:
+                    self._emit_diagnostic(
+                        reason="teleop_deactivated",
+                        observation_deg=current_joint_pos_deg,
+                        force=True,
+                    )
+                return action
 
             if self.teleop_start_time is None:
                 self.teleop_start_time = time.time()
@@ -786,8 +963,15 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     gripper_percent=self._extract_gripper_percent(hold_position),
                 )
                 if getattr(self.config, "base_allow_when_resetting", True):
-                    return self._merge_base_with_action(formatted_hold, base=sample.base if sample is not None else None)
-                return formatted_hold
+                    action = self._merge_base_with_action(formatted_hold, base=sample.base if sample is not None else None)
+                else:
+                    action = formatted_hold
+                self._last_action_snapshot = action
+                self._emit_diagnostic(
+                    reason="reset_hold",
+                    observation_deg=current_joint_pos_deg,
+                )
+                return action
 
             if self.prev_is_resetting and not current_is_resetting:
                 if sample is not None:
@@ -804,15 +988,25 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     current_joint_pos_deg,
                     gripper_percent=self._extract_gripper_percent(current_joint_pos_deg),
                 )
-                return self._merge_base_with_action(formatted_current, base=None)
+                action = self._merge_base_with_action(formatted_current, base=None)
+                self._last_action_snapshot = action
+                self._emit_diagnostic(
+                    reason="no_sample_hold_current",
+                    observation_deg=current_joint_pos_deg,
+                    level=logging.WARNING,
+                )
+                return action
 
             t_robot, q_robot = self._map_phone_to_robot(
                 sample.position,
                 sample.rotation_wxyz,
                 sample.precision_mode,
             )
+            self._last_target_position = np.array(t_robot, dtype=float, copy=True)
+            self._last_target_wxyz = np.array(q_robot, dtype=float, copy=True)
 
             solution_rad = np.asarray(self._solve_ik(t_robot, q_robot), dtype=float)
+            self._last_ik_solution_rad = np.array(solution_rad, dtype=float, copy=True)
             self.postprocessor.sync_from_legacy_tune(self.tune)
             self.postprocessor.set_reference_state(
                 self._match_joint_vector_length(current_joint_pos_solver_rad, len(solution_rad))
@@ -822,6 +1016,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 elbow_soft_stop=self._elbow_soft_stop,
                 precision_mode=sample.precision_mode,
             )
+            self._last_postprocessed_solution_rad = np.array(solution_rad, dtype=float, copy=True)
 
             if self.config.enable_visualization and self.urdf_vis:
                 self.urdf_vis.update_cfg(solution_rad)
@@ -836,7 +1031,13 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 list(solution_final),
                 gripper_percent=float(sample.gripper_value),
             )
-            return self._merge_base_with_action(action_ctrl, base=sample.base)
+            action = self._merge_base_with_action(action_ctrl, base=sample.base)
+            self._last_action_snapshot = action
+            self._emit_diagnostic(
+                reason="active_tick",
+                observation_deg=current_joint_pos_deg,
+            )
+            return action
 
             # Discourage elbow going down past soft stop (≈ quarter range from lower)
 
@@ -865,7 +1066,14 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 gripper_percent=self._extract_gripper_percent(current_joint_pos_deg),
             )
             fallback_base = sample.base if sample is not None else None
-            return self._merge_base_with_action(formatted_current, base=fallback_base)
+            action = self._merge_base_with_action(formatted_current, base=fallback_base)
+            self._last_action_snapshot = action
+            self._emit_diagnostic(
+                reason="action_error",
+                observation_deg=current_joint_pos_deg,
+                level=logging.ERROR,
+            )
+            return action
 
     def _solve_ik(self, target_position: np.ndarray, target_wxyz: np.ndarray) -> list[float]:
         """Solve inverse kinematics for target pose. Returns solution in radians."""
@@ -883,6 +1091,12 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             return solution  # Always return radians
         except ImportError as e:
             logger.error(f"Could not import IK solver: {e}")
+            self._emit_diagnostic(
+                reason="ik_import_error",
+                observation_deg=None,
+                level=logging.ERROR,
+                force=True,
+            )
             # Return rest pose in radians
             return list(self.config.rest_pose)
 

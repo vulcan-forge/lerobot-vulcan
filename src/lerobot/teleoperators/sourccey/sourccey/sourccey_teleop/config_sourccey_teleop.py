@@ -121,3 +121,8 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     # Allow base to run when teleop is inactive or resetting
     base_allow_when_inactive: bool = True
     base_allow_when_resetting: bool = True
+
+    # Runtime diagnostics
+    diagnostics_enabled: bool = True
+    diagnostics_interval_s: float = 2.0
+    diagnostics_include_action: bool = True
