@@ -48,10 +48,7 @@ from lerobot.teleoperators.vr_teleoperation import (
 from lerobot.teleoperators.vr_teleoperation.mapping import PoseMapper
 from lerobot.teleoperators.vr_teleoperation.models import VRTeleopSample
 
-try:
-    from .config_remote_teleoperator_sourccey import PhoneTeleoperatorSourcceyConfig
-except ImportError:  # pragma: no cover - legacy name fallback
-    from .config_phone_teleoperator_sourccey import PhoneTeleoperatorSourcceyConfig  # type: ignore[import]
+from .config_sourccey_teleop import PhoneTeleoperatorSourcceyConfig
 
 try:
     from lerobot.teleoperators.occulus.normalization import (  # type: ignore[import]
