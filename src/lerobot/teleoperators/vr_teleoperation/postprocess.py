@@ -16,6 +16,9 @@ class FixedRateJointLimit:
 class JointPostprocessConfig:
     lowpass_alpha: float = 0.25
     delta_scale: dict[int, float] = field(default_factory=lambda: {0: 0.5, 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0})
+    precision_mode_lowpass_alpha: float = 1.0
+    precision_mode_disable_delta_scale: bool = True
+    precision_mode_disable_fixed_rate: bool = True
     wrist_roll_bias_enabled: bool = True
     wrist_roll_index: int = 4
     wrist_roll_target_rad: float = 0.0
@@ -34,6 +37,7 @@ class JointPostprocessConfig:
     fixed_rate_limits: dict[int, FixedRateJointLimit] = field(
         default_factory=lambda: {0: FixedRateJointLimit(step_deg=2.0, deadband_deg=0.2)}
     )
+    continuous_joint_indices: tuple[int, ...] = (4,)
     bypass_all_mods: bool = False
 
     @classmethod
@@ -88,7 +92,25 @@ class JointPostprocessor:
         self._prev_q = None
         self._elbow_back_limit = None
 
-    def apply(self, solution_rad: np.ndarray, *, elbow_soft_stop: float | None) -> np.ndarray:
+    def set_reference_state(self, reference_q_rad: np.ndarray | None) -> None:
+        if reference_q_rad is None:
+            return
+        reference = np.array(reference_q_rad, dtype=float, copy=True)
+        if self._prev_q is not None and len(self._prev_q) == len(reference):
+            reference = self._unwrap_continuous_joints(reference, self._prev_q)
+        self._prev_q = reference
+        if self._elbow_back_limit is None and self.config.elbow_back_block_enabled:
+            elbow_idx = self.config.elbow_back_block_index
+            if 0 <= elbow_idx < len(reference):
+                self._elbow_back_limit = float(reference[elbow_idx])
+
+    def apply(
+        self,
+        solution_rad: np.ndarray,
+        *,
+        elbow_soft_stop: float | None,
+        precision_mode: bool = False,
+    ) -> np.ndarray:
         solution = np.array(solution_rad, dtype=float, copy=True)
 
         if self.config.bypass_all_mods:
@@ -99,7 +121,13 @@ class JointPostprocessor:
             self._prev_q = solution.copy()
 
         prev_q = self._prev_q.copy()
-        solution = self.config.lowpass_alpha * solution + (1.0 - self.config.lowpass_alpha) * prev_q
+        solution = self._unwrap_continuous_joints(solution, prev_q)
+
+        alpha = self.config.lowpass_alpha
+        if precision_mode:
+            alpha = max(alpha, self.config.precision_mode_lowpass_alpha)
+
+        solution = alpha * solution + (1.0 - alpha) * prev_q
 
         if self.config.elbow_soft_stop_enabled:
             solution = self._apply_elbow_soft_stop(solution, prev_q, elbow_soft_stop)
@@ -110,12 +138,13 @@ class JointPostprocessor:
                 blend = self.config.wrist_roll_blend
                 solution[wrist_idx] = (1.0 - blend) * solution[wrist_idx] + blend * self.config.wrist_roll_target_rad
 
-        for joint_idx, scale in self.config.delta_scale.items():
-            if 0 <= joint_idx < len(solution) and scale != 1.0:
-                delta = solution[joint_idx] - prev_q[joint_idx]
-                solution[joint_idx] = prev_q[joint_idx] + scale * delta
+        if not (precision_mode and self.config.precision_mode_disable_delta_scale):
+            for joint_idx, scale in self.config.delta_scale.items():
+                if 0 <= joint_idx < len(solution) and scale != 1.0:
+                    delta = solution[joint_idx] - prev_q[joint_idx]
+                    solution[joint_idx] = prev_q[joint_idx] + scale * delta
 
-        if self.config.fixed_rate_enabled:
+        if self.config.fixed_rate_enabled and not (precision_mode and self.config.precision_mode_disable_fixed_rate):
             for joint_idx, limit in self.config.fixed_rate_limits.items():
                 if 0 <= joint_idx < len(solution):
                     solution[joint_idx] = self._apply_fixed_rate_limit(solution[joint_idx], prev_q[joint_idx], limit)
@@ -124,6 +153,15 @@ class JointPostprocessor:
             solution = self._apply_elbow_back_block(solution)
 
         self._prev_q = solution.copy()
+        return solution
+
+    def _unwrap_continuous_joints(self, solution: np.ndarray, prev_q: np.ndarray) -> np.ndarray:
+        if solution.shape != prev_q.shape:
+            return solution
+        for joint_idx in self.config.continuous_joint_indices:
+            if 0 <= joint_idx < len(solution):
+                delta = solution[joint_idx] - prev_q[joint_idx]
+                solution[joint_idx] = prev_q[joint_idx] + np.arctan2(np.sin(delta), np.cos(delta))
         return solution
 
     def _apply_elbow_soft_stop(

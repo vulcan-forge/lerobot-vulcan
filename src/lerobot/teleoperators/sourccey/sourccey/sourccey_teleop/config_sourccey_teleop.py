@@ -71,6 +71,13 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     sensitivity_precision: float = 0.2
     # Global mapping gain multiplier for both translation and rotation
     mapping_gain: float = 2.0
+    translation_axis_scale_normal: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    translation_axis_scale_precision: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    rotation_axis_scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    translation_deadband_m: float = 0.0
+    rotation_deadband_rad: float = 0.0
+    incremental_mapping: bool = True
+    sync_pose_from_observation: bool = True
     
     # Initial robot pose (when connecting phone) - same as SO100
     initial_position: tuple[float, ...] = (0.0, -0.17, 0.237)  # meters

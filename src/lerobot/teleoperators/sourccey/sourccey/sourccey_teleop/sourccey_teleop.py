@@ -21,6 +21,7 @@ from functools import cached_property
 from typing import Any, Mapping, Sequence, Tuple
 
 import numpy as np
+from scipy.spatial.transform import Rotation as R
 
 
 try:
@@ -45,7 +46,7 @@ from lerobot.teleoperators.vr_teleoperation import (
     JointPostprocessor,
     resolve_sourccey_teleop_assets,
 )
-from lerobot.teleoperators.vr_teleoperation.mapping import PoseMapper
+from lerobot.teleoperators.vr_teleoperation.mapping import PoseMapper, quat_as_scalar_first
 from lerobot.teleoperators.vr_teleoperation.models import VRTeleopSample
 
 from .config_sourccey_teleop import PhoneTeleoperatorSourcceyConfig
@@ -210,6 +211,16 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             sensitivity_precision=float(self.config.sensitivity_precision),
             rotation_sensitivity=float(self.config.rotation_sensitivity),
             mapping_gain=float(getattr(self.config, "mapping_gain", 1.0)),
+            translation_axis_scale_normal=getattr(self.config, "translation_axis_scale_normal", (1.0, 1.0, 1.0)),
+            translation_axis_scale_precision=getattr(
+                self.config,
+                "translation_axis_scale_precision",
+                (1.0, 1.0, 1.0),
+            ),
+            rotation_axis_scale=getattr(self.config, "rotation_axis_scale", (1.0, 1.0, 1.0)),
+            translation_deadband_m=float(getattr(self.config, "translation_deadband_m", 0.0)),
+            rotation_deadband_rad=float(getattr(self.config, "rotation_deadband_rad", 0.0)),
+            incremental_mode=bool(getattr(self.config, "incremental_mapping", True)),
         )
         
         # gRPC server and pose service (to be initialized in connect())
@@ -467,8 +478,12 @@ class PhoneTeleoperatorSourccey(Teleoperator):
 
     def _open_phone_connection(self, curr_qpos_rad: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Wait for phone to connect and set initial mapping."""
-        del curr_qpos_rad
-        if self.arm_side == "right":
+        measured_pose = None
+        if bool(getattr(self.config, "sync_pose_from_observation", True)):
+            measured_pose = self._compute_robot_pose_from_solver_radians(curr_qpos_rad)
+        if measured_pose is not None:
+            self.current_t_R, self.current_q_R = measured_pose
+        elif self.arm_side == "right":
             self.current_t_R = np.array(getattr(self.config, "initial_position_right", self.config.initial_position))
             self.current_q_R = np.array(getattr(self.config, "initial_wxyz_right", self.config.initial_wxyz))
         else:
@@ -565,6 +580,82 @@ class PhoneTeleoperatorSourccey(Teleoperator):
 
         return solution_final
 
+    def _observed_joint_positions_to_solver_degrees(self, joint_positions_deg: Sequence[float]) -> np.ndarray:
+        solver_positions = np.array(list(joint_positions_deg[: len(self._joint_names)]), dtype=float)
+
+        if getattr(self.config, "joint_offsets_deg", None):
+            offsets = self.config.joint_offsets_deg or {}
+            for idx, joint_name in enumerate(self._joint_names):
+                if idx < len(solver_positions) and joint_name in offsets:
+                    solver_positions[idx] -= float(offsets[joint_name])
+
+        if self.arm_side == "right":
+            solver_positions[: min(5, len(solver_positions))] *= -1.0
+        elif len(solver_positions) > 4:
+            solver_positions[4] *= -1.0
+
+        return solver_positions
+
+    def _observed_joint_positions_to_solver_radians(self, joint_positions_deg: Sequence[float]) -> np.ndarray:
+        return np.deg2rad(self._observed_joint_positions_to_solver_degrees(joint_positions_deg))
+
+    def _match_joint_vector_length(self, joint_values_rad: np.ndarray, target_length: int) -> np.ndarray:
+        joint_values = np.array(joint_values_rad, dtype=float, copy=True)
+        if len(joint_values) >= target_length:
+            return joint_values[:target_length]
+        return np.pad(joint_values, (0, target_length - len(joint_values)), constant_values=0.0)
+
+    def _compute_robot_pose_from_solver_radians(
+        self,
+        joint_positions_rad: Sequence[float],
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        if self.urdf is None:
+            return None
+
+        joint_cfg = {
+            joint_name: float(joint_value)
+            for joint_name, joint_value in zip(self._joint_names, joint_positions_rad)
+        }
+
+        fk_result = None
+        attempts = (
+            {"cfg": joint_cfg, "use_names": True},
+            {"cfg": joint_cfg},
+            {"cfg": np.array(list(joint_cfg.values()), dtype=float), "use_names": True},
+            {"cfg": np.array(list(joint_cfg.values()), dtype=float)},
+        )
+        for kwargs in attempts:
+            try:
+                fk_result = self.urdf.link_fk(**kwargs)
+                break
+            except TypeError:
+                continue
+            except Exception:
+                continue
+
+        if fk_result is None:
+            return None
+
+        transform = None
+        if isinstance(fk_result, dict):
+            if self.config.target_link_name in fk_result:
+                transform = fk_result[self.config.target_link_name]
+            else:
+                link_map = getattr(self.urdf, "link_map", None)
+                if link_map and self.config.target_link_name in link_map:
+                    transform = fk_result.get(link_map[self.config.target_link_name])
+
+        if transform is None:
+            return None
+
+        transform_matrix = np.asarray(transform, dtype=float)
+        if transform_matrix.shape != (4, 4):
+            return None
+
+        position = transform_matrix[:3, 3]
+        rotation = R.from_matrix(transform_matrix[:3, :3])
+        return position.astype(float), quat_as_scalar_first(rotation)
+
     def _apply_start_pose_mirroring(self) -> None:
         if self.arm_side != "right":
             return
@@ -615,6 +706,12 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         if not self.initial_positions_shown:
             self._display_motor_positions_formatted(current_joint_pos_deg, "INITIAL ARM POSITION")
             self.initial_positions_shown = True
+
+        current_joint_pos_solver_rad = self._observed_joint_positions_to_solver_radians(current_joint_pos_deg)
+        if bool(getattr(self.config, "sync_pose_from_observation", True)):
+            measured_pose = self._compute_robot_pose_from_solver_radians(current_joint_pos_solver_rad)
+            if measured_pose is not None:
+                self.pose_mapper.set_robot_pose(*measured_pose)
 
         sample: VRTeleopSample | None = None
         try:
@@ -717,7 +814,14 @@ class PhoneTeleoperatorSourccey(Teleoperator):
 
             solution_rad = np.asarray(self._solve_ik(t_robot, q_robot), dtype=float)
             self.postprocessor.sync_from_legacy_tune(self.tune)
-            solution_rad = self.postprocessor.apply(solution_rad, elbow_soft_stop=self._elbow_soft_stop)
+            self.postprocessor.set_reference_state(
+                self._match_joint_vector_length(current_joint_pos_solver_rad, len(solution_rad))
+            )
+            solution_rad = self.postprocessor.apply(
+                solution_rad,
+                elbow_soft_stop=self._elbow_soft_stop,
+                precision_mode=sample.precision_mode,
+            )
 
             if self.config.enable_visualization and self.urdf_vis:
                 self.urdf_vis.update_cfg(solution_rad)

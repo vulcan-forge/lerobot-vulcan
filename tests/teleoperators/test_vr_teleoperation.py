@@ -17,6 +17,7 @@
 import numpy as np
 
 from lerobot.teleoperators.vr_teleoperation.assets import resolve_sourccey_teleop_assets
+from lerobot.teleoperators.vr_teleoperation.mapping import PoseMapper
 from lerobot.teleoperators.vr_teleoperation.models import BaseMotionCommand, VRTeleopSample
 from lerobot.teleoperators.vr_teleoperation.observation import ControlledArmObservationSelector
 from lerobot.teleoperators.vr_teleoperation.postprocess import (
@@ -116,6 +117,74 @@ def test_joint_postprocessor_applies_fixed_rate_limit_after_baseline():
 
     assert np.allclose(baseline, np.deg2rad([0.0]))
     assert np.allclose(limited, np.deg2rad([2.0]))
+
+
+def test_joint_postprocessor_precision_mode_can_bypass_smoothing_and_rate_limits():
+    postprocessor = JointPostprocessor(
+        JointPostprocessConfig(
+            lowpass_alpha=0.25,
+            delta_scale={0: 0.5},
+            wrist_roll_bias_enabled=False,
+            elbow_soft_stop_enabled=False,
+            elbow_back_block_enabled=False,
+            fixed_rate_enabled=True,
+            fixed_rate_limits={0: FixedRateJointLimit(step_deg=2.0, deadband_deg=0.0)},
+        )
+    )
+
+    postprocessor.set_reference_state(np.deg2rad(np.array([0.0])))
+    precise = postprocessor.apply(np.deg2rad(np.array([10.0])), elbow_soft_stop=None, precision_mode=True)
+
+    assert np.allclose(precise, np.deg2rad([10.0]))
+
+
+def test_joint_postprocessor_unwraps_continuous_joints_to_nearest_rotation():
+    postprocessor = JointPostprocessor(
+        JointPostprocessConfig(
+            lowpass_alpha=1.0,
+            delta_scale={},
+            wrist_roll_bias_enabled=False,
+            elbow_soft_stop_enabled=False,
+            elbow_back_block_enabled=False,
+            fixed_rate_enabled=False,
+            continuous_joint_indices=(0,),
+        )
+    )
+
+    postprocessor.set_reference_state(np.deg2rad(np.array([179.0])))
+    unwrapped = postprocessor.apply(np.deg2rad(np.array([-179.0])), elbow_soft_stop=None)
+
+    assert np.allclose(unwrapped, np.deg2rad([181.0]), atol=1e-6)
+
+
+def test_pose_mapper_incremental_mapping_reanchors_to_latest_robot_pose():
+    mapper = PoseMapper(
+        initial_robot_position=np.array([0.0, 0.0, 0.0]),
+        initial_robot_wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
+        sensitivity_normal=1.0,
+        sensitivity_precision=0.5,
+        rotation_sensitivity=1.0,
+        mapping_gain=1.0,
+        incremental_mode=True,
+    )
+
+    mapper.open_session(np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0, 0.0]))
+    pos_1, quat_1 = mapper.map_pose(
+        np.array([0.1, 0.0, 0.0]),
+        np.array([1.0, 0.0, 0.0, 0.0]),
+        precision_mode=False,
+    )
+    assert np.allclose(pos_1, [0.1, 0.0, 0.0])
+    assert np.allclose(quat_1, [1.0, 0.0, 0.0, 0.0])
+
+    mapper.set_robot_pose(np.array([0.1, 0.05, 0.0]), np.array([1.0, 0.0, 0.0, 0.0]))
+    pos_2, quat_2 = mapper.map_pose(
+        np.array([0.2, 0.0, 0.0]),
+        np.array([1.0, 0.0, 0.0, 0.0]),
+        precision_mode=False,
+    )
+    assert np.allclose(pos_2, [0.2, 0.05, 0.0])
+    assert np.allclose(quat_2, [1.0, 0.0, 0.0, 0.0])
 
 
 def test_resolve_sourccey_teleop_assets_finds_repo_defaults():
