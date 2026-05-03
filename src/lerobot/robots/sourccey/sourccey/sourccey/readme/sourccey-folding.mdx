@@ -20,7 +20,7 @@ uv run lerobot-record \
  --teleop.id="sourccey_leader" \
  --teleop.left_arm_port="/dev/ttyACM0" \
  --teleop.right_arm_port="/dev/ttyACM1" \
- --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-c/nickm/sourccey-013__shirt-fold-blue-c__set325__nickm" \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-c/nickm/sourccey-013__shirt-fold-blue-c__set450__nickm" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=5 \
@@ -74,12 +74,12 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train_retry.py \
 #Fine tune
 
 ```
-CUDA_VISIBLE_DEVICES=0 uv run lerobot-train-retry \
+CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --max-attempts=30 \
   --retry-delay-seconds=20 \
-  --dataset.repo_id="Combination/sourccey-shirt-fold-c-002" \
-  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-0012" \
-  --job_name="xvla_s_sourccey-shirt-fold-c-002" \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-c-004" \
+  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-004" \
+  --job_name="xvla_s_sourccey-shirt-fold-c-004" \
   --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
   --policy.dtype=bfloat16 \
   --policy.action_mode=auto \
@@ -103,16 +103,17 @@ CUDA_VISIBLE_DEVICES=0 uv run lerobot-train-retry \
 CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --max-attempts=30 \
   --retry-delay-seconds=20 \
-  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-0012" \
+  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-003" \
   --steps=1000000 \
   --save_freq=20000 \
   --resume=true \
-  --config_path="outputs/train/xvla_s_sourccey-shirt-fold-c-0012/checkpoints/last/pretrained_model/train_config.json"
+  --config_path="outputs/train/xvla_s_sourccey-shirt-fold-c-003/checkpoints/last/pretrained_model/train_config.json"
 
 ```
 
 ## SARM
 
+```
 CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
  --dataset.repo_id="Combination/sourccey-shirt-fold-01**cmbF**d**chrism**20260407**append**20260408" \
  --policy.type=sarm \

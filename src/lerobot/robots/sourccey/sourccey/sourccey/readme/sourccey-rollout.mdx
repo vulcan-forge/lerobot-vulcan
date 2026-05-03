@@ -14,7 +14,7 @@ Assumptions:
 ```bash
 uv run lerobot-rollout \
   --strategy.type=base \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-003/checkpoints/0820000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --logging.throttle_spam=true \
@@ -98,16 +98,18 @@ Corrections-only mode:
 ```bash
 uv run lerobot-rollout \
   --strategy.type=dagger \
-  --strategy.num_episodes=20 \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
+  --strategy.num_episodes=1 \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-003/checkpoints/0500000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --teleop.type=bi_sourccey_leader \
   --teleop.left_arm_port=/dev/ttyACM0 \
   --teleop.right_arm_port=/dev/ttyACM1 \
-  --dataset.repo_id="sourccey-013/rollout_sourccey_dagger/dagger-000" \
+  --dataset.repo_id="sourccey-013/rollout__sourccey-013__shirt-fold-blue-c/nickm/dagger-100-nickm" \
   --dataset.single_task="Fold the shirt" \
-  --fps=30
+  --fps=30 \
+  --display_data=true \
+  --dataset.push_to_hub=false
 ```
 
 Continuous mode (`record_autonomous=true`):
@@ -121,11 +123,12 @@ uv run lerobot-rollout \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --teleop.type=bi_sourccey_leader \
-  --teleop.left_arm_port=/dev/ttyACM0 \
+  --teleop.left_arm_port=/dev/t     tyACM0 \
   --teleop.right_arm_port=/dev/ttyACM1 \
   --dataset.repo_id="HF_USER/rollout_sourccey_dagger_auto" \
   --dataset.single_task="Fold the shirt" \
   --dataset.streaming_encoding=true \
+  --display_data=true \
   --fps=30
 ```
 
