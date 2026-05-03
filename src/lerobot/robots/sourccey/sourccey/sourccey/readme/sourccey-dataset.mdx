@@ -57,6 +57,21 @@ uv run lerobot-edit-dataset \
 
 ## 3) Audit video decode health
 
+Dataset consistency audit (stats mismatch, intervention leakage, z.pos checks):
+
+```bash
+uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/audit_dataset_consistency.py \
+  --dataset-root "$DATASET_ROOT"
+```
+
+Fail fast version (use in CI / strict checks):
+
+```bash
+uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/audit_dataset_consistency.py \
+  --dataset-root "$DATASET_ROOT" \
+  --fail-on-issues
+```
+
 Fast smoke test:
 
 ```bash

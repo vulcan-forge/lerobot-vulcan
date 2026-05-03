@@ -80,7 +80,7 @@ CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --dataset.repo_id="Combination/sourccey-shirt-fold-c-004" \
   --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-004" \
   --job_name="xvla_s_sourccey-shirt-fold-c-004" \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-003/checkpoints/1000000/pretrained_model" \
   --policy.dtype=bfloat16 \
   --policy.action_mode=auto \
   --policy.max_action_dim=20 \
@@ -114,14 +114,14 @@ CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
 ## SARM
 
 ```
-CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
+CUDA_VISIBLE_DEVICES=1 uv run lerobot-train \
  --dataset.repo_id="Combination/sourccey-shirt-fold-01**cmbF**d**chrism**20260407**append**20260408" \
- --policy.type=sarm \
- --policy.annotation_mode=single_stage \
- --policy.image_keys='["observation.images.front_right","observation.images.front_left"]' \
+ --reward_model.type=sarm \
+ --reward_model.annotation_mode=single_stage \
+ --reward_model.image_keys='["observation.images.front_right","observation.images.front_left"]' \
  --output_dir=outputs/train/sarm_2cam \
  --batch_size=8 \
  --steps=20000 \
  --wandb.enable=false \
- --policy.push_to_hub=false
+ --reward_model.push_to_hub=false
 ```
