@@ -186,11 +186,18 @@ sourccey-desktop = [
     "torchvision>=0.24.1",
     "torchcodec==0.9.1",
 
+    "lerobot[pyzmq-dep]",
     "lerobot[xvla]",
 
     # Audio
     # Pin known-good CUDA/cuDNN stack for Windows GPU Whisper.
     "ctranslate2==4.6.3 ; sys_platform == 'win32'",
+
+    # SLAM runtime
+    # Keep a lightweight cross-platform orbslam3 import path for the current adapter.
+    "orbslam3>=0.0",
+    # Prefer native Linux wheel bindings when available.
+    "orbslam3-python>=2.0.0 ; sys_platform == 'linux'",
 ]
 kinematics = ["lerobot[placo-dep]"]
 intelrealsense = [

@@ -208,3 +208,79 @@ class RolloutSlamSubscriber:
             self._socket.close()
             self._socket = None
 
+
+class RolloutSlamInputPublisher:
+    """Non-blocking rollout-side SLAM input publisher."""
+
+    def __init__(
+        self,
+        endpoint: str,
+        *,
+        stereo_left_key: str = "front_left",
+        stereo_right_key: str = "front_right",
+        source: str = "rollout_client",
+        jpeg_quality: int = 80,
+    ) -> None:
+        self.endpoint = endpoint
+        self.stereo_left_key = stereo_left_key
+        self.stereo_right_key = stereo_right_key
+        self.source = source
+        self.jpeg_quality = int(jpeg_quality)
+        self._context = zmq.Context.instance()
+        self._socket: zmq.Socket | None = None
+        self._frame_ids: dict[str, int] = {
+            self.stereo_left_key: 0,
+            self.stereo_right_key: 0,
+        }
+
+    def start(self) -> None:
+        if self._socket is not None:
+            return
+        sock = self._context.socket(zmq.PUB)
+        sock.bind(self.endpoint)
+        self._socket = sock
+
+    def publish_observation(self, observation: dict[str, Any]) -> bool:
+        if self._socket is None:
+            return False
+
+        left = observation.get(self.stereo_left_key)
+        right = observation.get(self.stereo_right_key)
+        if left is None or right is None:
+            return False
+
+        now_ns = monotonic_ns()
+        self._frame_ids[self.stereo_left_key] += 1
+        self._frame_ids[self.stereo_right_key] += 1
+
+        packet = build_slam_input_packet(
+            source=self.source,
+            host_monotonic_ns=now_ns,
+            base_velocity={
+                "x.vel": float(observation.get("x.vel", 0.0)),
+                "y.vel": float(observation.get("y.vel", 0.0)),
+                "theta.vel": float(observation.get("theta.vel", 0.0)),
+            },
+            frame_ids=self._frame_ids,
+            capture_monotonic_ns={
+                self.stereo_left_key: now_ns,
+                self.stereo_right_key: now_ns,
+            },
+            camera_frames={
+                self.stereo_left_key: left,
+                self.stereo_right_key: right,
+            },
+            stereo_left=self.stereo_left_key,
+            stereo_right=self.stereo_right_key,
+            jpeg_quality=self.jpeg_quality,
+        )
+        try:
+            self._socket.send(packet, flags=zmq.NOBLOCK)
+        except zmq.Again:
+            return False
+        return True
+
+    def stop(self) -> None:
+        if self._socket is not None:
+            self._socket.close()
+            self._socket = None

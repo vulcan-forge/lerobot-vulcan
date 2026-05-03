@@ -8,6 +8,7 @@ import numpy as np
 import zmq
 
 from lerobot.slam.transport import (
+    RolloutSlamInputPublisher,
     RolloutSlamSubscriber,
     build_slam_input_packet,
     parse_slam_input_packet,
@@ -90,3 +91,41 @@ def test_rollout_slam_subscriber_receives_latest() -> None:
     sub.stop()
     pub.close()
 
+
+def test_rollout_slam_input_publisher_emits_packet() -> None:
+    endpoint = "inproc://slam-input-test"
+    context = zmq.Context.instance()
+    sub = context.socket(zmq.SUB)
+    sub.connect(endpoint)
+    sub.setsockopt(zmq.SUBSCRIBE, b"")
+
+    pub = RolloutSlamInputPublisher(
+        endpoint,
+        stereo_left_key="front_left",
+        stereo_right_key="front_right",
+        source="unit-test",
+    )
+    pub.start()
+
+    # Allow PUB/SUB subscription handshake.
+    time.sleep(0.03)
+    sent = pub.publish_observation(
+        {
+            "front_left": np.full((16, 16, 3), 42, dtype=np.uint8),
+            "front_right": np.full((16, 16, 3), 77, dtype=np.uint8),
+            "x.vel": 0.2,
+            "y.vel": 0.1,
+            "theta.vel": -0.3,
+        }
+    )
+    assert sent
+    time.sleep(0.03)
+    payload = sub.recv(flags=zmq.NOBLOCK)
+    slam_input = parse_slam_input_packet(payload)
+    assert slam_input.source == "unit-test"
+    assert slam_input.base_velocity["x.vel"] == 0.2
+    assert slam_input.left.name == "front_left"
+    assert slam_input.right.name == "front_right"
+
+    pub.stop()
+    sub.close()

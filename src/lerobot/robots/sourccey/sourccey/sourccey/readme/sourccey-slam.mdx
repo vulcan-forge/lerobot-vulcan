@@ -5,8 +5,8 @@ This guide shows how to run SLAM with Sourccey starting from **basic teleoperati
 Important defaults in this repo:
 
 - SLAM is designed to run on the **client/workstation** (not on the Raspberry Pi host).
-- Teleop SLAM now uses **client observation ingest** (no extra host-side SLAM ZMQ required).
-- If ORB-SLAM3 bindings are unavailable, the adapter falls back to degraded odometry-backed output and logs health accordingly.
+- For **consumer Windows PCs**, recommended mode is a **native SLAM sidecar** over local endpoints.
+- The teleop client publishes stereo + odometry to sidecar input and subscribes to SLAM output.
 
 ---
 
@@ -18,32 +18,25 @@ uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 
 ---
 
-## 2) Run teleoperation with in-process SLAM on your workstation
+## 2) Start your SLAM sidecar on Windows
+
+Run your native Windows SLAM runtime as a separate process and configure:
+
+- input endpoint: `tcp://127.0.0.1:5560`
+- output endpoint: `tcp://127.0.0.1:5561`
+
+Example (replace with your actual sidecar executable):
+
+```bash
+slam-sidecar.exe --input=tcp://127.0.0.1:5560 --output=tcp://127.0.0.1:5561
+```
+
+---
+
+## 3) Run teleoperation with remote-endpoint SLAM bridge
 
 Use the dedicated SLAM teleoperation entrypoint.
 Recommended command (hybrid: leader arms + keyboard rover base overlay):
-
-Linux/macOS serial example:
-
-```bash
-uv run lerobot-slam-teleoperate \
-  --robot.type=sourccey_client \
-  --robot.id="sourccey" \
-  --robot.remote_ip="192.168.1.212" \
-  --teleop.type=bi_sourccey_leader \
-  --teleop.id="sourccey_leader" \
-  --teleop.left_arm_port="/dev/ttyACM0" \
-  --teleop.right_arm_port="/dev/ttyACM1" \
-  --fps=30 \
-  --display_data=true \
-  --slam.enabled=true \
-  --slam.source_mode=client_observation \
-  --slam.stereo_left_key=front_left \
-  --slam.stereo_right_key=front_right \
-  --slam.target_hz=15
-```
-
-Windows serial example:
 
 ```bash
 uv run lerobot-slam-teleoperate \
@@ -57,9 +50,12 @@ uv run lerobot-slam-teleoperate \
   --fps=30 \
   --display_data=true \
   --slam.enabled=true \
-  --slam.source_mode=client_observation \
+  --slam.source_mode=remote_endpoint \
+  --slam.input_endpoint=tcp://127.0.0.1:5560 \
+  --slam.remote_endpoint=tcp://127.0.0.1:5561 \
   --slam.stereo_left_key=front_left \
   --slam.stereo_right_key=front_right \
+  --slam.input_jpeg_quality=80 \
   --slam.target_hz=15
 ```
 
@@ -74,24 +70,25 @@ When using `--teleop.type=bi_sourccey_leader` (or `sourccey_leader`), Sourccey k
 
 ---
 
-## 3) What you should see
+## 4) What you should see
 
 In client logs (about every 5s), you should see SLAM health lines like:
 
 - `SLAM health: healthy ...`
-- or `SLAM health: degraded ...` if ORB-SLAM3 backend is missing and fallback is active.
+- or `SLAM health: no_data/stale ...` if sidecar is not publishing.
 
 If SLAM never becomes healthy:
 
+- Confirm sidecar is running and bound to `5560/5561`.
 - Verify `front_left` and `front_right` camera keys exist in observations.
 - Confirm camera devices on Pi using `sourccey-camera.mdx`.
 - Reduce workload: keep `--fps=30`, `--slam.target_hz=15`.
 
 ---
 
-## 4) Optional: Run SLAM during rollout/sentry too
+## 5) Optional: Run SLAM during rollout/sentry too
 
-The same client-observation SLAM mode works in rollout:
+The same remote SLAM bridge mode works in rollout:
 
 ```bash
 uv run lerobot-rollout \
@@ -104,9 +101,12 @@ uv run lerobot-rollout \
   --fps=30 \
   --duration=300 \
   --slam.enabled=true \
-  --slam.source_mode=client_observation \
+  --slam.source_mode=remote_endpoint \
+  --slam.input_endpoint=tcp://127.0.0.1:5560 \
+  --slam.remote_endpoint=tcp://127.0.0.1:5561 \
   --slam.stereo_left_key=front_left \
   --slam.stereo_right_key=front_right \
+  --slam.input_jpeg_quality=80 \
   --slam.target_hz=15
 ```
 
@@ -119,10 +119,10 @@ When SLAM is enabled in rollout, these fields are recorded into dataset frames:
 
 ---
 
-## 5) Notes on architecture
+## 6) Notes on architecture
 
-- Current recommended path: **no new host SLAM transport** for teleop/rollout SLAM.
+- Current recommended Windows path: **native sidecar SLAM runtime + remote_endpoint bridge**.
 - Pi host keeps normal observation/action behavior.
-- Client process ingests the same observation stream already used for control and visualization.
-- A remote endpoint mode still exists (`slam.source_mode=remote_endpoint`) if you explicitly want external SLAM service topology.
+- Client process uses the same observation stream already used for control/visualization, then publishes stereo+odom to SLAM sidecar.
+- No SLAM compute is required on the Pi.
 - Core LeRobot teleoperate/strategy files stay mostly untouched; SLAM-specific behavior lives under `lerobot/slam/integrations` and dedicated SLAM entry scripts.

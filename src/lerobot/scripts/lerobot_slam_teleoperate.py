@@ -46,6 +46,7 @@ from lerobot.slam.integrations.rollout import (
     RolloutSlamConfig,
     SlamAwareRobotProxy,
     build_rollout_slam_session,
+    require_rollout_slam_backend,
 )
 from lerobot.teleoperators.keyboard.configuration_keyboard import KeyboardTeleopConfig
 from lerobot.teleoperators import (  # noqa: F401
@@ -165,18 +166,24 @@ class TeleoperateSlamConfig:
     enabled: bool = False
     backend: str = "orbslam3"
     source_mode: str = "client_observation"
+    input_endpoint: str = "tcp://127.0.0.1:5560"
+    remote_endpoint: str = "tcp://127.0.0.1:5561"
     stereo_left_key: str = "front_left"
     stereo_right_key: str = "front_right"
+    input_jpeg_quality: int = 80
     target_hz: float = 15.0
     healthy_timeout_s: float = 0.75
     stale_timeout_s: float = 2.0
     map_save_enabled: bool = False
 
     def __post_init__(self):
-        if self.source_mode not in ("client_observation",):
+        if self.source_mode not in ("client_observation", "remote_endpoint"):
             raise ValueError(
-                f"Unsupported slam.source_mode '{self.source_mode}'. Expected 'client_observation'."
+                f"Unsupported slam.source_mode '{self.source_mode}'. "
+                "Expected one of: client_observation, remote_endpoint."
             )
+        if self.input_jpeg_quality <= 0 or self.input_jpeg_quality > 100:
+            raise ValueError("--slam.input_jpeg_quality must be in [1, 100]")
         if self.target_hz <= 0:
             raise ValueError("--slam.target_hz must be > 0")
         if self.healthy_timeout_s <= 0:
@@ -261,22 +268,43 @@ def teleoperate(cfg: SlamTeleoperateConfig):
             enabled=True,
             backend=cfg.slam.backend,
             source_mode=cfg.slam.source_mode,
+            input_endpoint=cfg.slam.input_endpoint,
+            remote_endpoint=cfg.slam.remote_endpoint,
             stereo_left_key=cfg.slam.stereo_left_key,
             stereo_right_key=cfg.slam.stereo_right_key,
+            input_jpeg_quality=cfg.slam.input_jpeg_quality,
             target_hz=cfg.slam.target_hz,
             healthy_timeout_s=cfg.slam.healthy_timeout_s,
             stale_timeout_s=cfg.slam.stale_timeout_s,
             map_save_enabled=cfg.slam.map_save_enabled,
         )
         slam_session = build_rollout_slam_session(slam_cfg)
+        try:
+            require_rollout_slam_backend(slam_session, cfg.slam.backend)
+        except Exception:
+            slam_session.stop()
+            raise
         robot = SlamAwareRobotProxy(robot, slam_session)
-        logging.info(
-            "Teleop SLAM enabled (backend=%s, stereo=(%s,%s), target_hz=%.1f)",
-            cfg.slam.backend,
-            cfg.slam.stereo_left_key,
-            cfg.slam.stereo_right_key,
-            cfg.slam.target_hz,
-        )
+        if cfg.slam.source_mode == "client_observation":
+            logging.info(
+                "Teleop SLAM enabled (backend=%s, source=%s, stereo=(%s,%s), target_hz=%.1f)",
+                cfg.slam.backend,
+                cfg.slam.source_mode,
+                cfg.slam.stereo_left_key,
+                cfg.slam.stereo_right_key,
+                cfg.slam.target_hz,
+            )
+        else:
+            logging.info(
+                "Teleop SLAM enabled (backend=%s, source=%s, input=%s, output=%s, stereo=(%s,%s), target_hz=%.1f)",
+                cfg.slam.backend,
+                cfg.slam.source_mode,
+                cfg.slam.input_endpoint,
+                cfg.slam.remote_endpoint,
+                cfg.slam.stereo_left_key,
+                cfg.slam.stereo_right_key,
+                cfg.slam.target_hz,
+            )
 
     robot.connect()
     using_rest_fallback = False

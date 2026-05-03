@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+import importlib
 from dataclasses import dataclass
 from time import monotonic_ns
 
@@ -48,19 +49,27 @@ class ORBSLAM3Adapter(SlamAdapter):
         self._theta = 0.0
         self._backend_ready = False
         self._backend_error = "ORB-SLAM3 backend unavailable"
+        self._backend_module: str | None = None
 
     def start(self) -> None:
         """Try to initialize ORB-SLAM3 bindings if present."""
-        try:
-            import orbslam3  # type: ignore # noqa: F401
+        candidates = ("orbslam3", "orbslam3_python", "python_orb_slam3", "pywrapped_orbslam3")
+        last_exc: Exception | None = None
+        for module_name in candidates:
+            try:
+                importlib.import_module(module_name)
+                self._backend_ready = True
+                self._backend_module = module_name
+                self._backend_error = ""
+                logger.info("ORB-SLAM3 backend detected via module '%s'", module_name)
+                return
+            except Exception as exc:
+                last_exc = exc
 
-            self._backend_ready = True
-            self._backend_error = ""
-            logger.info("ORB-SLAM3 backend detected")
-        except Exception as exc:
-            self._backend_ready = False
-            self._backend_error = f"ORB-SLAM3 backend unavailable: {exc}"
-            logger.warning(self._backend_error)
+        self._backend_ready = False
+        self._backend_module = None
+        self._backend_error = f"ORB-SLAM3 backend unavailable: {last_exc}"
+        logger.warning(self._backend_error)
 
     def submit(self, slam_input: SlamInput) -> None:
         """Update SLAM state from new stereo input and base velocity."""
@@ -80,7 +89,7 @@ class ORBSLAM3Adapter(SlamAdapter):
 
         if self._backend_ready:
             status = SlamStatus.HEALTHY
-            detail = "ORB-SLAM3 active"
+            detail = f"ORB-SLAM3 active ({self._backend_module})"
         else:
             status = SlamStatus.DEGRADED
             detail = self._backend_error
@@ -110,4 +119,19 @@ class ORBSLAM3Adapter(SlamAdapter):
     def stop(self) -> None:
         """Release backend resources."""
         self._backend_ready = False
+
+    @property
+    def backend_ready(self) -> bool:
+        """Whether a real ORB-SLAM3 binding was loaded."""
+        return self._backend_ready
+
+    @property
+    def backend_error(self) -> str:
+        """Reason backend loading failed when unavailable."""
+        return self._backend_error
+
+    @property
+    def backend_module(self) -> str | None:
+        """Imported module name used for ORB-SLAM3 bindings."""
+        return self._backend_module
 

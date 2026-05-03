@@ -42,9 +42,11 @@ class RolloutSlamConfig:
     backend: str = "orbslam3"
     mode: str = "live_localization"
     source_mode: str = "client_observation"
+    input_endpoint: str = "tcp://127.0.0.1:5560"
     remote_endpoint: str = "tcp://127.0.0.1:5561"
     stereo_left_key: str = "front_left"
     stereo_right_key: str = "front_right"
+    input_jpeg_quality: int = 80
     target_hz: float = 15.0
     map_save_enabled: bool = False
     healthy_timeout_s: float = 0.75
@@ -60,6 +62,8 @@ class RolloutSlamConfig:
             )
         if self.target_hz <= 0:
             raise ValueError("--slam.target_hz must be > 0")
+        if self.input_jpeg_quality <= 0 or self.input_jpeg_quality > 100:
+            raise ValueError("--slam.input_jpeg_quality must be in [1, 100]")
         if self.healthy_timeout_s <= 0:
             raise ValueError("--slam.healthy_timeout_s must be > 0")
         if self.stale_timeout_s <= 0:
@@ -75,15 +79,19 @@ class RolloutSlamSession:
         self,
         runtime: InProcessSlamRuntime | None = None,
         subscriber: Any | None = None,
+        input_publisher: Any | None = None,
     ) -> None:
         self.runtime = runtime
         self.subscriber = subscriber
+        self.input_publisher = input_publisher
         self._last_status: str | None = None
         self._last_log_ts: float = 0.0
 
     def observe(self, observation: dict[str, Any]) -> None:
         if self.runtime is not None:
             self.runtime.submit_observation(observation)
+        if self.input_publisher is not None:
+            self.input_publisher.publish_observation(observation)
         self._log_health()
 
     def get_latest(self) -> SlamOutput | None:
@@ -96,6 +104,8 @@ class RolloutSlamSession:
     def stop(self) -> None:
         if self.runtime is not None:
             self.runtime.stop()
+        if self.input_publisher is not None:
+            self.input_publisher.stop()
         if self.subscriber is not None:
             self.subscriber.stop()
 
@@ -138,6 +148,23 @@ class RolloutSlamSession:
             "slam.health.status": np.array([status_code], dtype=np.int64),
             "slam.health.latency_ms": np.array([output.health.latency_ms], dtype=np.float32),
         }
+
+
+def require_rollout_slam_backend(session: RolloutSlamSession, backend: str) -> None:
+    """Raise if an in-process SLAM session cannot load its requested backend."""
+    runtime = session.runtime
+    if runtime is None:
+        return
+
+    adapter = runtime.orchestrator.adapter
+    backend_ready = getattr(adapter, "backend_ready", True)
+    if backend_ready:
+        return
+
+    backend_error = getattr(adapter, "backend_error", "SLAM backend unavailable")
+    raise RuntimeError(
+        f"SLAM enabled but backend '{backend}' is unavailable. {backend_error}"
+    )
 
 
 class SlamAwareRobotProxy:
@@ -216,9 +243,24 @@ def build_rollout_slam_session(cfg: RolloutSlamConfig) -> RolloutSlamSession:
 
     if not _zmq_available:
         raise ImportError("SLAM rollout telemetry requires pyzmq. Install with `lerobot[pyzmq-dep]`.")
-    from lerobot.slam.transport import RolloutSlamSubscriber
+    from lerobot.slam.transport import RolloutSlamInputPublisher, RolloutSlamSubscriber
 
-    logger.info("Starting SLAM telemetry subscriber (endpoint=%s)", cfg.remote_endpoint)
+    logger.info(
+        "Starting remote SLAM bridge (input=%s, output=%s, stereo=(%s,%s), jpeg_quality=%d)",
+        cfg.input_endpoint,
+        cfg.remote_endpoint,
+        cfg.stereo_left_key,
+        cfg.stereo_right_key,
+        cfg.input_jpeg_quality,
+    )
+    input_publisher = RolloutSlamInputPublisher(
+        cfg.input_endpoint,
+        stereo_left_key=cfg.stereo_left_key,
+        stereo_right_key=cfg.stereo_right_key,
+        source="rollout_client",
+        jpeg_quality=cfg.input_jpeg_quality,
+    )
+    input_publisher.start()
     subscriber = RolloutSlamSubscriber(cfg.remote_endpoint)
     subscriber.start()
-    return RolloutSlamSession(subscriber=subscriber)
+    return RolloutSlamSession(subscriber=subscriber, input_publisher=input_publisher)
