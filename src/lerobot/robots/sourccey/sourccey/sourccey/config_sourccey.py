@@ -129,6 +129,8 @@ class SourcceyHostConfig:
     port_zmq_text_in: int = 5557  # receive text from client
     port_zmq_text_out: int = 5558  # send text/events to client
     port_zmq_audio: int = 5559  # publish PCM16 audio stream
+    # Dedicated SLAM input stream (host -> remote SLAM service).
+    port_zmq_slam_input: int = 5560
 
     # Duration of the application
     connection_time_s: int = 86400
@@ -138,6 +140,9 @@ class SourcceyHostConfig:
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
+    # SLAM stream controls
+    slam_publish_enabled: bool = False
+    slam_jpeg_quality: int = 80
 
 
 @RobotConfig.register_subclass("sourccey_client")

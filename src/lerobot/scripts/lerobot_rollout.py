@@ -130,6 +130,19 @@ Usage examples
         --dataset.repo_id=user/rollout_sentry_data \\
         --dataset.single_task="patrol" \\
         --resume=true
+
+    # Sentry mode + SLAM telemetry subscription (publish/log only)
+    lerobot-rollout \\
+        --strategy.type=sentry \\
+        --policy.path=user/my_policy \\
+        --robot.type=sourccey_client \\
+        --robot.remote_ip=<robot-host-ip> \\
+        --dataset.repo_id=user/rollout_sentry_data \\
+        --dataset.single_task="patrol" \\
+        --slam.enabled=true \\
+        --slam.source_mode=client_observation \\
+        --slam.stereo_left_key=front_left \\
+        --slam.stereo_right_key=front_right
 """
 
 import logging
@@ -203,6 +216,26 @@ def rollout(cfg: RolloutConfig):
         cfg.fps,
         f"{cfg.duration}s" if cfg.duration > 0 else "infinite",
     )
+    if cfg.slam.enabled:
+        if cfg.slam.source_mode == "client_observation":
+            logger.info(
+                "SLAM enabled (backend=%s, mode=%s, source=%s, stereo=(%s,%s), target_hz=%.1f)",
+                cfg.slam.backend,
+                cfg.slam.mode,
+                cfg.slam.source_mode,
+                cfg.slam.stereo_left_key,
+                cfg.slam.stereo_right_key,
+                cfg.slam.target_hz,
+            )
+        else:
+            logger.info(
+                "SLAM enabled (backend=%s, mode=%s, source=%s, endpoint=%s, target_hz=%.1f)",
+                cfg.slam.backend,
+                cfg.slam.mode,
+                cfg.slam.source_mode,
+                cfg.slam.remote_endpoint,
+                cfg.slam.target_hz,
+            )
 
     try:
         strategy.setup(ctx)

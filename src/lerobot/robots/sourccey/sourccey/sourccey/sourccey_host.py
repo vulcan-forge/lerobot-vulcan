@@ -19,6 +19,8 @@ import time
 
 import zmq
 
+from lerobot.slam.transport import build_slam_input_packet
+
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
 from .sourccey import Sourccey
 
@@ -27,6 +29,7 @@ from ..protobuf.generated import sourccey_pb2
 
 class SourcceyHost:
     def __init__(self, config: SourcceyHostConfig):
+        self.config = config
         self.zmq_context = zmq.Context()
         self.zmq_cmd_socket = self.zmq_context.socket(zmq.PULL)
         self.zmq_cmd_socket.setsockopt(zmq.CONFLATE, 1)
@@ -35,15 +38,60 @@ class SourcceyHost:
         self.zmq_observation_socket = self.zmq_context.socket(zmq.PUSH)
         self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
         self.zmq_observation_socket.bind(f"tcp://*:{config.port_zmq_observations}")
+        self.zmq_slam_socket = None
+        if config.slam_publish_enabled:
+            self.zmq_slam_socket = self.zmq_context.socket(zmq.PUB)
+            self.zmq_slam_socket.bind(f"tcp://*:{config.port_zmq_slam_input}")
+        self._slam_frame_ids = {"front_left": 0, "front_right": 0}
 
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
         self.max_loop_freq_hz = config.max_loop_freq_hz
 
     def disconnect(self):
+        if self.zmq_slam_socket is not None:
+            self.zmq_slam_socket.close()
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
+
+    def publish_slam_input(self, robot: Sourccey, observation: dict) -> None:
+        """Publish dedicated SLAM payload without affecting control/observation streams."""
+        if self.zmq_slam_socket is None:
+            return
+        try:
+            camera_frames = {
+                "front_left": observation.get("front_left"),
+                "front_right": observation.get("front_right"),
+            }
+            if any(frame is None for frame in camera_frames.values()):
+                return
+            for name in self._slam_frame_ids:
+                self._slam_frame_ids[name] += 1
+
+            capture_meta = robot.get_camera_capture_metadata()
+            now_ns = time.monotonic_ns()
+            packet = build_slam_input_packet(
+                source="sourccey_host",
+                host_monotonic_ns=now_ns,
+                base_velocity={
+                    "x.vel": float(observation.get("x.vel", 0.0)),
+                    "y.vel": float(observation.get("y.vel", 0.0)),
+                    "theta.vel": float(observation.get("theta.vel", 0.0)),
+                },
+                frame_ids=self._slam_frame_ids,
+                capture_monotonic_ns={
+                    "front_left": int(capture_meta.get("front_left", now_ns)),
+                    "front_right": int(capture_meta.get("front_right", now_ns)),
+                },
+                camera_frames=camera_frames,
+                jpeg_quality=self.config.slam_jpeg_quality,
+            )
+            self.zmq_slam_socket.send(packet, flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logging.debug("SLAM stream publish skipped: %s", exc)
 
 
 def main():
@@ -129,6 +177,8 @@ def main():
 
                     # Send protobuf message instead of JSON
                     host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
+                    if host.zmq_slam_socket is not None:
+                        host.publish_slam_input(robot, observation)
             except zmq.Again:
                 logging.info("Dropping observation, no client connected")
             except Exception as e:

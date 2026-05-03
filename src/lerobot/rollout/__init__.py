@@ -26,6 +26,7 @@ from .configs import (
     HighlightStrategyConfig,
     RolloutLoggingConfig,
     RolloutConfig,
+    RolloutSlamConfig,
     RolloutStrategyConfig,
     SentryStrategyConfig,
 )
@@ -75,6 +76,7 @@ __all__ = [
     "RTCInferenceEngine",
     "RolloutConfig",
     "RolloutLoggingConfig",
+    "RolloutSlamConfig",
     "RolloutContext",
     "RolloutStrategy",
     "RolloutStrategyConfig",

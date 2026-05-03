@@ -286,6 +286,16 @@ class Sourccey(Robot):
             print(f"Error getting observation: {e}")
             return {}
 
+    def get_camera_capture_metadata(self) -> dict[str, int]:
+        """Best-effort per-camera capture timestamp metadata in monotonic ns."""
+        metadata: dict[str, int] = {}
+        for cam_key, camera in self.cameras.items():
+            ts = getattr(camera, "latest_timestamp", None)
+            if ts is None:
+                continue
+            metadata[cam_key] = int(float(ts) * 1e9)
+        return metadata
+
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         try:
             # Apply per-arm untorque flags automatically

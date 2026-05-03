@@ -322,6 +322,8 @@ lerobot-imgtransform-viz="lerobot.scripts.lerobot_imgtransform_viz:main"
 lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
 lerobot-setup-can="lerobot.scripts.lerobot_setup_can:main"
 lerobot-rollout="lerobot.scripts.lerobot_rollout:main"
+lerobot-slam-service="lerobot.scripts.lerobot_slam_service:main"
+lerobot-slam-teleoperate="lerobot.scripts.lerobot_slam_teleoperate:main"
 
 # ---------------- Custom Commands ----------------
 lerobot-audit-video-decode-errors="lerobot.scripts.sourccey.dataset.audit_video_decode_errors:main"

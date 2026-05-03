@@ -45,6 +45,12 @@ from lerobot.processor import (
 )
 from lerobot.processor.relative_action_processor import RelativeActionsProcessorStep
 from lerobot.robots import make_robot_from_config
+from lerobot.slam.integrations.rollout import (
+    SlamAwareDatasetProxy,
+    SlamAwareRobotProxy,
+    add_rollout_slam_dataset_features,
+    build_rollout_slam_session,
+)
 from lerobot.teleoperators import Teleoperator, make_teleoperator_from_config
 from lerobot.utils.feature_utils import combine_feature_dicts, hw_to_dataset_features
 
@@ -243,7 +249,9 @@ def build_rollout_context(
     initial_position = {k: v for k, v in initial_obs.items() if k.endswith(".pos")}
     logger.info("Captured initial robot position (%d keys)", len(initial_position))
 
-    robot_wrapper = ThreadSafeRobot(robot)
+    slam_session = build_rollout_slam_session(cfg.slam) if cfg.slam.enabled else None
+    robot_for_rollout = SlamAwareRobotProxy(robot, slam_session) if slam_session is not None else robot
+    robot_wrapper = ThreadSafeRobot(robot_for_rollout)
 
     teleop = None
     if cfg.teleop is not None:
@@ -299,6 +307,8 @@ def build_rollout_context(
         use_videos=cfg.dataset.video if cfg.dataset else True,
     )
     dataset_features = combine_feature_dicts(action_dataset_features, observation_dataset_features)
+    if cfg.slam.enabled:
+        add_rollout_slam_dataset_features(dataset_features)
     hw_features = hw_to_dataset_features(observation_features_hw, "observation")
     raw_action_keys = list(action_features_hw.keys())
     policy_action_names = getattr(policy_config, "action_feature_names", None)
@@ -428,6 +438,9 @@ def build_rollout_context(
         compile_warmup_inferences=cfg.compile_warmup_inferences,
         shutdown_event=shutdown_event,
     )
+
+    if dataset is not None and slam_session is not None:
+        dataset = SlamAwareDatasetProxy(dataset, slam_session)
 
     # --- 8. Assemble ---------------------------------------------------
     logger.info("Rollout context assembled successfully")

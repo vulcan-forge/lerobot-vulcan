@@ -1,0 +1,128 @@
+# Sourccey SLAM (Teleoperation First)
+
+This guide shows how to run SLAM with Sourccey starting from **basic teleoperation**.
+
+Important defaults in this repo:
+
+- SLAM is designed to run on the **client/workstation** (not on the Raspberry Pi host).
+- Teleop SLAM now uses **client observation ingest** (no extra host-side SLAM ZMQ required).
+- If ORB-SLAM3 bindings are unavailable, the adapter falls back to degraded odometry-backed output and logs health accordingly.
+
+---
+
+## 1) Start Sourccey host on the Raspberry Pi
+
+```bash
+uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
+```
+
+---
+
+## 2) Run teleoperation with in-process SLAM on your workstation
+
+Use the dedicated SLAM teleoperation entrypoint.
+Recommended command (hybrid: leader arms + keyboard rover base overlay):
+
+Linux/macOS serial example:
+
+```bash
+uv run lerobot-slam-teleoperate \
+  --robot.type=sourccey_client \
+  --robot.id="sourccey" \
+  --robot.remote_ip="192.168.1.212" \
+  --teleop.type=bi_sourccey_leader \
+  --teleop.id="sourccey_leader" \
+  --teleop.left_arm_port="/dev/ttyACM0" \
+  --teleop.right_arm_port="/dev/ttyACM1" \
+  --fps=30 \
+  --display_data=true \
+  --slam.enabled=true \
+  --slam.source_mode=client_observation \
+  --slam.stereo_left_key=front_left \
+  --slam.stereo_right_key=front_right \
+  --slam.target_hz=15
+```
+
+Windows serial example:
+
+```bash
+uv run lerobot-slam-teleoperate \
+  --robot.type=sourccey_client \
+  --robot.id="sourccey" \
+  --robot.remote_ip="192.168.1.212" \
+  --teleop.type=bi_sourccey_leader \
+  --teleop.id="sourccey_leader" \
+  --teleop.left_arm_port="COM3" \
+  --teleop.right_arm_port="COM4" \
+  --fps=30 \
+  --display_data=true \
+  --slam.enabled=true \
+  --slam.source_mode=client_observation \
+  --slam.stereo_left_key=front_left \
+  --slam.stereo_right_key=front_right \
+  --slam.target_hz=15
+```
+
+If leader ports are not connected, this command automatically falls back to a safe resting/hold arm action mode so SLAM can still run.
+When using `--teleop.type=bi_sourccey_leader` (or `sourccey_leader`), Sourccey keyboard overlay is enabled automatically:
+- `W/S`: forward/backward
+- `A/D`: strafe left/right
+- `Z/X`: rotate left/right
+- `Q/E`: z actuator up/down
+- `R/F`: speed up/down
+- `N/M`: toggle left/right arm untorque
+
+---
+
+## 3) What you should see
+
+In client logs (about every 5s), you should see SLAM health lines like:
+
+- `SLAM health: healthy ...`
+- or `SLAM health: degraded ...` if ORB-SLAM3 backend is missing and fallback is active.
+
+If SLAM never becomes healthy:
+
+- Verify `front_left` and `front_right` camera keys exist in observations.
+- Confirm camera devices on Pi using `sourccey-camera.mdx`.
+- Reduce workload: keep `--fps=30`, `--slam.target_hz=15`.
+
+---
+
+## 4) Optional: Run SLAM during rollout/sentry too
+
+The same client-observation SLAM mode works in rollout:
+
+```bash
+uv run lerobot-rollout \
+  --strategy.type=sentry \
+  --policy.path="outputs/train/.../pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --dataset.repo_id="your_user/rollout_sourccey_slam_demo" \
+  --dataset.single_task="teleop_slam_test" \
+  --fps=30 \
+  --duration=300 \
+  --slam.enabled=true \
+  --slam.source_mode=client_observation \
+  --slam.stereo_left_key=front_left \
+  --slam.stereo_right_key=front_right \
+  --slam.target_hz=15
+```
+
+When SLAM is enabled in rollout, these fields are recorded into dataset frames:
+
+- `slam.pose.xyz`
+- `slam.pose.quat`
+- `slam.health.status`
+- `slam.health.latency_ms`
+
+---
+
+## 5) Notes on architecture
+
+- Current recommended path: **no new host SLAM transport** for teleop/rollout SLAM.
+- Pi host keeps normal observation/action behavior.
+- Client process ingests the same observation stream already used for control and visualization.
+- A remote endpoint mode still exists (`slam.source_mode=remote_endpoint`) if you explicitly want external SLAM service topology.
+- Core LeRobot teleoperate/strategy files stay mostly untouched; SLAM-specific behavior lives under `lerobot/slam/integrations` and dedicated SLAM entry scripts.

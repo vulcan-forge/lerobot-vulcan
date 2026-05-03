@@ -25,6 +25,7 @@ import draccus
 from lerobot.configs import PreTrainedConfig, parser
 from lerobot.configs.dataset import DatasetRecordConfig
 from lerobot.robots.config import RobotConfig
+from lerobot.slam.integrations.rollout import RolloutSlamConfig
 from lerobot.teleoperators.config import TeleoperatorConfig
 from lerobot.utils.device_utils import auto_select_torch_device, is_torch_device_available
 
@@ -205,6 +206,7 @@ class RolloutConfig:
 
     # Rollout logging controls
     logging: RolloutLoggingConfig = field(default_factory=RolloutLoggingConfig)
+    slam: RolloutSlamConfig = field(default_factory=RolloutSlamConfig)
 
     # Runtime
     fps: float = 30.0
