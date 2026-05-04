@@ -17,6 +17,7 @@
 from dataclasses import dataclass, field
 
 from lerobot.cameras import CameraConfig
+from lerobot.common.so_arm import SOJointConfig, make_so_follower_joint_configs
 
 from ..config import RobotConfig
 
@@ -40,6 +41,12 @@ class SOFollowerConfig:
 
     # Set to `True` for backward compatibility with previous policies/dataset
     use_degrees: bool = True
+
+    # Reverse the default calibration target positions when using a mirrored embodiment.
+    reverse: bool = False
+
+    # Joint definitions and normalized calibration ranges.
+    motors: dict[str, SOJointConfig] = field(default_factory=make_so_follower_joint_configs)
 
 
 @RobotConfig.register_subclass("so101_follower")

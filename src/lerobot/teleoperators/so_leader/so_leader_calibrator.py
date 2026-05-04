@@ -1,8 +1,7 @@
-import json
 import logging
-from pathlib import Path
 from typing import Any, Dict
 
+from lerobot.motors.feetech.feetech import OperatingMode
 from lerobot.motors.motors_bus import MotorCalibration
 
 
@@ -33,25 +32,59 @@ class SOLeaderCalibrator:
         logger.info(f"Default calibration completed and saved to {self.teleop.calibration_fpath}")
         return self.teleop.calibration
 
-    def _initialize_calibration(self, reverse: bool = False) -> Dict[str, int]:
-        """Initialize the calibration of the teleop."""
+    def manual_calibrate(self) -> Dict[str, MotorCalibration]:
+        """Perform manual calibration with user interaction."""
+        if self.teleop.calibration:
+            user_input = input(
+                f"Press ENTER to use provided calibration file associated with the id {self.teleop.id}, or type 'c' and press ENTER to run calibration: "
+            )
+            if user_input.strip().lower() != "c":
+                logger.info(f"Writing calibration file associated with the id {self.teleop.id} to the motors")
+                self.teleop.bus.write_calibration(self.teleop.calibration)
+                return self.teleop.calibration
 
-        homing_offsets = self.teleop.bus.set_position_homings({
-            "shoulder_pan": 2047 if reverse else 2048,
-            "shoulder_lift": 3325 if reverse else 770,
-            "elbow_flex": 1000 if reverse else 3095,
-            "wrist_flex": 1335 if reverse else 2760,
-            "wrist_roll": 2020 if reverse else 2085,
-            "gripper": 1190 if reverse else 2905
-        })
+        logger.info(f"\nRunning calibration of teleoperator {self.teleop.id}")
+        self.teleop.bus.disable_torque()
+        for motor in self.teleop.bus.motors:
+            self.teleop.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
+
+        input("Move teleoperator to the middle of its range of motion and press ENTER....")
+        homing_offsets = self._initialize_calibration()
+        range_mins, range_maxes = self._record_or_fill_ranges()
+
+        self.teleop.calibration = self._create_calibration_dict(homing_offsets, range_mins, range_maxes)
+        self.teleop.bus.write_calibration(self.teleop.calibration)
+        self._save_calibration()
+        print(f"Calibration saved to {self.teleop.calibration_fpath}")
+        return self.teleop.calibration
+
+    def _initialize_calibration(self, reverse: bool = False) -> Dict[str, int]:
+        """Initialize the calibration of the teleop from configured homing targets."""
+        target_positions = {
+            motor: cfg.homing_position
+            for motor, cfg in self.teleop.config.motors.items()
+            if cfg.homing_position is not None
+        }
+        homing_offsets: Dict[str, int] = {}
+        if target_positions:
+            homing_offsets.update(self.teleop.bus.set_position_homings(target_positions))
+
+        remaining_motors = [motor for motor in self.teleop.bus.motors if motor not in homing_offsets]
+        if remaining_motors:
+            homing_offsets.update(self.teleop.bus.set_half_turn_homings(remaining_motors))
+
         return homing_offsets
 
-    def _create_calibration_dict(self, homing_offsets: Dict[str, int],
-                                range_mins: Dict[str, Any], range_maxes: Dict[str, int] = None) -> Dict[str, MotorCalibration]:
+    def _create_calibration_dict(
+        self,
+        homing_offsets: Dict[str, int],
+        range_mins: Dict[str, Any],
+        range_maxes: Dict[str, int] | None = None,
+    ) -> Dict[str, MotorCalibration]:
 
         calibration = {}
         for motor, m in self.teleop.bus.motors.items():
-            drive_mode = 0
+            drive_mode = self.teleop.config.motors[motor].drive_mode
 
             range_min = range_mins[motor]
             range_max = range_maxes[motor]
@@ -66,73 +99,41 @@ class SOLeaderCalibrator:
         return calibration
 
     def _load_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
-        """Load default calibration from file."""
-        # Get the directory of the current file
-        current_dir = Path(__file__).parent
-        calibration_dir = current_dir.parent / "so100_leader"
-        calibration_file = calibration_dir / "default_calibration.json"
-
-        # Create the calibration directory if it doesn't exist
-        calibration_dir.mkdir(parents=True, exist_ok=True)
-
-        # If the calibration file doesn't exist, create it with default values
-        if not calibration_file.exists():
-            logger.info(f"Calibration file {calibration_file} not found. Creating default calibration...")
-            default_calibration = self._create_default_calibration(reverse)
-            with open(calibration_file, "w") as f:
-                json.dump(default_calibration, f, indent=4)
-            logger.info(f"Created default calibration file: {calibration_file}")
-
-        with open(calibration_file, "r") as f:
-            return json.load(f)
+        """Load default calibration from the current config."""
+        return self._create_default_calibration(reverse)
 
     def _create_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
-        """Create default calibration data for the robot."""
-
+        """Create default calibration data from the configured joint layout."""
         return {
-            "shoulder_pan": {
-                "id": 1,
-                "drive_mode": 0,
+            motor: {
+                "id": cfg.id,
+                "drive_mode": cfg.drive_mode,
                 "homing_offset": 0,
-                "range_min": 1000,
-                "range_max": 3095
-            },
-            "shoulder_lift": {
-                "id": 2,
-                "drive_mode": 1,
-                "homing_offset": 0,
-                "range_min": 800,
-                "range_max": 3295
-            },
-            "elbow_flex": {
-                "id": 3,
-                "drive_mode": 0,
-                "homing_offset": 0,
-                "range_min": 850,
-                "range_max": 3345
-            },
-            "wrist_flex": {
-                "id": 4,
-                "drive_mode": 0,
-                "homing_offset": 0,
-                "range_min": 750,
-                "range_max": 3245
-            },
-            "wrist_roll": {
-                "id": 5,
-                "drive_mode": 0,
-                "homing_offset": 0,
-                "range_min": 0,
-                "range_max": 4095
-            },
-            "gripper": {
-                "id": 6,
-                "drive_mode": 0,
-                "homing_offset": 0,
-                "range_min": 2023,
-                "range_max": 3500
+                "range_min": cfg.range_min,
+                "range_max": cfg.range_max,
             }
+            for motor, cfg in self.teleop.config.motors.items()
         }
+
+    def _record_or_fill_ranges(self) -> tuple[dict[str, int], dict[str, int]]:
+        record_range_motors = [motor for motor, cfg in self.teleop.config.motors.items() if not cfg.fixed_range]
+
+        if record_range_motors:
+            print(
+                "Move the following joints sequentially through their entire ranges of motion.\n"
+                f"Recording positions for: {', '.join(record_range_motors)}.\n"
+                "Press ENTER to stop..."
+            )
+            range_mins, range_maxes = self.teleop.bus.record_ranges_of_motion(record_range_motors)
+        else:
+            range_mins, range_maxes = {}, {}
+
+        for motor, cfg in self.teleop.config.motors.items():
+            if cfg.fixed_range:
+                range_mins[motor] = cfg.range_min
+                range_maxes[motor] = cfg.range_max
+
+        return range_mins, range_maxes
 
     def _save_calibration(self) -> None:
         """Save calibration to file."""

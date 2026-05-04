@@ -14,8 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from lerobot.common.so_arm import SOJointConfig, make_so_leader_joint_configs
 from ..config import TeleoperatorConfig
 
 
@@ -28,6 +29,12 @@ class SOLeaderConfig:
 
     # Whether to use degrees for angles
     use_degrees: bool = True
+
+    # Reverse the default calibration target positions when using a mirrored embodiment.
+    reverse: bool = False
+
+    # Joint definitions and normalized calibration ranges.
+    motors: dict[str, SOJointConfig] = field(default_factory=make_so_leader_joint_configs)
 
 
 @TeleoperatorConfig.register_subclass("so101_leader")

@@ -1,15 +1,15 @@
-import json
+from typing import Any, Dict
+
 import logging
-import time
-from pathlib import Path
-from typing import Any, Dict, Tuple
-from venv import logger
 
 from lerobot.motors.feetech.feetech import OperatingMode
 from lerobot.motors.motors_bus import MotorCalibration
 
+logger = logging.getLogger(__name__)
+
+
 class SOFollowerCalibrator:
-    """Handles calibration operations for Sourccey robots."""
+    """Handles calibration operations for SO follower robots."""
 
     def __init__(self, robot):
         self.robot = robot
@@ -35,7 +35,6 @@ class SOFollowerCalibrator:
     def manual_calibrate(self) -> Dict[str, MotorCalibration]:
         """Perform manual calibration with user interaction."""
         if self.robot.calibration:
-            # Calibration file exists, ask user whether to use it or run new calibration
             user_input = input(
                 f"Press ENTER to use provided calibration file associated with the id {self.robot.id}, or type 'c' and press ENTER to run calibration: "
             )
@@ -50,17 +49,8 @@ class SOFollowerCalibrator:
             self.robot.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
 
         input(f"Move robot to the middle of its range of motion and press ENTER....")
-        homing_offsets = self.robot.bus.set_half_turn_homings()
-
-        full_turn_motor = "wrist_roll"
-        unknown_range_motors = [motor for motor in self.robot.bus.motors if motor != full_turn_motor]
-        print(
-            f"Move all joints except '{full_turn_motor}' sequentially through their "
-            "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
-        )
-        range_mins, range_maxes = self.robot.bus.record_ranges_of_motion(unknown_range_motors)
-        range_mins[full_turn_motor] = 0
-        range_maxes[full_turn_motor] = 4095
+        homing_offsets = self._initialize_calibration()
+        range_mins, range_maxes = self._record_or_fill_ranges()
 
         self.robot.calibration = self._create_calibration_dict(homing_offsets, range_mins, range_maxes)
         self.robot.bus.write_calibration(self.robot.calibration)
@@ -68,11 +58,15 @@ class SOFollowerCalibrator:
         print("Calibration saved to", self.robot.calibration_fpath)
         return self.robot.calibration
 
-    def _create_calibration_dict(self, homing_offsets: Dict[str, int],
-                                range_mins: Dict[str, Any], range_maxes: Dict[str, int] = None) -> Dict[str, MotorCalibration]:
+    def _create_calibration_dict(
+        self,
+        homing_offsets: Dict[str, int],
+        range_mins: Dict[str, Any],
+        range_maxes: Dict[str, int] | None = None,
+    ) -> Dict[str, MotorCalibration]:
         calibration = {}
         for motor, m in self.robot.bus.motors.items():
-            drive_mode = 0
+            drive_mode = self.robot.config.motors[motor].drive_mode
             range_min = range_mins[motor]
             range_max = range_maxes[motor]
             calibration[motor] = MotorCalibration(
@@ -85,86 +79,58 @@ class SOFollowerCalibrator:
         return calibration
 
     def _initialize_calibration(self, reverse: bool = False) -> Dict[str, int]:
-        """Initialize the calibration of the robot."""
-        # Set all motors to half turn homings except shoulder_lift
-        homing_offsets = self.robot.bus.set_position_homings({
-            "shoulder_pan": 2047 if reverse else 2048,
-            "shoulder_lift": 3300 if reverse else 795,
-            "elbow_flex": 1000 if reverse else 3095,
-            "wrist_flex": 1200 if reverse else 2895,
-            "wrist_roll": 1995 if reverse else 2100,
-            "gripper": 1130 if reverse else 2965
-        })
+        """Initialize calibration using configured homing targets."""
+        target_positions = {
+            motor: cfg.homing_position
+            for motor, cfg in self.robot.config.motors.items()
+            if cfg.homing_position is not None
+        }
+        homing_offsets: Dict[str, int] = {}
+        if target_positions:
+            homing_offsets.update(self.robot.bus.set_position_homings(target_positions))
+
+        remaining_motors = [motor for motor in self.robot.bus.motors if motor not in homing_offsets]
+        if remaining_motors:
+            homing_offsets.update(self.robot.bus.set_half_turn_homings(remaining_motors))
+
         return homing_offsets
 
     def _load_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
-        """Load default calibration from file."""
-        # Get the directory of the current file
-        current_dir = Path(__file__).parent
-        calibration_dir = current_dir.parent / "so100_follower"
-        calibration_file = calibration_dir / "default_calibration.json"
-
-        # Create the calibration directory if it doesn't exist
-        calibration_dir.mkdir(parents=True, exist_ok=True)
-
-        # If the calibration file doesn't exist, create it with default values
-        if not calibration_file.exists():
-            logger.info(f"Calibration file {calibration_file} not found. Creating default calibration...")
-            default_calibration = self._create_default_calibration(reverse)
-            with open(calibration_file, "w") as f:
-                json.dump(default_calibration, f, indent=4)
-            logger.info(f"Created default calibration file: {calibration_file}")
-
-        with open(calibration_file, "r") as f:
-            return json.load(f)
+        """Load default calibration from the current config."""
+        return self._create_default_calibration(reverse)
 
     def _create_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
-        """Create default calibration data for the robot."""
-
+        """Create default calibration data from the configured joint layout."""
         return {
-            "shoulder_pan": {
-                "id": 1,
-                "drive_mode": 0,
+            motor: {
+                "id": cfg.id,
+                "drive_mode": cfg.drive_mode,
                 "homing_offset": 0,
-                "range_min": 1000,
-                "range_max": 3095
-            },
-            "shoulder_lift": {
-                "id": 2,
-                "drive_mode": 1,
-                "homing_offset": 0,
-                "range_min": 800,
-                "range_max": 3295
-            },
-            "elbow_flex": {
-                "id": 3,
-                "drive_mode": 0,
-                "homing_offset": 0,
-                "range_min": 850,
-                "range_max": 3345
-            },
-            "wrist_flex": {
-                "id": 4,
-                "drive_mode": 0,
-                "homing_offset": 0,
-                "range_min": 750,
-                "range_max": 3245
-            },
-            "wrist_roll": {
-                "id": 5,
-                "drive_mode": 0,
-                "homing_offset": 0,
-                "range_min": 0,
-                "range_max": 4095
-            },
-            "gripper": {
-                "id": 6,
-                "drive_mode": 0,
-                "homing_offset": 0,
-                "range_min": 2023,
-                "range_max": 3500
+                "range_min": cfg.range_min,
+                "range_max": cfg.range_max,
             }
+            for motor, cfg in self.robot.config.motors.items()
         }
+
+    def _record_or_fill_ranges(self) -> tuple[dict[str, int], dict[str, int]]:
+        record_range_motors = [motor for motor, cfg in self.robot.config.motors.items() if not cfg.fixed_range]
+
+        if record_range_motors:
+            print(
+                "Move the following joints sequentially through their entire ranges of motion.\n"
+                f"Recording positions for: {', '.join(record_range_motors)}.\n"
+                "Press ENTER to stop..."
+            )
+            range_mins, range_maxes = self.robot.bus.record_ranges_of_motion(record_range_motors)
+        else:
+            range_mins, range_maxes = {}, {}
+
+        for motor, cfg in self.robot.config.motors.items():
+            if cfg.fixed_range:
+                range_mins[motor] = cfg.range_min
+                range_maxes[motor] = cfg.range_max
+
+        return range_mins, range_maxes
 
     def _save_calibration(self) -> None:
         """Save calibration to file."""

@@ -21,13 +21,16 @@ from .config_so_leader import (
     SOLeaderTeleopConfig,
 )
 from .so_leader import SO100Leader, SO101Leader, SOLeader
+from lerobot.common.so_arm import SOJointConfig, make_so7_rprprpg_joint_configs
 
 __all__ = [
     "SO100Leader",
     "SO100LeaderConfig",
     "SO101Leader",
     "SO101LeaderConfig",
+    "SOJointConfig",
     "SOLeader",
     "SOLeaderConfig",
     "SOLeaderTeleopConfig",
+    "make_so7_rprprpg_joint_configs",
 ]

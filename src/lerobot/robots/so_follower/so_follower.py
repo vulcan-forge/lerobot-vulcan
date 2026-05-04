@@ -19,7 +19,7 @@ import time
 from functools import cached_property
 
 from lerobot.cameras import make_cameras_from_configs
-from lerobot.motors import Motor, MotorCalibration, MotorNormMode
+from lerobot.common.so_arm import make_motor_bus_motors
 from lerobot.motors.feetech import (
     FeetechMotorsBus,
     OperatingMode,
@@ -30,6 +30,7 @@ from lerobot.utils.decorators import check_if_already_connected, check_if_not_co
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
 from .config_so_follower import SOFollowerRobotConfig
+from .so_follower_calibrator import SOFollowerCalibrator
 
 logger = logging.getLogger(__name__)
 
@@ -46,21 +47,13 @@ class SOFollower(Robot):
     def __init__(self, config: SOFollowerRobotConfig):
         super().__init__(config)
         self.config = config
-        # choose normalization mode depending on config if available
-        norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
         self.bus = FeetechMotorsBus(
             port=self.config.port,
-            motors={
-                "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
-                "shoulder_lift": Motor(2, "sts3215", norm_mode_body),
-                "elbow_flex": Motor(3, "sts3215", norm_mode_body),
-                "wrist_flex": Motor(4, "sts3215", norm_mode_body),
-                "wrist_roll": Motor(5, "sts3215", norm_mode_body),
-                "gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
-            },
+            motors=make_motor_bus_motors(config.motors, use_degrees=config.use_degrees),
             calibration=self.calibration,
         )
         self.cameras = make_cameras_from_configs(config.cameras)
+        self.calibrator = SOFollowerCalibrator(self)
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -109,51 +102,10 @@ class SOFollower(Robot):
         return self.bus.is_calibrated
 
     def calibrate(self) -> None:
-        if self.calibration:
-            # Calibration file exists, ask user whether to use it or run new calibration
-            user_input = input(
-                f"Press ENTER to use provided calibration file associated with the id {self.id}, or type 'c' and press ENTER to run calibration: "
-            )
-            if user_input.strip().lower() != "c":
-                logger.info(f"Writing calibration file associated with the id {self.id} to the motors")
-                self.bus.write_calibration(self.calibration)
-                return
-
-        logger.info(f"\nRunning calibration of {self}")
-        self.bus.disable_torque()
-        for motor in self.bus.motors:
-            self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
-
-        input(f"Move {self} to the middle of its range of motion and press ENTER....")
-        homing_offsets = self.bus.set_half_turn_homings()
-
-        # Attempt to call record_ranges_of_motion with a reduced motor set when appropriate.
-        full_turn_motor = "wrist_roll"
-        unknown_range_motors = [motor for motor in self.bus.motors if motor != full_turn_motor]
-        print(
-            f"Move all joints except '{full_turn_motor}' sequentially through their "
-            "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
-        )
-        range_mins, range_maxes = self.bus.record_ranges_of_motion(unknown_range_motors)
-        range_mins[full_turn_motor] = 0
-        range_maxes[full_turn_motor] = 4095
-
-        self.calibration = {}
-        for motor, m in self.bus.motors.items():
-            self.calibration[motor] = MotorCalibration(
-                id=m.id,
-                drive_mode=0,
-                homing_offset=homing_offsets[motor],
-                range_min=range_mins[motor],
-                range_max=range_maxes[motor],
-            )
-
-        self.bus.write_calibration(self.calibration)
-        self._save_calibration()
-        print("Calibration saved to", self.calibration_fpath)
+        self.calibration = self.calibrator.manual_calibrate()
 
     def auto_calibrate(self, full_reset: bool = False) -> None:
-        self.calibration = self.calibrator.default_calibrate(reverse=self.config.reverse)
+        self.calibration = self.calibrator.default_calibrate(reverse=getattr(self.config, "reverse", False))
 
     def configure(self) -> None:
         with self.bus.torque_disabled():
@@ -166,7 +118,7 @@ class SOFollower(Robot):
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 32)
 
-                if motor == "gripper":
+                if self.config.motors[motor].is_gripper:
                     self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
                     self.bus.write("Protection_Current", motor, 250)  # 50% of max current to avoid burnout
                     self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded

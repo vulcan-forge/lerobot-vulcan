@@ -22,6 +22,7 @@ import pytest
 from lerobot.robots.so_follower import (
     SO100Follower,
     SO100FollowerConfig,
+    make_so7_rprprpg_joint_configs,
 )
 
 
@@ -109,3 +110,49 @@ def test_send_action(follower):
 
     goal_pos = {m: (i + 1) * 10 for i, m in enumerate(follower.bus.motors)}
     follower.bus.sync_write.assert_called_once_with("Goal_Position", goal_pos)
+
+
+def test_custom_7dof_motor_layout():
+    bus_mock = _make_bus_mock()
+
+    def _bus_side_effect(*_args, **kwargs):
+        bus_mock.motors = kwargs["motors"]
+        bus_mock.sync_read.return_value = {motor: idx for idx, motor in enumerate(bus_mock.motors, 1)}
+        bus_mock.sync_write.return_value = None
+        bus_mock.write.return_value = None
+        bus_mock.disable_torque.return_value = None
+        bus_mock.enable_torque.return_value = None
+        bus_mock.is_calibrated = True
+        return bus_mock
+
+    custom_motors = make_so7_rprprpg_joint_configs(
+        homing_positions={
+            "roll_1": 2048,
+            "pitch_1": 1024,
+            "roll_2": 2048,
+            "pitch_2": 1024,
+            "roll_3": 2048,
+            "pitch_3": 1024,
+            "gripper": 3000,
+        },
+        range_mins={"gripper": 1800},
+        range_maxes={"gripper": 3300},
+    )
+
+    with (
+        patch(
+            "lerobot.robots.so_follower.so_follower.FeetechMotorsBus",
+            side_effect=_bus_side_effect,
+        ),
+        patch.object(SO100Follower, "configure", lambda self: None),
+    ):
+        robot = SO100Follower(SO100FollowerConfig(port="/dev/null", motors=custom_motors))
+        assert list(robot.bus.motors) == [
+            "roll_1",
+            "pitch_1",
+            "roll_2",
+            "pitch_2",
+            "roll_3",
+            "pitch_3",
+            "gripper",
+        ]
