@@ -40,6 +40,7 @@ CTRL_FW_VERSION = 0x0002
 CTRL_CHEM_ID = 0x0008
 CTRL_SEAL = 0x0020
 CTRL_IT_ENABLE = 0x0021
+DEFAULT_TARGET_CHEM_ID = 4203
 
 # TRM default unseal key bytes shown as 0x36720414 (two 16-bit writes)
 DEFAULT_UNSEAL_KEY1 = 0x0414
@@ -420,6 +421,17 @@ def wait_for_update_status(
 def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
     maybe_unseal(gauge, args, writing=True)
 
+    observed_chem_id = gauge.read_control_subcmd(CTRL_CHEM_ID)
+    if args.require_chem_id and observed_chem_id != args.chem_id:
+        raise RuntimeError(
+            "CHEM_ID mismatch: "
+            f"observed=0x{observed_chem_id:04X} ({observed_chem_id}), "
+            f"expected=0x{args.chem_id:04X} ({args.chem_id}). "
+            "On bq34z100-R2, Control() subcommand CHEM_ID (0x0008) is a read/report command; "
+            "program the desired chemistry profile (golden image) with TI tooling, then rerun setup."
+        )
+    print(f"CHEM_ID check: 0x{observed_chem_id:04X} ({observed_chem_id})")
+
     writes: list[PendingWrite] = []
 
     # Series cells
@@ -564,6 +576,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_div_mode.add_argument("--disable-voltsel", action="store_true", help="Set PackConfig[VOLTSEL]=0")
 
     p_setup = sub.add_parser("setup-4s-lifepo4", help="Apply a practical 4S LiFePO4 starter configuration")
+    p_setup.add_argument(
+        "--chem-id",
+        type=lambda x: int(x, 0),
+        default=DEFAULT_TARGET_CHEM_ID,
+        help="Expected CHEM_ID before applying setup (default: 4203)",
+    )
+    p_setup.add_argument(
+        "--require-chem-id",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Require CHEM_ID to match --chem-id before setup writes (default: enabled)",
+    )
     p_setup.add_argument(
         "--design-capacity-mah",
         type=int,

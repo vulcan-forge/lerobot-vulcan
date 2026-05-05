@@ -8,6 +8,7 @@ Outputs only frontend-facing fields:
 - max_capacity_ah
 - state_of_charge
 - max_error
+- chem_id
 - error
 """
 
@@ -28,6 +29,8 @@ REG_REMAINING_CAPACITY = 0x04  # 2 bytes (mAh)
 REG_FULL_CHARGE_CAPACITY = 0x06  # 2 bytes (mAh)
 REG_VOLTAGE = 0x08  # 2 bytes (mV)
 REG_AVERAGE_CURRENT = 0x0A  # 2 bytes (mA, signed)
+REG_CONTROL = 0x00  # 2 bytes
+CTRL_CHEM_ID = 0x0008
 
 
 @dataclass
@@ -38,6 +41,7 @@ class BatteryData:
     max_capacity_ah: float
     state_of_charge: int
     max_error: int
+    chem_id: int
     error: str | None
 
 
@@ -69,6 +73,12 @@ class BQ34Z100:
         raw = bus.read_word_data(self._addr, reg)
         return self._swap_u16(raw) if swap_word_bytes else raw
 
+    def _read_control_subcmd(self, bus: Any, subcmd: int, swap_word_bytes: bool) -> int:
+        # Control() returns data at 0x00/0x01 after writing a 2-byte subcommand.
+        bus.write_word_data(self._addr, REG_CONTROL, subcmd & 0xFFFF)
+        raw = bus.read_word_data(self._addr, REG_CONTROL)
+        return self._swap_u16(raw) if swap_word_bytes else raw
+
     def read(
         self,
         configured_rsense_mohm: float,
@@ -86,6 +96,7 @@ class BQ34Z100:
             full_charge_mah = self._read_u16(bus, REG_FULL_CHARGE_CAPACITY, swap_word_bytes)
             voltage_mv = self._read_u16(bus, REG_VOLTAGE, swap_word_bytes)
             current_raw = self._read_u16(bus, REG_AVERAGE_CURRENT, swap_word_bytes)
+            chem_id = self._read_control_subcmd(bus, CTRL_CHEM_ID, swap_word_bytes)
 
         current_ma = self._to_s16(current_raw)
 
@@ -96,6 +107,7 @@ class BQ34Z100:
             max_capacity_ah=(full_charge_mah * correction) / 1000.0,
             state_of_charge=max(0, min(100, int(soc_pct))),
             max_error=max(0, min(100, int(max_error_pct))),
+            chem_id=int(chem_id) & 0xFFFF,
             error=None,
         )
 
@@ -158,6 +170,7 @@ def main() -> int:
             max_capacity_ah=-1.0,
             state_of_charge=-1,
             max_error=-1,
+            chem_id=-1,
             error=str(exc),
         )
 
@@ -167,6 +180,9 @@ def main() -> int:
         payload["current_a"] = round(float(payload["current_a"]), 3)
         payload["remaining_capacity_ah"] = round(float(payload["remaining_capacity_ah"]), 3)
         payload["max_capacity_ah"] = round(float(payload["max_capacity_ah"]), 3)
+        payload["chem_id_hex"] = f"0x{int(payload['chem_id']) & 0xFFFF:04X}"
+    else:
+        payload["chem_id_hex"] = None
 
     print(json.dumps(payload, separators=(",", ":")))
     return 0
