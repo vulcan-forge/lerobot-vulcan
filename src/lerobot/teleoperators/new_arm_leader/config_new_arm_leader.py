@@ -14,21 +14,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from lerobot.common.so_arm import SOJointConfig, make_new_bot_leader_joint_configs
 from ..config import TeleoperatorConfig
 
 
+@dataclass
+class NewBotLeaderConfig:
+    """Base configuration for the 7-DoF NewBot leader."""
+
+    port: str
+    use_degrees: bool = True
+    motors: dict[str, SOJointConfig] = field(default_factory=make_new_bot_leader_joint_configs)
+
+
+@TeleoperatorConfig.register_subclass("newbot_leader")
+@TeleoperatorConfig.register_subclass("new_bot_leader")
 @TeleoperatorConfig.register_subclass("new_arm_leader")
 @dataclass
-class NewArmLeaderConfig(TeleoperatorConfig):
-    """Configuration for the seven degree-of-freedom New Arm leader."""
+class NewBotLeaderTeleopConfig(TeleoperatorConfig, NewBotLeaderConfig):
+    pass
 
-    # Port to connect to the arm.
-    port: str
 
-    # Whether to use degrees for angles.
-    use_degrees: bool = True
-
-    # Joints that can make a full motor turn during calibration.
-    full_turn_motors: tuple[str, ...] = ("wrist_twist",)
+NewBotLeaderConfig = NewBotLeaderTeleopConfig
+NewArmLeaderConfig = NewBotLeaderTeleopConfig

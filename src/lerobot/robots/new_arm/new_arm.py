@@ -19,46 +19,85 @@ import time
 from functools import cached_property
 
 from lerobot.cameras import make_cameras_from_configs
-from lerobot.motors import Motor, MotorCalibration, MotorNormMode
+from lerobot.common.so_arm import make_motor_bus_motors
+from lerobot.motors import MotorCalibration
 from lerobot.motors.feetech import FeetechMotorsBus, OperatingMode
 from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
-from .config_new_arm import NewArmConfig
+from .config_new_arm import NewBotRobotConfig
 
 logger = logging.getLogger(__name__)
 
 
-def make_new_arm_motors(use_degrees: bool) -> dict[str, Motor]:
-    norm_mode_body = MotorNormMode.DEGREES if use_degrees else MotorNormMode.RANGE_M100_100
-    return {
-        "shoulder_twist": Motor(1, "sts3215", norm_mode_body),
-        "shoulder_lift": Motor(2, "sts3215", norm_mode_body),
-        "elbow_twist": Motor(3, "sts3215", norm_mode_body),
-        "elbow_lift": Motor(4, "sts3215", norm_mode_body),
-        "wrist_twist": Motor(5, "sts3215", norm_mode_body),
-        "wrist_lift": Motor(6, "sts3215", norm_mode_body),
-        "gripper": Motor(7, "sts3215", MotorNormMode.RANGE_0_100),
-    }
+class NewBot(Robot):
+    """Seven-DOF Feetech robot using the NewBot joint layout."""
 
+    config_class = NewBotRobotConfig
+    name = "new_bot"
 
-class NewArm(Robot):
-    """Seven-DOF Feetech arm following the SO-100/SO-101 calibration and teleoperation flow."""
-
-    config_class = NewArmConfig
-    name = "new_arm"
-
-    def __init__(self, config: NewArmConfig):
+    def __init__(self, config: NewBotRobotConfig):
         super().__init__(config)
         self.config = config
         self.bus = FeetechMotorsBus(
             port=self.config.port,
-            motors=make_new_arm_motors(config.use_degrees),
+            motors=make_motor_bus_motors(config.motors, use_degrees=config.use_degrees),
             calibration=self.calibration,
         )
         self.cameras = make_cameras_from_configs(config.cameras)
+        self._wrap_guard_motors = tuple(self.bus.motors)
+        self._wrap_guard_state: dict[str, str | None] = {motor: None for motor in self._wrap_guard_motors}
+        self._last_effective_raw: dict[str, int] = {}
+
+    def _apply_wrap_guards(self, raw_positions: dict[str, int]) -> dict[str, int]:
+        if not self.calibration:
+            return raw_positions
+
+        guarded_positions: dict[str, int] = {}
+        for motor, value in raw_positions.items():
+            calibration = self.calibration.get(motor)
+            if calibration is None:
+                guarded_positions[motor] = value
+                continue
+
+            min_ = calibration.range_min
+            max_ = calibration.range_max
+            bounded_value = min(max_, max(min_, value))
+
+            state = self._wrap_guard_state.get(motor)
+            last_value = self._last_effective_raw.get(motor)
+            band = max(32, int((max_ - min_) * 0.08))
+            high_band = max_ - band
+            low_band = min_ + band
+
+            if state == "high":
+                if high_band <= value <= max_:
+                    state = None
+                    effective_value = value
+                else:
+                    effective_value = max_
+            elif state == "low":
+                if min_ <= value <= low_band:
+                    state = None
+                    effective_value = value
+                else:
+                    effective_value = min_
+            elif last_value is not None and last_value >= high_band and value <= low_band:
+                state = "high"
+                effective_value = max_
+            elif last_value is not None and last_value <= low_band and value >= high_band:
+                state = "low"
+                effective_value = min_
+            else:
+                effective_value = bounded_value
+
+            self._wrap_guard_state[motor] = state
+            guarded_positions[motor] = effective_value
+            self._last_effective_raw[motor] = effective_value
+
+        return guarded_positions
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -119,23 +158,27 @@ class NewArm(Robot):
         input(f"Move {self} to the middle of its range of motion and press ENTER....")
         homing_offsets = self.bus.set_half_turn_homings()
 
-        full_turn_motors = set(self.config.full_turn_motors)
-        unknown_range_motors = [motor for motor in self.bus.motors if motor not in full_turn_motors]
-        full_turn_text = "', '".join(self.config.full_turn_motors)
-        print(
-            f"Move all joints except '{full_turn_text}' sequentially through their "
-            "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
-        )
+        fixed_range_motors = {name for name, cfg in self.config.motors.items() if cfg.fixed_range}
+        unknown_range_motors = [motor for motor in self.bus.motors if motor not in fixed_range_motors]
+        if fixed_range_motors:
+            fixed_range_text = "', '".join(sorted(fixed_range_motors))
+            print(
+                f"Move all joints except '{fixed_range_text}' sequentially through their "
+                "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
+            )
+        else:
+            print("Move all joints sequentially through their entire ranges of motion.\nRecording positions. Press ENTER to stop...")
+
         range_mins, range_maxes = self.bus.record_ranges_of_motion(unknown_range_motors)
-        for motor in full_turn_motors:
-            range_mins[motor] = 0
-            range_maxes[motor] = 4095
+        for motor in fixed_range_motors:
+            range_mins[motor] = self.config.motors[motor].range_min
+            range_maxes[motor] = self.config.motors[motor].range_max
 
         self.calibration = {}
         for motor, m in self.bus.motors.items():
             self.calibration[motor] = MotorCalibration(
                 id=m.id,
-                drive_mode=0,
+                drive_mode=self.config.motors[motor].drive_mode,
                 homing_offset=homing_offsets[motor],
                 range_min=range_mins[motor],
                 range_max=range_maxes[motor],
@@ -154,7 +197,7 @@ class NewArm(Robot):
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 32)
 
-                if motor == "gripper":
+                if self.config.motors[motor].is_gripper:
                     self.bus.write("Max_Torque_Limit", motor, 500)
                     self.bus.write("Protection_Current", motor, 250)
                     self.bus.write("Overload_Torque", motor, 25)
@@ -168,8 +211,11 @@ class NewArm(Robot):
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:
         start = time.perf_counter()
-        obs_dict = self.bus.sync_read("Present_Position")
-        obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
+        raw_positions = self.bus.sync_read("Present_Position", normalize=False)
+        guarded_positions = self._apply_wrap_guards(raw_positions)
+        ids_values = {self.bus.motors[motor].id: int(value) for motor, value in guarded_positions.items()}
+        normalized_positions = self.bus._normalize(ids_values)
+        obs_dict = {f"{motor}.pos": normalized_positions[self.bus.motors[motor].id] for motor in guarded_positions}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 
@@ -200,3 +246,6 @@ class NewArm(Robot):
             cam.disconnect()
 
         logger.info(f"{self} disconnected.")
+
+
+NewArm = NewBot

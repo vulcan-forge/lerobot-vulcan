@@ -14,7 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .config_new_arm_leader import NewArmLeaderConfig
-from .new_arm_leader import NewArmLeader
+from .config_new_arm_leader import NewArmLeaderConfig, NewBotLeaderConfig, NewBotLeaderTeleopConfig
+from .new_arm_leader import NewArmLeader, NewBotLeader
 
-__all__ = ["NewArmLeader", "NewArmLeaderConfig"]
+__all__ = [
+    "NewArmLeader",
+    "NewArmLeaderConfig",
+    "NewBotLeader",
+    "NewBotLeaderConfig",
+    "NewBotLeaderTeleopConfig",
+]

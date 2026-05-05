@@ -17,30 +17,30 @@
 from dataclasses import dataclass, field
 
 from lerobot.cameras import CameraConfig
+from lerobot.common.so_arm import SOJointConfig, make_new_bot_follower_joint_configs
 
 from ..config import RobotConfig
 
 
+@dataclass
+class NewBotConfig:
+    """Base configuration for the 7-DoF NewBot follower."""
+
+    port: str
+    disable_torque_on_disconnect: bool = True
+    max_relative_target: float | dict[str, float] | None = None
+    cameras: dict[str, CameraConfig] = field(default_factory=dict)
+    use_degrees: bool = True
+    motors: dict[str, SOJointConfig] = field(default_factory=make_new_bot_follower_joint_configs)
+
+
+@RobotConfig.register_subclass("newbot")
+@RobotConfig.register_subclass("new_bot")
 @RobotConfig.register_subclass("new_arm")
 @dataclass
-class NewArmConfig(RobotConfig):
-    """Configuration for the seven degree-of-freedom New Arm follower."""
+class NewBotRobotConfig(RobotConfig, NewBotConfig):
+    pass
 
-    # Port to connect to the arm.
-    port: str
 
-    disable_torque_on_disconnect: bool = True
-
-    # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
-    # Set this to a positive scalar to have the same value for all motors, or a dictionary that maps motor
-    # names to the max_relative_target value for that motor.
-    max_relative_target: float | dict[str, float] | None = None
-
-    # Cameras attached to the robot.
-    cameras: dict[str, CameraConfig] = field(default_factory=dict)
-
-    # Set to `True` for backward compatibility with SO-100/SO-101 policies/datasets.
-    use_degrees: bool = True
-
-    # Joints that can make a full motor turn during calibration.
-    full_turn_motors: tuple[str, ...] = ("wrist_twist",)
+NewBotConfig = NewBotRobotConfig
+NewArmConfig = NewBotRobotConfig

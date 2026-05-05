@@ -941,7 +941,7 @@ class SerialMotorsBus(MotorsBusBase):
             elif self.motors[motor].norm_mode is MotorNormMode.DEGREES:
                 mid = (min_ + max_) / 2
                 max_res = self.model_resolution_table[self._id_to_model(id_)] - 1
-                normalized_values[id_] = (val - mid) * 360 / max_res
+                normalized_values[id_] = (bounded_val - mid) * 360 / max_res
             else:
                 raise NotImplementedError
 
@@ -972,7 +972,8 @@ class SerialMotorsBus(MotorsBusBase):
             elif self.motors[motor].norm_mode is MotorNormMode.DEGREES:
                 mid = (min_ + max_) / 2
                 max_res = self.model_resolution_table[self._id_to_model(id_)] - 1
-                unnormalized_values[id_] = int((val * max_res / 360) + mid)
+                raw_val = int((val * max_res / 360) + mid)
+                unnormalized_values[id_] = min(max_, max(min_, raw_val))
             else:
                 raise NotImplementedError
 

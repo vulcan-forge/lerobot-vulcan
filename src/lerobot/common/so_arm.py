@@ -112,3 +112,149 @@ def make_so7_rprprpg_joint_configs(
         )
 
     return motors
+
+
+def make_new_bot_leader_joint_configs(
+    *,
+    start_id: int = 1,
+    homing_positions: dict[str, int | None] | None = None,
+    range_mins: dict[str, int] | None = None,
+    range_maxes: dict[str, int] | None = None,
+    models: dict[str, str] | None = None,
+    drive_modes: dict[str, int] | None = None,
+    fixed_range_motors: set[str] | None = None,
+) -> dict[str, SOJointConfig]:
+    joint_names = (
+        "shoulder_roll",
+        "shoulder_pitch",
+        "elbow_roll",
+        "elbow_pitch",
+        "wrist_pitch",
+        "wrist_roll",
+        "gripper",
+    )
+    homing_positions = homing_positions or {}
+    range_mins = range_mins or {}
+    range_maxes = range_maxes or {}
+    models = models or {}
+    drive_modes = drive_modes or {}
+    fixed_range_motors = fixed_range_motors or set()
+
+    default_models = {
+        "shoulder_roll": "sts3215",
+        "shoulder_pitch": "sts3215",
+        "elbow_pitch": "sts3215",
+        "elbow_roll": "sts3215",
+        "wrist_pitch": "sts3215",
+        "wrist_roll": "sts3215",
+        "gripper": "sts3215",
+    }
+    default_homing_positions = {
+        "shoulder_roll": 2048,
+        "shoulder_pitch": 1024,
+        "elbow_roll": 2048,
+        "elbow_pitch": 1024,
+        "wrist_pitch": 1024,
+        "wrist_roll": 2048,
+        "gripper": 3000,
+    }
+    default_range_mins = {
+        "elbow_roll": 700,
+        "elbow_pitch": 800,
+        "wrist_roll": 0,
+        "gripper": 1800,
+    }
+    default_range_maxes = {
+        "elbow_roll": 3200,
+        "elbow_pitch": 3200,
+        "wrist_roll": 4095,
+        "gripper": 3300,
+    }
+
+    motors: dict[str, SOJointConfig] = {}
+    for index, joint_name in enumerate(joint_names):
+        motors[joint_name] = SOJointConfig(
+            id=start_id + index,
+            model=models.get(joint_name, default_models[joint_name]),
+            drive_mode=drive_modes.get(joint_name, 0),
+            homing_position=homing_positions.get(joint_name, default_homing_positions[joint_name]),
+            range_min=range_mins.get(joint_name, default_range_mins.get(joint_name, 0)),
+            range_max=range_maxes.get(joint_name, default_range_maxes.get(joint_name, 4095)),
+            fixed_range=joint_name in fixed_range_motors,
+            is_gripper=joint_name == "gripper",
+        )
+
+    return motors
+
+
+def make_new_bot_follower_joint_configs(
+    *,
+    start_id: int = 1,
+    homing_positions: dict[str, int | None] | None = None,
+    range_mins: dict[str, int] | None = None,
+    range_maxes: dict[str, int] | None = None,
+    models: dict[str, str] | None = None,
+    drive_modes: dict[str, int] | None = None,
+    fixed_range_motors: set[str] | None = None,
+) -> dict[str, SOJointConfig]:
+    joint_names = (
+        "shoulder_roll",
+        "shoulder_pitch",
+        "elbow_roll",
+        "elbow_pitch",
+        "wrist_pitch",
+        "wrist_roll",
+        "gripper",
+    )
+    homing_positions = homing_positions or {}
+    range_mins = range_mins or {}
+    range_maxes = range_maxes or {}
+    models = models or {}
+    drive_modes = drive_modes or {}
+    fixed_range_motors = fixed_range_motors or set()
+
+    default_models = {
+        "shoulder_roll": "sts3032",
+        "shoulder_pitch": "sts3032",
+        "elbow_pitch": "sts3250",
+        "elbow_roll": "sts3250",
+        "wrist_pitch": "sts3215",
+        "wrist_roll": "sts3215",
+        "gripper": "sts3215",
+    }
+    default_homing_positions = {
+        "shoulder_roll": 2048,
+        "shoulder_pitch": 1024,
+        "elbow_roll": 2048,
+        "elbow_pitch": 1024,
+        "wrist_pitch": 1024,
+        "wrist_roll": 2048,
+        "gripper": 3000,
+    }
+    default_range_mins = {
+        "elbow_roll": 700,
+        "elbow_pitch": 800,
+        "wrist_roll": 0,
+        "gripper": 1800,
+    }
+    default_range_maxes = {
+        "elbow_roll": 3200,
+        "elbow_pitch": 3200,
+        "wrist_roll": 4095,
+        "gripper": 3300,
+    }
+
+    motors: dict[str, SOJointConfig] = {}
+    for index, joint_name in enumerate(joint_names):
+        motors[joint_name] = SOJointConfig(
+            id=start_id + index,
+            model=models.get(joint_name, default_models[joint_name]),
+            drive_mode=drive_modes.get(joint_name, 0),
+            homing_position=homing_positions.get(joint_name, default_homing_positions[joint_name]),
+            range_min=range_mins.get(joint_name, default_range_mins.get(joint_name, 0)),
+            range_max=range_maxes.get(joint_name, default_range_maxes.get(joint_name, 4095)),
+            fixed_range=joint_name in fixed_range_motors,
+            is_gripper=joint_name == "gripper",
+        )
+
+    return motors

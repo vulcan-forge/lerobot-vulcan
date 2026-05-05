@@ -14,7 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .config_new_arm import NewArmConfig, NewBotConfig, NewBotRobotConfig
-from .new_arm import NewArm, NewBot
+from lerobot.scripts.lerobot_calibrate_new_arm_leader import make_new_arm_leader_joint_configs
 
-__all__ = ["NewArm", "NewArmConfig", "NewBot", "NewBotConfig", "NewBotRobotConfig"]
+
+def test_new_arm_leader_calibration_motor_models():
+    motors = make_new_arm_leader_joint_configs()
+
+    assert {name: cfg.model for name, cfg in motors.items()} == {
+        "roll_1": "sts3032",
+        "pitch_1": "sts3032",
+        "roll_2": "sts3250",
+        "pitch_2": "sts3250",
+        "roll_3": "sts3215",
+        "pitch_3": "sts3215",
+        "gripper": "sts3215",
+    }
+    assert motors["gripper"].id == 7
+    assert motors["gripper"].is_gripper
