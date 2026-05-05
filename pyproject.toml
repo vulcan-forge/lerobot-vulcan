@@ -304,6 +304,7 @@ all = [
 
 [project.scripts]
 lerobot-calibrate="lerobot.scripts.lerobot_calibrate:main"
+lerobot-calibrate-new-arm-follower="lerobot.scripts.lerobot_calibrate_new_arm_follower:main"
 lerobot-find-cameras="lerobot.scripts.lerobot_find_cameras:main"
 lerobot-find-port="lerobot.scripts.lerobot_find_port:main"
 lerobot-record="lerobot.scripts.lerobot_record:main"

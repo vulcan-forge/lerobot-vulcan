@@ -112,6 +112,10 @@ def test_abc_implementation(dummy_motors):
     FeetechMotorsBus(port="/dev/dummy-port", motors=dummy_motors)
 
 
+def test_sts3032_model_number_is_supported():
+    assert MODEL_NUMBER_TABLE["sts3032"] == 2569
+
+
 @pytest.mark.parametrize("id_", [1, 2, 3])
 def test_ping(id_, mock_motors, dummy_motors):
     expected_model_nb = MODEL_NUMBER_TABLE[dummy_motors[f"dummy_{id_}"].model]
