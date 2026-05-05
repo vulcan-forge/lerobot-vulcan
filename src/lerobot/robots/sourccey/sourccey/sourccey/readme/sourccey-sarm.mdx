@@ -9,23 +9,23 @@ This is an MD file for implement the stage aware reward model for datasets
 Training the model
 
 ```
-CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
- --dataset.repo_id="Combination/sourccey-shirt-aggregate-2" \
- --policy.type=sarm \
- --policy.annotation_mode=single_stage \
- --policy.image_keys='["observation.images.front_right","observation.images.front_left"]' \
- --output_dir=outputs/train/sarm_2cam_sourccey-shirt-aggregate-2 \
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-train \
+ --dataset.repo_id="Combination/sourccey-shirt-fold-c-004" \
+ --reward_model.type=sarm \
+ --reward_model.annotation_mode=single_stage \
+ --reward_model.image_keys='["observation.images.front_right","observation.images.front_left"]' \
+ --output_dir=outputs/train/sarm_sourccey-shirt-fold-c-004 \
  --batch_size=8 \
  --steps=100000 \
- --save_freq=10000 \
+ --save_freq=20000 \
  --wandb.enable=false \
- --policy.push_to_hub=false
+ --reward_model.push_to_hub=false
 ```
 
 ### Resume Training
 
 ```
-CUDA_VISIBLE_DEVICES=1 uv run python src/lerobot/scripts/lerobot_train.py \
+CUDA_VISIBLE_DEVICES=1 uv run lerobot-train \
   --resume=true \
   --config_path=outputs/train/sarm_2cam_sourccey-shirt-aggregate-2/checkpoints/last/pretrained_model/train_config.json
 
@@ -34,11 +34,11 @@ CUDA_VISIBLE_DEVICES=1 uv run python src/lerobot/scripts/lerobot_train.py \
 
 ### Debug
 
-CUDA_VISIBLE_DEVICES=0 uv run python src/lerobot/scripts/lerobot_train.py \
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-train \
   --dataset.repo_id="Combination/sourccey-shirt-aggregate-2" \
-  --policy.type=sarm \
-  --policy.annotation_mode=single_stage \
-  --policy.image_keys='["observation.images.front_right","observation.images.front_left"]' \
+  --reward_model.type=sarm \
+  --reward_model.annotation_mode=single_stage \
+  --reward_model.image_keys='["observation.images.front_right","observation.images.front_left"]' \
   --dataset.video_backend=pyav \
   --num_workers=0 \
   --batch_size=1 \
@@ -46,7 +46,7 @@ CUDA_VISIBLE_DEVICES=0 uv run python src/lerobot/scripts/lerobot_train.py \
   --steps=4000 \
   --output_dir=outputs/train/sarm_2cam_sourccey-shirt-aggregate-2_debug \
   --wandb.enable=false \
-  --policy.push_to_hub=false
+  --reward_model.push_to_hub=false
 
 
 ###
@@ -58,7 +58,7 @@ Compute the RABC Weights
 Visualize Dryrun
 
 ```
-python src/lerobot/policies/sarm/compute_rabc_weights.py \
+uv run python -m lerobot.rewards.sarm.compute_rabc_weights \
  --dataset-repo-id="Combination/sourccey-shirt-aggregate-2-hq" \
  --reward-model-path=outputs/train/sarm_2cam_sourccey-shirt-aggregate-2/checkpoints/060000/pretrained_model \
  --head-mode=sparse \
@@ -72,7 +72,7 @@ python src/lerobot/policies/sarm/compute_rabc_weights.py \
 Generatoe RA-BC progress
 
 ```
-python src/lerobot/policies/sarm/compute_rabc_weights.py \
+uv run python -m lerobot.rewards.sarm.compute_rabc_weights \
  --dataset-repo-id="Combination/sourccey-shirt-aggregate-2-hq" \
  --reward-model-path="outputs/train/sarm_2cam_sourccey-shirt-aggregate-2/checkpoints/060000/pretrained_model" \
  --head-mode=sparse \
