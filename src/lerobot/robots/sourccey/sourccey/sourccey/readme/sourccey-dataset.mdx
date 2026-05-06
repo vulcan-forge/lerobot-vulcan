@@ -6,7 +6,7 @@ Use this runbook when you want a clean local dataset for training.
 
 ```bash
 HF_LEROBOT_HOME="${HOME}/.cache/huggingface/lerobot"
-DATASET_REPO="Combination/sourccey-shirt-fold-c-004"
+DATASET_REPO="Combination/sourccey-shirt-fold-c-005"
 DATASET_ROOT="${HF_LEROBOT_HOME}/${DATASET_REPO}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 
@@ -70,6 +70,23 @@ Fail fast version (use in CI / strict checks):
 uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/audit_dataset_consistency.py \
   --dataset-root "$DATASET_ROOT" \
   --fail-on-issues
+```
+
+If consistency issues are reported, fix them with:
+
+Dry run:
+
+```bash
+uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/fix_dataset_consistency.py \
+  --dataset-root "$DATASET_ROOT" \
+  --dry-run
+```
+
+Apply fixes:
+
+```bash
+uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/fix_dataset_consistency.py \
+  --dataset-root "$DATASET_ROOT"
 ```
 
 Fast smoke test:
