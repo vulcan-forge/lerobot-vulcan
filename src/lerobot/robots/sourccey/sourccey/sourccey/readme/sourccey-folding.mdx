@@ -74,24 +74,24 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train_retry.py \
 #Fine tune
 
 ```
-CUDA_VISIBLE_DEVICES=0 uv run lerobot-train-retry \
+CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --max-attempts=30 \
   --retry-delay-seconds=20 \
   --dataset.repo_id="Combination/sourccey-shirt-fold-c-005" \
   --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-005" \
   --job_name="xvla_s_sourccey-shirt-fold-c-005" \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-005/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-004/checkpoints/1000000/pretrained_model" \
   --policy.dtype=bfloat16 \
   --policy.action_mode=auto \
   --policy.max_action_dim=20 \
   --policy.device=cuda \
   --policy.push_to_hub=false \
   --policy.input_features=null \
-  --policy.scheduler_warmup_steps=1000 \
-  --policy.scheduler_decay_steps=40000 \
+  --policy.scheduler_warmup_steps=5000 \
+  --policy.scheduler_decay_steps=1000000 \
   --policy.scheduler_decay_lr=5e-06 \
-  --steps=40000 \
-  --save_freq=5000 \
+  --steps=1000000 \
+  --save_freq=20000 \
   --batch_size=8 \
   --wandb.enable=false
 ```
@@ -103,13 +103,41 @@ CUDA_VISIBLE_DEVICES=0 uv run lerobot-train-retry \
 CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --max-attempts=30 \
   --retry-delay-seconds=20 \
-  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-004" \
+  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-005" \
   --steps=1000000 \
   --save_freq=20000 \
   --resume=true \
-  --config_path="outputs/train/xvla_s_sourccey-shirt-fold-c-004/checkpoints/last/pretrained_model/train_config.json"
+  --config_path="outputs/train/xvla_s_sourccey-shirt-fold-c-005/checkpoints/last/pretrained_model/train_config.json"
 
 ```
+
+# Fine Tune - Near ending run
+
+```
+CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
+  --max-attempts=30 \
+  --retry-delay-seconds=20 \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-c-005" \
+  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-005" \
+  --job_name="xvla_s_sourccey-shirt-fold-c-005" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-004/checkpoints/1000000/pretrained_model" \
+  --policy.dtype=bfloat16 \
+  --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --policy.input_features=null \
+  --policy.optimizer_lr=5e-05 \
+  --policy.scheduler_warmup_steps=5000 \
+  --policy.scheduler_decay_steps=500000 \
+  --policy.scheduler_decay_lr=5e-06 \
+  --steps=500000 \
+  --save_freq=20000 \
+  --batch_size=8 \
+  --wandb.enable=false
+```
+
+
 
 ## SARM
 

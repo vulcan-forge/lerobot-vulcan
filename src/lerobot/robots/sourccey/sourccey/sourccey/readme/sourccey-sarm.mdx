@@ -10,11 +10,11 @@ Training the model
 
 ```
 CUDA_VISIBLE_DEVICES=0 uv run lerobot-train \
- --dataset.repo_id="Combination/sourccey-shirt-fold-c-004" \
+ --dataset.repo_id="Combination/sourccey-shirt-fold-c-005" \
  --reward_model.type=sarm \
  --reward_model.annotation_mode=single_stage \
  --reward_model.image_keys='["observation.images.front_right","observation.images.front_left"]' \
- --output_dir=outputs/train/sarm_sourccey-shirt-fold-c-004 \
+ --output_dir=outputs/train/sarm_sourccey-shirt-fold-c-005 \
  --batch_size=8 \
  --steps=25000 \
  --save_freq=5000 \

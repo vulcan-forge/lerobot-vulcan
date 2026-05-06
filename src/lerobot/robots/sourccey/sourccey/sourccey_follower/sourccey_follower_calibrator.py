@@ -28,6 +28,7 @@ class SourcceyFollowerCalibrator:
     """Handles calibration operations for Sourccey robots."""
 
     GRIPPER_RANGE_EXTENSION = 25
+    DEFAULT_CALIBRATION_GRIPPER_RANGE_EXTENSION = 5
 
     def __init__(self, robot):
         self.robot = robot
@@ -44,7 +45,12 @@ class SourcceyFollowerCalibrator:
             min_ranges[motor] = default_calibration[motor]["range_min"]
             max_ranges[motor] = default_calibration[motor]["range_max"]
 
-        self.robot.calibration = self._create_calibration_dict(homing_offsets, min_ranges, max_ranges)
+        self.robot.calibration = self._create_calibration_dict(
+            homing_offsets,
+            min_ranges,
+            max_ranges,
+            gripper_range_extension=self.DEFAULT_CALIBRATION_GRIPPER_RANGE_EXTENSION,
+        )
         self.robot.bus.write_calibration(self.robot.calibration)
         self._save_calibration()
         logger.info(f"Default calibration completed and saved to {self.robot.calibration_fpath}")
@@ -118,7 +124,7 @@ class SourcceyFollowerCalibrator:
             homing_offsets,
             detected_ranges["min"],
             detected_ranges["max"],
-            apply_gripper_range_extension=True,
+            gripper_range_extension=self.GRIPPER_RANGE_EXTENSION,
         )
 
         # Step 5: Write calibration to motors and save
@@ -132,7 +138,7 @@ class SourcceyFollowerCalibrator:
         homing_offsets: Dict[str, int],
         range_mins: Dict[str, Any],
         range_maxes: Dict[str, int] = None,
-        apply_gripper_range_extension: bool = False,
+        gripper_range_extension: int = 0,
     ) -> Dict[str, MotorCalibration]:
         calibration = {}
         for motor, m in self.robot.bus.motors.items():
@@ -140,11 +146,11 @@ class SourcceyFollowerCalibrator:
 
             range_min = range_mins[motor]
             range_max = range_maxes[motor]
-            if motor == "gripper" and apply_gripper_range_extension:
+            if motor == "gripper" and gripper_range_extension > 0:
                 if self.robot.config.orientation == "right":
-                    range_max += self.GRIPPER_RANGE_EXTENSION
+                    range_max += gripper_range_extension
                 else:
-                    range_min -= self.GRIPPER_RANGE_EXTENSION
+                    range_min -= gripper_range_extension
             calibration[motor] = MotorCalibration(
                 id=m.id,
                 drive_mode=drive_mode,
