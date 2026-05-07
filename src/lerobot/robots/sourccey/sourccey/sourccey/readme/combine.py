@@ -13,7 +13,6 @@ DEFAULT_PARENTS = [
     "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-a/nickm",
     "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-c/nickm",
     "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/rollout__sourccey-013__shirt-fold-blue-c/nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-c-specific-000/nickm",
     "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-c-specific-001/nickm",
     "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-c-specific-002/nickm",
     "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-c-specific-003/nickm",

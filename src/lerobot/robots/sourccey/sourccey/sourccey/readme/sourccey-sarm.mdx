@@ -59,17 +59,34 @@ Visualize Dryrun
 
 ```
 uv run python -m lerobot.rewards.sarm.compute_rabc_weights \
- --dataset-repo-id="Combination/sourccey-shirt-aggregate-2-hq" \
- --reward-model-path=outputs/train/sarm_2cam_sourccey-shirt-aggregate-2/checkpoints/060000/pretrained_model \
+ --dataset-repo-id="Combination/sourccey-shirt-fold-c-005" \
+ --reward-model-path="outputs/train/sarm_sourccey-shirt-fold-c-005/checkpoints/025000/pretrained_model" \
  --head-mode=sparse \
  --device=cuda \
- --num-visualizations=10 \
  --output-dir="./outputs/sarm_viz" \
  --stride=30 \
- --visualize-only
+ --visualize-only \
+ --visualize-episode-indices=32
+
 ```
 
-Generatoe RA-BC progress
+Visualize Multiple Ranked
+
+```
+uv run python -m lerobot.rewards.sarm.compute_rabc_weights \
+ --dataset-repo-id="Combination/sourccey-shirt-fold-c-005" \
+ --reward-model-path="outputs/train/sarm_sourccey-shirt-fold-c-005/checkpoints/025000/pretrained_model" \
+ --head-mode=sparse \
+ --device=cuda \
+ --output-dir="./outputs/sarm_viz_ranked" \
+ --stride=30 \
+ --visualize-only \
+ --visualize-ranking-csv="outputs/sarm_episode_ranking_progress/episode_ranking_progress.csv" \
+ --visualize-top-k=25 \
+ --visualize-bottom-k=25
+```
+
+Generate RA-BC progress
 
 ```
 uv run python -m lerobot.rewards.sarm.compute_rabc_weights \
@@ -83,99 +100,11 @@ uv run python -m lerobot.rewards.sarm.compute_rabc_weights \
  --no-push-to-hub
 ```
 
-###
 
-Rank Episodes with Sourccey Custom Script
-
+View Dataset Episode
 ```
-python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_rank_sarm_progress.py \
-  --dataset-repo-id="Combination/sourccey-shirt-fold-c-005" \
-  --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-005/sarm_progress.parquet" \
-  --head-mode=sparse \
-  --output-dir="outputs/sarm_episode_ranking_progress" \
-  --weight-max=0.40 \
-  --weight-mean=0.25 \
-  --weight-upward=0.20 \
-  --weight-stability=0.15 \
-  --drop-bottom-k=100
-```
-
-### Delete command from SARM progress
-
-```
-uv run lerobot-edit-dataset \
-  --repo_id "Combination/sourccey-shirt-aggregate-2" \
-  --new_repo_id "Combination/sourccey-shirt-aggregate-2_filtered_progress" \
-  --operation.type delete_episodes \
-  --operation.episode_indices "[1, 3, 10, 11, 12, 23, 25, 26, 30, 31, 32, 34, 36, 38, 43, 44, 45, 48, 54, 58, 65, 69, 71, 73, 75, 83, 86, 87, 90, 99, 104, 111, 131, 145, 156, 180, 209, 237, 240, 253, 257, 280, 282, 303, 315, 320, 337, 347, 349, 371, 374, 395, 396, 435, 488, 498, 527, 566, 575, 636, 692, 696, 808, 809, 812, 816, 831, 844, 848, 854, 856, 857, 860, 862, 863, 864, 866, 871, 876, 880, 882, 894, 897, 898, 901, 904, 912, 916, 917, 926, 927, 929, 930, 931, 932, 933, 935, 936, 940, 945, 946, 951, 956, 958, 960, 966, 967, 969, 977, 981, 991, 992, 994, 995, 996, 1006, 1025, 1030, 1037, 1044, 1062, 1067, 1093, 1106, 1113, 1120, 1178, 1179, 1197, 1205, 1287, 1295, 1304]"
-```
-
-## 10 at a time delete
-```
-uv run lerobot-edit-dataset \
-  --repo_id "Combination/sourccey-shirt-aggregate-2" \
-  --new_repo_id "Combination/sourccey-shirt-aggregate-2_drop_last10" \
-  --operation.type delete_episodes \
-  --operation.episode_indices "[1106, 1113, 1120, 1178, 1179, 1197, 1205, 1287, 1295, 1304]"
-```
-
-
-
-
-
-Output artifacts:
-- `outputs/sarm_episode_ranking_progress/episode_ranking_progress.csv`
-- `outputs/sarm_episode_ranking_progress/episodes_to_drop_progress.json`
-
-Use `episodes_to_drop_progress.json` with `lerobot-edit-dataset --operation.type delete_episodes` to trim low-quality episodes.
-
-###
-
-Rank Episodes by Progress + Stability (No Final-Score Term)
-
-This ranking excludes final progress from the score and prioritizes:
-- high max progress
-- high mean progress
-- high upward ratio
-- stable trajectory (low drawdown / low sudden drops)
-
-```
-python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_rank_sarm_progress.py \
- --dataset-repo-id="Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01" \
- --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-01__cmbF__d__chrism__20260409__append__20260410_01/sarm_progress.parquet" \
- --head-mode=sparse \
- --output-dir="outputs/sarm_episode_ranking_progress" \
- --weight-max=0.40 \
- --weight-mean=0.25 \
- --weight-upward=0.20 \
- --weight-stability=0.15 \
- --preview-top-k=25 \
- --preview-bottom-k=25 \
- --file-bottom-k=0 \
- --drop-bottom-k=100 \
- --save-charts \
- --chart-top-k=10 \
- --chart-bottom-k=10 \
- --chart-rolling-window=61 \
- --chart-dpi=160
-```
-
-###
-
-Debug One Episode Ranking (Chart)
-
-```
-python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_plot_sarm_episode.py \
- --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-aggregate-2-hq/sarm_progress.parquet" \
- --episode-index=872 \
- --head-mode=sparse \
- --ranking-csv="outputs/sarm_episode_ranking_progress/episode_ranking_progress.csv" \
- --output-path="outputs/sarm_episode_ranking_progress/episode_872_sparse_debug.png"
-```
-
-
-###
-Dataset Checker
-```
-
+uv run lerobot-dataset-viz \
+  --repo-id "Combination/sourccey-shirt-fold-c-005" \
+  --episode-index 32 \
+  --mode local
 ```
