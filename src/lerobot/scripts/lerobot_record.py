@@ -602,6 +602,7 @@ def _pop_robot_recording_command(robot: Robot, method_name: str) -> bool:
     try:
         result = bool(pop_command())
         if result:
+            print(f"[RECORDER] Popped host recording command via {method_name}")
             logging.info("Host recording command popped from robot via %s", method_name)
         return result
     except Exception:

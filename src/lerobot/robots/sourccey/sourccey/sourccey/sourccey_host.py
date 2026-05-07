@@ -69,6 +69,7 @@ def main():
         "Sourccey observation socket configured for broadcast on tcp://*:%s",
         host_config.port_zmq_observations,
     )
+    print(f"[HOST] Observation socket mode: PUB on tcp://*:{host_config.port_zmq_observations}")
 
     print("Waiting for commands...")
 
@@ -104,6 +105,10 @@ def main():
                 recording_stop_request = bool(data.get("request_recording_stop", False))
                 recording_rerecord_request = bool(data.get("request_recording_rerecord", False))
                 if recording_start_request or recording_stop_request or recording_rerecord_request:
+                    print(
+                        "[HOST] Received recording command flags from Unity: "
+                        f"start={recording_start_request} stop={recording_stop_request} rerecord={recording_rerecord_request}"
+                    )
                     logging.info(
                         "Host received recording command flags from Unity: start=%s stop=%s rerecord=%s",
                         recording_start_request,
@@ -112,6 +117,7 @@ def main():
                     )
                 if recording_start_request and not previous_recording_start_request:
                     recording_start_counter += 1
+                    print(f"[HOST] START signal touched host. counter={recording_start_counter}")
                     logging.info(
                         "Observed new recording START request from Unity stream -> counter=%s",
                         recording_start_counter,
@@ -120,6 +126,7 @@ def main():
 
                 if recording_stop_request and not previous_recording_stop_request:
                     recording_stop_counter += 1
+                    print(f"[HOST] STOP signal touched host. counter={recording_stop_counter}")
                     logging.info(
                         "Observed new recording STOP request from Unity stream -> counter=%s",
                         recording_stop_counter,
@@ -128,6 +135,7 @@ def main():
 
                 if recording_rerecord_request and not previous_recording_rerecord_request:
                     recording_rerecord_counter += 1
+                    print(f"[HOST] RERECORD signal touched host. counter={recording_rerecord_counter}")
                     logging.info(
                         "Observed new recording RERECORD request from Unity stream -> counter=%s",
                         recording_rerecord_counter,

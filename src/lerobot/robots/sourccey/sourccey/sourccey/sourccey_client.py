@@ -190,6 +190,7 @@ class SourcceyClient(Robot):
         self.zmq_observation_socket.connect(zmq_observations_locator)
         self.zmq_observation_socket.setsockopt(zmq.SUBSCRIBE, b"")
         self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
+        print(f"[CLIENT] Observation socket mode: SUB on {zmq_observations_locator}")
 
         poller = zmq.Poller()
         poller.register(self.zmq_observation_socket, zmq.POLLIN)
@@ -345,6 +346,7 @@ class SourcceyClient(Robot):
             return False
 
         self._pending_recording_start_requests -= 1
+        print(f"[CLIENT] Consumed START signal. remaining={self._pending_recording_start_requests}")
         logging.info(
             "Consuming pending host recording START request. remaining=%s",
             self._pending_recording_start_requests,
@@ -356,6 +358,7 @@ class SourcceyClient(Robot):
             return False
 
         self._pending_recording_stop_requests -= 1
+        print(f"[CLIENT] Consumed STOP signal. remaining={self._pending_recording_stop_requests}")
         logging.info(
             "Consuming pending host recording STOP request. remaining=%s",
             self._pending_recording_stop_requests,
@@ -367,6 +370,7 @@ class SourcceyClient(Robot):
             return False
 
         self._pending_recording_rerecord_requests -= 1
+        print(f"[CLIENT] Consumed RERECORD signal. remaining={self._pending_recording_rerecord_requests}")
         logging.info(
             "Consuming pending host recording RERECORD request. remaining=%s",
             self._pending_recording_rerecord_requests,
@@ -399,6 +403,7 @@ class SourcceyClient(Robot):
         pending_value = int(getattr(self, pending_attr)) + delta
         setattr(self, pending_attr, pending_value)
         setattr(self, last_attr, counter)
+        print(f"[CLIENT] Received host {label} signal. counter={counter} delta={delta} pending={pending_value}")
         logging.info(
             "Received host %s signal counter=%s delta=%s pending=%s",
             label,
