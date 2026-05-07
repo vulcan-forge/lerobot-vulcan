@@ -32,7 +32,7 @@ class SourcceyHost:
         self.zmq_cmd_socket.setsockopt(zmq.CONFLATE, 1)
         self.zmq_cmd_socket.bind(f"tcp://*:{config.port_zmq_cmd}")
 
-        self.zmq_observation_socket = self.zmq_context.socket(zmq.PUSH)
+        self.zmq_observation_socket = self.zmq_context.socket(zmq.PUB)
         self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
         self.zmq_observation_socket.bind(f"tcp://*:{config.port_zmq_observations}")
 
@@ -65,6 +65,10 @@ def main():
     logging.info("Starting Host")
     host_config = SourcceyHostConfig()
     host = SourcceyHost(host_config)
+    logging.info(
+        "Sourccey observation socket configured for broadcast on tcp://*:%s",
+        host_config.port_zmq_observations,
+    )
 
     print("Waiting for commands...")
 
