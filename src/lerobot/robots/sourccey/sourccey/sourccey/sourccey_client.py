@@ -99,8 +99,12 @@ class SourcceyClient(Robot):
 
         # Stored target position (what we "expect" z to be at while holding keys).
         self._z_pos_cmd = 0.0
-        self._last_recording_toggle_counter = 0
-        self._pending_recording_toggle_requests = 0
+        self._last_recording_start_counter = 0
+        self._last_recording_stop_counter = 0
+        self._last_recording_rerecord_counter = 0
+        self._pending_recording_start_requests = 0
+        self._pending_recording_stop_requests = 0
+        self._pending_recording_rerecord_requests = 0
 
     ###################################################################
     # Properties and Attributes
@@ -192,8 +196,12 @@ class SourcceyClient(Robot):
         if self.zmq_observation_socket not in socks or socks[self.zmq_observation_socket] != zmq.POLLIN:
             raise DeviceNotConnectedError("Timeout waiting for Sourccey Host to connect expired.")
 
-        self._last_recording_toggle_counter = 0
-        self._pending_recording_toggle_requests = 0
+        self._last_recording_start_counter = 0
+        self._last_recording_stop_counter = 0
+        self._last_recording_rerecord_counter = 0
+        self._pending_recording_start_requests = 0
+        self._pending_recording_stop_requests = 0
+        self._pending_recording_rerecord_requests = 0
         self._is_connected = True
 
     def calibrate(self) -> None:
@@ -309,7 +317,7 @@ class SourcceyClient(Robot):
         try:
             robot_state = sourccey_pb2.SourcceyRobotState()
             robot_state.ParseFromString(latest_message_bytes)
-            self._update_recording_toggle_state(robot_state)
+            self._update_recording_command_state(robot_state)
             observation = self.protobuf_converter.protobuf_to_observation(robot_state)
         except Exception as e:
             logging.error(f"Error parsing protobuf observation: {e}")
@@ -331,36 +339,79 @@ class SourcceyClient(Robot):
 
         return new_frames, new_state
 
-    def pop_recording_toggle_request(self) -> bool:
-        """Return True once for each new host-side recording toggle event."""
-        if self._pending_recording_toggle_requests <= 0:
+    def pop_recording_start_request(self) -> bool:
+        if self._pending_recording_start_requests <= 0:
             return False
 
-        self._pending_recording_toggle_requests -= 1
+        self._pending_recording_start_requests -= 1
         return True
 
-    def _update_recording_toggle_state(self, robot_state: sourccey_pb2.SourcceyRobotState) -> None:
-        counter = int(getattr(robot_state, "recording_toggle_counter", 0))
-        if counter < self._last_recording_toggle_counter:
+    def pop_recording_stop_request(self) -> bool:
+        if self._pending_recording_stop_requests <= 0:
+            return False
+
+        self._pending_recording_stop_requests -= 1
+        return True
+
+    def pop_recording_rerecord_request(self) -> bool:
+        if self._pending_recording_rerecord_requests <= 0:
+            return False
+
+        self._pending_recording_rerecord_requests -= 1
+        return True
+
+    def _update_recording_counter(
+        self,
+        *,
+        counter: int,
+        last_attr: str,
+        pending_attr: str,
+        label: str,
+    ) -> None:
+        last_value = int(getattr(self, last_attr))
+        if counter < last_value:
             logging.warning(
-                "Recording toggle counter moved backwards (last=%s current=%s). Resetting local tracker.",
-                self._last_recording_toggle_counter,
+                "%s counter moved backwards (last=%s current=%s). Resetting local tracker.",
+                label,
+                last_value,
                 counter,
             )
-            self._last_recording_toggle_counter = counter
+            setattr(self, last_attr, counter)
             return
 
-        if counter == self._last_recording_toggle_counter:
+        if counter == last_value:
             return
 
-        delta = counter - self._last_recording_toggle_counter
-        self._pending_recording_toggle_requests += delta
-        self._last_recording_toggle_counter = counter
+        delta = counter - last_value
+        pending_value = int(getattr(self, pending_attr)) + delta
+        setattr(self, pending_attr, pending_value)
+        setattr(self, last_attr, counter)
         logging.info(
-            "Received host recording toggle signal counter=%s delta=%s pending=%s",
+            "Received host %s signal counter=%s delta=%s pending=%s",
+            label,
             counter,
             delta,
-            self._pending_recording_toggle_requests,
+            pending_value,
+        )
+
+    def _update_recording_command_state(self, robot_state: sourccey_pb2.SourcceyRobotState) -> None:
+        self._update_recording_counter(
+            counter=int(getattr(robot_state, "recording_start_counter", 0)),
+            last_attr="_last_recording_start_counter",
+            pending_attr="_pending_recording_start_requests",
+            label="recording START",
+        )
+        self._update_recording_counter(
+            counter=int(getattr(robot_state, "recording_stop_counter", 0)),
+            last_attr="_last_recording_stop_counter",
+            pending_attr="_pending_recording_stop_requests",
+            label="recording STOP",
+        )
+        self._update_recording_counter(
+            counter=int(getattr(robot_state, "recording_rerecord_counter", 0)),
+            last_attr="_last_recording_rerecord_counter",
+            pending_attr="_pending_recording_rerecord_requests",
+            label="recording RERECORD",
         )
 
     ###################################################################

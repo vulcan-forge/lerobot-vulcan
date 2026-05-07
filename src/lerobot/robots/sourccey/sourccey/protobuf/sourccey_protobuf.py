@@ -64,11 +64,16 @@ class SourcceyProtobuf:
                 except AttributeError:
                     pass
 
-            if "request_recording_toggle" in action:
-                try:
-                    robot_action.request_recording_toggle = bool(action.get("request_recording_toggle", False))
-                except AttributeError:
-                    pass
+            for action_key, proto_attr in (
+                ("request_recording_start", "request_recording_start"),
+                ("request_recording_stop", "request_recording_stop"),
+                ("request_recording_rerecord", "request_recording_rerecord"),
+            ):
+                if action_key in action:
+                    try:
+                        setattr(robot_action, proto_attr, bool(action.get(action_key, False)))
+                    except AttributeError:
+                        pass
 
             return robot_action
 
@@ -123,7 +128,9 @@ class SourcceyProtobuf:
                     camera.image_data = encoded_img.tobytes()
                     msg.cameras.append(camera)
 
-            msg.recording_toggle_counter = int(observation.get("recording.toggle_counter", 0))
+            msg.recording_start_counter = int(observation.get("recording.start_counter", 0))
+            msg.recording_stop_counter = int(observation.get("recording.stop_counter", 0))
+            msg.recording_rerecord_counter = int(observation.get("recording.rerecord_counter", 0))
 
             return msg
 
@@ -176,7 +183,9 @@ class SourcceyProtobuf:
             # Per-arm flags from protobuf
             action["untorque_left"] = bool(getattr(action_msg, "untorque_left", False))
             action["untorque_right"] = bool(getattr(action_msg, "untorque_right", False))
-            action["request_recording_toggle"] = bool(getattr(action_msg, "request_recording_toggle", False))
+            action["request_recording_start"] = bool(getattr(action_msg, "request_recording_start", False))
+            action["request_recording_stop"] = bool(getattr(action_msg, "request_recording_stop", False))
+            action["request_recording_rerecord"] = bool(getattr(action_msg, "request_recording_rerecord", False))
 
             return action
 
@@ -219,7 +228,9 @@ class SourcceyProtobuf:
 
             # Z position (linear actuator)
             observation["z.pos"] = robot_state.base_position.z_pos
-            observation["recording.toggle_counter"] = int(getattr(robot_state, "recording_toggle_counter", 0))
+            observation["recording.start_counter"] = int(getattr(robot_state, "recording_start_counter", 0))
+            observation["recording.stop_counter"] = int(getattr(robot_state, "recording_stop_counter", 0))
+            observation["recording.rerecord_counter"] = int(getattr(robot_state, "recording_rerecord_counter", 0))
 
             # Process cameras from the cameras list
             for camera in robot_state.cameras:

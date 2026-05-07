@@ -594,15 +594,15 @@ def _mark_episode_end(
     events["exit_early"] = True
 
 
-def _pop_robot_recording_toggle(robot: Robot) -> bool:
-    pop_toggle = getattr(robot, "pop_recording_toggle_request", None)
-    if pop_toggle is None:
+def _pop_robot_recording_command(robot: Robot, method_name: str) -> bool:
+    pop_command = getattr(robot, method_name, None)
+    if pop_command is None:
         return False
 
     try:
-        return bool(pop_toggle())
+        return bool(pop_command())
     except Exception:
-        logging.exception("Failed to read host recording toggle from %s", robot)
+        logging.exception("Failed to read host recording command %s from %s", method_name, robot)
         return False
 
 
@@ -617,7 +617,9 @@ def _poll_runtime_controls(
     remote_control: RemoteRecordingControlServer | None,
 ) -> None:
     teleop_events = _collect_teleop_events(teleop)
-    host_toggle_requested = _pop_robot_recording_toggle(robot)
+    host_start_requested = _pop_robot_recording_command(robot, "pop_recording_start_request")
+    host_stop_requested = _pop_robot_recording_command(robot, "pop_recording_stop_request")
+    host_rerecord_requested = _pop_robot_recording_command(robot, "pop_recording_rerecord_request")
 
     if control_phase == "armed_idle" and start_trigger == "teleop_signal":
         if teleop_events[TeleopEvents.START_EPISODE]:
@@ -626,7 +628,7 @@ def _poll_runtime_controls(
             return
 
     if control_phase == "armed_idle" and start_trigger == "host_signal":
-        if host_toggle_requested:
+        if host_start_requested:
             logging.info("Received host recording start signal")
             _mark_episode_start(events)
             return
@@ -645,10 +647,15 @@ def _poll_runtime_controls(
             _mark_episode_end(events)
             return
 
-    if control_phase == "recording" and end_trigger in {"host_signal", "either"} and host_toggle_requested:
-        logging.info("Received host recording stop signal")
-        _mark_episode_end(events)
-        return
+    if control_phase == "recording" and end_trigger in {"host_signal", "either"}:
+        if host_rerecord_requested:
+            logging.info("Received host recording rerecord signal")
+            _mark_episode_end(events, rerecord=True)
+            return
+        if host_stop_requested:
+            logging.info("Received host recording stop signal")
+            _mark_episode_end(events)
+            return
 
     if remote_control is None:
         return
@@ -806,10 +813,18 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 "dataset.start_trigger=teleop_signal requires a teleop device that implements get_teleop_events()."
             )
 
-    if cfg.dataset.start_trigger == "host_signal" and not hasattr(robot, "pop_recording_toggle_request"):
-        raise ValueError(
-            "dataset.start_trigger=host_signal requires a robot that implements pop_recording_toggle_request()."
+    if cfg.dataset.start_trigger == "host_signal":
+        required_host_methods = (
+            "pop_recording_start_request",
+            "pop_recording_stop_request",
+            "pop_recording_rerecord_request",
         )
+        missing_methods = [method_name for method_name in required_host_methods if not hasattr(robot, method_name)]
+        if missing_methods:
+            raise ValueError(
+                "dataset.start_trigger=host_signal requires a robot that implements "
+                f"{', '.join(missing_methods)}."
+            )
 
     try:
         if cfg.resume:

@@ -43,9 +43,11 @@ message SourcceyRobotState {
     // Camera State - simplified to just name and bytes
     repeated CameraImage cameras = 5;
 
-    // Monotonic counter incremented by the host whenever it observes a new
-    // recording toggle request coming from the Unity control stream.
-    uint32 recording_toggle_counter = 6;
+    // Monotonic counters incremented by the host whenever it observes a new
+    // recording request coming from the Unity control stream.
+    uint32 recording_start_counter = 6;
+    uint32 recording_stop_counter = 7;
+    uint32 recording_rerecord_counter = 8;
 }
 
 // Complete sourccey robot action
@@ -62,8 +64,11 @@ message SourcceyRobotAction {
     bool untorque_left = 5;
     bool untorque_right = 6;
 
-    // One-shot request from the Unity client asking the host/client recorder
-    // pipeline to toggle recording state. The host detects rising edges and
-    // increments SourcceyRobotState.recording_toggle_counter.
-    bool request_recording_toggle = 7;
+    // One-shot requests from the Unity client asking the host/client recorder
+    // pipeline to start, stop, or rerecord the current episode. The host
+    // detects rising edges and increments the matching counters in
+    // SourcceyRobotState.
+    bool request_recording_start = 7;
+    bool request_recording_stop = 8;
+    bool request_recording_rerecord = 9;
 }

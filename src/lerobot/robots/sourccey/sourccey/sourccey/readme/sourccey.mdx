@@ -278,7 +278,7 @@ In this mode:
 
 ### VR Recording From The Existing Sourccey Host Stream
 
-If the Unity VR app is already driving the robot through the normal Sourccey host connection, the cleanest recording setup is to let the Unity action stream carry a small recording-toggle bit to the host. The host surfaces that as a counter in robot observations, and `lerobot-record` on the client starts and stops episodes when that counter changes.
+If the Unity VR app is already driving the robot through the normal Sourccey host connection, the cleanest recording setup is to let the Unity action stream carry explicit recording requests to the host. The host surfaces those as counters in robot observations, and `lerobot-record` on the client reacts to `start`, `stop`, and `rerecord` events from that same stream.
 
 ```bash
 uv run lerobot-record \
@@ -299,10 +299,10 @@ uv run lerobot-record \
 In this mode:
 
 - the Unity app keeps talking only to the Sourccey host
-- pressing the wired recording button sends a `request_recording_toggle` bit on the normal action stream
-- the host increments `recording_toggle_counter` on each new toggle request
-- `lerobot-record` watches that counter through `sourccey_client` observations
-- the first toggle starts an episode and the next toggle ends it
+- pressing the wired recording controls sends `request_recording_start`, `request_recording_stop`, or `request_recording_rerecord` bits on the normal action stream
+- the host increments the matching counters in robot observations
+- `lerobot-record` watches those counters through `sourccey_client` observations
+- `start` begins an episode, `stop` ends and saves it, and `rerecord` discards the current take and returns to the armed state
 - `episode_time_s` remains a safety timeout because `end_trigger=either`
 
 ### VR Recording From A Remote Toggle Client

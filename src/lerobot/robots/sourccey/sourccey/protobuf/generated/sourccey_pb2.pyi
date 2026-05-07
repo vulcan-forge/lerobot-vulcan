@@ -47,35 +47,43 @@ class BasePosition(_message.Message):
     def __init__(self, z_pos: _Optional[float] = ...) -> None: ...
 
 class SourcceyRobotState(_message.Message):
-    __slots__ = ("left_arm_joints", "right_arm_joints", "base_position", "base_velocity", "cameras", "recording_toggle_counter")
+    __slots__ = ("left_arm_joints", "right_arm_joints", "base_position", "base_velocity", "cameras", "recording_start_counter", "recording_stop_counter", "recording_rerecord_counter")
     LEFT_ARM_JOINTS_FIELD_NUMBER: _ClassVar[int]
     RIGHT_ARM_JOINTS_FIELD_NUMBER: _ClassVar[int]
     BASE_POSITION_FIELD_NUMBER: _ClassVar[int]
     BASE_VELOCITY_FIELD_NUMBER: _ClassVar[int]
     CAMERAS_FIELD_NUMBER: _ClassVar[int]
-    RECORDING_TOGGLE_COUNTER_FIELD_NUMBER: _ClassVar[int]
+    RECORDING_START_COUNTER_FIELD_NUMBER: _ClassVar[int]
+    RECORDING_STOP_COUNTER_FIELD_NUMBER: _ClassVar[int]
+    RECORDING_RERECORD_COUNTER_FIELD_NUMBER: _ClassVar[int]
     left_arm_joints: MotorJoint
     right_arm_joints: MotorJoint
     base_position: BasePosition
     base_velocity: BaseVelocity
     cameras: _containers.RepeatedCompositeFieldContainer[CameraImage]
-    recording_toggle_counter: int
-    def __init__(self, left_arm_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., right_arm_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., base_position: _Optional[_Union[BasePosition, _Mapping]] = ..., base_velocity: _Optional[_Union[BaseVelocity, _Mapping]] = ..., cameras: _Optional[_Iterable[_Union[CameraImage, _Mapping]]] = ..., recording_toggle_counter: _Optional[int] = ...) -> None: ...
+    recording_start_counter: int
+    recording_stop_counter: int
+    recording_rerecord_counter: int
+    def __init__(self, left_arm_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., right_arm_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., base_position: _Optional[_Union[BasePosition, _Mapping]] = ..., base_velocity: _Optional[_Union[BaseVelocity, _Mapping]] = ..., cameras: _Optional[_Iterable[_Union[CameraImage, _Mapping]]] = ..., recording_start_counter: _Optional[int] = ..., recording_stop_counter: _Optional[int] = ..., recording_rerecord_counter: _Optional[int] = ...) -> None: ...
 
 class SourcceyRobotAction(_message.Message):
-    __slots__ = ("left_arm_target_joints", "right_arm_target_joints", "base_target_position", "base_target_velocity", "untorque_left", "untorque_right", "request_recording_toggle")
+    __slots__ = ("left_arm_target_joints", "right_arm_target_joints", "base_target_position", "base_target_velocity", "untorque_left", "untorque_right", "request_recording_start", "request_recording_stop", "request_recording_rerecord")
     LEFT_ARM_TARGET_JOINTS_FIELD_NUMBER: _ClassVar[int]
     RIGHT_ARM_TARGET_JOINTS_FIELD_NUMBER: _ClassVar[int]
     BASE_TARGET_POSITION_FIELD_NUMBER: _ClassVar[int]
     BASE_TARGET_VELOCITY_FIELD_NUMBER: _ClassVar[int]
     UNTORQUE_LEFT_FIELD_NUMBER: _ClassVar[int]
     UNTORQUE_RIGHT_FIELD_NUMBER: _ClassVar[int]
-    REQUEST_RECORDING_TOGGLE_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_RECORDING_START_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_RECORDING_STOP_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_RECORDING_RERECORD_FIELD_NUMBER: _ClassVar[int]
     left_arm_target_joints: MotorJoint
     right_arm_target_joints: MotorJoint
     base_target_position: BasePosition
     base_target_velocity: BaseVelocity
     untorque_left: bool
     untorque_right: bool
-    request_recording_toggle: bool
-    def __init__(self, left_arm_target_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., right_arm_target_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., base_target_position: _Optional[_Union[BasePosition, _Mapping]] = ..., base_target_velocity: _Optional[_Union[BaseVelocity, _Mapping]] = ..., untorque_left: bool = ..., untorque_right: bool = ..., request_recording_toggle: bool = ...) -> None: ...
+    request_recording_start: bool
+    request_recording_stop: bool
+    request_recording_rerecord: bool
+    def __init__(self, left_arm_target_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., right_arm_target_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., base_target_position: _Optional[_Union[BasePosition, _Mapping]] = ..., base_target_velocity: _Optional[_Union[BaseVelocity, _Mapping]] = ..., untorque_left: bool = ..., untorque_right: bool = ..., request_recording_start: bool = ..., request_recording_stop: bool = ..., request_recording_rerecord: bool = ...) -> None: ...

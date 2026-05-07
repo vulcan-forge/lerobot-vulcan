@@ -70,8 +70,12 @@ def main():
 
     last_cmd_time = time.time()
     watchdog_active = False
-    recording_toggle_counter = 0
-    previous_recording_toggle_request = False
+    recording_start_counter = 0
+    recording_stop_counter = 0
+    recording_rerecord_counter = 0
+    previous_recording_start_request = False
+    previous_recording_stop_request = False
+    previous_recording_rerecord_request = False
 
     try:
         # Business logic
@@ -92,14 +96,32 @@ def main():
 
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
 
-                recording_toggle_request = bool(data.get("request_recording_toggle", False))
-                if recording_toggle_request and not previous_recording_toggle_request:
-                    recording_toggle_counter += 1
+                recording_start_request = bool(data.get("request_recording_start", False))
+                if recording_start_request and not previous_recording_start_request:
+                    recording_start_counter += 1
                     logging.info(
-                        "Observed new recording toggle request from Unity stream -> counter=%s",
-                        recording_toggle_counter,
+                        "Observed new recording START request from Unity stream -> counter=%s",
+                        recording_start_counter,
                     )
-                previous_recording_toggle_request = recording_toggle_request
+                previous_recording_start_request = recording_start_request
+
+                recording_stop_request = bool(data.get("request_recording_stop", False))
+                if recording_stop_request and not previous_recording_stop_request:
+                    recording_stop_counter += 1
+                    logging.info(
+                        "Observed new recording STOP request from Unity stream -> counter=%s",
+                        recording_stop_counter,
+                    )
+                previous_recording_stop_request = recording_stop_request
+
+                recording_rerecord_request = bool(data.get("request_recording_rerecord", False))
+                if recording_rerecord_request and not previous_recording_rerecord_request:
+                    recording_rerecord_counter += 1
+                    logging.info(
+                        "Observed new recording RERECORD request from Unity stream -> counter=%s",
+                        recording_rerecord_counter,
+                    )
+                previous_recording_rerecord_request = recording_rerecord_request
 
                 # Send action to robot
                 _action_sent = robot.send_action(data)
@@ -137,7 +159,9 @@ def main():
                     logging.warning("No observation received. Sending previous observation.")
 
                 if observation is not None and observation != {}:
-                    observation["recording.toggle_counter"] = recording_toggle_counter
+                    observation["recording.start_counter"] = recording_start_counter
+                    observation["recording.stop_counter"] = recording_stop_counter
+                    observation["recording.rerecord_counter"] = recording_rerecord_counter
                     # Convert observation to protobuf using existing method
                     robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
 
