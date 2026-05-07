@@ -315,8 +315,6 @@ class SourcceyClient(Robot):
         if latest_message_bytes is None:
             return self.last_frames, self.last_remote_state
 
-        print(f"[CLIENT] Received observation packet bytes={len(latest_message_bytes)}")
-
         # 3. Parse the protobuf message
         try:
             robot_state = sourccey_pb2.SourcceyRobotState()
@@ -418,10 +416,6 @@ class SourcceyClient(Robot):
         start_counter = int(getattr(robot_state, "recording_start_counter", 0))
         stop_counter = int(getattr(robot_state, "recording_stop_counter", 0))
         rerecord_counter = int(getattr(robot_state, "recording_rerecord_counter", 0))
-        print(
-            "[CLIENT] Raw host observation counters: "
-            f"start={start_counter} stop={stop_counter} rerecord={rerecord_counter}"
-        )
         self._update_recording_counter(
             counter=start_counter,
             last_attr="_last_recording_start_counter",
