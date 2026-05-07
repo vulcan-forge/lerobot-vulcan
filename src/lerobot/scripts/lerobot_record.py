@@ -602,7 +602,6 @@ def _pop_robot_recording_command(robot: Robot, method_name: str) -> bool:
     try:
         result = bool(pop_command())
         if result:
-            print(f"[RECORDER] Popped host recording command via {method_name}")
             logging.info("Host recording command popped from robot via %s", method_name)
         return result
     except Exception:
@@ -648,6 +647,7 @@ def _poll_runtime_controls(
             return
         if teleop_events[TeleopEvents.TERMINATE_EPISODE]:
             logging.info("Received teleop stop episode signal")
+            events["stop_command_received"] = True
             _mark_episode_end(events)
             return
 
@@ -658,6 +658,7 @@ def _poll_runtime_controls(
             return
         if host_stop_requested:
             logging.info("Received host recording stop signal")
+            events["stop_command_received"] = True
             _mark_episode_end(events)
             return
 
@@ -704,6 +705,7 @@ def _reset_runtime_episode_flags(events: dict[str, Any]) -> None:
     events["terminate_episode"] = False
     events["successful_episode"] = False
     events["rerecord_episode"] = False
+    events["stop_command_received"] = False
 
 
 def _wait_for_episode_start(
@@ -722,7 +724,8 @@ def _wait_for_episode_start(
     if remote_control is not None:
         remote_control.set_phase("armed_idle", recording=False)
 
-    log_say("Waiting for episode start signal", cfg.play_sounds)
+    wait_prompt = str(events.pop("next_wait_prompt", "Waiting for episode start signal"))
+    log_say(wait_prompt, cfg.play_sounds)
 
     if cfg.dataset.start_trigger == "teleop_signal":
         record_loop(
@@ -990,15 +993,21 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     )
 
                 if events["rerecord_episode"]:
-                    log_say("Re-record episode", cfg.play_sounds)
                     events["rerecord_episode"] = False
                     events["exit_early"] = False
                     events["terminate_episode"] = False
                     events["successful_episode"] = False
+                    events["next_wait_prompt"] = (
+                        f"Re-recording episode {dataset.num_episodes}, waiting for start signal"
+                    )
                     dataset.clear_episode_buffer()
                     if remote_control is not None:
                         remote_control.set_phase("armed_idle", recording=False)
                     continue
+
+                if events.get("stop_command_received"):
+                    log_say("Stop recording", cfg.play_sounds)
+                    events["stop_command_received"] = False
 
                 dataset.save_episode()
                 recorded_episodes += 1
