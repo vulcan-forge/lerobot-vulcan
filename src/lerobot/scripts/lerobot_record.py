@@ -733,6 +733,11 @@ def _wait_for_episode_start(
         )
     else:
         while not events["stop_recording"] and not events["start_episode"]:
+            if cfg.dataset.start_trigger == "host_signal":
+                try:
+                    robot.get_observation()
+                except Exception:
+                    logging.exception("Failed to poll robot observation while waiting for host recording signal")
             _poll_runtime_controls(
                 robot=robot,
                 events=events,
