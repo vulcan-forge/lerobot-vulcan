@@ -181,6 +181,16 @@ def main():
                     observation["recording.start_counter"] = recording_start_counter
                     observation["recording.stop_counter"] = recording_stop_counter
                     observation["recording.rerecord_counter"] = recording_rerecord_counter
+                    if (
+                        recording_start_counter > 0
+                        or recording_stop_counter > 0
+                        or recording_rerecord_counter > 0
+                    ):
+                        print(
+                            "[HOST] Publishing observation counters: "
+                            f"start={recording_start_counter} stop={recording_stop_counter} "
+                            f"rerecord={recording_rerecord_counter}"
+                        )
                     # Convert observation to protobuf using existing method
                     robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
 
