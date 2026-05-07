@@ -832,6 +832,14 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 "dataset.start_trigger=host_signal requires a robot that implements "
                 f"{', '.join(missing_methods)}."
             )
+        if getattr(robot, "name", "") == "sourccey_client":
+            observation_transport = getattr(robot, "observation_transport", "legacy")
+            if observation_transport != "broadcast":
+                raise ValueError(
+                    "dataset.start_trigger=host_signal with sourccey_client requires "
+                    "--robot.observation_transport=broadcast so the recorder can subscribe to the "
+                    "dedicated VR-recording observation stream."
+                )
 
     try:
         if cfg.resume:

@@ -32,15 +32,20 @@ class SourcceyHost:
         self.zmq_cmd_socket.setsockopt(zmq.CONFLATE, 1)
         self.zmq_cmd_socket.bind(f"tcp://*:{config.port_zmq_cmd}")
 
-        self.zmq_observation_socket = self.zmq_context.socket(zmq.PUB)
+        self.zmq_observation_socket = self.zmq_context.socket(zmq.PUSH)
         self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
         self.zmq_observation_socket.bind(f"tcp://*:{config.port_zmq_observations}")
+
+        self.zmq_observation_broadcast_socket = self.zmq_context.socket(zmq.PUB)
+        self.zmq_observation_broadcast_socket.setsockopt(zmq.CONFLATE, 1)
+        self.zmq_observation_broadcast_socket.bind(f"tcp://*:{config.port_zmq_observations_broadcast}")
 
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
         self.max_loop_freq_hz = config.max_loop_freq_hz
 
     def disconnect(self):
+        self.zmq_observation_broadcast_socket.close()
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
@@ -66,8 +71,9 @@ def main():
     host_config = SourcceyHostConfig()
     host = SourcceyHost(host_config)
     logging.info(
-        "Sourccey observation socket configured for broadcast on tcp://*:%s",
+        "Sourccey observation sockets configured: legacy push on tcp://*:%s, broadcast pub on tcp://*:%s",
         host_config.port_zmq_observations,
+        host_config.port_zmq_observations_broadcast,
     )
 
     print("Waiting for commands...")
@@ -168,11 +174,18 @@ def main():
                     observation["recording.rerecord_counter"] = recording_rerecord_counter
                     # Convert observation to protobuf using existing method
                     robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
+                    payload = robot_state.SerializeToString()
 
-                    # Send protobuf message instead of JSON
-                    host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
+                    # Send legacy single-consumer observation stream
+                    try:
+                        host.zmq_observation_socket.send(payload, flags=zmq.NOBLOCK)
+                    except zmq.Again:
+                        logging.debug("Dropping legacy observation, no legacy client connected")
+
+                    # Send broadcast observation stream for Unity + recorder consumers
+                    host.zmq_observation_broadcast_socket.send(payload, flags=zmq.NOBLOCK)
             except zmq.Again:
-                logging.info("Dropping observation, no client connected")
+                logging.debug("Dropping broadcast observation, no broadcast subscriber ready")
             except Exception as e:
                 logging.error(f"Failed to send observation: {e}")
 

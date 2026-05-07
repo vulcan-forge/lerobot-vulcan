@@ -181,6 +181,11 @@ On the Raspberry Pi, start the robot host to enable remote control
 uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 ```
 
+Observation transport ports:
+
+- `5556`: legacy single-client observation stream (`PUSH/PULL`) used by normal teleop and older tools
+- `5560`: broadcast observation stream (`PUB/SUB`) used by the VR recording host-signal flow
+
 ## Teleoperation
 
 On your computer, activate the virtual environment and start teleoperation:
@@ -285,6 +290,7 @@ uv run lerobot-record \
  --robot.type=sourccey_client \
  --robot.id=sourccey \
  --robot.remote_ip=192.168.1.214 \
+ --robot.observation_transport=broadcast \
  --dataset.repo_id=sourccey-012/sourccey-vr-host-fold-shorts \
  --dataset.single_task="Fold the shorts" \
  --dataset.num_episodes=5 \
@@ -298,12 +304,16 @@ uv run lerobot-record \
 
 In this mode:
 
-- the Unity app keeps talking only to the Sourccey host
+- the Unity app keeps talking to the Sourccey host the same way it always did
+- `sourccey_client` subscribes to the dedicated broadcast observation stream on port `5560`
+- normal teleop / legacy tools keep using the legacy observation stream on port `5556`
 - pressing the wired recording controls sends `request_recording_start`, `request_recording_stop`, or `request_recording_rerecord` bits on the normal action stream
 - the host increments the matching counters in robot observations
 - `lerobot-record` watches those counters through `sourccey_client` observations
 - `start` begins an episode, `stop` ends and saves it, and `rerecord` discards the current take and returns to the armed state
 - `episode_time_s` remains a safety timeout because `end_trigger=either`
+
+Normal teleop and older Sourccey client tools do not need any extra flag. They stay on the original legacy observation transport by default.
 
 ### VR Recording From A Remote Toggle Client
 

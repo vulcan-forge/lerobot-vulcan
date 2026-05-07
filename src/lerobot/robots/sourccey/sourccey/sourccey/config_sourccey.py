@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from lerobot.cameras.configs import CameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
@@ -125,6 +126,7 @@ class SourcceyHostConfig:
     # Network Configuration
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
+    port_zmq_observations_broadcast: int = 5560
     # Text + audio (used by voice pipeline)
     port_zmq_text_in: int = 5557  # receive text from client
     port_zmq_text_out: int = 5558  # send text/events to client
@@ -147,6 +149,8 @@ class SourcceyClientConfig(RobotConfig):
     remote_ip: str
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
+    port_zmq_observations_broadcast: int = 5560
+    observation_transport: Literal["legacy", "broadcast"] = "legacy"
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {

@@ -46,6 +46,8 @@ class SourcceyClient(Robot):
         self.remote_ip = config.remote_ip
         self.port_zmq_cmd = config.port_zmq_cmd
         self.port_zmq_observations = config.port_zmq_observations
+        self.port_zmq_observations_broadcast = config.port_zmq_observations_broadcast
+        self.observation_transport = config.observation_transport
 
         self.teleop_keys = config.teleop_keys
 
@@ -185,11 +187,21 @@ class SourcceyClient(Robot):
         self.zmq_cmd_socket.connect(zmq_cmd_locator)
         self.zmq_cmd_socket.setsockopt(zmq.CONFLATE, 1)
 
-        self.zmq_observation_socket = self.zmq_context.socket(zmq.SUB)
-        zmq_observations_locator = f"tcp://{self.remote_ip}:{self.port_zmq_observations}"
-        self.zmq_observation_socket.connect(zmq_observations_locator)
-        self.zmq_observation_socket.setsockopt(zmq.SUBSCRIBE, b"")
-        self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
+        if self.observation_transport == "broadcast":
+            self.zmq_observation_socket = self.zmq_context.socket(zmq.SUB)
+            zmq_observations_locator = (
+                f"tcp://{self.remote_ip}:{self.port_zmq_observations_broadcast}"
+            )
+            self.zmq_observation_socket.connect(zmq_observations_locator)
+            self.zmq_observation_socket.setsockopt(zmq.SUBSCRIBE, b"")
+            self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
+            logging.info("Using broadcast observation transport on %s", zmq_observations_locator)
+        else:
+            self.zmq_observation_socket = self.zmq_context.socket(zmq.PULL)
+            zmq_observations_locator = f"tcp://{self.remote_ip}:{self.port_zmq_observations}"
+            self.zmq_observation_socket.connect(zmq_observations_locator)
+            self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
+            logging.info("Using legacy observation transport on %s", zmq_observations_locator)
 
         poller = zmq.Poller()
         poller.register(self.zmq_observation_socket, zmq.POLLIN)
