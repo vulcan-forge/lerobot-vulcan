@@ -284,6 +284,13 @@ def select_episodes_to_drop(
     return sorted(drop_set)
 
 
+def select_bottom_k_episodes(metrics: list[EpisodeMetrics], bottom_k: int) -> list[int]:
+    if bottom_k <= 0 or not metrics:
+        return []
+    count = min(len(metrics), bottom_k)
+    return sorted(m.episode_index for m in metrics[-count:])
+
+
 def _print_preview(metrics: list[EpisodeMetrics], top_k: int, bottom_k: int) -> None:
     def fmt(m: EpisodeMetrics) -> str:
         return (
@@ -496,14 +503,20 @@ def main() -> int:
     parser.add_argument(
         "--file-top-k",
         type=int,
-        default=300,
-        help="How many top episodes to export in top-selection CSV",
+        default=0,
+        help="How many top episodes to export in top-selection CSV (0 disables)",
     )
     parser.add_argument(
         "--file-bottom-k",
         type=int,
-        default=300,
-        help="How many bottom episodes to export in bottom-selection CSV",
+        default=0,
+        help="How many bottom episodes to export in bottom-selection CSV (0 disables)",
+    )
+    parser.add_argument(
+        "--drop-bottom-k",
+        type=int,
+        default=100,
+        help="Write the worst K ranked episodes to episodes_to_drop_progress.json (0 disables)",
     )
     parser.add_argument(
         "--save-charts",
@@ -596,25 +609,27 @@ def main() -> int:
     top_selection_count = _resolve_selection_size(len(metrics), args.file_top_k)
     bottom_selection_count = _resolve_selection_size(len(metrics), args.file_bottom_k)
 
-    top_selection = metrics[:top_selection_count]
     bottom_selection = list(reversed(metrics[-bottom_selection_count:])) if bottom_selection_count > 0 else []
 
-    top_selection_csv = output_dir / f"episodes_top{top_selection_count}_progress.csv"
-    bottom_selection_csv = output_dir / f"episodes_bottom{bottom_selection_count}_progress.csv"
-    write_selection_csv(top_selection, top_selection_csv, selection_label="top")
-    write_selection_csv(bottom_selection, bottom_selection_csv, selection_label="bottom")
-    logging.info(
-        "Saved top-selection CSV (%d episodes, from --file-top-k=%d): %s",
-        top_selection_count,
-        args.file_top_k,
-        top_selection_csv,
-    )
-    logging.info(
-        "Saved bottom-selection CSV (%d episodes, from --file-bottom-k=%d): %s",
-        bottom_selection_count,
-        args.file_bottom_k,
-        bottom_selection_csv,
-    )
+    if top_selection_count > 0:
+        top_selection = metrics[:top_selection_count]
+        top_selection_csv = output_dir / f"episodes_top{top_selection_count}_progress.csv"
+        write_selection_csv(top_selection, top_selection_csv, selection_label="top")
+        logging.info(
+            "Saved top-selection CSV (%d episodes, from --file-top-k=%d): %s",
+            top_selection_count,
+            args.file_top_k,
+            top_selection_csv,
+        )
+    if bottom_selection_count > 0:
+        bottom_selection_csv = output_dir / f"episodes_bottom{bottom_selection_count}_progress.csv"
+        write_selection_csv(bottom_selection, bottom_selection_csv, selection_label="bottom")
+        logging.info(
+            "Saved bottom-selection CSV (%d episodes, from --file-bottom-k=%d): %s",
+            bottom_selection_count,
+            args.file_bottom_k,
+            bottom_selection_csv,
+        )
 
     _print_preview(metrics, top_k=max(preview_top_count, 1), bottom_k=max(preview_bottom_count, 1))
 
@@ -636,12 +651,17 @@ def main() -> int:
             chart_dpi=max(72, args.chart_dpi),
         )
 
-    episodes_to_drop = select_episodes_to_drop(
-        metrics=metrics,
-        quality_below=args.quality_below,
-        bottom_quality_quantile=args.bottom_quality_quantile,
-        max_drawdown_above=args.max_drawdown_above,
-    )
+    episodes_to_drop: list[int] = []
+    if args.drop_bottom_k > 0:
+        episodes_to_drop = select_bottom_k_episodes(metrics, args.drop_bottom_k)
+        logging.info("Selected worst %d ranked episodes for drop JSON", len(episodes_to_drop))
+    else:
+        episodes_to_drop = select_episodes_to_drop(
+            metrics=metrics,
+            quality_below=args.quality_below,
+            bottom_quality_quantile=args.bottom_quality_quantile,
+            max_drawdown_above=args.max_drawdown_above,
+        )
     if episodes_to_drop:
         drop_json = output_dir / "episodes_to_drop_progress.json"
         drop_json.write_text(json.dumps(episodes_to_drop))
@@ -659,7 +679,10 @@ def main() -> int:
                 episodes_to_drop,
             )
     else:
-        logging.info("No drop thresholds specified (or no episodes matched). Ranking CSV is ready.")
+        logging.info(
+            "No episodes selected for drop (set --drop-bottom-k > 0 or provide threshold flags). "
+            "Ranking CSV is ready."
+        )
 
     return 0
 

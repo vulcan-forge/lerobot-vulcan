@@ -418,7 +418,7 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     policy.train()
 
     train_metrics = {
-        "loss": AverageMeter("loss", ":.3f"),
+        "loss": AverageMeter("loss", ":.4f"),
         "grad_norm": AverageMeter("grdn", ":.3f"),
         "lr": AverageMeter("lr", ":0.1e"),
         "update_s": AverageMeter("updt_s", ":.3f"),

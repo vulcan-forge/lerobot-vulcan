@@ -430,6 +430,116 @@ def visualize_sarm_predictions(
     logging.info(f"Visualizations saved to: {output_dir.absolute()}")
 
 
+def _get_parts_dir(output_path: Path) -> Path:
+    return output_path.parent / f"{output_path.stem}_parts"
+
+
+def _parts_manifest_path(parts_dir: Path) -> Path:
+    return parts_dir / "manifest.json"
+
+
+def _episode_part_path(parts_dir: Path, episode_idx: int) -> Path:
+    return parts_dir / f"episode_{episode_idx:06d}.parquet"
+
+
+def _atomic_write_table(table: pa.Table, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.with_suffix(target.suffix + ".tmp")
+    pq.write_table(table, tmp_path)
+    tmp_path.replace(target)
+
+
+def _write_parts_manifest(
+    parts_dir: Path,
+    *,
+    dataset_repo_id: str,
+    reward_model_path: str,
+    head_mode: str,
+    stride: int,
+    compute_sparse: bool,
+    compute_dense: bool,
+    num_episodes: int,
+    reset_parts: bool,
+) -> None:
+    if reset_parts and parts_dir.exists():
+        shutil.rmtree(parts_dir)
+
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = _parts_manifest_path(parts_dir)
+    expected = {
+        "dataset_repo_id": dataset_repo_id,
+        "reward_model_path": reward_model_path,
+        "head_mode": head_mode,
+        "stride": int(stride),
+        "compute_sparse": bool(compute_sparse),
+        "compute_dense": bool(compute_dense),
+        "num_episodes": int(num_episodes),
+    }
+
+    if manifest_path.exists():
+        try:
+            existing = json.loads(manifest_path.read_text())
+        except Exception:  # nosec B110
+            existing = None
+        if existing != expected:
+            logging.warning("Existing SARM parts manifest differs from current run. Resetting parts directory.")
+            shutil.rmtree(parts_dir)
+            parts_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path.write_text(json.dumps(expected, indent=2))
+
+
+def _list_completed_episodes(parts_dir: Path) -> set[int]:
+    completed: set[int] = set()
+    if not parts_dir.exists():
+        return completed
+    pattern = re.compile(r"^episode_(\d{6})\.parquet$")
+    for path in parts_dir.iterdir():
+        if not path.is_file():
+            continue
+        m = pattern.match(path.name)
+        if m:
+            completed.add(int(m.group(1)))
+    return completed
+
+
+def _merge_parts_to_output(
+    *,
+    parts_dir: Path,
+    output_path: Path,
+    reward_model_path: str,
+    expected_num_episodes: int,
+) -> pa.Table:
+    part_paths = sorted(parts_dir.glob("episode_*.parquet"))
+    if not part_paths:
+        raise RuntimeError(f"No episode part files found in {parts_dir}")
+
+    if len(part_paths) < expected_num_episodes:
+        logging.warning(
+            "Merging incomplete parts: found %d / expected %d episodes",
+            len(part_paths),
+            expected_num_episodes,
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_output = output_path.with_suffix(output_path.suffix + ".tmp")
+    metadata = {b"reward_model_path": reward_model_path.encode()}
+    writer = None
+    try:
+        for part_path in part_paths:
+            table = pq.read_table(part_path)
+            table = table.replace_schema_metadata(metadata)
+            if writer is None:
+                writer = pq.ParquetWriter(tmp_output, table.schema)
+            writer.write_table(table)
+    finally:
+        if writer is not None:
+            writer.close()
+
+    tmp_output.replace(output_path)
+    return pq.read_table(output_path)
+
+
 def generate_all_frame_indices(ep_start: int, ep_end: int, frame_gap: int = 30) -> list[int]:
     """Generate all frame indices, ordered by offset for cache-friendly access.
 

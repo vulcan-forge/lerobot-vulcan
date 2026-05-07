@@ -27,7 +27,7 @@ CUDA_VISIBLE_DEVICES=0 uv run lerobot-train \
 ```
 CUDA_VISIBLE_DEVICES=0 uv run lerobot-train \
   --resume=true \
-  --config_path=outputs/train/sarm_sourccey-shirt-fold-c-004/checkpoints/last/pretrained_model/train_config.json
+  --config_path=outputs/train/sarm_sourccey-shirt-fold-c-005/checkpoints/last/pretrained_model/train_config.json
 
 ```
 
@@ -73,8 +73,8 @@ Generatoe RA-BC progress
 
 ```
 uv run python -m lerobot.rewards.sarm.compute_rabc_weights \
- --dataset-repo-id="Combination/sourccey-shirt-aggregate-2-hq" \
- --reward-model-path="outputs/train/sarm_2cam_sourccey-shirt-aggregate-2/checkpoints/060000/pretrained_model" \
+ --dataset-repo-id="Combination/sourccey-shirt-fold-c-005" \
+ --reward-model-path="outputs/train/sarm_sourccey-shirt-fold-c-005/checkpoints/025000/pretrained_model" \
  --head-mode=sparse \
  --device=cuda \
  --num-visualizations=10 \
@@ -89,15 +89,15 @@ Rank Episodes with Sourccey Custom Script
 
 ```
 python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_rank_sarm_progress.py \
-  --dataset-repo-id="Combination/sourccey-shirt-aggregate-2-hq" \
-  --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-aggregate-2-hq/sarm_progress.parquet" \
+  --dataset-repo-id="Combination/sourccey-shirt-fold-c-005" \
+  --progress-path="/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-005/sarm_progress.parquet" \
   --head-mode=sparse \
   --output-dir="outputs/sarm_episode_ranking_progress" \
   --weight-max=0.40 \
   --weight-mean=0.25 \
   --weight-upward=0.20 \
   --weight-stability=0.15 \
-  --bottom-quality-quantile=0.10
+  --drop-bottom-k=100
 ```
 
 ### Delete command from SARM progress
@@ -125,8 +125,6 @@ uv run lerobot-edit-dataset \
 
 Output artifacts:
 - `outputs/sarm_episode_ranking_progress/episode_ranking_progress.csv`
-- `outputs/sarm_episode_ranking_progress/episodes_top300_progress.csv`
-- `outputs/sarm_episode_ranking_progress/episodes_bottom300_progress.csv`
 - `outputs/sarm_episode_ranking_progress/episodes_to_drop_progress.json`
 
 Use `episodes_to_drop_progress.json` with `lerobot-edit-dataset --operation.type delete_episodes` to trim low-quality episodes.
@@ -153,14 +151,13 @@ python src/lerobot/robots/sourccey/sourccey/sourccey/scripts/sourccey_rank_sarm_
  --weight-stability=0.15 \
  --preview-top-k=25 \
  --preview-bottom-k=25 \
- --file-top-k=300 \
- --file-bottom-k=300 \
+ --file-bottom-k=0 \
+ --drop-bottom-k=100 \
  --save-charts \
  --chart-top-k=10 \
  --chart-bottom-k=10 \
  --chart-rolling-window=61 \
- --chart-dpi=160 \
- --bottom-quality-quantile=0.10
+ --chart-dpi=160
 ```
 
 ###
