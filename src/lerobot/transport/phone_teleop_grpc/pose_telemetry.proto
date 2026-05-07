@@ -23,6 +23,10 @@ message PoseData {
   float y_vel = 11;      // strafe left/right
   float theta_vel = 12;  // rotational velocity
   bool base_active = 13; // whether base command should be applied
+  bool start_episode = 14;
+  bool stop_episode = 15;
+  bool rerecord_episode = 16;
+  bool mark_success = 17;
 }
 
 message PoseResponse {

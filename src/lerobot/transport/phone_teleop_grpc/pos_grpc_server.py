@@ -48,6 +48,10 @@ class PoseTelemetryService(pose_telemetry_pb2_grpc.PoseTelemetryServicer):
                 y_vel = getattr(pose_data, "y_vel", 0.0)
                 theta_vel = getattr(pose_data, "theta_vel", 0.0)
                 base_active = getattr(pose_data, "base_active", False)
+                start_episode = getattr(pose_data, "start_episode", False)
+                stop_episode = getattr(pose_data, "stop_episode", False)
+                rerecord_episode = getattr(pose_data, "rerecord_episode", False)
+                mark_success = getattr(pose_data, "mark_success", False)
                 
                 # If any velocity is non-zero, treat as active and log
                 if abs(x_vel) > 0.0 or abs(y_vel) > 0.0 or abs(theta_vel) > 0.0:
@@ -77,6 +81,10 @@ class PoseTelemetryService(pose_telemetry_pb2_grpc.PoseTelemetryServicer):
                     "precision": precision_mode,
                     "reset_mapping": reset_mapping,
                     "is_resetting": is_resetting,
+                    "start_episode": bool(start_episode),
+                    "stop_episode": bool(stop_episode),
+                    "rerecord_episode": bool(rerecord_episode),
+                    "mark_success": bool(mark_success),
                     # Pass through base control if provided
                     "base": {
                         "x.vel": float(x_vel),

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 class TeleopEvents(Enum):
     """Shared constants for teleoperator events across teleoperators."""
 
+    START_EPISODE = "start_episode"
     SUCCESS = "success"
     FAILURE = "failure"
     RERECORD_EPISODE = "rerecord_episode"

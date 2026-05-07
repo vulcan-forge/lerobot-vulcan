@@ -64,6 +64,12 @@ class SourcceyProtobuf:
                 except AttributeError:
                     pass
 
+            if "request_recording_toggle" in action:
+                try:
+                    robot_action.request_recording_toggle = bool(action.get("request_recording_toggle", False))
+                except AttributeError:
+                    pass
+
             return robot_action
 
         except ImportError as e:
@@ -117,6 +123,8 @@ class SourcceyProtobuf:
                     camera.image_data = encoded_img.tobytes()
                     msg.cameras.append(camera)
 
+            msg.recording_toggle_counter = int(observation.get("recording.toggle_counter", 0))
+
             return msg
 
         except ImportError as e:
@@ -168,6 +176,7 @@ class SourcceyProtobuf:
             # Per-arm flags from protobuf
             action["untorque_left"] = bool(getattr(action_msg, "untorque_left", False))
             action["untorque_right"] = bool(getattr(action_msg, "untorque_right", False))
+            action["request_recording_toggle"] = bool(getattr(action_msg, "request_recording_toggle", False))
 
             return action
 
@@ -210,6 +219,7 @@ class SourcceyProtobuf:
 
             # Z position (linear actuator)
             observation["z.pos"] = robot_state.base_position.z_pos
+            observation["recording.toggle_counter"] = int(getattr(robot_state, "recording_toggle_counter", 0))
 
             # Process cameras from the cameras list
             for camera in robot_state.cameras:

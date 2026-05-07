@@ -38,6 +38,7 @@ except ImportError as e:
 
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.teleoperators.teleoperator import Teleoperator
+from lerobot.teleoperators.utils import TeleopEvents
 from lerobot.motors.feetech.tables import MODEL_RESOLUTION
 from lerobot.teleoperators.vr_teleoperation import (
     BaseMotionCommand,
@@ -296,6 +297,12 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         self._last_wrist_refined_solution_rad: np.ndarray | None = None
         self._last_postprocessed_solution_rad: np.ndarray | None = None
         self._last_action_snapshot: dict[str, Any] | None = None
+        self._prev_episode_button_states = {
+            "start_episode": False,
+            "stop_episode": False,
+            "rerecord_episode": False,
+            "mark_success": False,
+        }
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -363,6 +370,10 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             "precision_mode": bool(sample.precision_mode),
             "reset_mapping": bool(sample.reset_mapping),
             "is_resetting": bool(sample.is_resetting),
+            "start_episode": bool(sample.start_episode),
+            "stop_episode": bool(sample.stop_episode),
+            "rerecord_episode": bool(sample.rerecord_episode),
+            "mark_success": bool(sample.mark_success),
             "base": {
                 "x": self._round_scalar(sample.base.x),
                 "y": self._round_scalar(sample.base.y),
@@ -1189,6 +1200,45 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 level=logging.ERROR,
             )
             return action
+
+    def get_teleop_events(self) -> dict[str, Any]:
+        sample = self._last_sample or self.pose_stream.read_latest()
+        if sample is None:
+            return {
+                TeleopEvents.START_EPISODE: False,
+                TeleopEvents.IS_INTERVENTION: False,
+                TeleopEvents.TERMINATE_EPISODE: False,
+                TeleopEvents.SUCCESS: False,
+                TeleopEvents.FAILURE: False,
+                TeleopEvents.RERECORD_EPISODE: False,
+            }
+
+        current_states = {
+            "start_episode": bool(sample.start_episode),
+            "stop_episode": bool(sample.stop_episode),
+            "rerecord_episode": bool(sample.rerecord_episode),
+            "mark_success": bool(sample.mark_success),
+        }
+
+        def rising_edge(name: str) -> bool:
+            current = current_states[name]
+            previous = self._prev_episode_button_states.get(name, False)
+            self._prev_episode_button_states[name] = current
+            return current and not previous
+
+        start_episode = rising_edge("start_episode")
+        stop_episode = rising_edge("stop_episode")
+        rerecord_episode = rising_edge("rerecord_episode")
+        mark_success = rising_edge("mark_success")
+
+        return {
+            TeleopEvents.START_EPISODE: start_episode,
+            TeleopEvents.IS_INTERVENTION: bool(sample.teleop_active),
+            TeleopEvents.TERMINATE_EPISODE: stop_episode,
+            TeleopEvents.SUCCESS: mark_success,
+            TeleopEvents.FAILURE: False,
+            TeleopEvents.RERECORD_EPISODE: rerecord_episode,
+        }
 
     def _solve_ik(self, target_position: np.ndarray, target_wxyz: np.ndarray) -> list[float]:
         """Solve inverse kinematics for target pose. Returns solution in radians."""

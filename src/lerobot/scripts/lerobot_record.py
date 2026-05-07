@@ -90,6 +90,7 @@ from lerobot.common.control_utils import (
     sanity_check_dataset_name,
     sanity_check_dataset_robot_compatibility,
 )
+from lerobot.common.remote_recording_control import RemoteRecordingControlServer
 from lerobot.configs import PreTrainedConfig, parser
 from lerobot.datasets import (
     LeRobotDataset,
@@ -132,6 +133,7 @@ from lerobot.robots import (  # noqa: F401
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
+    TeleopEvents,
     bi_openarm_leader,
     bi_so_leader,
     homunculus,
@@ -210,10 +212,33 @@ class DatasetRecordConfig:
     encoder_threads: int | None = None
     # Rename map for the observation to override the image and state keys
     rename_map: dict[str, str] = field(default_factory=dict)
+    # When to start an episode: immediately, after a teleop event, after a host-side
+    # signal observed via robot observations, or after a remote HTTP signal.
+    start_trigger: str = "immediate"
+    # When to end an episode once it has started.
+    end_trigger: str = "timeout"
+    # Host interface for the remote recording control server when using start_trigger=remote_signal.
+    remote_signal_host: str = "0.0.0.0"
+    # Port for the remote recording control server when using start_trigger=remote_signal.
+    remote_signal_port: int = 8787
+    # Maximum time a remote toggle request should wait for the recorder loop to acknowledge it.
+    remote_signal_response_timeout_s: float = 1.5
 
     def __post_init__(self):
         if self.single_task is None:
             raise ValueError("You need to provide a task as argument in `single_task`.")
+        allowed_start_triggers = {"immediate", "teleop_signal", "host_signal", "remote_signal"}
+        if self.start_trigger not in allowed_start_triggers:
+            raise ValueError(
+                f"Unsupported dataset.start_trigger={self.start_trigger!r}. "
+                f"Expected one of {sorted(allowed_start_triggers)}."
+            )
+        allowed_end_triggers = {"timeout", "teleop_signal", "host_signal", "either"}
+        if self.end_trigger not in allowed_end_triggers:
+            raise ValueError(
+                f"Unsupported dataset.end_trigger={self.end_trigger!r}. "
+                f"Expected one of {sorted(allowed_end_triggers)}."
+            )
 
 
 @dataclass
@@ -250,7 +275,11 @@ class RecordConfig:
             self.policy = PreTrainedConfig.from_pretrained(policy_path, cli_overrides=cli_overrides)
             self.policy.pretrained_path = policy_path
 
-        if self.teleop is None and self.policy is None:
+        if (
+            self.teleop is None
+            and self.policy is None
+            and self.dataset.start_trigger not in {"remote_signal", "host_signal"}
+        ):
             raise ValueError("Choose a policy, a teleoperator or both to control the robot")
 
     @classmethod
@@ -313,6 +342,10 @@ def record_loop(
     display_data: bool = False,
     interpolator: ActionInterpolator | None = None,
     display_compressed_images: bool = False,
+    start_trigger: str = "immediate",
+    end_trigger: str = "timeout",
+    remote_control: RemoteRecordingControlServer | None = None,
+    control_phase: str = "recording",
 ):
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -362,6 +395,16 @@ def record_loop(
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
+
+        _poll_runtime_controls(
+            robot=robot,
+            events=events,
+            teleop=teleop,
+            start_trigger=start_trigger,
+            end_trigger=end_trigger,
+            control_phase=control_phase,
+            remote_control=remote_control,
+        )
 
         if events["exit_early"]:
             events["exit_early"] = False
@@ -450,6 +493,11 @@ def record_loop(
             act_processed_teleop = teleop_action_processor((act, obs))
             action_values = act_processed_teleop
             robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
+        elif policy is None and teleop is None and start_trigger in {"remote_signal", "host_signal"}:
+            action_values = {
+                key: obs_processed.get(key, obs.get(key, 0.0)) for key in robot.action_features
+            }
+            robot_action_to_send = None
         else:
             no_action_count += 1
             if no_action_count == 1 or no_action_count % 10 == 0:
@@ -464,7 +512,8 @@ def record_loop(
         # Action can eventually be clipped using `max_relative_target`,
         # so action actually sent is saved in the dataset. action = postprocessor.process(action)
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
-        _sent_action = robot.send_action(robot_action_to_send)
+        if robot_action_to_send is not None:
+            _sent_action = robot.send_action(robot_action_to_send)
 
         # Write to dataset (only on real policy frames, not interpolated-only iterations)
         if dataset is not None and is_record_frame:
@@ -495,6 +544,209 @@ def record_loop(
         precise_sleep(max(sleep_time_s, 0.0))
 
         timestamp = time.perf_counter() - start_episode_t
+
+
+def _collect_teleop_events(teleop: Teleoperator | list[Teleoperator] | None) -> dict[TeleopEvents, bool]:
+    defaults = {
+        TeleopEvents.START_EPISODE: False,
+        TeleopEvents.IS_INTERVENTION: False,
+        TeleopEvents.TERMINATE_EPISODE: False,
+        TeleopEvents.SUCCESS: False,
+        TeleopEvents.FAILURE: False,
+        TeleopEvents.RERECORD_EPISODE: False,
+    }
+    if teleop is None:
+        return defaults
+
+    providers = teleop if isinstance(teleop, list) else [teleop]
+    merged = defaults.copy()
+    for provider in providers:
+        get_events = getattr(provider, "get_teleop_events", None)
+        if get_events is None:
+            continue
+        try:
+            provider_events = get_events() or {}
+        except Exception:
+            logging.exception("Failed to read teleop events from %s", provider)
+            continue
+        for key in merged:
+            merged[key] = merged[key] or bool(provider_events.get(key, False))
+    return merged
+
+
+def _mark_episode_start(events: dict[str, Any]) -> None:
+    events["start_episode"] = True
+    events["terminate_episode"] = False
+    events["successful_episode"] = False
+    events["rerecord_episode"] = False
+    events["exit_early"] = True
+
+
+def _mark_episode_end(
+    events: dict[str, Any],
+    *,
+    rerecord: bool = False,
+    success: bool = False,
+) -> None:
+    events["terminate_episode"] = not rerecord
+    events["successful_episode"] = success
+    events["rerecord_episode"] = rerecord
+    events["exit_early"] = True
+
+
+def _pop_robot_recording_toggle(robot: Robot) -> bool:
+    pop_toggle = getattr(robot, "pop_recording_toggle_request", None)
+    if pop_toggle is None:
+        return False
+
+    try:
+        return bool(pop_toggle())
+    except Exception:
+        logging.exception("Failed to read host recording toggle from %s", robot)
+        return False
+
+
+def _poll_runtime_controls(
+    *,
+    robot: Robot,
+    events: dict[str, Any],
+    teleop: Teleoperator | list[Teleoperator] | None,
+    start_trigger: str,
+    end_trigger: str,
+    control_phase: str,
+    remote_control: RemoteRecordingControlServer | None,
+) -> None:
+    teleop_events = _collect_teleop_events(teleop)
+    host_toggle_requested = _pop_robot_recording_toggle(robot)
+
+    if control_phase == "armed_idle" and start_trigger == "teleop_signal":
+        if teleop_events[TeleopEvents.START_EPISODE]:
+            logging.info("Received teleop start episode signal")
+            _mark_episode_start(events)
+            return
+
+    if control_phase == "armed_idle" and start_trigger == "host_signal":
+        if host_toggle_requested:
+            logging.info("Received host recording start signal")
+            _mark_episode_start(events)
+            return
+
+    if control_phase == "recording" and end_trigger in {"teleop_signal", "either"}:
+        if teleop_events[TeleopEvents.RERECORD_EPISODE]:
+            logging.info("Received teleop rerecord signal")
+            _mark_episode_end(events, rerecord=True)
+            return
+        if teleop_events[TeleopEvents.SUCCESS]:
+            logging.info("Received teleop success signal")
+            _mark_episode_end(events, success=True)
+            return
+        if teleop_events[TeleopEvents.TERMINATE_EPISODE]:
+            logging.info("Received teleop stop episode signal")
+            _mark_episode_end(events)
+            return
+
+    if control_phase == "recording" and end_trigger in {"host_signal", "either"} and host_toggle_requested:
+        logging.info("Received host recording stop signal")
+        _mark_episode_end(events)
+        return
+
+    if remote_control is None:
+        return
+
+    request = remote_control.pop_pending_toggle()
+    if request is None:
+        return
+
+    if control_phase == "armed_idle" and start_trigger == "remote_signal":
+        _mark_episode_start(events)
+        remote_control.complete_toggle(
+            request,
+            ok=True,
+            recording=True,
+            phase="recording",
+            message="Recording On",
+        )
+        return
+
+    if control_phase == "recording" and start_trigger == "remote_signal":
+        _mark_episode_end(events)
+        remote_control.complete_toggle(
+            request,
+            ok=True,
+            recording=False,
+            phase="armed_idle",
+            message="Recording Off",
+        )
+        return
+
+    remote_control.complete_toggle(
+        request,
+        ok=False,
+        recording=(control_phase == "recording"),
+        phase=control_phase,
+        message=f"Recorder is busy in phase={control_phase}.",
+    )
+
+
+def _reset_runtime_episode_flags(events: dict[str, Any]) -> None:
+    events["start_episode"] = False
+    events["terminate_episode"] = False
+    events["successful_episode"] = False
+    events["rerecord_episode"] = False
+
+
+def _wait_for_episode_start(
+    *,
+    robot: Robot,
+    teleop: Teleoperator | list[Teleoperator] | None,
+    events: dict[str, Any],
+    cfg: RecordConfig,
+    teleop_action_processor: RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction],
+    robot_action_processor: RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction],
+    robot_observation_processor: RobotProcessorPipeline[RobotObservation, RobotObservation],
+    remote_control: RemoteRecordingControlServer | None,
+    display_compressed_images: bool,
+) -> bool:
+    _reset_runtime_episode_flags(events)
+    if remote_control is not None:
+        remote_control.set_phase("armed_idle", recording=False)
+
+    log_say("Waiting for episode start signal", cfg.play_sounds)
+
+    if cfg.dataset.start_trigger == "teleop_signal":
+        record_loop(
+            robot=robot,
+            events=events,
+            fps=cfg.dataset.fps,
+            teleop_action_processor=teleop_action_processor,
+            robot_action_processor=robot_action_processor,
+            robot_observation_processor=robot_observation_processor,
+            teleop=teleop,
+            control_time_s=float("inf"),
+            single_task=cfg.dataset.single_task,
+            display_data=cfg.display_data,
+            display_compressed_images=display_compressed_images,
+            start_trigger=cfg.dataset.start_trigger,
+            end_trigger=cfg.dataset.end_trigger,
+            remote_control=remote_control,
+            control_phase="armed_idle",
+        )
+    else:
+        while not events["stop_recording"] and not events["start_episode"]:
+            _poll_runtime_controls(
+                robot=robot,
+                events=events,
+                teleop=teleop,
+                start_trigger=cfg.dataset.start_trigger,
+                end_trigger=cfg.dataset.end_trigger,
+                control_phase="armed_idle",
+                remote_control=remote_control,
+            )
+            if events["exit_early"]:
+                events["exit_early"] = False
+            precise_sleep(1 / cfg.dataset.fps)
+
+    return bool(events["start_episode"] and not events["stop_recording"])
 
 
 @parser.wrap()
@@ -531,10 +783,31 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
     dataset = None
     listener = None
+    remote_control = None
+    num_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
+
+    if cfg.dataset.start_trigger == "teleop_signal" and teleop is None:
+        raise ValueError("dataset.start_trigger=teleop_signal requires a teleop device.")
+
+    if cfg.dataset.start_trigger == "teleop_signal":
+        teleop_has_events = False
+        providers = teleop if isinstance(teleop, list) else [teleop]
+        for provider in providers:
+            if provider is not None and hasattr(provider, "get_teleop_events"):
+                teleop_has_events = True
+                break
+        if not teleop_has_events:
+            raise ValueError(
+                "dataset.start_trigger=teleop_signal requires a teleop device that implements get_teleop_events()."
+            )
+
+    if cfg.dataset.start_trigger == "host_signal" and not hasattr(robot, "pop_recording_toggle_request"):
+        raise ValueError(
+            "dataset.start_trigger=host_signal requires a robot that implements pop_recording_toggle_request()."
+        )
 
     try:
         if cfg.resume:
-            num_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
             dataset = LeRobotDataset.resume(
                 cfg.dataset.repo_id,
                 root=cfg.dataset.root,
@@ -559,8 +832,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 robot_type=robot.name,
                 features=dataset_features,
                 use_videos=cfg.dataset.video,
-                image_writer_processes=cfg.dataset.num_image_writer_processes,
-                image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
+                image_writer_processes=cfg.dataset.num_image_writer_processes if num_cameras > 0 else 0,
+                image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * num_cameras
+                if num_cameras > 0
+                else 0,
                 batch_encoding_size=cfg.dataset.video_encoding_batch_size,
                 vcodec=cfg.dataset.vcodec,
                 streaming_encoding=cfg.dataset.streaming_encoding,
@@ -596,7 +871,17 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         if teleop is not None:
             teleop.connect()
 
+        if cfg.dataset.start_trigger == "remote_signal":
+            remote_control = RemoteRecordingControlServer(
+                host=cfg.dataset.remote_signal_host,
+                port=cfg.dataset.remote_signal_port,
+                response_timeout_s=cfg.dataset.remote_signal_response_timeout_s,
+            )
+            remote_control.start()
+            remote_control.set_phase("armed_idle", recording=False)
+
         listener, events = init_keyboard_listener()
+        _reset_runtime_episode_flags(events)
 
         if not cfg.dataset.streaming_encoding:
             logging.info(
@@ -606,6 +891,26 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         with VideoEncodingManager(dataset):
             recorded_episodes = 0
             while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
+                should_start = True
+                if cfg.dataset.start_trigger != "immediate":
+                    should_start = _wait_for_episode_start(
+                        robot=robot,
+                        teleop=teleop,
+                        events=events,
+                        cfg=cfg,
+                        teleop_action_processor=teleop_action_processor,
+                        robot_action_processor=robot_action_processor,
+                        robot_observation_processor=robot_observation_processor,
+                        remote_control=remote_control,
+                        display_compressed_images=display_compressed_images,
+                    )
+
+                if not should_start:
+                    break
+
+                _reset_runtime_episode_flags(events)
+                if remote_control is not None:
+                    remote_control.set_phase("recording", recording=True)
                 log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
                 record_loop(
                     robot=robot,
@@ -624,14 +929,24 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     display_data=cfg.display_data,
                     interpolator=interpolator,
                     display_compressed_images=display_compressed_images,
+                    start_trigger=cfg.dataset.start_trigger,
+                    end_trigger=cfg.dataset.end_trigger,
+                    remote_control=remote_control,
+                    control_phase="recording",
                 )
 
                 # Execute a few seconds without recording to give time to manually reset the environment
                 # Skip reset for the last episode to be recorded
-                if not events["stop_recording"] and (
+                if (
+                    cfg.dataset.start_trigger == "immediate"
+                    and not events["stop_recording"]
+                    and (
                     (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
+                    )
                 ):
                     log_say("Reset the environment", cfg.play_sounds)
+                    if remote_control is not None:
+                        remote_control.set_phase("resetting", recording=False)
 
                     record_loop(
                         robot=robot,
@@ -644,22 +959,36 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         control_time_s=cfg.dataset.reset_time_s,
                         single_task=cfg.dataset.single_task,
                         display_data=cfg.display_data,
+                        start_trigger=cfg.dataset.start_trigger,
+                        end_trigger=cfg.dataset.end_trigger,
+                        remote_control=remote_control,
+                        control_phase="resetting",
                     )
 
                 if events["rerecord_episode"]:
                     log_say("Re-record episode", cfg.play_sounds)
                     events["rerecord_episode"] = False
                     events["exit_early"] = False
+                    events["terminate_episode"] = False
+                    events["successful_episode"] = False
                     dataset.clear_episode_buffer()
+                    if remote_control is not None:
+                        remote_control.set_phase("armed_idle", recording=False)
                     continue
 
                 dataset.save_episode()
                 recorded_episodes += 1
+                if remote_control is not None:
+                    remote_control.set_phase("armed_idle", recording=False)
     finally:
         log_say("Stop recording", cfg.play_sounds, blocking=True)
 
         if dataset:
             dataset.finalize()
+
+        if remote_control is not None:
+            remote_control.set_phase("stopped", recording=False)
+            remote_control.stop()
 
         if robot.is_connected:
             robot.disconnect()

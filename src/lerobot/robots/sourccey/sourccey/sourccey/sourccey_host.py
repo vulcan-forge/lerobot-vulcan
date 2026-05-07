@@ -70,6 +70,8 @@ def main():
 
     last_cmd_time = time.time()
     watchdog_active = False
+    recording_toggle_counter = 0
+    previous_recording_toggle_request = False
 
     try:
         # Business logic
@@ -89,6 +91,15 @@ def main():
                 robot_action.ParseFromString(msg_bytes)
 
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
+
+                recording_toggle_request = bool(data.get("request_recording_toggle", False))
+                if recording_toggle_request and not previous_recording_toggle_request:
+                    recording_toggle_counter += 1
+                    logging.info(
+                        "Observed new recording toggle request from Unity stream -> counter=%s",
+                        recording_toggle_counter,
+                    )
+                previous_recording_toggle_request = recording_toggle_request
 
                 # Send action to robot
                 _action_sent = robot.send_action(data)
@@ -126,6 +137,7 @@ def main():
                     logging.warning("No observation received. Sending previous observation.")
 
                 if observation is not None and observation != {}:
+                    observation["recording.toggle_counter"] = recording_toggle_counter
                     # Convert observation to protobuf using existing method
                     robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
 

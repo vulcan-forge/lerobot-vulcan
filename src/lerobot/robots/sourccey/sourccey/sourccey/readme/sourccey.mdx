@@ -245,6 +245,95 @@ python src/lerobot/control/sourccey/sourccey/record.py \
 - `--dataset.reset_time_s`: Time between episodes for reset
 - `--dataset.task`: Task description for the dataset
 
+### VR Recording From LeRobot Teleop Signals
+
+If you are using the LeRobot Sourccey VR teleoperator stream directly, you can arm the recorder first and let the VR stream decide when the episode starts and stops.
+
+```bash
+uv run lerobot-record \
+ --robot.type=sourccey_client \
+ --robot.id=sourccey \
+ --robot.remote_ip=192.168.1.214 \
+ --teleop.type=sourccey_teleop \
+ --teleop.id=vr_left \
+ --teleop.arm_side=left \
+ --teleop.grpc_port=8765 \
+ --dataset.repo_id=sourccey-012/sourccey-vr-fold-shorts \
+ --dataset.single_task="Fold the shorts" \
+ --dataset.num_episodes=5 \
+ --dataset.episode_time_s=200 \
+ --dataset.reset_time_s=5 \
+ --dataset.fps=30 \
+ --dataset.start_trigger=teleop_signal \
+ --dataset.end_trigger=either \
+ --dataset.push_to_hub=false
+```
+
+In this mode:
+
+- `start_episode` from the VR stream begins the episode
+- `stop_episode` ends and saves the episode
+- `rerecord_episode` discards the current buffer and re-arms
+- `mark_success` ends the episode as a successful take
+
+### VR Recording From The Existing Sourccey Host Stream
+
+If the Unity VR app is already driving the robot through the normal Sourccey host connection, the cleanest recording setup is to let the Unity action stream carry a small recording-toggle bit to the host. The host surfaces that as a counter in robot observations, and `lerobot-record` on the client starts and stops episodes when that counter changes.
+
+```bash
+uv run lerobot-record \
+ --robot.type=sourccey_client \
+ --robot.id=sourccey \
+ --robot.remote_ip=192.168.1.214 \
+ --dataset.repo_id=sourccey-012/sourccey-vr-host-fold-shorts \
+ --dataset.single_task="Fold the shorts" \
+ --dataset.num_episodes=5 \
+ --dataset.episode_time_s=200 \
+ --dataset.reset_time_s=5 \
+ --dataset.fps=30 \
+ --dataset.start_trigger=host_signal \
+ --dataset.end_trigger=either \
+ --dataset.push_to_hub=false
+```
+
+In this mode:
+
+- the Unity app keeps talking only to the Sourccey host
+- pressing the wired recording button sends a `request_recording_toggle` bit on the normal action stream
+- the host increments `recording_toggle_counter` on each new toggle request
+- `lerobot-record` watches that counter through `sourccey_client` observations
+- the first toggle starts an episode and the next toggle ends it
+- `episode_time_s` remains a safety timeout because `end_trigger=either`
+
+### VR Recording From A Remote Toggle Client
+
+If the VR headset or another client is controlling the robot outside of LeRobot, run the recorder in remote-signal mode and have the client call the built-in HTTP toggle endpoint.
+
+```bash
+uv run lerobot-record \
+ --robot.type=sourccey_client \
+ --robot.id=sourccey \
+ --robot.remote_ip=192.168.1.214 \
+ --dataset.repo_id=sourccey-012/sourccey-vr-direct-fold-shorts \
+ --dataset.single_task="Fold the shorts" \
+ --dataset.num_episodes=5 \
+ --dataset.episode_time_s=200 \
+ --dataset.reset_time_s=5 \
+ --dataset.fps=30 \
+ --dataset.start_trigger=remote_signal \
+ --dataset.end_trigger=either \
+ --dataset.remote_signal_host=0.0.0.0 \
+ --dataset.remote_signal_port=8787 \
+ --dataset.push_to_hub=false
+```
+
+The recorder exposes:
+
+- `GET /recording/status`
+- `POST /recording/toggle`
+
+Pressing the remote toggle while the recorder is armed starts an episode. Pressing it again while recording stops and saves the episode.
+
 ---
 
 ## Training Models

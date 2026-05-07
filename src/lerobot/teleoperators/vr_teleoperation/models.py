@@ -60,6 +60,10 @@ class VRTeleopSample:
     precision_mode: bool = False
     reset_mapping: bool = False
     is_resetting: bool = False
+    start_episode: bool = False
+    stop_episode: bool = False
+    rerecord_episode: bool = False
+    mark_success: bool = False
     base: BaseMotionCommand = field(default_factory=BaseMotionCommand)
 
     @classmethod
@@ -74,6 +78,10 @@ class VRTeleopSample:
             precision_mode=bool(payload.get("precision", False)),
             reset_mapping=bool(payload.get("reset_mapping", False)),
             is_resetting=bool(payload.get("is_resetting", False)),
+            start_episode=bool(payload.get("start_episode", False)),
+            stop_episode=bool(payload.get("stop_episode", False)),
+            rerecord_episode=bool(payload.get("rerecord_episode", False)),
+            mark_success=bool(payload.get("mark_success", False)),
             base=BaseMotionCommand.from_payload(payload.get("base")),
         )
 

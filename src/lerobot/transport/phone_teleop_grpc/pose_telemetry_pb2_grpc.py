@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from . import pose_telemetry_pb2 as pose__telemetry__pb2
+import pose_telemetry_pb2 as pose__telemetry__pb2
 
 GRPC_GENERATED_VERSION = '1.73.1'
 GRPC_VERSION = grpc.__version__
