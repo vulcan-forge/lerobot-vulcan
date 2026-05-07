@@ -97,6 +97,15 @@ def main():
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
 
                 recording_start_request = bool(data.get("request_recording_start", False))
+                recording_stop_request = bool(data.get("request_recording_stop", False))
+                recording_rerecord_request = bool(data.get("request_recording_rerecord", False))
+                if recording_start_request or recording_stop_request or recording_rerecord_request:
+                    logging.info(
+                        "Host received recording command flags from Unity: start=%s stop=%s rerecord=%s",
+                        recording_start_request,
+                        recording_stop_request,
+                        recording_rerecord_request,
+                    )
                 if recording_start_request and not previous_recording_start_request:
                     recording_start_counter += 1
                     logging.info(
@@ -105,7 +114,6 @@ def main():
                     )
                 previous_recording_start_request = recording_start_request
 
-                recording_stop_request = bool(data.get("request_recording_stop", False))
                 if recording_stop_request and not previous_recording_stop_request:
                     recording_stop_counter += 1
                     logging.info(
@@ -114,7 +122,6 @@ def main():
                     )
                 previous_recording_stop_request = recording_stop_request
 
-                recording_rerecord_request = bool(data.get("request_recording_rerecord", False))
                 if recording_rerecord_request and not previous_recording_rerecord_request:
                     recording_rerecord_counter += 1
                     logging.info(

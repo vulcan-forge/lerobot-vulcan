@@ -600,7 +600,10 @@ def _pop_robot_recording_command(robot: Robot, method_name: str) -> bool:
         return False
 
     try:
-        return bool(pop_command())
+        result = bool(pop_command())
+        if result:
+            logging.info("Host recording command popped from robot via %s", method_name)
+        return result
     except Exception:
         logging.exception("Failed to read host recording command %s from %s", method_name, robot)
         return False
