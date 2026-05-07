@@ -193,6 +193,17 @@ def main():
                         )
                     # Convert observation to protobuf using existing method
                     robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
+                    if (
+                        robot_state.recording_start_counter > 0
+                        or robot_state.recording_stop_counter > 0
+                        or robot_state.recording_rerecord_counter > 0
+                    ):
+                        print(
+                            "[HOST] Protobuf counters being sent: "
+                            f"start={robot_state.recording_start_counter} "
+                            f"stop={robot_state.recording_stop_counter} "
+                            f"rerecord={robot_state.recording_rerecord_counter}"
+                        )
 
                     # Send protobuf message instead of JSON
                     host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
