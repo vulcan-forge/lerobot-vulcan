@@ -345,10 +345,6 @@ class SourcceyClient(Robot):
             return False
 
         self._pending_recording_start_requests -= 1
-        logging.info(
-            "Consuming pending host recording START request. remaining=%s",
-            self._pending_recording_start_requests,
-        )
         return True
 
     def pop_recording_stop_request(self) -> bool:
@@ -356,10 +352,6 @@ class SourcceyClient(Robot):
             return False
 
         self._pending_recording_stop_requests -= 1
-        logging.info(
-            "Consuming pending host recording STOP request. remaining=%s",
-            self._pending_recording_stop_requests,
-        )
         return True
 
     def pop_recording_rerecord_request(self) -> bool:
@@ -367,10 +359,6 @@ class SourcceyClient(Robot):
             return False
 
         self._pending_recording_rerecord_requests -= 1
-        logging.info(
-            "Consuming pending host recording RERECORD request. remaining=%s",
-            self._pending_recording_rerecord_requests,
-        )
         return True
 
     def _update_recording_counter(
@@ -399,14 +387,6 @@ class SourcceyClient(Robot):
         pending_value = int(getattr(self, pending_attr)) + delta
         setattr(self, pending_attr, pending_value)
         setattr(self, last_attr, counter)
-        print(f"[CLIENT] Received host {label} signal. counter={counter} delta={delta} pending={pending_value}")
-        logging.info(
-            "Received host %s signal counter=%s delta=%s pending=%s",
-            label,
-            counter,
-            delta,
-            pending_value,
-        )
 
     def _update_recording_command_state(self, robot_state: sourccey_pb2.SourcceyRobotState) -> None:
         start_counter = int(getattr(robot_state, "recording_start_counter", 0))
