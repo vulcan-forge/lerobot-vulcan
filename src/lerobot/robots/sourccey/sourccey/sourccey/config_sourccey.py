@@ -14,7 +14,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Literal
 
 from lerobot.cameras.configs import CameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
@@ -150,7 +149,7 @@ class SourcceyClientConfig(RobotConfig):
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
     port_zmq_observations_broadcast: int = 5560
-    observation_transport: Literal["legacy", "broadcast"] = "legacy"
+    observation_transport: str = "legacy"
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {
@@ -178,3 +177,10 @@ class SourcceyClientConfig(RobotConfig):
 
     polling_timeout_ms: int = 15
     connect_timeout_s: int = 5
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.observation_transport not in {"legacy", "broadcast"}:
+            raise ValueError(
+                "robot.observation_transport must be one of: 'legacy', 'broadcast'"
+            )
