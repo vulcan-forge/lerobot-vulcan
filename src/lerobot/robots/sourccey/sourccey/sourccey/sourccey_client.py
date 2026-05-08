@@ -107,6 +107,7 @@ class SourcceyClient(Robot):
         self._pending_recording_start_requests = 0
         self._pending_recording_stop_requests = 0
         self._pending_recording_rerecord_requests = 0
+        self._recording_counters_initialized = False
 
     ###################################################################
     # Properties and Attributes
@@ -215,6 +216,7 @@ class SourcceyClient(Robot):
         self._pending_recording_start_requests = 0
         self._pending_recording_stop_requests = 0
         self._pending_recording_rerecord_requests = 0
+        self._recording_counters_initialized = False
         self._is_connected = True
 
     def calibrate(self) -> None:
@@ -404,6 +406,17 @@ class SourcceyClient(Robot):
         start_counter = int(getattr(robot_state, "recording_start_counter", 0))
         stop_counter = int(getattr(robot_state, "recording_stop_counter", 0))
         rerecord_counter = int(getattr(robot_state, "recording_rerecord_counter", 0))
+
+        if not self._recording_counters_initialized:
+            self._last_recording_start_counter = start_counter
+            self._last_recording_stop_counter = stop_counter
+            self._last_recording_rerecord_counter = rerecord_counter
+            self._pending_recording_start_requests = 0
+            self._pending_recording_stop_requests = 0
+            self._pending_recording_rerecord_requests = 0
+            self._recording_counters_initialized = True
+            return
+
         self._update_recording_counter(
             counter=start_counter,
             last_attr="_last_recording_start_counter",
