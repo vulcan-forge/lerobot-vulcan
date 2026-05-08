@@ -10,17 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_PARENTS = [
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-a/nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-c/nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/rollout__sourccey-013__shirt-fold-blue-c/nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-c-specific-001/nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-c-specific-002/nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-c-specific-003/nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-c-specific-004/nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-princeton-1/VR",
 
 ]
 HF_LEROBOT_HOME = Path("/home/sourccey/.cache/huggingface/lerobot")
-DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-005"
+DEFAULT_DATASET_REPO = "Combination/sourccey-vr-000"
 
 
 @dataclass(frozen=True)

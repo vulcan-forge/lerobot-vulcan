@@ -14,7 +14,7 @@ Assumptions:
 ```bash
 uv run lerobot-rollout \
   --strategy.type=base \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-004/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/0300000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --logging.throttle_spam=true \
@@ -27,6 +27,48 @@ uv run lerobot-rollout \
 
 To disable throttling and show every message:
 - `--logging.throttle_spam=false`
+
+---
+
+## 1b) Performance-tuned Base Rollout (Sourccey + XVLA)
+
+If you see repeated warnings like:
+- `Record loop is running slower (...) than target FPS (...)`
+- `No new data available within timeout`
+
+use this profile first:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
+  --strategy.type=base \
+  --inference.type=rtc \
+  --inference.rtc.enabled=false \
+  --inference.rtc.execution_horizon=30 \
+  --interpolation_multiplier=2 \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/0300000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --robot.polling_timeout_ms=5 \
+  --logging.throttle_spam=true \
+  --logging.throttle_interval_s=30.0 \
+  --task="Fold the shirt" \
+  --display_data=false \
+  --duration=1800 \
+  --fps=20 \
+  --device=cuda
+```
+
+Notes:
+- `--inference.type=rtc` enables async inference in a background thread.
+- `--inference.rtc.enabled=false` keeps queue-append mode (useful for policies without RTC overlap kwargs, like XVLA).
+- `--interpolation_multiplier=2` smooths control by emitting interpolated actions between policy outputs.
+- `--robot.polling_timeout_ms=5` reduces blocking when no new observation packet is available.
+- `--display_data=false` removes Rerun visualization overhead from the control loop.
+
+If 20 FPS is stable, try increasing:
+- `--fps=24`, then `--fps=30`
+
+If 30 FPS is still unstable, keep `--fps` near sustained sensor rate and use interpolation for smoother actuation.
 
 ---
 
