@@ -8,19 +8,39 @@ import cv2
 import numpy as np
 
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
+from lerobot.robots.sourccey.sourccey.sourccey.modules.slam import SlamInputConfig
 
 
 def _make_client() -> SourcceyClient:
     config = SourcceyClientConfig(
         id="test-client",
         remote_ip="127.0.0.1",
-        slam_input_enabled=True,
-        slam_input_endpoint="tcp://127.0.0.1:5560",
-        slam_stereo_left_key="front_left",
-        slam_stereo_right_key="front_right",
-        slam_jpeg_quality=80,
+        slam=SlamInputConfig(
+            input_enabled=True,
+            input_endpoint="tcp://127.0.0.1:5560",
+            stereo_left_key="front_left",
+            stereo_right_key="front_right",
+            jpeg_quality=80,
+        ),
     )
     return SourcceyClient(config)
+
+
+def test_legacy_flat_slam_config_fields_still_work() -> None:
+    config = SourcceyClientConfig(
+        id="test-client",
+        remote_ip="127.0.0.1",
+        slam_input_enabled=True,
+        slam_input_endpoint="tcp://127.0.0.1:5561",
+        slam_stereo_left_key="left_cam",
+        slam_stereo_right_key="right_cam",
+        slam_jpeg_quality=72,
+    )
+    assert config.slam.input_enabled is True
+    assert config.slam.input_endpoint == "tcp://127.0.0.1:5561"
+    assert config.slam.stereo_left_key == "left_cam"
+    assert config.slam.stereo_right_key == "right_cam"
+    assert config.slam.jpeg_quality == 72
 
 
 def _make_frames() -> dict[str, np.ndarray]:

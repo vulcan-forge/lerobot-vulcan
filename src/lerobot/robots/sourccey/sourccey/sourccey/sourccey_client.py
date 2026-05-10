@@ -28,6 +28,11 @@ from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnected
 
 from lerobot.robots.robot import Robot
 from .config_sourccey import SourcceyClientConfig
+from .modules.slam import (
+    SlamInputPublisher,
+    close_slam_pub_socket,
+    create_slam_pub_socket,
+)
 
 # Import protobuf modules
 from ..protobuf.generated import sourccey_pb2
@@ -46,11 +51,12 @@ class SourcceyClient(Robot):
         self.remote_ip = config.remote_ip
         self.port_zmq_cmd = config.port_zmq_cmd
         self.port_zmq_observations = config.port_zmq_observations
-        self.slam_input_enabled = config.slam_input_enabled
-        self.slam_input_endpoint = config.slam_input_endpoint
-        self.slam_stereo_left_key = config.slam_stereo_left_key
-        self.slam_stereo_right_key = config.slam_stereo_right_key
-        self.slam_jpeg_quality = int(np.clip(config.slam_jpeg_quality, 1, 100))
+        slam_cfg = config.slam
+        self.slam_input_enabled = slam_cfg.input_enabled
+        self.slam_input_endpoint = slam_cfg.input_endpoint
+        self.slam_stereo_left_key = slam_cfg.stereo_left_key
+        self.slam_stereo_right_key = slam_cfg.stereo_right_key
+        self.slam_jpeg_quality = int(np.clip(slam_cfg.jpeg_quality, 1, 100))
 
         self.teleop_keys = config.teleop_keys
 
@@ -64,10 +70,12 @@ class SourcceyClient(Robot):
 
         self.last_frames = {}
         self.last_remote_state = {}
-        self._slam_camera_frame_ids: dict[str, int] = {}
-        self._slam_warn_log_interval_s = 5.0
-        self._slam_warn_last_ts: dict[str, float] = {}
-        self._slam_warn_suppressed: dict[str, int] = {}
+        self._slam_input_publisher = SlamInputPublisher(
+            source_id=self.id,
+            stereo_left_key=self.slam_stereo_left_key,
+            stereo_right_key=self.slam_stereo_right_key,
+            jpeg_quality=self.slam_jpeg_quality,
+        )
 
         # Define three speed levels and a current index
         self.speed_levels = [
@@ -211,16 +219,9 @@ class SourcceyClient(Robot):
             self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
 
             if self.slam_input_enabled:
-                self.zmq_slam_input_socket = self.zmq_context.socket(zmq.PUB)
-                self.zmq_slam_input_socket.setsockopt(zmq.LINGER, 0)
-                try:
-                    self.zmq_slam_input_socket.bind(self.slam_input_endpoint)
-                except zmq.ZMQError as e:
-                    self.zmq_slam_input_socket.close(0)
-                    self.zmq_slam_input_socket = None
-                    raise RuntimeError(
-                        f"Failed to bind SLAM input publisher at {self.slam_input_endpoint}: {e}"
-                    ) from e
+                self.zmq_slam_input_socket = create_slam_pub_socket(
+                    self.zmq_context, self.slam_input_endpoint
+                )
 
             poller = zmq.Poller()
             poller.register(self.zmq_observation_socket, zmq.POLLIN)
@@ -231,7 +232,7 @@ class SourcceyClient(Robot):
             self._is_connected = True
         except Exception:
             if self.zmq_slam_input_socket is not None:
-                self.zmq_slam_input_socket.close(0)
+                close_slam_pub_socket(self.zmq_slam_input_socket)
                 self.zmq_slam_input_socket = None
             if self.zmq_observation_socket is not None:
                 self.zmq_observation_socket.close(0)
@@ -282,7 +283,7 @@ class SourcceyClient(Robot):
         except Exception as e:
             logging.debug(f"Could not send final relax command before disconnect: {e}")
         if self.zmq_slam_input_socket is not None:
-            self.zmq_slam_input_socket.close(0)
+            close_slam_pub_socket(self.zmq_slam_input_socket)
             self.zmq_slam_input_socket = None
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
@@ -494,102 +495,22 @@ class SourcceyClient(Robot):
         return current_frames, obs_dict
 
     def _publish_slam_input(self, observation: Dict[str, Any], frames: Dict[str, np.ndarray]) -> None:
-        payload = self._build_slam_input_packet(observation=observation, frames=frames)
-        if payload is None or self.zmq_slam_input_socket is None:
-            return
-        try:
-            self.zmq_slam_input_socket.send(payload, flags=zmq.NOBLOCK)
-        except zmq.Again:
-            logging.debug("Dropping SLAM input packet, no subscriber connected.")
-        except Exception as e:
-            self._log_slam_warning_throttled("slam_send_failed", f"Failed to publish SLAM input packet: {e}")
+        self._slam_input_publisher.publish(
+            socket=self.zmq_slam_input_socket,
+            observation=observation,
+            frames=frames,
+        )
 
     def _build_slam_input_packet(
         self, observation: Dict[str, Any], frames: Dict[str, np.ndarray]
     ) -> Optional[bytes]:
-        left_key = self.slam_stereo_left_key
-        right_key = self.slam_stereo_right_key
-        required_keys = (left_key, right_key)
-
-        missing_keys = [key for key in required_keys if key not in frames or frames[key] is None]
-        if missing_keys:
-            self._log_slam_warning_throttled(
-                "slam_missing_stereo",
-                (
-                    "Skipping SLAM input publish: missing required stereo frames "
-                    f"{missing_keys} (configured left={left_key}, right={right_key})."
-                ),
-            )
-            return None
-
-        cameras_payload: Dict[str, Dict[str, Any]] = {}
-        now_ns = time.monotonic_ns()
-        for cam_name, frame in frames.items():
-            if not isinstance(frame, np.ndarray):
-                continue
-            ok, encoded_jpg = cv2.imencode(
-                ".jpg",
-                frame,
-                [int(cv2.IMWRITE_JPEG_QUALITY), int(self.slam_jpeg_quality)],
-            )
-            if not ok or encoded_jpg is None:
-                self._log_slam_warning_throttled(
-                    f"slam_jpeg_encode_failed:{cam_name}",
-                    f"Skipping SLAM camera frame '{cam_name}': JPEG encoding failed.",
-                )
-                # Required stereo cameras must always be present and encodable.
-                if cam_name in required_keys:
-                    return None
-                continue
-
-            frame_id = self._slam_camera_frame_ids.get(cam_name, 0) + 1
-            self._slam_camera_frame_ids[cam_name] = frame_id
-            cameras_payload[cam_name] = {
-                "frame_id": frame_id,
-                "capture_monotonic_ns": now_ns,
-                "jpeg_b64": base64.b64encode(encoded_jpg.tobytes()).decode("ascii"),
-            }
-
-        if left_key not in cameras_payload or right_key not in cameras_payload:
-            self._log_slam_warning_throttled(
-                "slam_missing_required_encoded",
-                (
-                    "Skipping SLAM input publish: required stereo cameras were not encoded "
-                    f"(left={left_key in cameras_payload}, right={right_key in cameras_payload})."
-                ),
-            )
-            return None
-
-        packet = {
-            "schema": "slam_input.v1",
-            "source": f"sourccey_client:{self.id}",
-            "host_monotonic_ns": now_ns,
-            "base_velocity": {
-                "x.vel": float(observation.get("x.vel", 0.0)),
-                "y.vel": float(observation.get("y.vel", 0.0)),
-                "theta.vel": float(observation.get("theta.vel", 0.0)),
-            },
-            "stereo_left": left_key,
-            "stereo_right": right_key,
-            "imu_samples": [],
-            "cameras": cameras_payload,
-        }
-        return json.dumps(packet, separators=(",", ":")).encode("utf-8")
+        return self._slam_input_publisher.build_packet(
+            observation=observation,
+            frames=frames,
+        )
 
     def _log_slam_warning_throttled(self, key: str, message: str) -> None:
-        now = time.monotonic()
-        last_ts = self._slam_warn_last_ts.get(key, 0.0)
-        elapsed = now - last_ts
-        if elapsed >= self._slam_warn_log_interval_s:
-            suppressed = self._slam_warn_suppressed.get(key, 0)
-            if suppressed > 0:
-                logging.warning("%s (suppressed %d similar warnings)", message, suppressed)
-            else:
-                logging.warning("%s", message)
-            self._slam_warn_last_ts[key] = now
-            self._slam_warn_suppressed[key] = 0
-        else:
-            self._slam_warn_suppressed[key] = self._slam_warn_suppressed.get(key, 0) + 1
+        self._slam_input_publisher.log_warning_throttled(key, message)
 
     ###################################################################
     # Private Control Functions

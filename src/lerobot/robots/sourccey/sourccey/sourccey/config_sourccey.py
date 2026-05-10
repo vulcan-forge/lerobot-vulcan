@@ -20,6 +20,7 @@ from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.motors.dc_motors_controller import DCMotor, MotorNormMode
 
 from lerobot.robots.config import RobotConfig
+from .modules.slam import SlamInputConfig
 
 
 def sourccey_cameras_config() -> dict[str, CameraConfig]:
@@ -147,12 +148,16 @@ class SourcceyClientConfig(RobotConfig):
     remote_ip: str
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
-    # SLAM sidecar input stream (sourccey-slam expects slam_input.v1)
-    slam_input_enabled: bool = False
-    slam_input_endpoint: str = "tcp://127.0.0.1:5560"
-    slam_stereo_left_key: str = "front_left"
-    slam_stereo_right_key: str = "front_right"
-    slam_jpeg_quality: int = 80
+    # SLAM sidecar input stream (sourccey-slam expects slam_input.v1).
+    # Canonical config lives under this nested field.
+    slam: SlamInputConfig = field(default_factory=SlamInputConfig)
+    # Backward-compatibility aliases for existing commands/docs.
+    # If provided, these values override the nested slam config in __post_init__.
+    slam_input_enabled: bool | None = None
+    slam_input_endpoint: str | None = None
+    slam_stereo_left_key: str | None = None
+    slam_stereo_right_key: str | None = None
+    slam_jpeg_quality: int | None = None
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {
@@ -180,3 +185,18 @@ class SourcceyClientConfig(RobotConfig):
 
     polling_timeout_ms: int = 15
     connect_timeout_s: int = 5
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+
+        # Migrate flat legacy flags into nested SLAM config when explicitly provided.
+        if self.slam_input_enabled is not None:
+            self.slam.input_enabled = self.slam_input_enabled
+        if self.slam_input_endpoint is not None:
+            self.slam.input_endpoint = self.slam_input_endpoint
+        if self.slam_stereo_left_key is not None:
+            self.slam.stereo_left_key = self.slam_stereo_left_key
+        if self.slam_stereo_right_key is not None:
+            self.slam.stereo_right_key = self.slam_stereo_right_key
+        if self.slam_jpeg_quality is not None:
+            self.slam.jpeg_quality = self.slam_jpeg_quality
