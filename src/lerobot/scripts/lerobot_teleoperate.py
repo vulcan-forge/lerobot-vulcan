@@ -122,6 +122,51 @@ class TeleoperateConfig:
     display_port: int | None = None
     # Whether to  display compressed images in Rerun
     display_compressed_images: bool = False
+    # If teleop connection fails (e.g. leader arm ports unplugged), continue only if
+    # the teleoperator can still provide a safe default action while disconnected.
+    allow_default_action_fallback_on_teleop_connect_error: bool = True
+
+
+def _connect_teleop_with_optional_default_fallback(
+    teleop: Teleoperator, *, allow_default_fallback: bool
+) -> bool:
+    """
+    Try connecting the teleoperator.
+
+    Returns:
+        bool: True if teleop connected, False if we intentionally fall back to
+        disconnected default actions.
+    """
+    try:
+        teleop.connect()
+        return True
+    except Exception as exc:
+        if not allow_default_fallback:
+            raise
+
+        # Best effort: clean up partial connection state before probing fallback.
+        try:
+            teleop.disconnect()
+        except Exception:
+            pass
+
+        try:
+            fallback_action = teleop.get_action()
+        except Exception as probe_exc:
+            raise RuntimeError(
+                "Teleop connection failed and no disconnected default action fallback is available."
+            ) from probe_exc
+
+        if not isinstance(fallback_action, dict):
+            raise RuntimeError(
+                "Teleop connection failed and fallback action is invalid (expected dict)."
+            ) from exc
+
+        logging.warning(
+            "Teleop connect failed (%s). Continuing with disconnected default actions.",
+            exc,
+        )
+        return False
 
 
 def teleop_loop(
@@ -221,10 +266,17 @@ def teleoperate(cfg: TeleoperateConfig):
     robot = make_robot_from_config(cfg.robot)
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
-    teleop.connect()
-    robot.connect()
+    teleop_connected = False
+    robot_connected = False
 
     try:
+        teleop_connected = _connect_teleop_with_optional_default_fallback(
+            teleop,
+            allow_default_fallback=cfg.allow_default_action_fallback_on_teleop_connect_error,
+        )
+        robot.connect()
+        robot_connected = True
+
         teleop_loop(
             teleop=teleop,
             robot=robot,
@@ -241,8 +293,10 @@ def teleoperate(cfg: TeleoperateConfig):
     finally:
         if cfg.display_data:
             shutdown_rerun()
-        teleop.disconnect()
-        robot.disconnect()
+        if teleop_connected and teleop.is_connected:
+            teleop.disconnect()
+        if robot_connected and robot.is_connected:
+            robot.disconnect()
 
 
 def main():

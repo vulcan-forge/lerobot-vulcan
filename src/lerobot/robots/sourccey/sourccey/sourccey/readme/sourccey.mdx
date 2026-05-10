@@ -227,8 +227,12 @@ uv run lerobot-teleoperate \
  --teleop.left_arm_port="COM17" \
  --teleop.right_arm_port="COM18" \
  --fps=30 \
- --display_data=true
+ --display_data=true \
+ --robot.slam_input_enabled=true
+
 ```
+
+# On Linux Then run:
 
 ```
 uv run lerobot-teleoperate \
@@ -240,7 +244,8 @@ uv run lerobot-teleoperate \
  --teleop.left_arm_port="/dev/ttyACM1" \
  --teleop.right_arm_port="/dev/ttyACM0" \
  --fps=30 \
- --display_data=true
+ --display_data=true \
+ --robot.slam_input_enabled=true
 ```
 
 **Parameters:**
@@ -407,17 +412,18 @@ uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.py
 ### Combining Datasets
 
 uv run lerobot-edit-dataset \
-  --new_repo_id="Combination/sourccey-013__shirt-fold-dark-blue-a__set000-006__nickm" \
-  --operation.type=merge \
-  --operation.repo_ids="[
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set000__nickm',
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set001__nickm',
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set002__nickm',
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set003__nickm',
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set004__nickm',
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set005__nickm',
-    'sourccey-013/sourccey-013__shirt-fold-dark-blue-a/nickm/sourccey-013__shirt-fold-dark-blue-a__set006__nickm'
-  ]"
+ --new_repo_id="Combination/sourccey-013**shirt-fold-dark-blue-a**set000-006**nickm" \
+ --operation.type=merge \
+ --operation.repo_ids="[
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set000**nickm',
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set001**nickm',
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set002**nickm',
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set003**nickm',
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set004**nickm',
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set005**nickm',
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set006\_\_nickm'
+]"
+
 ## **⚠️ Important:** Do not include trailing commas in the `--dataset_paths` array, as this will cause errors.
 
 ## Workflow Summary

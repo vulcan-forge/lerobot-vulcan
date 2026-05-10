@@ -147,6 +147,12 @@ class SourcceyClientConfig(RobotConfig):
     remote_ip: str
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
+    # SLAM sidecar input stream (sourccey-slam expects slam_input.v1)
+    slam_input_enabled: bool = False
+    slam_input_endpoint: str = "tcp://127.0.0.1:5560"
+    slam_stereo_left_key: str = "front_left"
+    slam_stereo_right_key: str = "front_right"
+    slam_jpeg_quality: int = 80
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {
