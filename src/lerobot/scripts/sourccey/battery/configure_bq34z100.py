@@ -40,7 +40,7 @@ CTRL_FW_VERSION = 0x0002
 CTRL_CHEM_ID = 0x0008
 CTRL_SEAL = 0x0020
 CTRL_IT_ENABLE = 0x0021
-DEFAULT_TARGET_CHEM_ID = 4203
+DEFAULT_TARGET_CHEM_ID = 0x4203
 
 # TRM default unseal key bytes shown as 0x36720414 (two 16-bit writes)
 DEFAULT_UNSEAL_KEY1 = 0x0414
@@ -598,7 +598,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--chem-id",
         type=lambda x: int(x, 0),
         default=DEFAULT_TARGET_CHEM_ID,
-        help="Expected CHEM_ID before applying setup (default: 4203)",
+        help="Expected CHEM_ID before applying setup (default: 0x4203)",
     )
     p_setup.add_argument(
         "--require-chem-id",
