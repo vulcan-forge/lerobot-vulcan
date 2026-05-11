@@ -83,6 +83,9 @@ FIELDS: dict[str, FieldSpec] = {
     "pack_configuration_b": FieldSpec("pack_configuration_b", 64, 2, "H1", "Pack Configuration B flags"),
     "pack_configuration_c": FieldSpec("pack_configuration_c", 64, 3, "H1", "Pack Configuration C flags"),
     "number_of_series_cells": FieldSpec("number_of_series_cells", 64, 7, "U1", "Number of series cells"),
+    "flash_update_ok_cell_volt_mv": FieldSpec(
+        "flash_update_ok_cell_volt_mv", 68, 0, "I2", "Flash Update OK Cell Voltage (mV)"
+    ),
     "design_capacity_mah": FieldSpec("design_capacity_mah", 48, 11, "I2", "Design Capacity (mAh)"),
     "design_energy_cwh": FieldSpec("design_energy_cwh", 48, 13, "I2", "Design Energy (cWh)"),
     "cell_charge_voltage_t1_t2_mv": FieldSpec(
