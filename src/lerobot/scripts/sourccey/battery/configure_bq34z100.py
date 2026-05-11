@@ -431,6 +431,12 @@ def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
             "program the desired chemistry profile (golden image) with TI tooling, then rerun setup."
         )
     print(f"CHEM_ID check: 0x{observed_chem_id:04X} ({observed_chem_id})")
+    if not args.require_chem_id and observed_chem_id != args.chem_id:
+        print(
+            "WARNING: CHEM_ID does not match profile expectation "
+            f"(observed=0x{observed_chem_id:04X}, expected=0x{args.chem_id:04X}). "
+            "Continuing because --require-chem-id is disabled."
+        )
 
     writes: list[PendingWrite] = []
 
@@ -501,12 +507,6 @@ def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
             old = gauge.read_field(spec)
             writes.append(PendingWrite(spec=spec, old_value=old, new_value=cell_cv))
 
-    # Optional: reset UpdateStatus for fresh learning run
-    if args.reset_update_status:
-        spec_us = FIELDS["update_status"]
-        old_us = gauge.read_field(spec_us)
-        writes.append(PendingWrite(spec=spec_us, old_value=old_us, new_value=0x00))
-
     print(
         f"Profile: {args.series_cells}S LiFePO4, design_capacity={args.design_capacity_mah}mAh, "
         f"charge_voltage={args.pack_charge_voltage_mv}mV, "
@@ -514,6 +514,21 @@ def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
         f"divider={divider}, voltsel={'on' if args.set_voltsel else 'unchanged'}"
     )
     apply_writes(gauge, writes, verify=not args.no_verify, dry_run=args.dry_run)
+
+    # Optional: reset UpdateStatus for fresh learning run.
+    # This field is gauge-state managed and may reject host writes in some modes.
+    if args.reset_update_status:
+        spec_us = FIELDS["update_status"]
+        old_us = gauge.read_field(spec_us)
+        update_status_write = [PendingWrite(spec=spec_us, old_value=old_us, new_value=0x00)]
+        try:
+            apply_writes(gauge, update_status_write, verify=not args.no_verify, dry_run=args.dry_run)
+        except RuntimeError as exc:
+            print(
+                "WARNING: Could not reset UpdateStatus to 0x00. "
+                "Continuing setup because this register may be managed by gauge state. "
+                f"Details: {exc}"
+            )
 
     if args.enable_it and not args.dry_run:
         print("Sending IT_ENABLE (0x0021) to start learning.")
@@ -585,8 +600,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument(
         "--require-chem-id",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Require CHEM_ID to match --chem-id before setup writes (default: enabled)",
+        default=False,
+        help="Require CHEM_ID to match --chem-id before setup writes (default: disabled)",
     )
     p_setup.add_argument(
         "--design-capacity-mah",
@@ -652,8 +667,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument(
         "--reset-update-status",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Set UpdateStatus=0x00 for a fresh learning cycle (default: enabled)",
+        default=False,
+        help="Set UpdateStatus=0x00 for a fresh learning cycle (default: disabled)",
     )
     p_setup.add_argument(
         "--enable-it",
