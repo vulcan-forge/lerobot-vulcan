@@ -631,9 +631,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument(
         "--taper-current-ma",
         type=int,
-        default=150,
+        default=250,
         help=(
-            "Taper current in mA (default: 150). "
+            "Taper current in mA (default: 250). "
             "Tune to your charger's end-of-charge tail current."
         ),
     )
