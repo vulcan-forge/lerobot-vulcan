@@ -45,6 +45,7 @@ class NewBotLeader(Teleoperator):
         self._wrap_guard_motors = tuple(self.bus.motors)
         self._wrap_guard_state: dict[str, str | None] = {motor: None for motor in self._wrap_guard_motors}
         self._last_effective_raw: dict[str, int] = {}
+        self._last_load_print_time = 0.0
 
     def _apply_wrap_guards(self, raw_action: dict[str, int]) -> dict[str, int]:
         if not self.calibration:
@@ -194,6 +195,20 @@ class NewBotLeader(Teleoperator):
         ids_values = {self.bus.motors[motor].id: int(value) for motor, value in guarded_action.items()}
         normalized_action = self.bus._normalize(ids_values)
         action = {f"{motor}.pos": normalized_action[self.bus.motors[motor].id] for motor in guarded_action}
+        now = time.perf_counter()
+        if now - self._last_load_print_time >= 1.0:
+            try:
+                loads = self.bus.sync_read("Present_Load", normalize=False)
+                currents = self.bus.sync_read("Present_Current", normalize=False)
+                voltages = self.bus.sync_read("Present_Voltage", normalize=False)
+                temperatures = self.bus.sync_read("Present_Temperature", normalize=False)
+                print(f"Leader torque/load: {loads}", flush=True)
+                print(f"Leader current: {currents}", flush=True)
+                print(f"Leader voltage: {voltages}", flush=True)
+                print(f"Leader temperature: {temperatures}", flush=True)
+            except Exception:
+                pass
+            self._last_load_print_time = now
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
         return action

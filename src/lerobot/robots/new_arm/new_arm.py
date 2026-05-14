@@ -50,6 +50,7 @@ class NewBot(Robot):
         self._wrap_guard_motors = tuple(self.bus.motors)
         self._wrap_guard_state: dict[str, str | None] = {motor: None for motor in self._wrap_guard_motors}
         self._last_effective_raw: dict[str, int] = {}
+        self._last_load_print_time = 0.0
 
     def _apply_wrap_guards(self, raw_positions: dict[str, int]) -> dict[str, int]:
         if not self.calibration:
@@ -237,6 +238,20 @@ class NewBot(Robot):
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
         self.bus.sync_write("Goal_Position", goal_pos)
+        now = time.perf_counter()
+        if now - self._last_load_print_time >= 1.0:
+            try:
+                loads = self.bus.sync_read("Present_Load", normalize=False)
+                currents = self.bus.sync_read("Present_Current", normalize=False)
+                voltages = self.bus.sync_read("Present_Voltage", normalize=False)
+                temperatures = self.bus.sync_read("Present_Temperature", normalize=False)
+                print(f"Follower torque/load: {loads}", flush=True)
+                print(f"Follower current: {currents}", flush=True)
+                print(f"Follower voltage: {voltages}", flush=True)
+                print(f"Follower temperature: {temperatures}", flush=True)
+            except Exception:
+                pass
+            self._last_load_print_time = now
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
     @check_if_not_connected

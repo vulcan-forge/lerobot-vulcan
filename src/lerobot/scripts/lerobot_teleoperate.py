@@ -77,6 +77,7 @@ from lerobot.robots import (  # noqa: F401
     hope_jr,
     koch_follower,
     make_robot_from_config,
+    new_arm,
     omx_follower,
     openarm_follower,
     reachy2,
@@ -93,6 +94,7 @@ from lerobot.teleoperators import (  # noqa: F401
     keyboard,
     koch_leader,
     make_teleoperator_from_config,
+    new_arm_leader,
     omx_leader,
     openarm_leader,
     openarm_mini,
@@ -122,6 +124,19 @@ class TeleoperateConfig:
     display_port: int | None = None
     # Whether to  display compressed images in Rerun
     display_compressed_images: bool = False
+
+
+def _read_motor_loads(device: Robot | Teleoperator) -> dict[str, int] | None:
+    bus = getattr(device, "bus", None)
+    if bus is None:
+        return None
+
+    try:
+        loads = bus.sync_read("Present_Load", normalize=False)
+    except Exception:
+        return None
+
+    return {motor: int(value) for motor, value in loads.items()}
 
 
 def teleop_loop(
@@ -154,6 +169,7 @@ def teleop_loop(
 
     display_len = max(len(key) for key in robot.action_features)
     start = time.perf_counter()
+    last_torque_print = start - 1.0
     while True:
         loop_start = time.perf_counter()
 
@@ -177,6 +193,16 @@ def teleop_loop(
 
         # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
         _ = robot.send_action(robot_action_to_send)
+
+        now = time.perf_counter()
+        if now - last_torque_print >= 1.0:
+            robot_loads = _read_motor_loads(robot)
+            teleop_loads = _read_motor_loads(teleop)
+            if robot_loads is not None:
+                print(f"Robot torque/load: {robot_loads}")
+            if teleop_loads is not None:
+                print(f"Teleop torque/load: {teleop_loads}")
+            last_torque_print = now
 
         if display_data:
             # Process robot observation through pipeline

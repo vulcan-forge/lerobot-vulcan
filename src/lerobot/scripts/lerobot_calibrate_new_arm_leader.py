@@ -33,28 +33,9 @@ from pprint import pformat
 
 import draccus
 
-from lerobot.common.so_arm import SOJointConfig
-from lerobot.teleoperators.so_leader import SOLeader, SOLeaderTeleopConfig
+from lerobot.teleoperators.new_arm_leader.config_new_arm_leader import NewBotLeaderTeleopConfig
+from lerobot.teleoperators.new_arm_leader.new_arm_leader import NewBotLeader
 from lerobot.utils.utils import init_logging
-
-
-def make_new_arm_leader_joint_configs() -> dict[str, SOJointConfig]:
-    return {
-        "roll_1": SOJointConfig(id=1, model="sts3032", homing_position=2048),
-        "pitch_1": SOJointConfig(id=2, model="sts3032", homing_position=1024),
-        "roll_2": SOJointConfig(id=3, model="sts3250", homing_position=2048),
-        "pitch_2": SOJointConfig(id=4, model="sts3250", homing_position=1024),
-        "roll_3": SOJointConfig(id=5, model="sts3215", homing_position=2048),
-        "pitch_3": SOJointConfig(id=6, model="sts3215", homing_position=1024),
-        "gripper": SOJointConfig(
-            id=7,
-            model="sts3215",
-            homing_position=3000,
-            range_min=1800,
-            range_max=3300,
-            is_gripper=True,
-        ),
-    }
 
 
 @dataclass
@@ -71,15 +52,13 @@ def calibrate_new_arm_leader(cfg: NewArmLeaderCalibrateConfig) -> None:
     init_logging()
     logging.info(pformat(asdict(cfg)))
 
-    teleop_cfg = SOLeaderTeleopConfig(
+    teleop_cfg = NewBotLeaderTeleopConfig(
         port=cfg.port,
         id=cfg.id,
         calibration_dir=cfg.calibration_dir,
         use_degrees=cfg.use_degrees,
-        reverse=cfg.reverse,
-        motors=make_new_arm_leader_joint_configs(),
     )
-    teleop = SOLeader(teleop_cfg)
+    teleop = NewBotLeader(teleop_cfg)
 
     teleop.connect(calibrate=False)
     try:
