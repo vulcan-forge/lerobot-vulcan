@@ -140,6 +140,13 @@ class SourcceyHostConfig:
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
 
+    # IMU periodic logging on host
+    imu_print_enabled: bool = True
+    imu_print_interval_s: float = 10.0
+    imu_bus_num: int = 1
+    imu_lsm6dsox_address: int = 0x6A
+    imu_lis3mdl_address: int = 0x1C
+
 
 @RobotConfig.register_subclass("sourccey_client")
 @dataclass

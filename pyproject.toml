@@ -175,6 +175,10 @@ sourccey = [
 
     # Battery
     "smbus2>=0.4.3 ; sys_platform == 'linux'",
+    # IMU
+    "adafruit-blinka>=8.52.0 ; sys_platform == 'linux'",
+    "adafruit-circuitpython-lsm6ds>=4.7.0 ; sys_platform == 'linux'",
+    "adafruit-circuitpython-lis3mdl>=1.2.0 ; sys_platform == 'linux'",
 
     # Audio
     "vosk>=0.3.45 ; sys_platform != 'darwin' and sys_platform != 'win32'",
