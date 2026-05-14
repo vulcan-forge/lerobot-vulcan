@@ -9,6 +9,7 @@ If you only do one thing, follow **Quick Start** below in order.
 - `configure_bq34z100.py` - write/read bq34z100 Data Flash fields over I2C
 - `battery.py` - minimal frontend battery telemetry JSON
 - `check_bq34z100.py` - deep diagnostics + watch mode for learning cycle checks
+- `golden/flash_bq34z100.py` - TI FlashStream runner for `.df.fs` / `.bq.fs` files
 
 ## Prerequisites
 
@@ -124,6 +125,26 @@ Optional watch mode:
 uv run python src/lerobot/scripts/sourccey/battery/check_bq34z100.py --watch --interval-s 5
 ```
 
+### 6) Flash golden image (new or recovered chips)
+
+Full firmware + data flash image:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py flash-golden --profile bq
+```
+
+Data-flash-only image:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py flash-golden --profile df
+```
+
+Preview without writes:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py flash-golden --profile bq --dry-run
+```
+
 ## Common commands
 
 List editable built-in fields:
@@ -154,6 +175,12 @@ Use non-default bus/address if needed:
 
 ```bash
 uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py --bus 1 --address 0x55 info
+```
+
+Flash from a specific file path:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py flash-golden --fs-file src/lerobot/scripts/sourccey/battery/golden/0100_2_01-bq34z100.bq.fs
 ```
 
 ## Troubleshooting write failures
