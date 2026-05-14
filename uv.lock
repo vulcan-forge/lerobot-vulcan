@@ -77,6 +77,137 @@ wheels = [
 ]
 
 [[package]]
+name = "adafruit-blinka"
+version = "9.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adafruit-circuitpython-typing", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-platformdetect", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-pureio", marker = "sys_platform == 'linux'" },
+    { name = "binho-host-adapter", marker = "sys_platform == 'linux'" },
+    { name = "pyftdi", marker = "sys_platform == 'linux'" },
+    { name = "sysv-ipc", marker = "platform_machine != 'mips' and sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a6/43/1addb059d8e589799571718f4c6f7456a3112681c9f92442939d06f67605/adafruit_blinka-9.1.0.tar.gz", hash = "sha256:6d17122358d5f9c4a550eae4f78207ac4c239662236bb37fc646b9f4166e3248", size = 929886, upload-time = "2026-04-21T18:29:55.987Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bb/97/17dac675981730d29b2d583de2aa0a9c2963d6c63f6bdc7eebf2711914ef/adafruit_blinka-9.1.0-py3-none-any.whl", hash = "sha256:6f617d4ebb7c2e14dfe1259c63f21df4a77d1b12d5efd92cf71ae4bf34d21b91", size = 1059892, upload-time = "2026-04-21T18:29:54.24Z" },
+]
+
+[[package]]
+name = "adafruit-circuitpython-busdevice"
+version = "5.2.17"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adafruit-blinka", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-typing", marker = "sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/40/c0/f789bfc16d2e7eed23171f264b961ceb25314ba92d733be5bd47a4ecb23e/adafruit_circuitpython_busdevice-5.2.17.tar.gz", hash = "sha256:01887ba0056d3635536f0bf1e580a2969c67fc2c4c7b42a4093bcf7a3308bc9b", size = 24423, upload-time = "2026-04-23T21:18:13.438Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/42/0d/66a4e0fbd7b35107f7dee04fed890f77b83d1da9dd1f7474af2ed21700ea/adafruit_circuitpython_busdevice-5.2.17-py3-none-any.whl", hash = "sha256:5a834fbe0b88b07d20494bec566815da154aa4b1b668e2e665277b34b3578e44", size = 7494, upload-time = "2026-04-23T21:18:12.284Z" },
+]
+
+[[package]]
+name = "adafruit-circuitpython-connectionmanager"
+version = "3.1.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adafruit-blinka", marker = "sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a0/29/1653838bc0e5c6119fa2b03edb58b592a2475e7cf99810064a99e5eb8994/adafruit_circuitpython_connectionmanager-3.1.8.tar.gz", hash = "sha256:ce7436d62ac26312fbd2fc7d8f70ab0582a7c7807d7033ae5bd5cb53e4f66f3b", size = 33828, upload-time = "2026-04-23T21:18:42.138Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e4/43/929d17e5dbe0773e3a3c728b12cf1a777ada32639764b09365a1b56703c0/adafruit_circuitpython_connectionmanager-3.1.8-py3-none-any.whl", hash = "sha256:f93e27874a840f728b5cdbb1bcf0aee4e75ed1c0ba46b4562606ac3ac3ea2cca", size = 7755, upload-time = "2026-04-23T21:18:40.984Z" },
+]
+
+[[package]]
+name = "adafruit-circuitpython-lis3mdl"
+version = "1.2.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adafruit-blinka", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-busdevice", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-register", marker = "sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b4/3c/eb1bcaa675277cb55d9395195eba7e8836cd74a7dd5721ad59c49650d03a/adafruit_circuitpython_lis3mdl-1.2.8.tar.gz", hash = "sha256:e4ba8dbf93c0763279090584d36b80361e95ee92ea97c473ade8282c2e81bb94", size = 26748, upload-time = "2026-04-23T20:59:12.726Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/97/412b4f2d1f091a817a26ae0d292c337accd4266fb36c93498111a0df4e44/adafruit_circuitpython_lis3mdl-1.2.8-py3-none-any.whl", hash = "sha256:26652b0871392cddb74626834f2c35c4d62dbe1f3ad55d6de915433c376a2f01", size = 6879, upload-time = "2026-04-23T20:59:11.847Z" },
+]
+
+[[package]]
+name = "adafruit-circuitpython-lsm6ds"
+version = "4.6.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adafruit-blinka", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-busdevice", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-register", marker = "sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/43/45/e84a63586df1ffdac4e6f6484beb781a364138a5b455d538dacb4d4880f9/adafruit_circuitpython_lsm6ds-4.6.3.tar.gz", hash = "sha256:ade09692bac623b396493be26673c2730c43874099a8e34ef5108c11b0458eb9", size = 29764, upload-time = "2026-04-23T20:59:31.967Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/26/1b/1c385b5dfefe8a95e51c85de0b888bc8ed4175fd1e7c20e10a069fe384ff/adafruit_circuitpython_lsm6ds-4.6.3-py3-none-any.whl", hash = "sha256:079351c8ef3ce9a375ad617664a59aad276a16c3891844d7ee30f9583147d6b2", size = 13939, upload-time = "2026-04-23T20:59:30.958Z" },
+]
+
+[[package]]
+name = "adafruit-circuitpython-register"
+version = "1.11.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adafruit-blinka", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-busdevice", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-typing", marker = "sys_platform == 'linux'" },
+    { name = "typing-extensions", marker = "sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c3/68/9eea7a41e92a8c641b3b457925001d5b0d15161f54e2c55effb36f715915/adafruit_circuitpython_register-1.11.3.tar.gz", hash = "sha256:4da69922e5f4fed9842dd90bc2e58848e2bc3ea959cbec788d4fb4b5d41021ae", size = 31696, upload-time = "2026-04-23T21:24:47.875Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/90/12/e23f35b7b16d39295c0c63765b1be0342ae33991bb64974a86fcb29a7142/adafruit_circuitpython_register-1.11.3-py3-none-any.whl", hash = "sha256:83b5e9ad1b7afb35330a549ef62fb3ce5cf8e13128ef52fb6eb13f3cd8f2cca6", size = 19009, upload-time = "2026-04-23T21:24:46.961Z" },
+]
+
+[[package]]
+name = "adafruit-circuitpython-requests"
+version = "4.1.17"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adafruit-blinka", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-connectionmanager", marker = "sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bc/5c/cb31dd0a6e56a92bd9bf672539ba6102204bc443fe9af9a5f8e893b99169/adafruit_circuitpython_requests-4.1.17.tar.gz", hash = "sha256:7259976be340324d34da1ba6f4b935430b46ceece2e5c1632387a24e6f94e9a3", size = 67777, upload-time = "2026-04-23T21:24:48.423Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/01/8c/15a2de09cc3c30793336cf79798948768611463ddfb2b2669f51569228fb/adafruit_circuitpython_requests-4.1.17-py3-none-any.whl", hash = "sha256:4c205188a052f52b3bb8ab4af97798d7d56ae3701857d31f03b164f029fae44f", size = 10841, upload-time = "2026-04-23T21:24:47.522Z" },
+]
+
+[[package]]
+name = "adafruit-circuitpython-typing"
+version = "1.12.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adafruit-blinka", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-busdevice", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-requests", marker = "sys_platform == 'linux'" },
+    { name = "typing-extensions", marker = "sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/65/a2/40a3440aed2375371507af668570b68523ee01db9c25c47ce5a05883170e/adafruit_circuitpython_typing-1.12.3.tar.gz", hash = "sha256:63f196f834e47842bcd4cf8c37aaa0c61e1aeb5d07f056c875fc3016cda91a12", size = 25603, upload-time = "2025-10-27T18:17:38.56Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cc/a1/578a03ba2bce0809b4e30974b47958963c9efe67b9fe74e7dbcdbbd45318/adafruit_circuitpython_typing-1.12.3-py3-none-any.whl", hash = "sha256:f6d0a02150e1e4efb5a2c2945b88d948809fdb465875f39947108b8467c986d9", size = 11014, upload-time = "2025-10-27T18:17:37.771Z" },
+]
+
+[[package]]
+name = "adafruit-platformdetect"
+version = "3.88.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/92/3d991a9e322855be20c2df771b632ed81f1640b43a9969524765da23f4af/adafruit_platformdetect-3.88.0.tar.gz", hash = "sha256:dc2188ddb348bfd2a02a9533263294cc0f1762bd9f6b3b20866547d98820cd71", size = 49558, upload-time = "2026-02-24T19:01:07.066Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/29/c4/32572c051f1554d73633a802447321bff2a2332ef4210d47de807afd26c7/adafruit_platformdetect-3.88.0-py3-none-any.whl", hash = "sha256:69e694d80d551c6cb8e39f731e6ee0de1f135e64cffee0e2a665b1f9579c10d7", size = 26964, upload-time = "2026-02-24T19:01:05.646Z" },
+]
+
+[[package]]
+name = "adafruit-pureio"
+version = "1.1.11"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e5/b7/f1672435116822079bbdab42163f9e6424769b7db778873d95d18c085230/Adafruit_PureIO-1.1.11.tar.gz", hash = "sha256:c4cfbb365731942d1f1092a116f47dfdae0aef18c5b27f1072b5824ad5ea8c7c", size = 35511, upload-time = "2023-05-25T19:01:34.654Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/9d/28e9d12f36e13c5f2acba3098187b0e931290ecd1d8df924391b5ad2db19/Adafruit_PureIO-1.1.11-py3-none-any.whl", hash = "sha256:281ab2099372cc0decc26326918996cbf21b8eed694ec4764d51eefa029d324e", size = 10678, upload-time = "2023-05-25T19:01:32.397Z" },
+]
+
+[[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
 source = { registry = "https://pypi.org/simple" }
@@ -380,6 +511,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c3/b0/1c6a16426d389813b48d95e26898aff79abbde42ad353958ad95cc8c9b21/beautifulsoup4-4.14.3.tar.gz", hash = "sha256:6292b1c5186d356bba669ef9f7f051757099565ad9ada5dd630bd9de5fa7fb86", size = 627737, upload-time = "2025-11-30T15:08:26.084Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1a/39/47f9197bdd44df24d67ac8893641e16f386c984a0619ef2ee4c51fbbc019/beautifulsoup4-4.14.3-py3-none-any.whl", hash = "sha256:0918bfe44902e6ad8d57732ba310582e98da931428d231a5ecb9e7c703a735bb", size = 107721, upload-time = "2025-11-30T15:08:24.087Z" },
+]
+
+[[package]]
+name = "binho-host-adapter"
+version = "0.1.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyserial", marker = "sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/68/36/29b7b896e83e195fac6d64ccff95c0f24a18ee86e7437a22e60e0331d90a/binho-host-adapter-0.1.6.tar.gz", hash = "sha256:1e6da7a84e208c13b5f489066f05774bff1d593d0f5bf1ca149c2b8e83eae856", size = 10068, upload-time = "2020-06-04T19:38:11.789Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7b/6b/0f13486003aea3eb349c2946b7ec9753e7558b78e35d22c938062a96959c/binho_host_adapter-0.1.6-py3-none-any.whl", hash = "sha256:f71ca176c1e2fc1a5dce128beb286da217555c6c7c805f2ed282a6f3507ec277", size = 10540, upload-time = "2020-06-04T19:38:10.612Z" },
 ]
 
 [[package]]
@@ -3005,6 +3148,9 @@ smolvla = [
     { name = "transformers" },
 ]
 sourccey = [
+    { name = "adafruit-blinka", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-lis3mdl", marker = "sys_platform == 'linux'" },
+    { name = "adafruit-circuitpython-lsm6ds", marker = "sys_platform == 'linux'" },
     { name = "deepdiff" },
     { name = "faster-whisper" },
     { name = "feetech-servo-sdk" },
@@ -3022,6 +3168,8 @@ sourccey = [
 ]
 sourccey-desktop = [
     { name = "ctranslate2", version = "4.6.3", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'win32'" },
+    { name = "pynput" },
+    { name = "rerun-sdk" },
     { name = "torch", version = "2.9.1", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux') or (sys_platform != 'linux' and sys_platform != 'win32')" },
     { name = "torch", version = "2.9.1+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or sys_platform == 'win32'" },
     { name = "torchcodec" },
@@ -3080,6 +3228,9 @@ xvla = [
 requires-dist = [
     { name = "accelerate", marker = "extra == 'smolvla'", specifier = ">=1.7.0,<2.0.0" },
     { name = "accelerate", marker = "extra == 'training'", specifier = ">=1.10.0,<2.0.0" },
+    { name = "adafruit-blinka", marker = "sys_platform == 'linux' and extra == 'sourccey'", specifier = ">=8.52.0" },
+    { name = "adafruit-circuitpython-lis3mdl", marker = "sys_platform == 'linux' and extra == 'sourccey'", specifier = ">=1.2.0" },
+    { name = "adafruit-circuitpython-lsm6ds", marker = "sys_platform == 'linux' and extra == 'sourccey'", specifier = ">=4.6.1" },
     { name = "av", marker = "extra == 'av-dep'", specifier = ">=15.0.0,<16.0.0" },
     { name = "cmake", specifier = ">=3.29.0.1,<4.2.0" },
     { name = "contourpy", marker = "extra == 'matplotlib-dep'", specifier = ">=1.3.0,<2.0.0" },
@@ -3175,6 +3326,7 @@ requires-dist = [
     { name = "lerobot", extras = ["pygame-dep"], marker = "extra == 'hopejr'" },
     { name = "lerobot", extras = ["pygame-dep"], marker = "extra == 'unitree-g1'" },
     { name = "lerobot", extras = ["pynput-dep"], marker = "extra == 'hardware'" },
+    { name = "lerobot", extras = ["pynput-dep"], marker = "extra == 'sourccey-desktop'" },
     { name = "lerobot", extras = ["pyserial-dep"], marker = "extra == 'dynamixel'" },
     { name = "lerobot", extras = ["pyserial-dep"], marker = "extra == 'feetech'" },
     { name = "lerobot", extras = ["pyserial-dep"], marker = "extra == 'hardware'" },
@@ -3209,6 +3361,7 @@ requires-dist = [
     { name = "lerobot", extras = ["viz"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["viz"], marker = "extra == 'core-scripts'" },
     { name = "lerobot", extras = ["viz"], marker = "extra == 'dataset-viz'" },
+    { name = "lerobot", extras = ["viz"], marker = "extra == 'sourccey-desktop'" },
     { name = "lerobot", extras = ["wallx"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["xvla"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["xvla"], marker = "extra == 'sourccey-desktop'" },
@@ -4952,6 +5105,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pyftdi"
+version = "0.57.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyserial", marker = "sys_platform == 'linux'" },
+    { name = "pyusb", marker = "sys_platform == 'linux'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/16/cd/0731490946e037e954ef83719f07c7672cf32bc90dd9c75201c40b827664/pyftdi-0.57.1-py3-none-any.whl", hash = "sha256:efd3f5a7d43202dc883ff261a7b1cb4dcbbe65b19628f8603a8b1183a7bc2841", size = 146180, upload-time = "2025-08-14T15:59:16.164Z" },
+]
+
+[[package]]
 name = "pygame"
 version = "2.6.1"
 source = { registry = "https://pypi.org/simple" }
@@ -5300,6 +5465,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/56/db/b8721d71d945e6a8ac63c0fc900b2067181dbb50805958d4d4661cf7d277/pytz-2026.1.post1.tar.gz", hash = "sha256:3378dde6a0c3d26719182142c56e60c7f9af7e968076f31aae569d72a0358ee1", size = 321088, upload-time = "2026-03-03T07:47:50.683Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/10/99/781fe0c827be2742bcc775efefccb3b048a3a9c6ce9aec0cbf4a101677e5/pytz-2026.1.post1-py2.py3-none-any.whl", hash = "sha256:f2fd16142fda348286a75e1a524be810bb05d444e5a081f37f7affc635035f7a", size = 510489, upload-time = "2026-03-03T07:47:49.167Z" },
+]
+
+[[package]]
+name = "pyusb"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/6b/ce3727395e52b7b76dfcf0c665e37d223b680b9becc60710d4bc08b7b7cb/pyusb-1.3.1.tar.gz", hash = "sha256:3af070b607467c1c164f49d5b0caabe8ac78dbed9298d703a8dbf9df4052d17e", size = 77281, upload-time = "2025-01-08T23:45:01.866Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/28/b8/27e6312e86408a44fe16bd28ee12dd98608b39f7e7e57884a24e8f29b573/pyusb-1.3.1-py3-none-any.whl", hash = "sha256:bf9b754557af4717fe80c2b07cc2b923a9151f5c08d17bdb5345dac09d6a0430", size = 58465, upload-time = "2025-01-08T23:45:00.029Z" },
 ]
 
 [[package]]
@@ -6123,6 +6297,30 @@ wheels = [
 ]
 
 [[package]]
+name = "sysv-ipc"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f2/5e/59208c6dd05ebc6f46ce2023c4fc01ffe814a1967d21b35d312c7e6ffeae/sysv_ipc-1.2.0.tar.gz", hash = "sha256:ef96ab33bb62e4d14142f0be0524dcc0c3c70c96442df2fc773c67b7c7514199", size = 102810, upload-time = "2026-01-09T14:05:02.231Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/98/b35eba27297a886931d69352c171cfd53ea9b4a9097d282f80556046bc39/sysv_ipc-1.2.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:eb8cea6b912b467083941032f4b38269d86d1ec8f2dec0ca39694fedf6fd9acd", size = 72257, upload-time = "2026-01-09T14:04:23.289Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/6f/906724d4ca94cc5c0a6c419ed0ec2a0b64b41de6771590ebf9db59cc97db/sysv_ipc-1.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:48865de17c9354a6c7740c47dc4d13f409afe43e4fc350b56df3ca5c10c1462d", size = 73309, upload-time = "2026-01-09T14:04:24.421Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/3a/818d7634f31484e35ffee1b018287a0007e24a98709d06ecc544e7c7cba8/sysv_ipc-1.2.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:f69c30545a3280b4b7f2057fd3aedb7044e45894314752241802e697a00b5413", size = 70955, upload-time = "2026-01-09T14:04:25.172Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/80/e3881c84573206563191d8c13711382dc22bf54a7ae4d09d099271cf3703/sysv_ipc-1.2.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:a000180848b59508bd862215998ee70c4cd4cd3081b0b066068e9287645cda35", size = 71223, upload-time = "2026-01-09T14:04:26.061Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/2d/2e4f55201cca54666c08468538348be4af16a52c7296bdd038a303e7be9f/sysv_ipc-1.2.0-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:977f0e313c2e663000f0c316682ea2c3f6d2f86bbbdb1bcd274fea244a211df0", size = 72727, upload-time = "2026-01-09T14:04:28.317Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/6a/e04914984503317dd2481d6ff5fa9ab85e70960b79514309b0bcb0ef08d8/sysv_ipc-1.2.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f0b40e147277a954c41f94207dfab402bfa8371198c191b826d833b40c5e83e9", size = 73643, upload-time = "2026-01-09T14:04:29.234Z" },
+    { url = "https://files.pythonhosted.org/packages/54/46/6f9aacbbf4c71ddce08f645bd67fa4223573a3191fd938acc926ca2b94c4/sysv_ipc-1.2.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:83ff789f67477dc09424f674e1eb9195d8edd9b4044c3d5833d1a252d49034fc", size = 71319, upload-time = "2026-01-09T14:04:30.059Z" },
+    { url = "https://files.pythonhosted.org/packages/34/21/0127cb9ecbc281c5b5a79d4be7a61e2d35442f72baaa1594e089dbe9206a/sysv_ipc-1.2.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:fc541299c3af8351abff804e287a0c203338c140f70ee70855f46a1710cc0ff7", size = 71575, upload-time = "2026-01-09T14:04:32.011Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/a5/1d0f4a95ba040987266af995eb973f2d469fa61452cc925a8ff95401927f/sysv_ipc-1.2.0-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7dcdda15a2ead282545d007bd4fb5bfff844d2ac2b2f4a2b52ddcb2a38953968", size = 73168, upload-time = "2026-01-09T14:04:35.49Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/7a/25d2a8a7bde7165a0260d06e83a57ecfe8668802f31ffea47620cfcb56eb/sysv_ipc-1.2.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9c5bf97ac00370159973c17a29224ae6f277757cee704abd61be1ce5bfaf78b0", size = 74039, upload-time = "2026-01-09T14:04:36.709Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/77/2be88d40d24a780f56ca74ff01802f8cb548a1def4c50da7094720fcd41c/sysv_ipc-1.2.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:201e18f6f32bd6542e0886668699c16ddcdcc37105b2643c2c50a044f22e437f", size = 72237, upload-time = "2026-01-09T14:04:37.729Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/04/b7657691f0274bd22fb66fc772e567c78dffb96f6943cbb16352e20b55a1/sysv_ipc-1.2.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:4daecc8fae2a6335ed56095d19a3bda96e551ea78781cd53abda94cfe37b6cfe", size = 72400, upload-time = "2026-01-09T14:04:38.55Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/61/ff85f043f507d4d9d5a84411dfd18f8f896dc3f77d29f5f4f6ee1d48ec9c/sysv_ipc-1.2.0-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:17f8b31c09ed94d0fa95d64720426344e2ae5a06691a8f076ef3909145877958", size = 76984, upload-time = "2026-01-09T14:04:41.32Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/39/02d900a035c674c6e4edb263ea0061c0fa8389ad9a2270150dc2a1fee476/sysv_ipc-1.2.0-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:acd083316d0c5b2e7fb5b7a5db6ad8fb2400ea4ca3d1813692acd93656a51f79", size = 77179, upload-time = "2026-01-09T14:04:42.65Z" },
+    { url = "https://files.pythonhosted.org/packages/46/5a/d269d9aca6f2eda908c58a244488bcca751004c8f954742fd8aadf2e0a6d/sysv_ipc-1.2.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:3eb7b8f8b577ec0fbde890f86c6f9dc365f3012b02e4e275a350427621df80ad", size = 75959, upload-time = "2026-01-09T14:04:43.569Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/13/a49595e0056dc607e7530b946c7b62f11ec514822c40d54d94287e534e9d/sysv_ipc-1.2.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:a65e64577082b109d49bd68db8facb6f3a08ddbbde4b76c87b1246490922ef2a", size = 75679, upload-time = "2026-01-09T14:04:44.4Z" },
+]
+
+[[package]]
 name = "teleop"
 version = "0.1.5"
 source = { registry = "https://pypi.org/simple" }
@@ -6404,21 +6602,21 @@ dependencies = [
     { name = "typing-extensions", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or sys_platform == 'win32'" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:6e7f84cb10c7e7d9f862c318f056d64840544ab4f0bcbf8cf7ed6047fe04051f" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:e70e1b18881e6b3c1ce402d0a989da39f956a3a057526e03c354df23d704ce9b" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp312-cp312-win_amd64.whl", hash = "sha256:cd3232a562ad2a2699d48130255e1b24c07dfe694a40dcd24fad683c752de121" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:32b47b951a9f4e8dc7e132bc2e2f60ac6dd236c5786c07320185bc5062ce5b92" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:bdec3d5e26a472d292ec48d9d56e3feda86f3e60744cb49c92603502ba34d331" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp313-cp313-win_amd64.whl", hash = "sha256:47cae56331fdec7f7082aad967b25868cc5f94b203fc273e40346a852aa009dd" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:4444e1e23b083e3dc0591e53d3a3f7ba45500a6e24071ffc8df2dc319cbd6302" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:5270e343fc4b1d21308a30656ea922a23d85f3afbf12abd2481672fa94953fd6" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp313-cp313t-win_amd64.whl", hash = "sha256:c0bb31481c3f505cb5baa630f2b975f07f77be557bbafe5cfc695ac911ea325c" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:3951834ec2f6daf67e33c940a341dcde7173629202b7e72f247f42621ce088bc" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:59a98c01784f7b795ac3532513199ac54e3464ccc0f1dda44c940cc0afb426f8" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp314-cp314-win_amd64.whl", hash = "sha256:a80fe3b0467b6986741f28e88fcff0054a6a806616946f28f5f601bd95632ba0" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:a7b6c5c619d0ecf0613668d54aaea4d9fea0ef72bcd325b13e1ea64a43bf6775" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:f760a8ae4a6cff10f29db09e4ab372e4b8d1f704daf07b4ac39f6f590decc05c" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp314-cp314t-win_amd64.whl", hash = "sha256:59c74f9d2b49778b146f23bcfebc35f051d64f10ff0dbdfd22387a7bd1d9ed71" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:6e7f84cb10c7e7d9f862c318f056d64840544ab4f0bcbf8cf7ed6047fe04051f", upload-time = "2026-01-26T16:37:40Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:e70e1b18881e6b3c1ce402d0a989da39f956a3a057526e03c354df23d704ce9b", upload-time = "2026-01-26T16:37:43Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp312-cp312-win_amd64.whl", hash = "sha256:cd3232a562ad2a2699d48130255e1b24c07dfe694a40dcd24fad683c752de121", upload-time = "2026-01-26T16:37:50Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:32b47b951a9f4e8dc7e132bc2e2f60ac6dd236c5786c07320185bc5062ce5b92", upload-time = "2026-01-26T16:38:04Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:bdec3d5e26a472d292ec48d9d56e3feda86f3e60744cb49c92603502ba34d331", upload-time = "2026-01-26T16:38:10Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp313-cp313-win_amd64.whl", hash = "sha256:47cae56331fdec7f7082aad967b25868cc5f94b203fc273e40346a852aa009dd", upload-time = "2026-01-26T16:38:27Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:4444e1e23b083e3dc0591e53d3a3f7ba45500a6e24071ffc8df2dc319cbd6302", upload-time = "2026-01-26T16:38:31Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:5270e343fc4b1d21308a30656ea922a23d85f3afbf12abd2481672fa94953fd6", upload-time = "2026-01-26T16:38:38Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp313-cp313t-win_amd64.whl", hash = "sha256:c0bb31481c3f505cb5baa630f2b975f07f77be557bbafe5cfc695ac911ea325c", upload-time = "2026-01-26T16:38:52Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:3951834ec2f6daf67e33c940a341dcde7173629202b7e72f247f42621ce088bc", upload-time = "2026-01-26T16:38:55Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:59a98c01784f7b795ac3532513199ac54e3464ccc0f1dda44c940cc0afb426f8", upload-time = "2026-01-26T16:39:03Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp314-cp314-win_amd64.whl", hash = "sha256:a80fe3b0467b6986741f28e88fcff0054a6a806616946f28f5f601bd95632ba0", upload-time = "2026-01-26T16:39:05Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:a7b6c5c619d0ecf0613668d54aaea4d9fea0ef72bcd325b13e1ea64a43bf6775", upload-time = "2026-01-26T16:39:19Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:f760a8ae4a6cff10f29db09e4ab372e4b8d1f704daf07b4ac39f6f590decc05c", upload-time = "2026-01-26T16:39:29Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.9.1%2Bcu130-cp314-cp314t-win_amd64.whl", hash = "sha256:59c74f9d2b49778b146f23bcfebc35f051d64f10ff0dbdfd22387a7bd1d9ed71", upload-time = "2026-01-26T16:39:39Z" },
 ]
 
 [[package]]
@@ -6536,16 +6734,16 @@ dependencies = [
     { name = "torch", version = "2.9.1+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or sys_platform == 'win32'" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:6939dd403cc28ab0a46f53e6c86e2e852cf65771c1b0ddd09c44c541a1cdbad9" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp312-cp312-win_amd64.whl", hash = "sha256:d31ceaded0d9b737471fa680ccd9e1acb6d5f0f70f03ef3a8d786a99c79da7cf" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:1cac548fc20d6bd1da437f1bf586bbf9159ca3225222bacaa79b8a672197a535" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp313-cp313-win_amd64.whl", hash = "sha256:d688426d623b8ba763087726faf5b34b1fe404f44741656978d855403dbc7444" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:e342aa662dbd4dcb43a01e697e03f61f615fc34011f13f8c9bfcd1527f8a40c5" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp313-cp313t-win_amd64.whl", hash = "sha256:878ce9b16d2c8797cb846709d31c270e9b985bd7cc59e8c8e5bbb0ed372b31c7" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:461a5f5fdd4b2e9adf972bd4f2e2bd96299fac64b524542c3805bad898438416" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp314-cp314-win_amd64.whl", hash = "sha256:ae9ca2c3e6a517a01625404e72f485d0205463cb7c14f4f1dca8f5f368401be4" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:8dbd486b3e73bb21df3734bf06e03664bdbc015c3d97b27ddf17eb7fb99c529f" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp314-cp314t-win_amd64.whl", hash = "sha256:85c4606ff11773627d325f812628c4ea2d9a83b6c8417a344fdc16305ec0a454" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:6939dd403cc28ab0a46f53e6c86e2e852cf65771c1b0ddd09c44c541a1cdbad9", upload-time = "2025-11-15T18:12:58Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp312-cp312-win_amd64.whl", hash = "sha256:d31ceaded0d9b737471fa680ccd9e1acb6d5f0f70f03ef3a8d786a99c79da7cf", upload-time = "2025-11-15T20:02:26Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:1cac548fc20d6bd1da437f1bf586bbf9159ca3225222bacaa79b8a672197a535", upload-time = "2025-11-15T18:12:58Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp313-cp313-win_amd64.whl", hash = "sha256:d688426d623b8ba763087726faf5b34b1fe404f44741656978d855403dbc7444", upload-time = "2025-11-16T15:07:08Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:e342aa662dbd4dcb43a01e697e03f61f615fc34011f13f8c9bfcd1527f8a40c5", upload-time = "2025-11-15T18:12:58Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp313-cp313t-win_amd64.whl", hash = "sha256:878ce9b16d2c8797cb846709d31c270e9b985bd7cc59e8c8e5bbb0ed372b31c7", upload-time = "2025-11-16T15:07:06Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:461a5f5fdd4b2e9adf972bd4f2e2bd96299fac64b524542c3805bad898438416", upload-time = "2025-11-15T18:12:58Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp314-cp314-win_amd64.whl", hash = "sha256:ae9ca2c3e6a517a01625404e72f485d0205463cb7c14f4f1dca8f5f368401be4", upload-time = "2025-11-16T15:07:06Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:8dbd486b3e73bb21df3734bf06e03664bdbc015c3d97b27ddf17eb7fb99c529f", upload-time = "2025-11-15T18:12:58Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.24.1%2Bcu130-cp314-cp314t-win_amd64.whl", hash = "sha256:85c4606ff11773627d325f812628c4ea2d9a83b6c8417a344fdc16305ec0a454", upload-time = "2025-11-16T15:07:06Z" },
 ]
 
 [[package]]

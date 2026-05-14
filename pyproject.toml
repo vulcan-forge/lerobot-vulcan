@@ -191,6 +191,8 @@ sourccey-desktop = [
     "torchcodec==0.9.1",
 
     "lerobot[xvla]",
+    "lerobot[viz]",
+    "lerobot[pynput-dep]",
 
     # Audio
     # Pin known-good CUDA/cuDNN stack for Windows GPU Whisper.
