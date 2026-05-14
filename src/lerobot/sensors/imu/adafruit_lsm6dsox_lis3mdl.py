@@ -19,6 +19,21 @@ class AdafruitLSM6DSOXLIS3MDLIMU(BaseIMU):
         self._i2c: Any = None
         self._imu6: Any = None
         self._mag: Any = None
+        self._imu6_variant: str | None = None
+
+    @staticmethod
+    def _read_whoami(bus_num: int, address: int) -> int | None:
+        try:
+            from smbus2 import SMBus
+        except Exception:  # noqa: BLE001
+            return None
+
+        try:
+            with SMBus(bus_num) as bus:
+                # WHO_AM_I register
+                return int(bus.read_byte_data(address, 0x0F))
+        except Exception:  # noqa: BLE001
+            return None
 
     def connect(self) -> None:
         if self._connected:
@@ -27,7 +42,6 @@ class AdafruitLSM6DSOXLIS3MDLIMU(BaseIMU):
         try:
             import board
             from adafruit_lis3mdl import LIS3MDL
-            from adafruit_lsm6ds.lsm6dsox import LSM6DSOX
         except ImportError as exc:
             raise RuntimeError(
                 "Missing Adafruit IMU dependencies. Install with: "
@@ -35,8 +49,40 @@ class AdafruitLSM6DSOXLIS3MDLIMU(BaseIMU):
                 "adafruit-circuitpython-lsm6ds adafruit-circuitpython-lis3mdl"
             ) from exc
 
+        candidates: list[tuple[str, Any]] = []
+        # Prefer LSM6DSOX first, then common pin-compatible siblings.
+        for module_name, class_name in (
+            ("adafruit_lsm6ds.lsm6dsox", "LSM6DSOX"),
+            ("adafruit_lsm6ds.ism330dhcx", "ISM330DHCX"),
+            ("adafruit_lsm6ds.lsm6dso32", "LSM6DSO32"),
+            ("adafruit_lsm6ds.lsm6ds33", "LSM6DS33"),
+            ("adafruit_lsm6ds.lsm6ds3trc", "LSM6DS3TRC"),
+        ):
+            try:
+                module = __import__(module_name, fromlist=[class_name])
+                candidates.append((class_name, getattr(module, class_name)))
+            except Exception:  # noqa: BLE001
+                continue
+
         self._i2c = board.I2C()
-        self._imu6 = LSM6DSOX(self._i2c, address=int(self.config.lsm6dsox_address))
+        errors: list[str] = []
+        for variant_name, imu_cls in candidates:
+            try:
+                self._imu6 = imu_cls(self._i2c, address=int(self.config.lsm6dsox_address))
+                self._imu6_variant = variant_name
+                break
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{variant_name}: {exc}")
+
+        if self._imu6 is None:
+            whoami = self._read_whoami(self.config.bus_num, int(self.config.lsm6dsox_address))
+            whoami_str = "unknown" if whoami is None else f"0x{whoami:02X}"
+            raise RuntimeError(
+                "Failed to initialize any supported LSM6-family variant at "
+                f"0x{int(self.config.lsm6dsox_address):02X}. WHO_AM_I={whoami_str}. "
+                f"Tried: {', '.join(errors) if errors else 'no driver classes available'}"
+            )
+
         self._mag = LIS3MDL(self._i2c, address=int(self.config.lis3mdl_address))
         self._connected = True
 
@@ -46,6 +92,7 @@ class AdafruitLSM6DSOXLIS3MDLIMU(BaseIMU):
         self._imu6 = None
         self._mag = None
         self._i2c = None
+        self._imu6_variant = None
         self._connected = False
 
     def read(self) -> IMUSample:
@@ -83,4 +130,3 @@ class AdafruitLSM6DSOXLIS3MDLIMU(BaseIMU):
             valid=True,
             error=None,
         )
-

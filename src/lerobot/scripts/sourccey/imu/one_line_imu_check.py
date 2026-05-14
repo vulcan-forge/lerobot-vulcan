@@ -39,8 +39,10 @@ def main() -> int:
     )
     imu = AdafruitLSM6DSOXLIS3MDLIMU(config=config, calibration=calibration)
 
+    variant = None
     try:
         imu.connect()
+        variant = getattr(imu, "_imu6_variant", None)
         sample = imu.read()
     finally:
         imu.disconnect()
@@ -53,6 +55,7 @@ def main() -> int:
     temp_str = "None" if sample.temperature_c is None else f"{sample.temperature_c:.{args.precision}f}"
     print(
         f"{stamp} IMU_CHECK OK "
+        f"imu6_variant={variant} "
         f"accel_m_s2={_fmt_vec(sample.accel_m_s2, args.precision)} "
         f"gyro_rad_s={_fmt_vec(sample.gyro_rad_s, args.precision)} "
         f"mag_uT={_fmt_vec(sample.mag_uT, args.precision)} "
@@ -63,4 +66,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
