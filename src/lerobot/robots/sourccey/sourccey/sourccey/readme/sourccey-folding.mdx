@@ -20,7 +20,7 @@ uv run lerobot-record \
  --teleop.id="sourccey_leader" \
  --teleop.left_arm_port="/dev/ttyACM0" \
  --teleop.right_arm_port="/dev/ttyACM1" \
- --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-c/nickm/sourccey-013__shirt-fold-blue-c__set500_nickm" \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-light-blue-c/nickm/sourccey-013__shirt-fold-light-blue-c__set002_nickm" \
  --dataset.num_episodes=1 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=5 \
@@ -78,7 +78,7 @@ CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --max-attempts=30 \
   --retry-delay-seconds=20 \
   --dataset.repo_id="Combination/sourccey-shirt-fold-c-006" \
-  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-006" \
+  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-006-2" \
   --job_name="xvla_s_sourccey-shirt-fold-c-006" \
   --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-004/checkpoints/1000000/pretrained_model" \
   --policy.dtype=bfloat16 \
