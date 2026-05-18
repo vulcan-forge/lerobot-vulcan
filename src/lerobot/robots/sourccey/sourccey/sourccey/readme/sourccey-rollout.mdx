@@ -14,12 +14,12 @@ Assumptions:
 ```bash
 uv run lerobot-rollout \
   --strategy.type=base \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-place-a-000-start-c-006/checkpoints/0200000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --logging.throttle_spam=true \
   --logging.throttle_interval_s=30.0 \
-  --task="Fold the shirt" \
+  --task="Grab a shirt from the pile" \
   --display_data=true \
   --duration=1800 \
   --fps=30
