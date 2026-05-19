@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from lerobot.cameras.configs import CameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
@@ -146,6 +147,12 @@ class SourcceyHostConfig:
     imu_bus_num: int = 1
     imu_lsm6dsox_address: int = 0x6A
     imu_lis3mdl_address: int = 0x1C
+
+    # Host-side rollout debugging. The file is overwritten on each host start
+    # so every run leaves behind one fresh timing snapshot to inspect.
+    perf_log_enabled: bool = True
+    perf_log_path: str = str(Path.home() / "sourccey_host_perf.txt")
+    perf_log_interval_s: float = 5.0
 
 
 @RobotConfig.register_subclass("sourccey_client")
