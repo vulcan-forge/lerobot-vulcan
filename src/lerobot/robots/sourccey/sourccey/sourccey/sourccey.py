@@ -74,6 +74,7 @@ class Sourccey(Robot):
         self.cameras = make_cameras_from_configs(config.cameras)
         # Cameras are treated as best-effort: startup should not fail if a camera fails to connect/read.
         self._connected_cameras: set[str] = set()
+        self._camera_frame_cache: dict[str, np.ndarray] = {}
 
         self.dc_motors_controller = PWMDCMotorsController(
             motors=self.config.dc_motors,
@@ -203,6 +204,7 @@ class Sourccey(Robot):
             except Exception:
                 pass
         self._connected_cameras.clear()
+        self._camera_frame_cache.clear()
 
         logger.info(f"Sourccey disconnected.")
 
@@ -306,13 +308,23 @@ class Sourccey(Robot):
             for cam_key in self.cameras.keys():
                 cam_start = time.perf_counter()
                 try:
-                    obs_dict[cam_key] = self.cameras[cam_key].async_read()
+                    obs_dict[cam_key] = self.cameras[cam_key].read_latest(
+                        max_age_ms=self.config.camera_latest_max_age_ms
+                    )
+                    self._camera_frame_cache[cam_key] = obs_dict[cam_key]
                 except Exception as e:
-                    # Keep the observation schema stable even if a camera is down.
-                    h = int(self.config.cameras[cam_key].height)
-                    w = int(self.config.cameras[cam_key].width)
-                    obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)
-                    logger.warning(f"Camera '{cam_key}' read failed: {e}. Using black frame.")
+                    cached_frame = self._camera_frame_cache.get(cam_key)
+                    if cached_frame is not None:
+                        obs_dict[cam_key] = cached_frame
+                        logger.warning(f"Camera '{cam_key}' latest-frame read failed: {e}. Reusing cached frame.")
+                    else:
+                        # Keep the observation schema stable even if a camera is down.
+                        h = int(self.config.cameras[cam_key].height)
+                        w = int(self.config.cameras[cam_key].width)
+                        obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)
+                        logger.warning(
+                            f"Camera '{cam_key}' latest-frame read failed: {e}. Using black frame."
+                        )
                 camera_timings[cam_key] = time.perf_counter() - cam_start
             cameras_elapsed = time.perf_counter() - cameras_start
 

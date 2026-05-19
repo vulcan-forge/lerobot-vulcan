@@ -112,6 +112,7 @@ class SourcceyConfig(RobotConfig):
 
     dc_motors_config: dict = field(default_factory=sourccey_dc_motors_config)
     dc_motors: dict = field(default_factory=sourccey_dc_motors)
+    camera_latest_max_age_ms: int = 250
 
     # Optional
     left_arm_disable_torque_on_disconnect: bool = True
