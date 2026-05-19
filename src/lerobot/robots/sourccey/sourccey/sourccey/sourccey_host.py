@@ -52,10 +52,11 @@ class SourcceyHost:
 class _HostPerfReporter:
     """Collects lightweight host-loop timing stats and writes one fresh report per run."""
 
-    def __init__(self, config: SourcceyHostConfig):
+    def __init__(self, config: SourcceyHostConfig, stats_provider=None):
         self.enabled = config.perf_log_enabled
         self.path = Path(config.perf_log_path).expanduser()
         self.interval_s = max(float(config.perf_log_interval_s), 0.5)
+        self.stats_provider = stats_provider
         self.start_monotonic = time.monotonic()
         self._last_flush_ts = self.start_monotonic
 
@@ -175,6 +176,17 @@ class _HostPerfReporter:
             f"send_avg_ms: {avg_ms(self.send_total_s):.3f}",
             f"send_max_ms: {max_ms(self.send_max_s):.3f}",
         ]
+        if self.stats_provider is not None:
+            try:
+                extra_stats = self.stats_provider() or {}
+            except Exception as exc:  # noqa: BLE001
+                extra_stats = {"stats_provider_error": str(exc)}
+            for key in sorted(extra_stats):
+                value = extra_stats[key]
+                if isinstance(value, float):
+                    lines.append(f"{key}: {value:.3f}")
+                else:
+                    lines.append(f"{key}: {value}")
         return "\n".join(lines) + "\n"
 
 
@@ -271,7 +283,7 @@ def main():
     host_config = SourcceyHostConfig()
     host = SourcceyHost(host_config)
     imu_reporter = _IMUReporter(host_config)
-    perf_reporter = _HostPerfReporter(host_config)
+    perf_reporter = _HostPerfReporter(host_config, stats_provider=robot.get_observation_perf_snapshot)
     imu_reporter.start()
 
     print("Waiting for commands...")

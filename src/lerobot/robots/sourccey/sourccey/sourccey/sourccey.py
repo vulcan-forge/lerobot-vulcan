@@ -94,6 +94,28 @@ class Sourccey(Robot):
         # Track per-arm untorque state for edge detection
         self.untorque_left_prev = False
         self.untorque_right_prev = False
+        self._obs_perf_lock = threading.Lock()
+        self._obs_perf = {
+            "count": 0,
+            "left_arm_total_s": 0.0,
+            "left_arm_max_s": 0.0,
+            "right_arm_total_s": 0.0,
+            "right_arm_max_s": 0.0,
+            "base_total_s": 0.0,
+            "base_max_s": 0.0,
+            "z_total_s": 0.0,
+            "z_max_s": 0.0,
+            "cameras_total_s": 0.0,
+            "cameras_max_s": 0.0,
+            "camera_front_left_total_s": 0.0,
+            "camera_front_left_max_s": 0.0,
+            "camera_front_right_total_s": 0.0,
+            "camera_front_right_max_s": 0.0,
+            "camera_wrist_left_total_s": 0.0,
+            "camera_wrist_left_max_s": 0.0,
+            "camera_wrist_right_total_s": 0.0,
+            "camera_wrist_right_max_s": 0.0,
+        }
 
     def __del__(self):
         # Destructors can run on partially initialized objects if __init__ raised.
@@ -252,17 +274,24 @@ class Sourccey(Robot):
         try:
             obs_dict = {}
 
+            left_start = time.perf_counter()
             left_obs = self.left_arm.get_observation()
+            left_elapsed = time.perf_counter() - left_start
             obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
 
+            right_start = time.perf_counter()
             right_obs = self.right_arm.get_observation()
+            right_elapsed = time.perf_counter() - right_start
             obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
 
+            base_start = time.perf_counter()
             base_wheel_vel = self.dc_motors_controller.get_velocities()
             base_vel = self._wheel_normalized_to_body(base_wheel_vel)
+            base_elapsed = time.perf_counter() - base_start
             obs_dict.update(base_vel)
 
             # Z actuator position (best-effort; keep schema stable)
+            z_start = time.perf_counter()
             try:
                 if self.z_actuator is not None and self.z_actuator.is_connected and self.z_actuator.use_z_actuator:
                     obs_dict["z.pos"] = float(self.z_actuator.read_position())
@@ -270,8 +299,12 @@ class Sourccey(Robot):
                     obs_dict["z.pos"] = 100.0
             except Exception:
                 obs_dict["z.pos"] = 100.0
+            z_elapsed = time.perf_counter() - z_start
 
+            camera_timings: dict[str, float] = {}
+            cameras_start = time.perf_counter()
             for cam_key in self.cameras.keys():
+                cam_start = time.perf_counter()
                 try:
                     obs_dict[cam_key] = self.cameras[cam_key].async_read()
                 except Exception as e:
@@ -280,11 +313,66 @@ class Sourccey(Robot):
                     w = int(self.config.cameras[cam_key].width)
                     obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)
                     logger.warning(f"Camera '{cam_key}' read failed: {e}. Using black frame.")
+                camera_timings[cam_key] = time.perf_counter() - cam_start
+            cameras_elapsed = time.perf_counter() - cameras_start
+
+            self._record_observation_perf(
+                left_elapsed=left_elapsed,
+                right_elapsed=right_elapsed,
+                base_elapsed=base_elapsed,
+                z_elapsed=z_elapsed,
+                cameras_elapsed=cameras_elapsed,
+                camera_timings=camera_timings,
+            )
 
             return obs_dict
         except Exception as e:
             print(f"Error getting observation: {e}")
             return {}
+
+    def _record_observation_perf(
+        self,
+        *,
+        left_elapsed: float,
+        right_elapsed: float,
+        base_elapsed: float,
+        z_elapsed: float,
+        cameras_elapsed: float,
+        camera_timings: dict[str, float],
+    ) -> None:
+        with self._obs_perf_lock:
+            perf = self._obs_perf
+            perf["count"] += 1
+            perf["left_arm_total_s"] += left_elapsed
+            perf["left_arm_max_s"] = max(perf["left_arm_max_s"], left_elapsed)
+            perf["right_arm_total_s"] += right_elapsed
+            perf["right_arm_max_s"] = max(perf["right_arm_max_s"], right_elapsed)
+            perf["base_total_s"] += base_elapsed
+            perf["base_max_s"] = max(perf["base_max_s"], base_elapsed)
+            perf["z_total_s"] += z_elapsed
+            perf["z_max_s"] = max(perf["z_max_s"], z_elapsed)
+            perf["cameras_total_s"] += cameras_elapsed
+            perf["cameras_max_s"] = max(perf["cameras_max_s"], cameras_elapsed)
+            for cam_key, elapsed in camera_timings.items():
+                total_key = f"camera_{cam_key}_total_s"
+                max_key = f"camera_{cam_key}_max_s"
+                if total_key in perf:
+                    perf[total_key] += elapsed
+                    perf[max_key] = max(perf[max_key], elapsed)
+
+    def get_observation_perf_snapshot(self) -> dict[str, float]:
+        with self._obs_perf_lock:
+            perf = dict(self._obs_perf)
+        count = max(int(perf.get("count", 0)), 1)
+        snapshot: dict[str, float] = {"observation_perf_count": float(perf.get("count", 0))}
+        for key, value in perf.items():
+            if key == "count":
+                continue
+            if key.endswith("_total_s"):
+                snapshot[key.replace("_total_s", "_avg_ms")] = (float(value) / count) * 1000.0
+            elif key.endswith("_max_s"):
+                snapshot[key.replace("_max_s", "_max_ms")] = float(value) * 1000.0
+        return snapshot
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         try:
