@@ -30,6 +30,7 @@ env:
   UV_VERSION: "0.8.0"
   PYTHON_VERSION: "3.12"
   DOCKER_IMAGE_NAME: huggingface/lerobot-gpu:latest-deps
+  MIN_DEPENDENCY_AGE_DAYS: "3"
 
 # Ensures that only the latest run is active, canceling older runs.
 concurrency:
@@ -60,6 +61,12 @@ jobs:
 
       - name: Upgrade uv.lock
         run: uv lock --upgrade
+
+      - name: Enforce minimum dependency age
+        run: |
+          python scripts/ci/check_uv_lock_min_age.py \
+            --lock-file uv.lock \
+            --min-age-days "${MIN_DEPENDENCY_AGE_DAYS}"
 
       - name: Check for changes
         id: diff

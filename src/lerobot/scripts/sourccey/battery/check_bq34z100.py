@@ -488,6 +488,7 @@ CSV_COLUMNS = [
     "remaining_ah",
     "max_error_pct",
     "update_status_hex",
+    "chem_id_hex",
     "control_status_hex",
     "flags_hex",
     "FC",
@@ -512,6 +513,7 @@ def _extract_log_row(payload: dict[str, Any], *, df_snapshot: bool, event_marker
     telemetry = payload.get("telemetry", {})
     learning = payload.get("learning", {})
     pack = payload.get("pack", {})
+    chip_info = payload.get("chip_info", {})
     control_flags = payload.get("control_flags", {})
     return {
         "timestamp_utc": payload.get("timestamp_utc"),
@@ -522,6 +524,7 @@ def _extract_log_row(payload: dict[str, Any], *, df_snapshot: bool, event_marker
         "remaining_ah": telemetry.get("remaining_capacity_ah"),
         "max_error_pct": telemetry.get("max_error"),
         "update_status_hex": pack.get("update_status"),
+        "chem_id_hex": chip_info.get("chem_id"),
         "control_status_hex": control_flags.get("CONTROL_STATUS_hex"),
         "flags_hex": control_flags.get("FLAGS_hex"),
         "FC": control_flags.get("FC"),
@@ -563,7 +566,7 @@ def _print_watch_line(row: dict[str, Any], events: list[str]) -> None:
     stamp = row.get("timestamp_utc")
     msg = (
         f"[{stamp}] V={row.get('voltage_v')}V I={row.get('current_a')}A SOC={row.get('soc_pct')}% "
-        f"US={row.get('update_status_hex')} FC={row.get('FC')} VOK={row.get('VOK')} "
+        f"US={row.get('update_status_hex')} CID={row.get('chem_id_hex')} FC={row.get('FC')} VOK={row.get('VOK')} "
         f"RUP_DIS={row.get('RUP_DIS')} QEN={row.get('QEN')} "
         f"derived_fc={row.get('derived_fc_conditions_now')}"
     )

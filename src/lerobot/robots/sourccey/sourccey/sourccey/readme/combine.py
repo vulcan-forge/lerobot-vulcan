@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import csv
 import datetime as dt
 import json
 import shlex
@@ -10,12 +11,27 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_PARENTS = [
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-a/nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/sourccey-013__shirt-fold-blue-c/nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/rollout__sourccey-013__shirt-fold-blue-c/nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-006",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-005",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-006",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-007",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-008",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-009",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-010",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set000_nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set001_nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set002_nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set003_nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set004_nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set005_nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set006_nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set007_nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set008_nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set009_nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set010_nickm",
 ]
 HF_LEROBOT_HOME = Path("/home/sourccey/.cache/huggingface/lerobot")
-DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-004"
+DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-008"
 
 
 @dataclass(frozen=True)
@@ -23,6 +39,7 @@ class DatasetCandidate:
     root: Path
     repo_id: str
     features: dict
+    total_episodes: int
 
 
 def is_dataset_root(path: Path) -> bool:
@@ -51,7 +68,7 @@ def discover_dataset_roots(parents: list[Path]) -> list[Path]:
     return sorted(dict.fromkeys(roots))
 
 
-def load_features(path: Path) -> dict:
+def load_dataset_info(path: Path) -> tuple[dict, int]:
     info_path = path / "meta" / "info.json"
     try:
         info = json.loads(info_path.read_text())
@@ -61,7 +78,14 @@ def load_features(path: Path) -> dict:
     features = info.get("features")
     if not isinstance(features, dict):
         raise SystemExit(f"Invalid features metadata in {info_path}")
-    return features
+
+    total_episodes = info.get("total_episodes")
+    if not isinstance(total_episodes, int) or total_episodes < 0:
+        raise SystemExit(
+            f"Invalid total_episodes in {info_path}: expected non-negative int, got {total_episodes!r}"
+        )
+
+    return features, total_episodes
 
 
 def feature_signature(features: dict) -> str:
@@ -69,7 +93,18 @@ def feature_signature(features: dict) -> str:
 
 
 def build_candidates(roots: list[Path]) -> list[DatasetCandidate]:
-    return [DatasetCandidate(root=root, repo_id=root.name, features=load_features(root)) for root in roots]
+    candidates: list[DatasetCandidate] = []
+    for root in roots:
+        features, total_episodes = load_dataset_info(root)
+        candidates.append(
+            DatasetCandidate(
+                root=root,
+                repo_id=root.name,
+                features=features,
+                total_episodes=total_episodes,
+            )
+        )
+    return candidates
 
 
 def filter_candidates_by_feature(
@@ -150,9 +185,65 @@ def resolve_group_root(base_out_root: Path | None, repo_id: str) -> Path:
     return base_out_root.parent / repo_id
 
 
+def lineage_csv_path(out_root: Path) -> Path:
+    return out_root / "_reports" / "episode_lineage.csv"
+
+
+def write_episode_lineage_csv(candidates: list[DatasetCandidate], csv_path: Path) -> tuple[Path, int]:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    row_count = 0
+    merged_episode_index = 0
+    expected_row_count = sum(candidate.total_episodes for candidate in candidates)
+    fields = [
+        "merged_episode_index",
+        "source_dataset_index",
+        "source_repo_id",
+        "source_root",
+        "source_episode_index",
+    ]
+
+    with csv_path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for source_dataset_index, candidate in enumerate(candidates):
+            for source_episode_index in range(candidate.total_episodes):
+                writer.writerow(
+                    {
+                        "merged_episode_index": merged_episode_index,
+                        "source_dataset_index": source_dataset_index,
+                        "source_repo_id": candidate.repo_id,
+                        "source_root": str(candidate.root),
+                        "source_episode_index": source_episode_index,
+                    }
+                )
+                merged_episode_index += 1
+                row_count += 1
+
+    if row_count != expected_row_count:
+        raise SystemExit(
+            f"Lineage row count mismatch for {csv_path}: wrote {row_count}, expected {expected_row_count}"
+        )
+
+    return csv_path, row_count
+
+
 def run_merge(
     candidates: list[DatasetCandidate], out_repo: str, out_root: Path, config_path: Path, dry_run: bool
 ) -> None:
+    final_lineage_path = lineage_csv_path(out_root)
+    if dry_run:
+        premerge_lineage_path = final_lineage_path
+    else:
+        if out_root.exists():
+            raise SystemExit(
+                f"Output root already exists and merge requires a fresh directory: {out_root}\n"
+                "If this is from a prior failed run, remove it first and retry."
+            )
+        premerge_lineage_path = config_path.with_name(f"{config_path.stem}__episode_lineage.csv")
+
+    lineage_path, lineage_rows = write_episode_lineage_csv(candidates, premerge_lineage_path)
+
     repo_ids = [candidate.repo_id for candidate in candidates]
     cfg = {
         "new_repo_id": out_repo,
@@ -170,6 +261,7 @@ def run_merge(
     print(f"\nWrote merge config: {config_path}")
     print(f"Output repo_id: {out_repo}")
     print(f"Output root: {out_root}")
+    print(f"Wrote episode lineage CSV: {lineage_path} ({lineage_rows} rows)")
 
     cmd = ["uv", "run", "lerobot-edit-dataset", "--config_path", str(config_path)]
     print(f"\nRunning: {' '.join(shlex.quote(x) for x in cmd)}")
@@ -179,6 +271,11 @@ def run_merge(
         return
 
     subprocess.run(cmd, check=True)
+
+    if lineage_path != final_lineage_path:
+        final_lineage_path.parent.mkdir(parents=True, exist_ok=True)
+        lineage_path.replace(final_lineage_path)
+        print(f"Moved episode lineage CSV to: {final_lineage_path}")
 
 
 def default_stamp() -> str:

@@ -28,6 +28,11 @@ from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnected
 
 from lerobot.robots.robot import Robot
 from .config_sourccey import SourcceyClientConfig
+from .modules.slam import (
+    SlamInputPublisher,
+    close_slam_pub_socket,
+    create_slam_pub_socket,
+)
 
 # Import protobuf modules
 from ..protobuf.generated import sourccey_pb2
@@ -46,18 +51,33 @@ class SourcceyClient(Robot):
         self.remote_ip = config.remote_ip
         self.port_zmq_cmd = config.port_zmq_cmd
         self.port_zmq_observations = config.port_zmq_observations
+        slam_cfg = config.slam
+        self.slam_input_enabled = slam_cfg.input_enabled
+        self.slam_input_endpoint = slam_cfg.input_endpoint
+        self.slam_stereo_left_key = slam_cfg.stereo_left_key
+        self.slam_stereo_right_key = slam_cfg.stereo_right_key
+        self.slam_jpeg_quality = int(np.clip(slam_cfg.jpeg_quality, 1, 100))
 
         self.teleop_keys = config.teleop_keys
 
         self.polling_timeout_ms = config.polling_timeout_ms
+        self.log_no_data_timeouts = config.log_no_data_timeouts
+        self.no_data_log_interval_s = max(0.0, float(config.no_data_log_interval_s))
         self.connect_timeout_s = config.connect_timeout_s
 
         self.zmq_context = None
         self.zmq_cmd_socket = None
         self.zmq_observation_socket = None
+        self.zmq_slam_input_socket = None
 
         self.last_frames = {}
         self.last_remote_state = {}
+        self._slam_input_publisher = SlamInputPublisher(
+            source_id=self.id,
+            stereo_left_key=self.slam_stereo_left_key,
+            stereo_right_key=self.slam_stereo_right_key,
+            jpeg_quality=self.slam_jpeg_quality,
+        )
 
         # Define three speed levels and a current index
         self.speed_levels = [
@@ -101,7 +121,7 @@ class SourcceyClient(Robot):
         self._z_pos_cmd = 100.0
 
         # Log-throttle repeated poll timeouts to avoid terminal spam in teleop loops.
-        self._no_data_log_interval_s = 5.0
+        self._no_data_log_interval_s = self.no_data_log_interval_s
         self._last_no_data_log_ts = 0.0
         self._suppressed_no_data_logs = 0
 
@@ -188,24 +208,44 @@ class SourcceyClient(Robot):
                 "SourcceyClient is already connected. Do not run `robot.connect()` twice."
             )
 
-        self.zmq_context = zmq.Context()
-        self.zmq_cmd_socket = self.zmq_context.socket(zmq.PUSH)
-        zmq_cmd_locator = f"tcp://{self.remote_ip}:{self.port_zmq_cmd}"
-        self.zmq_cmd_socket.connect(zmq_cmd_locator)
-        self.zmq_cmd_socket.setsockopt(zmq.CONFLATE, 1)
+        try:
+            self.zmq_context = zmq.Context()
+            self.zmq_cmd_socket = self.zmq_context.socket(zmq.PUSH)
+            zmq_cmd_locator = f"tcp://{self.remote_ip}:{self.port_zmq_cmd}"
+            self.zmq_cmd_socket.connect(zmq_cmd_locator)
+            self.zmq_cmd_socket.setsockopt(zmq.CONFLATE, 1)
 
-        self.zmq_observation_socket = self.zmq_context.socket(zmq.PULL)
-        zmq_observations_locator = f"tcp://{self.remote_ip}:{self.port_zmq_observations}"
-        self.zmq_observation_socket.connect(zmq_observations_locator)
-        self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
+            self.zmq_observation_socket = self.zmq_context.socket(zmq.PULL)
+            zmq_observations_locator = f"tcp://{self.remote_ip}:{self.port_zmq_observations}"
+            self.zmq_observation_socket.connect(zmq_observations_locator)
+            self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
 
-        poller = zmq.Poller()
-        poller.register(self.zmq_observation_socket, zmq.POLLIN)
-        socks = dict(poller.poll(self.connect_timeout_s * 1000))
-        if self.zmq_observation_socket not in socks or socks[self.zmq_observation_socket] != zmq.POLLIN:
-            raise DeviceNotConnectedError("Timeout waiting for Sourccey Host to connect expired.")
+            if self.slam_input_enabled:
+                self.zmq_slam_input_socket = create_slam_pub_socket(
+                    self.zmq_context, self.slam_input_endpoint
+                )
 
-        self._is_connected = True
+            poller = zmq.Poller()
+            poller.register(self.zmq_observation_socket, zmq.POLLIN)
+            socks = dict(poller.poll(self.connect_timeout_s * 1000))
+            if self.zmq_observation_socket not in socks or socks[self.zmq_observation_socket] != zmq.POLLIN:
+                raise DeviceNotConnectedError("Timeout waiting for Sourccey Host to connect expired.")
+
+            self._is_connected = True
+        except Exception:
+            if self.zmq_slam_input_socket is not None:
+                close_slam_pub_socket(self.zmq_slam_input_socket)
+                self.zmq_slam_input_socket = None
+            if self.zmq_observation_socket is not None:
+                self.zmq_observation_socket.close(0)
+                self.zmq_observation_socket = None
+            if self.zmq_cmd_socket is not None:
+                self.zmq_cmd_socket.close(0)
+                self.zmq_cmd_socket = None
+            if self.zmq_context is not None:
+                self.zmq_context.term()
+                self.zmq_context = None
+            raise
 
     def calibrate(self) -> None:
         pass
@@ -244,6 +284,9 @@ class SourcceyClient(Robot):
             logging.debug("Could not send final relax command before disconnect: socket not ready.")
         except Exception as e:
             logging.debug(f"Could not send final relax command before disconnect: {e}")
+        if self.zmq_slam_input_socket is not None:
+            close_slam_pub_socket(self.zmq_slam_input_socket)
+            self.zmq_slam_input_socket = None
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
@@ -261,7 +304,7 @@ class SourcceyClient(Robot):
         if not self._is_connected:
             raise DeviceNotConnectedError("SourcceyClient is not connected. You need to run `robot.connect()`.")
 
-        frames, obs_dict = self._get_data()
+        frames, obs_dict, is_fresh = self._get_data()
 
         # Loop over each configured camera
         for cam_name, frame in frames.items():
@@ -269,6 +312,9 @@ class SourcceyClient(Robot):
                 logging.warning("Frame is None")
                 frame = np.zeros((640, 480, 3), dtype=np.uint8)
             obs_dict[cam_name] = frame
+
+        if is_fresh and self.slam_input_enabled:
+            self._publish_slam_input(observation=obs_dict, frames=frames)
 
         return obs_dict
 
@@ -316,7 +362,7 @@ class SourcceyClient(Robot):
     ###################################################################
     # Private Data Management
     ###################################################################
-    def _get_data(self) -> Tuple[Dict[str, np.ndarray], Dict[str, Any], Dict[str, Any]]:
+    def _get_data(self) -> Tuple[Dict[str, np.ndarray], Dict[str, Any], bool]:
         """
         Polls the video socket for the latest observation data.
 
@@ -330,7 +376,7 @@ class SourcceyClient(Robot):
 
         # 2. If no message, return cached data
         if latest_message_bytes is None:
-            return self.last_frames, self.last_remote_state
+            return self.last_frames, self.last_remote_state, False
 
         # 3. Parse the protobuf message
         try:
@@ -339,23 +385,23 @@ class SourcceyClient(Robot):
             observation = self.protobuf_converter.protobuf_to_observation(robot_state)
         except Exception as e:
             logging.error(f"Error parsing protobuf observation: {e}")
-            return self.last_frames, self.last_remote_state
+            return self.last_frames, self.last_remote_state, False
 
         # 4. If protobuf parsing failed, return cached data
         if observation is None:
-            return self.last_frames, self.last_remote_state
+            return self.last_frames, self.last_remote_state, False
 
         # 5. Process the valid observation data
         try:
             new_frames, new_state = self._remote_state_from_obs(observation)
         except Exception as e:
             logging.error(f"Error processing observation data, serving last observation: {e}")
-            return self.last_frames, self.last_remote_state
+            return self.last_frames, self.last_remote_state, False
 
         self.last_frames = new_frames
         self.last_remote_state = new_state
 
-        return new_frames, new_state
+        return new_frames, new_state, True
 
     ###################################################################
     # Private Message and Parsing Functions
@@ -372,6 +418,8 @@ class SourcceyClient(Robot):
             return None
 
         if self.zmq_observation_socket not in socks:
+            if not self.log_no_data_timeouts:
+                return None
             now = time.monotonic()
             elapsed = now - self._last_no_data_log_ts
             if elapsed >= self._no_data_log_interval_s:
@@ -449,6 +497,24 @@ class SourcceyClient(Robot):
                     current_frames[cam_name] = frame
 
         return current_frames, obs_dict
+
+    def _publish_slam_input(self, observation: Dict[str, Any], frames: Dict[str, np.ndarray]) -> None:
+        self._slam_input_publisher.publish(
+            socket=self.zmq_slam_input_socket,
+            observation=observation,
+            frames=frames,
+        )
+
+    def _build_slam_input_packet(
+        self, observation: Dict[str, Any], frames: Dict[str, np.ndarray]
+    ) -> Optional[bytes]:
+        return self._slam_input_publisher.build_packet(
+            observation=observation,
+            frames=frames,
+        )
+
+    def _log_slam_warning_throttled(self, key: str, message: str) -> None:
+        self._slam_input_publisher.log_warning_throttled(key, message)
 
     ###################################################################
     # Private Control Functions

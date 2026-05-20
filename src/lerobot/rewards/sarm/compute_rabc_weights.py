@@ -42,10 +42,18 @@ Usage:
         --visualize-only \\
         --num-visualizations 5
 
+    # Visualize specific episodes only
+    python src/lerobot/rewards/sarm/compute_rabc_weights.py \\
+        --dataset-repo-id lerobot/aloha_sim_insertion_human \\
+        --reward-model-path <USER>/sarm_single_uni4 \\
+        --visualize-only \\
+        --visualize-episode-indices 32,44
+
 The output is saved to the dataset's local cache directory as 'sarm_progress.parquet'.
 """
 
 import argparse
+import csv
 import json
 import logging
 import re
@@ -430,6 +438,116 @@ def visualize_sarm_predictions(
     logging.info(f"Visualizations saved to: {output_dir.absolute()}")
 
 
+def _get_parts_dir(output_path: Path) -> Path:
+    return output_path.parent / f"{output_path.stem}_parts"
+
+
+def _parts_manifest_path(parts_dir: Path) -> Path:
+    return parts_dir / "manifest.json"
+
+
+def _episode_part_path(parts_dir: Path, episode_idx: int) -> Path:
+    return parts_dir / f"episode_{episode_idx:06d}.parquet"
+
+
+def _atomic_write_table(table: pa.Table, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.with_suffix(target.suffix + ".tmp")
+    pq.write_table(table, tmp_path)
+    tmp_path.replace(target)
+
+
+def _write_parts_manifest(
+    parts_dir: Path,
+    *,
+    dataset_repo_id: str,
+    reward_model_path: str,
+    head_mode: str,
+    stride: int,
+    compute_sparse: bool,
+    compute_dense: bool,
+    num_episodes: int,
+    reset_parts: bool,
+) -> None:
+    if reset_parts and parts_dir.exists():
+        shutil.rmtree(parts_dir)
+
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = _parts_manifest_path(parts_dir)
+    expected = {
+        "dataset_repo_id": dataset_repo_id,
+        "reward_model_path": reward_model_path,
+        "head_mode": head_mode,
+        "stride": int(stride),
+        "compute_sparse": bool(compute_sparse),
+        "compute_dense": bool(compute_dense),
+        "num_episodes": int(num_episodes),
+    }
+
+    if manifest_path.exists():
+        try:
+            existing = json.loads(manifest_path.read_text())
+        except Exception:  # nosec B110
+            existing = None
+        if existing != expected:
+            logging.warning("Existing SARM parts manifest differs from current run. Resetting parts directory.")
+            shutil.rmtree(parts_dir)
+            parts_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path.write_text(json.dumps(expected, indent=2))
+
+
+def _list_completed_episodes(parts_dir: Path) -> set[int]:
+    completed: set[int] = set()
+    if not parts_dir.exists():
+        return completed
+    pattern = re.compile(r"^episode_(\d{6})\.parquet$")
+    for path in parts_dir.iterdir():
+        if not path.is_file():
+            continue
+        m = pattern.match(path.name)
+        if m:
+            completed.add(int(m.group(1)))
+    return completed
+
+
+def _merge_parts_to_output(
+    *,
+    parts_dir: Path,
+    output_path: Path,
+    reward_model_path: str,
+    expected_num_episodes: int,
+) -> pa.Table:
+    part_paths = sorted(parts_dir.glob("episode_*.parquet"))
+    if not part_paths:
+        raise RuntimeError(f"No episode part files found in {parts_dir}")
+
+    if len(part_paths) < expected_num_episodes:
+        logging.warning(
+            "Merging incomplete parts: found %d / expected %d episodes",
+            len(part_paths),
+            expected_num_episodes,
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_output = output_path.with_suffix(output_path.suffix + ".tmp")
+    metadata = {b"reward_model_path": reward_model_path.encode()}
+    writer = None
+    try:
+        for part_path in part_paths:
+            table = pq.read_table(part_path)
+            table = table.replace_schema_metadata(metadata)
+            if writer is None:
+                writer = pq.ParquetWriter(tmp_output, table.schema)
+            writer.write_table(table)
+    finally:
+        if writer is not None:
+            writer.close()
+
+    tmp_output.replace(output_path)
+    return pq.read_table(output_path)
+
+
 def generate_all_frame_indices(ep_start: int, ep_end: int, frame_gap: int = 30) -> list[int]:
     """Generate all frame indices, ordered by offset for cache-friendly access.
 
@@ -464,6 +582,171 @@ def interpolate_progress(
     return out.astype(np.float32)
 
 
+def parse_visualization_episode_indices(
+    raw_values: list[str] | None, num_episodes: int | None = None
+) -> list[int] | None:
+    """Parse and validate episode indices from CLI strings.
+
+    Accepts comma-separated values and/or repeated flags.
+    Example: ["32"] or ["32,44", "100"].
+    """
+    if not raw_values:
+        return None
+
+    parsed: list[int] = []
+    seen: set[int] = set()
+
+    for raw in raw_values:
+        for piece in raw.split(","):
+            token = piece.strip()
+            if not token:
+                continue
+            try:
+                episode_idx = int(token)
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid episode index '{token}' in --visualize-episode-indices. "
+                    "Use integers like: --visualize-episode-indices 32,44"
+                ) from e
+
+            if episode_idx < 0:
+                raise ValueError(f"Episode index {episode_idx} is invalid. Episode indices must be >= 0.")
+
+            if num_episodes is not None and episode_idx >= num_episodes:
+                raise ValueError(
+                    f"Episode index {episode_idx} is out of range. "
+                    f"Valid range is [0, {num_episodes - 1}]"
+                )
+
+            if episode_idx not in seen:
+                parsed.append(episode_idx)
+                seen.add(episode_idx)
+
+    if not parsed:
+        return None
+    return parsed
+
+
+def parse_visualization_ranking_indices(
+    ranking_csv: str | None,
+    top_k: int,
+    bottom_k: int,
+    num_episodes: int | None = None,
+) -> list[int] | None:
+    """Parse episode indices from a ranking CSV by taking top/bottom K rows."""
+    top_selection, bottom_selection = parse_visualization_ranking_groups(
+        ranking_csv=ranking_csv,
+        top_k=top_k,
+        bottom_k=bottom_k,
+        num_episodes=num_episodes,
+    )
+    if not top_selection and not bottom_selection:
+        return None
+
+    selected: list[int] = []
+    seen: set[int] = set()
+    for episode_idx in top_selection + bottom_selection:
+        if episode_idx not in seen:
+            selected.append(episode_idx)
+            seen.add(episode_idx)
+    return selected if selected else None
+
+
+def parse_visualization_ranking_groups(
+    ranking_csv: str | None,
+    top_k: int,
+    bottom_k: int,
+    num_episodes: int | None = None,
+) -> tuple[list[int], list[int]]:
+    """Parse top/bottom episode-index groups from a ranking CSV."""
+    if not ranking_csv:
+        if top_k > 0 or bottom_k > 0:
+            raise ValueError(
+                "--visualize-top-k/--visualize-bottom-k require --visualize-ranking-csv."
+            )
+        return [], []
+
+    if top_k < 0 or bottom_k < 0:
+        raise ValueError("--visualize-top-k and --visualize-bottom-k must be >= 0.")
+
+    if top_k == 0 and bottom_k == 0:
+        raise ValueError(
+            "When --visualize-ranking-csv is provided, set --visualize-top-k and/or "
+            "--visualize-bottom-k to a value > 0."
+        )
+
+    ranking_path = Path(ranking_csv).expanduser().resolve()
+    if not ranking_path.exists():
+        raise FileNotFoundError(f"Ranking CSV not found: {ranking_path}")
+
+    episode_indices: list[int] = []
+    with ranking_path.open(newline="") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames is None or "episode_index" not in reader.fieldnames:
+            raise ValueError(
+                f"Ranking CSV must contain an 'episode_index' column: {ranking_path}"
+            )
+
+        for line_no, row in enumerate(reader, start=2):
+            raw_ep = (row.get("episode_index") or "").strip()
+            if not raw_ep:
+                continue
+            try:
+                episode_idx = int(raw_ep)
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid episode_index '{raw_ep}' at line {line_no} in {ranking_path}"
+                ) from e
+
+            if episode_idx < 0:
+                raise ValueError(f"Episode index {episode_idx} is invalid. Episode indices must be >= 0.")
+            if num_episodes is not None and episode_idx >= num_episodes:
+                raise ValueError(
+                    f"Episode index {episode_idx} from ranking CSV is out of range. "
+                    f"Valid range is [0, {num_episodes - 1}]"
+                )
+            episode_indices.append(episode_idx)
+
+    if not episode_indices:
+        raise ValueError(f"No episode_index values found in ranking CSV: {ranking_path}")
+
+    top_count = min(top_k, len(episode_indices)) if top_k > 0 else 0
+    bottom_count = min(bottom_k, len(episode_indices)) if bottom_k > 0 else 0
+
+    top_selection = episode_indices[:top_count]
+    bottom_selection = episode_indices[-bottom_count:] if bottom_count > 0 else []
+    return top_selection, bottom_selection
+
+
+def resolve_visualization_episode_selection(
+    explicit_episode_indices_raw: list[str] | None,
+    ranking_csv: str | None,
+    ranking_top_k: int,
+    ranking_bottom_k: int,
+    num_episodes: int | None = None,
+) -> list[int] | None:
+    """Resolve final visualization episode list from explicit and ranking-derived sources."""
+    explicit = parse_visualization_episode_indices(explicit_episode_indices_raw, num_episodes) or []
+    ranked = parse_visualization_ranking_indices(
+        ranking_csv=ranking_csv,
+        top_k=ranking_top_k,
+        bottom_k=ranking_bottom_k,
+        num_episodes=num_episodes,
+    ) or []
+
+    if not explicit and not ranked:
+        return None
+
+    # Preserve user-specified ordering first, then append ranked episodes.
+    combined: list[int] = []
+    seen: set[int] = set()
+    for episode_idx in explicit + ranked:
+        if episode_idx not in seen:
+            combined.append(episode_idx)
+            seen.add(episode_idx)
+    return combined
+
+
 def compute_sarm_progress(
     dataset_repo_id: str,
     reward_model_path: str,
@@ -474,6 +757,7 @@ def compute_sarm_progress(
     output_dir: str = "./sarm_viz",
     stride: int = 1,
     reset_parts: bool = False,
+    visualize_episode_indices: list[int] | None = None,
 ):
     """
     Compute SARM progress predictions for all frames in a dataset.
@@ -488,6 +772,7 @@ def compute_sarm_progress(
         output_dir: Directory to save visualizations
         stride: Compute progress every N frames, interpolate the rest (default: 1 = every frame)
         reset_parts: If True, clears previous partial results and starts from scratch
+        visualize_episode_indices: Optional explicit episode indices to visualize
     """
     dataset, reward_model, preprocess = load_sarm_resources(dataset_repo_id, reward_model_path, device)
 
@@ -504,6 +789,14 @@ def compute_sarm_progress(
     num_episodes = dataset.num_episodes
     total_frames = dataset.num_frames
     logging.info(f"Processing {total_frames} frames across {num_episodes} episodes")
+
+    if visualize_episode_indices:
+        invalid = [idx for idx in visualize_episode_indices if idx < 0 or idx >= num_episodes]
+        if invalid:
+            raise ValueError(
+                f"Requested visualize episode index/indices out of range: {invalid}. "
+                f"Valid range is [0, {num_episodes - 1}]"
+            )
 
     # Determine which heads to compute
     dual_mode = reward_model.config.uses_dual_heads
@@ -730,7 +1023,19 @@ def compute_sarm_progress(
             )
 
     # Visualize episodes after processing
-    if num_visualizations > 0:
+    if visualize_episode_indices:
+        viz_episodes = visualize_episode_indices
+        logging.info(f"Generating visualizations for requested episodes: {viz_episodes}")
+        visualize_sarm_predictions(
+            dataset=dataset,
+            reward_model=reward_model,
+            preprocess=preprocess,
+            episode_indices=viz_episodes,
+            head_mode=head_mode,
+            output_dir=Path(output_dir),
+            stride=stride,
+        )
+    elif num_visualizations > 0:
         viz_episodes = list(range(min(num_visualizations, num_episodes)))
         logging.info(f"Generating {len(viz_episodes)} visualizations...")
         visualize_sarm_predictions(
@@ -763,6 +1068,22 @@ Examples:
         --reward-model-path <USER>/sarm_single_uni4 \\
         --visualize-only \\
         --num-visualizations 10
+
+    # Visualize specific episodes only
+    python src/lerobot/rewards/sarm/compute_rabc_weights.py \\
+        --dataset-repo-id lerobot/aloha_sim_insertion_human \\
+        --reward-model-path <USER>/sarm_single_uni4 \\
+        --visualize-only \\
+        --visualize-episode-indices 32,44
+
+    # Visualize top/bottom episodes from ranking CSV
+    python src/lerobot/rewards/sarm/compute_rabc_weights.py \\
+        --dataset-repo-id lerobot/aloha_sim_insertion_human \\
+        --reward-model-path <USER>/sarm_single_uni4 \\
+        --visualize-only \\
+        --visualize-ranking-csv outputs/sarm_episode_ranking_progress/episode_ranking_progress.csv \\
+        --visualize-top-k 25 \\
+        --visualize-bottom-k 25
         """,
     )
     parser.add_argument(
@@ -807,6 +1128,33 @@ Examples:
         type=int,
         default=5,
         help="Number of episodes to visualize (default: 5, set to 0 to skip)",
+    )
+    parser.add_argument(
+        "--visualize-episode-indices",
+        action="append",
+        default=None,
+        help=(
+            "Specific episode indices to visualize (comma-separated; can repeat). "
+            "Example: --visualize-episode-indices 32,44"
+        ),
+    )
+    parser.add_argument(
+        "--visualize-ranking-csv",
+        type=str,
+        default=None,
+        help="Ranking CSV path (e.g., episode_ranking_progress.csv) used for top/bottom episode selection.",
+    )
+    parser.add_argument(
+        "--visualize-top-k",
+        type=int,
+        default=0,
+        help="From --visualize-ranking-csv, include top K ranked episodes (0 disables).",
+    )
+    parser.add_argument(
+        "--visualize-bottom-k",
+        type=int,
+        default=0,
+        help="From --visualize-ranking-csv, include bottom K ranked episodes (0 disables).",
     )
     parser.add_argument(
         "--output-dir",
@@ -855,21 +1203,95 @@ Examples:
         dataset, reward_model, preprocess = load_sarm_resources(
             args.dataset_repo_id, reward_model_path, args.device
         )
-        logging.info(f"Visualization-only mode: visualizing {args.num_visualizations} episodes")
-        viz_episodes = list(range(min(args.num_visualizations, dataset.num_episodes)))
-        visualize_sarm_predictions(
-            dataset=dataset,
-            reward_model=reward_model,
-            preprocess=preprocess,
-            episode_indices=viz_episodes,
-            head_mode=args.head_mode,
-            output_dir=Path(args.output_dir),
-            stride=args.stride,
+        explicit_viz_episodes = parse_visualization_episode_indices(
+            args.visualize_episode_indices, dataset.num_episodes
+        ) or []
+        ranking_top_episodes, ranking_bottom_episodes = parse_visualization_ranking_groups(
+            ranking_csv=args.visualize_ranking_csv,
+            top_k=args.visualize_top_k,
+            bottom_k=args.visualize_bottom_k,
+            num_episodes=dataset.num_episodes,
         )
+
+        ranking_mode = bool(ranking_top_episodes or ranking_bottom_episodes)
+        if ranking_mode:
+            if explicit_viz_episodes:
+                manual_dir = Path(args.output_dir) / "manual"
+                logging.info(
+                    "Visualization-only mode: visualizing explicit episodes %s to %s",
+                    explicit_viz_episodes,
+                    manual_dir,
+                )
+                visualize_sarm_predictions(
+                    dataset=dataset,
+                    reward_model=reward_model,
+                    preprocess=preprocess,
+                    episode_indices=explicit_viz_episodes,
+                    head_mode=args.head_mode,
+                    output_dir=manual_dir,
+                    stride=args.stride,
+                )
+
+            if ranking_top_episodes:
+                top_dir = Path(args.output_dir) / "top"
+                logging.info(
+                    "Visualization-only mode: visualizing top-ranked episodes %s to %s",
+                    ranking_top_episodes,
+                    top_dir,
+                )
+                visualize_sarm_predictions(
+                    dataset=dataset,
+                    reward_model=reward_model,
+                    preprocess=preprocess,
+                    episode_indices=ranking_top_episodes,
+                    head_mode=args.head_mode,
+                    output_dir=top_dir,
+                    stride=args.stride,
+                )
+
+            if ranking_bottom_episodes:
+                bottom_dir = Path(args.output_dir) / "bottom"
+                logging.info(
+                    "Visualization-only mode: visualizing bottom-ranked episodes %s to %s",
+                    ranking_bottom_episodes,
+                    bottom_dir,
+                )
+                visualize_sarm_predictions(
+                    dataset=dataset,
+                    reward_model=reward_model,
+                    preprocess=preprocess,
+                    episode_indices=ranking_bottom_episodes,
+                    head_mode=args.head_mode,
+                    output_dir=bottom_dir,
+                    stride=args.stride,
+                )
+        else:
+            viz_episodes = explicit_viz_episodes if explicit_viz_episodes else None
+            if viz_episodes is None:
+                logging.info(f"Visualization-only mode: visualizing {args.num_visualizations} episodes")
+                viz_episodes = list(range(min(args.num_visualizations, dataset.num_episodes)))
+            else:
+                logging.info(f"Visualization-only mode: visualizing requested episodes {viz_episodes}")
+            visualize_sarm_predictions(
+                dataset=dataset,
+                reward_model=reward_model,
+                preprocess=preprocess,
+                episode_indices=viz_episodes,
+                head_mode=args.head_mode,
+                output_dir=Path(args.output_dir),
+                stride=args.stride,
+            )
+
         print(f"\nVisualizations saved to: {Path(args.output_dir).absolute()}")
         return
 
     # Full RABC computation (compute_sarm_progress loads model/dataset itself)
+    visualize_episode_indices = resolve_visualization_episode_selection(
+        explicit_episode_indices_raw=args.visualize_episode_indices,
+        ranking_csv=args.visualize_ranking_csv,
+        ranking_top_k=args.visualize_top_k,
+        ranking_bottom_k=args.visualize_bottom_k,
+    )
     output_path = compute_sarm_progress(
         dataset_repo_id=args.dataset_repo_id,
         reward_model_path=reward_model_path,
@@ -880,6 +1302,7 @@ Examples:
         output_dir=args.output_dir,
         stride=args.stride,
         reset_parts=args.reset_parts,
+        visualize_episode_indices=visualize_episode_indices,
     )
 
     print(f"\nSARM progress values saved to: {output_path}")

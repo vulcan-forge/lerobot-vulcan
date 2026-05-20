@@ -1,0 +1,218 @@
+# Sourccey Grab + Fold + Place Runbook
+
+Use this runbook to build a 3-stage cloth pipeline:
+1. Grab a clothing item from a pile
+2. Fold the clothing item
+3. Place the folded item aside
+
+## 0) Define task strings (keep these exact)
+
+```bash
+TASK_GRAB="Grab one piece of clothing from the pile"
+TASK_FOLD="Fold the shirt"
+TASK_PLACE="Place the folded clothing aside"
+```
+
+Use the same exact strings for recording and rollout.
+
+## 1) Record demonstrations per task
+
+Record grab episodes:
+
+```bash
+uv run lerobot-record \
+  --robot.type=sourccey_client \
+  --robot.id="sourccey" \
+  --robot.remote_ip="192.168.1.212" \
+  --teleop.type=bi_sourccey_leader \
+  --teleop.id="sourccey_leader" \
+  --teleop.left_arm_port="/dev/ttyACM0" \
+  --teleop.right_arm_port="/dev/ttyACM1" \
+  --dataset.repo_id="sourccey-013/sourccey-013__shirt-grab-c-specific-000/nickm/sourccey-013__shirt-grab-c__set000__nickm" \
+  --dataset.num_episodes=30 \
+  --dataset.episode_time_s=180 \
+  --dataset.reset_time_s=5 \
+  --dataset.single_task="Grab one piece of clothing from the pile"" \
+  --dataset.fps=30 \
+  --display_data=true \
+  --dataset.push_to_hub=false
+```
+
+Record fold episodes:
+
+```bash
+uv run lerobot-record \
+  --robot.type=sourccey_client \
+  --robot.id="sourccey" \
+  --robot.remote_ip="192.168.1.212" \
+  --teleop.type=bi_sourccey_leader \
+  --teleop.id="sourccey_leader" \
+  --teleop.left_arm_port="/dev/ttyACM0" \
+  --teleop.right_arm_port="/dev/ttyACM1" \
+  --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-c-specific-000/nickm/sourccey-013__shirt-fold-c__set000__nickm" \
+  --dataset.num_episodes=30 \
+  --dataset.episode_time_s=300 \
+  --dataset.reset_time_s=5 \
+  --dataset.single_task="$TASK_FOLD" \
+  --dataset.fps=30 \
+  --display_data=true \
+  --dataset.push_to_hub=false
+```
+
+Record place episodes:
+
+```bash
+uv run lerobot-record \
+  --robot.type=sourccey_client \
+  --robot.id="sourccey" \
+  --robot.remote_ip="192.168.1.212" \
+  --teleop.type=bi_sourccey_leader \
+  --teleop.id="sourccey_leader" \
+  --teleop.left_arm_port="/dev/ttyACM0" \
+  --teleop.right_arm_port="/dev/ttyACM1" \
+  --dataset.repo_id="sourccey-013/sourccey-013__shirt-place-c-specific-000/nickm/sourccey-013__shirt-place-c__set000__nickm" \
+  --dataset.num_episodes=30 \
+  --dataset.episode_time_s=180 \
+  --dataset.reset_time_s=5 \
+  --dataset.single_task="$TASK_PLACE" \
+  --dataset.fps=30 \
+  --display_data=true \
+  --dataset.push_to_hub=false
+```
+
+## 2) Merge into one multitask dataset
+
+Set dataset IDs:
+
+```bash
+GRAB_REPO="sourccey-013/sourccey-013__shirt-grab-c-specific-000/nickm/sourccey-013__shirt-grab-c__set000__nickm"
+FOLD_REPO="sourccey-013/sourccey-013__shirt-fold-c-specific-000/nickm/sourccey-013__shirt-fold-c__set000__nickm"
+PLACE_REPO="sourccey-013/sourccey-013__shirt-place-c-specific-000/nickm/sourccey-013__shirt-place-c__set000__nickm"
+
+MULTI_REPO="Combination/sourccey-shirt-grab-fold-place-c-000"
+```
+
+Merge:
+
+```bash
+uv run lerobot-edit-dataset \
+  --new_repo_id "$MULTI_REPO" \
+  --operation.type merge \
+  --operation.repo_ids "['$GRAB_REPO', '$FOLD_REPO', '$PLACE_REPO']"
+```
+
+Quick dataset check:
+
+```bash
+HF_LEROBOT_HOME="${HOME}/.cache/huggingface/lerobot"
+MULTI_ROOT="${HF_LEROBOT_HOME}/${MULTI_REPO}"
+
+uv run lerobot-edit-dataset \
+  --repo_id "$MULTI_REPO" \
+  --root "$MULTI_ROOT" \
+  --operation.type info \
+  --operation.show_features true
+```
+
+## 3) Train multitask policy
+
+From base:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
+  --max-attempts=30 \
+  --retry-delay-seconds=20 \
+  --dataset.repo_id="$MULTI_REPO" \
+  --output_dir="outputs/train/xvla_s_sourccey-shirt-grab-fold-place-c-000" \
+  --job_name="xvla_s_sourccey-shirt-grab-fold-place-c-000" \
+  --policy.path="lerobot/xvla-base" \
+  --policy.dtype=bfloat16 \
+  --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --policy.input_features=null \
+  --policy.scheduler_warmup_steps=3000 \
+  --policy.scheduler_decay_steps=300000 \
+  --policy.scheduler_decay_lr=5e-06 \
+  --steps=300000 \
+  --save_freq=20000 \
+  --batch_size=8 \
+  --wandb.enable=false
+```
+
+Fine-tune from your fold model:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
+  --max-attempts=30 \
+  --retry-delay-seconds=20 \
+  --dataset.repo_id="$MULTI_REPO" \
+  --output_dir="outputs/train/xvla_s_sourccey-shirt-grab-fold-place-c-000_ft" \
+  --job_name="xvla_s_sourccey-shirt-grab-fold-place-c-000_ft" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-004/checkpoints/1000000/pretrained_model" \
+  --policy.dtype=bfloat16 \
+  --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --policy.input_features=null \
+  --policy.optimizer_lr=5e-05 \
+  --policy.scheduler_warmup_steps=5000 \
+  --policy.scheduler_decay_steps=500000 \
+  --policy.scheduler_decay_lr=5e-06 \
+  --steps=500000 \
+  --save_freq=20000 \
+  --batch_size=8 \
+  --wandb.enable=false
+```
+
+## 4) Rollout each stage
+
+Grab:
+
+```bash
+uv run lerobot-rollout \
+  --strategy.type=base \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-grab-fold-place-c-000_ft/checkpoints/200000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --task="$TASK_GRAB" \
+  --display_data=true \
+  --duration=300 \
+  --fps=30
+```
+
+Fold:
+
+```bash
+uv run lerobot-rollout \
+  --strategy.type=base \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-grab-fold-place-c-000_ft/checkpoints/200000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --task="$TASK_FOLD" \
+  --display_data=true \
+  --duration=300 \
+  --fps=30
+```
+
+Place:
+
+```bash
+uv run lerobot-rollout \
+  --strategy.type=base \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-grab-fold-place-c-000_ft/checkpoints/200000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --task="$TASK_PLACE" \
+  --display_data=true \
+  --duration=300 \
+  --fps=30
+```
+
+## 5) Notes
+
+- Keep camera setup and calibration unchanged between recording and rollout.
+- Keep task prompts stable and exact.
+- If one stage lags, collect targeted corrections for that stage and merge again.

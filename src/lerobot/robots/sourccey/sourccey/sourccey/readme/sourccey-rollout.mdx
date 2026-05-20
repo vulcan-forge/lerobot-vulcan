@@ -12,21 +12,63 @@ Assumptions:
 ## 1) Quick Start (Base, no recording)
 
 ```bash
-uv run lerobot-rollout \
+CUDA_VISIBLE_DEVICES=1 uv run lerobot-rollout \
   --strategy.type=base \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-004/checkpoints/0120000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-008/checkpoints/0300000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --logging.throttle_spam=true \
   --logging.throttle_interval_s=30.0 \
-  --task="Fold the shirt" \
+  --task="Grab a shirt from the pile" \
   --display_data=true \
-  --duration=600 \
+  --duration=1800 \
   --fps=30
 ```
 
 To disable throttling and show every message:
 - `--logging.throttle_spam=false`
+
+---
+
+## 1b) Performance-tuned Base Rollout (Sourccey + XVLA)
+
+If you see repeated warnings like:
+- `Record loop is running slower (...) than target FPS (...)`
+- `No new data available within timeout`
+
+use this profile first:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
+  --strategy.type=base \
+  --inference.type=rtc \
+  --inference.rtc.enabled=false \
+  --inference.rtc.execution_horizon=30 \
+  --interpolation_multiplier=2 \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --robot.polling_timeout_ms=5 \
+  --logging.throttle_spam=true \
+  --logging.throttle_interval_s=30.0 \
+  --task="Fold the shirt" \
+  --display_data=false \
+  --duration=1800 \
+  --fps=20 \
+  --device=cuda
+```
+
+Notes:
+- `--inference.type=rtc` enables async inference in a background thread.
+- `--inference.rtc.enabled=false` keeps queue-append mode (useful for policies without RTC overlap kwargs, like XVLA).
+- `--interpolation_multiplier=2` smooths control by emitting interpolated actions between policy outputs.
+- `--robot.polling_timeout_ms=5` reduces blocking when no new observation packet is available.
+- `--display_data=false` removes Rerun visualization overhead from the control loop.
+
+If 20 FPS is stable, try increasing:
+- `--fps=24`, then `--fps=30`
+
+If 30 FPS is still unstable, keep `--fps` near sustained sensor rate and use interpolation for smoother actuation.
 
 ---
 
@@ -38,7 +80,7 @@ CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
   --inference.type=rtc \
   --inference.rtc.execution_horizon=10 \
   --inference.rtc.max_guidance_weight=10.0 \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --task="Fold the shirt" \
@@ -55,7 +97,7 @@ CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
 uv run lerobot-rollout \
   --strategy.type=sentry \
   --strategy.upload_every_n_episodes=5 \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --dataset.repo_id="sourccey-013/rollout_sourccey_sentry/sentry-000" \
@@ -81,7 +123,7 @@ uv run lerobot-rollout \
   --strategy.ring_buffer_seconds=30 \
   --strategy.save_key=s \
   --strategy.push_key=h \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --dataset.repo_id="sourccey-013/rollout_sourccey_highlight/highlight-000" \
@@ -99,13 +141,21 @@ Corrections-only mode:
 uv run lerobot-rollout \
   --strategy.type=dagger \
   --strategy.num_episodes=1 \
+<<<<<<< HEAD
   --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-003/checkpoints/0500000/pretrained_model" \
+=======
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+>>>>>>> vulcan-main
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --teleop.type=bi_sourccey_leader \
   --teleop.left_arm_port=/dev/ttyACM0 \
   --teleop.right_arm_port=/dev/ttyACM1 \
+<<<<<<< HEAD
   --dataset.repo_id="sourccey-013/rollout__sourccey-013__shirt-fold-blue-c/nickm/dagger-100-nickm" \
+=======
+  --dataset.repo_id="sourccey-013/rollout__sourccey-013__shirt-fold-light-blue-c/nickm/dagger-000-nickm" \
+>>>>>>> vulcan-main
   --dataset.single_task="Fold the shirt" \
   --fps=30 \
   --display_data=true \
@@ -119,17 +169,22 @@ uv run lerobot-rollout \
   --strategy.type=dagger \
   --strategy.record_autonomous=true \
   --strategy.num_episodes=50 \
-  --policy.path="HF_USER/sourccey-policy" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --teleop.type=bi_sourccey_leader \
   --teleop.left_arm_port=/dev/t     tyACM0 \
   --teleop.right_arm_port=/dev/ttyACM1 \
-  --dataset.repo_id="HF_USER/rollout_sourccey_dagger_auto" \
+  --dataset.repo_id="sourccey-013/rollout__sourccey-013__shirt-fold-light-blue-c/nickm/continuous-dagger-000-nickm" \
   --dataset.single_task="Fold the shirt" \
   --dataset.streaming_encoding=true \
   --display_data=true \
+<<<<<<< HEAD
   --fps=30
+=======
+  --fps=30 \
+  --dataset.push_to_hub=false
+>>>>>>> vulcan-main
 ```
 
 ---
@@ -141,7 +196,7 @@ If you want to use the Sourccey wrapper script added in this repo:
 ```bash
 uv run python src/lerobot/control/sourccey/sourccey/rollout.py \
   --remote_ip=192.168.1.212 \
-  --model_path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
+  --model_path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
   --task="Fold the shirt" \
   --duration=300 \
   --fps=30 \
@@ -153,7 +208,7 @@ RTC with wrapper:
 ```bash
 uv run python src/lerobot/control/sourccey/sourccey/rollout.py \
   --remote_ip=192.168.1.212 \
-  --model_path="outputs/train/xvla_s_sourccey-shirt-fold-c-001/checkpoints/1000000/pretrained_model" \
+  --model_path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
   --task="Fold the shirt" \
   --duration=300 \
   --fps=30 \

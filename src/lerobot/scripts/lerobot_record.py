@@ -116,6 +116,7 @@ from lerobot.teleoperators import (  # noqa: F401
     bi_openarm_leader,
     bi_so_leader,
     homunculus,
+    keyboard,
     koch_leader,
     make_teleoperator_from_config,
     omx_leader,
@@ -143,6 +144,9 @@ class RecordConfig:
     dataset: DatasetRecordConfig
     # Teleoperator to control the robot (required)
     teleop: TeleoperatorConfig | None = None
+    # Optional keyboard teleoperator to combine with the main teleop.
+    # Useful for robots that split arm/base control, such as sourccey_client.
+    teleop_keyboard: TeleoperatorConfig | None = None
     # Display all cameras on screen
     display_data: bool = False
     # Display data on a remote Rerun server
@@ -163,6 +167,49 @@ class RecordConfig:
                 "Use --teleop.type=... to specify one. "
                 "For policy-based deployment, use lerobot-rollout instead."
             )
+
+
+def connect_keyboard(teleop_keyboard: KeyboardTeleop) -> bool:
+    """Try connecting the keyboard teleoperator.
+
+    Returns:
+        bool: True if keyboard teleop connected, False if we intentionally
+        continue without keyboard base control.
+    """
+    try:
+        teleop_keyboard.connect()
+        return True
+    except Exception as exc:
+        logging.warning(
+            "Keyboard teleop connect failed (%s). Continuing without keyboard base control.",
+            exc,
+        )
+        return False
+
+
+_MISSING_KEYBOARD_BASE_ACTION_WARNING_ROBOTS: set[str] = set()
+
+
+def _get_keyboard_base_action(
+    robot: Robot, obs: RobotObservation, teleop_keyboard: KeyboardTeleop | None
+) -> RobotAction:
+    if teleop_keyboard is None or not teleop_keyboard.is_connected:
+        return {}
+
+    if not hasattr(robot, "_from_keyboard_to_base_action"):
+        if robot.name not in _MISSING_KEYBOARD_BASE_ACTION_WARNING_ROBOTS:
+            _MISSING_KEYBOARD_BASE_ACTION_WARNING_ROBOTS.add(robot.name)
+            logging.warning(
+                "Robot '%s' does not implement keyboard base action mapping; ignoring keyboard teleop.",
+                robot.name,
+            )
+        return {}
+
+    keyboard_action = teleop_keyboard.get_action()
+    z_pos = obs.get("z.pos")
+    if (z_pos is not None) and isinstance(z_pos, int | float):
+        return robot._from_keyboard_to_base_action(keyboard_action, z_pos)
+    return robot._from_keyboard_to_base_action(keyboard_action)
 
 
 """ --------------- record_loop() data flow --------------------------
@@ -207,6 +254,7 @@ def record_loop(
     ],  # runs after robot
     dataset: LeRobotDataset | None = None,
     teleop: Teleoperator | list[Teleoperator] | None = None,
+    teleop_keyboard: KeyboardTeleop | None = None,
     control_time_s: int | None = None,
     single_task: str | None = None,
     display_data: bool = False,
@@ -215,9 +263,9 @@ def record_loop(
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
 
-    teleop_arm = teleop_keyboard = None
+    teleop_arm = list_teleop_keyboard = None
     if isinstance(teleop, list):
-        teleop_keyboard = next((t for t in teleop if isinstance(t, KeyboardTeleop)), None)
+        list_teleop_keyboard = next((t for t in teleop if isinstance(t, KeyboardTeleop)), None)
         teleop_arm = next(
             (
                 t
@@ -235,7 +283,7 @@ def record_loop(
             None,
         )
 
-        if not (teleop_arm and teleop_keyboard and len(teleop) == 2 and robot.name == "lekiwi_client"):
+        if not (teleop_arm and list_teleop_keyboard and len(teleop) == 2 and robot.name == "lekiwi_client"):
             raise ValueError(
                 "For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. Currently only supported for LeKiwi robot."
             )
@@ -263,9 +311,11 @@ def record_loop(
 
         # Get action from teleop
         if isinstance(teleop, Teleoperator):
-            act = teleop.get_action()
+            arm_action = teleop.get_action()
             if robot.name == "unitree_g1":
                 teleop.send_feedback(obs)
+            base_action = _get_keyboard_base_action(robot=robot, obs=obs, teleop_keyboard=teleop_keyboard)
+            act = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
 
             # Applies a pipeline to the raw teleop action, default is IdentityProcessor
             act_processed_teleop = teleop_action_processor((act, obs))
@@ -275,7 +325,7 @@ def record_loop(
         elif isinstance(teleop, list):
             arm_action = teleop_arm.get_action()
             arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
-            keyboard_action = teleop_keyboard.get_action()
+            keyboard_action = list_teleop_keyboard.get_action()
             base_action = robot._from_keyboard_to_base_action(keyboard_action)
             act = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
             act_processed_teleop = teleop_action_processor((act, obs))
@@ -340,6 +390,7 @@ def record(
 
     robot = make_robot_from_config(cfg.robot)
     teleop = make_teleoperator_from_config(cfg.teleop) if cfg.teleop is not None else None
+    teleop_keyboard = make_teleoperator_from_config(cfg.teleop_keyboard) if cfg.teleop_keyboard else None
 
     # Fall back to identity pipelines when the caller doesn't supply processors.
     if (
@@ -369,6 +420,7 @@ def record(
 
     dataset = None
     listener = None
+    keyboard_connected = False
 
     try:
         if cfg.resume:
@@ -415,6 +467,7 @@ def record(
         robot.connect()
         if teleop is not None:
             teleop.connect()
+        keyboard_connected = connect_keyboard(teleop_keyboard) if teleop_keyboard is not None else False
 
         listener, events = init_keyboard_listener()
 
@@ -435,6 +488,7 @@ def record(
                     robot_action_processor=robot_action_processor,
                     robot_observation_processor=robot_observation_processor,
                     teleop=teleop,
+                    teleop_keyboard=teleop_keyboard if keyboard_connected else None,
                     dataset=dataset,
                     control_time_s=cfg.dataset.episode_time_s,
                     single_task=cfg.dataset.single_task,
@@ -457,6 +511,7 @@ def record(
                         robot_action_processor=robot_action_processor,
                         robot_observation_processor=robot_observation_processor,
                         teleop=teleop,
+                        teleop_keyboard=teleop_keyboard if keyboard_connected else None,
                         control_time_s=cfg.dataset.reset_time_s,
                         single_task=cfg.dataset.single_task,
                         display_data=cfg.display_data,
@@ -481,6 +536,8 @@ def record(
             robot.disconnect()
         if teleop and teleop.is_connected:
             teleop.disconnect()
+        if keyboard_connected and teleop_keyboard is not None and teleop_keyboard.is_connected:
+            teleop_keyboard.disconnect()
 
         if not is_headless() and listener:
             listener.stop()
