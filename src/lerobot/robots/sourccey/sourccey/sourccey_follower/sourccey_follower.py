@@ -44,6 +44,8 @@ class SourcceyFollower(Robot):
     _STARTUP_POSITION_MARGIN_TICKS = 32
     _STARTUP_POSITION_HARD_FAULT_TICKS = 180
     _STARTUP_POSITION_HARD_FAULT_FRACTION = 0.125
+    _STARTUP_TORQUE_ENABLE_RETRIES = 10
+    _STARTUP_TORQUE_VERIFY_RETRIES = 3
     _STS3215_PHASE_ANGLE_FEEDBACK_BIT = 0x10
     _STARTUP_LOG_ENV = "LEROBOT_SOURCCEY_STARTUP_LOG_PATH"
 
@@ -230,7 +232,7 @@ class SourcceyFollower(Robot):
             # Prime goal to current raw position before re-enabling torque to avoid startup jumps.
             self.bus.sync_write("Goal_Position", startup_raw_positions, normalize=False)
 
-            self.bus.enable_torque()
+            self._enable_torque_with_verification()
             self._startup_safety_armed = True
             self._write_startup_diagnostic(
                 status="armed",
@@ -345,6 +347,49 @@ class SourcceyFollower(Robot):
         projected_candidate = min(max(best_candidate, low), high)
 
         return int(round(projected_candidate)) % resolution
+
+    def _read_torque_enable_snapshot(self) -> dict[str, int | None]:
+        snapshot: dict[str, int | None] = {}
+        for motor in self.bus.motors:
+            try:
+                snapshot[motor] = int(self.bus.read("Torque_Enable", motor, normalize=False))
+            except Exception:
+                snapshot[motor] = None
+        return snapshot
+
+    def _enable_torque_with_verification(self) -> None:
+        last_error: Exception | None = None
+        for attempt in range(self._STARTUP_TORQUE_VERIFY_RETRIES):
+            try:
+                self.bus.enable_torque(num_retry=self._STARTUP_TORQUE_ENABLE_RETRIES)
+                return
+            except ConnectionError as e:
+                last_error = e
+                torque_snapshot = self._read_torque_enable_snapshot()
+                if all(value == 1 for value in torque_snapshot.values() if value is not None):
+                    logger.warning(
+                        f"{self} saw a transient torque-enable packet error, "
+                        f"but torque readback is enabled: {torque_snapshot}"
+                    )
+                    return
+                logger.warning(
+                    f"{self} torque-enable attempt {attempt + 1}/{self._STARTUP_TORQUE_VERIFY_RETRIES} failed. "
+                    f"Current torque snapshot={torque_snapshot}. Retrying."
+                )
+
+        # Preserve previous non-blocking behavior as much as possible:
+        # if communication is noisy, allow startup to continue but report clearly.
+        ping_snapshot = {}
+        for motor, motor_cfg in self.bus.motors.items():
+            try:
+                ping_snapshot[motor] = self.bus.ping(motor_cfg.id)
+            except Exception:
+                ping_snapshot[motor] = None
+        logger.error(
+            f"{self} failed to confirm torque enable after retries. "
+            f"Continuing startup to avoid blocking host. Ping snapshot={ping_snapshot}. "
+            f"Last error={last_error}"
+        )
 
     def _sync_read_present_position_reconciled(self) -> tuple[dict[str, float], dict[str, int], dict[str, int]]:
         raw_positions = self.bus.sync_read("Present_Position", normalize=False)
