@@ -114,12 +114,15 @@ def fix_z_pos_in_data(
             if arr.ndim == 2 and action_z_idx < arr.shape[1]:
                 bad = np.abs(arr[:, action_z_idx] - z_target) > z_tol
                 n_bad = int(np.count_nonzero(bad))
+                n_exact_mismatch = int(np.count_nonzero(arr[:, action_z_idx] != z_target))
                 if n_bad > 0:
                     action_changed_rows += n_bad
-                    arr[:, action_z_idx] = z_target
-                    new_col = pa.array(arr.tolist(), type=table.schema.field("action").type)
-                    table = table.set_column(col_idx, "action", new_col)
+                if n_exact_mismatch > 0:
                     table_changed = True
+                # Always enforce exact z_target value to avoid tiny residual drift.
+                arr[:, action_z_idx] = z_target
+                new_col = pa.array(arr.tolist(), type=table.schema.field("action").type)
+                table = table.set_column(col_idx, "action", new_col)
 
         if state_z_idx is not None and "observation.state" in table.column_names:
             col_idx = table.column_names.index("observation.state")
@@ -127,12 +130,15 @@ def fix_z_pos_in_data(
             if arr.ndim == 2 and state_z_idx < arr.shape[1]:
                 bad = np.abs(arr[:, state_z_idx] - z_target) > z_tol
                 n_bad = int(np.count_nonzero(bad))
+                n_exact_mismatch = int(np.count_nonzero(arr[:, state_z_idx] != z_target))
                 if n_bad > 0:
                     state_changed_rows += n_bad
-                    arr[:, state_z_idx] = z_target
-                    new_col = pa.array(arr.tolist(), type=table.schema.field("observation.state").type)
-                    table = table.set_column(col_idx, "observation.state", new_col)
+                if n_exact_mismatch > 0:
                     table_changed = True
+                # Always enforce exact z_target value to avoid tiny residual drift.
+                arr[:, state_z_idx] = z_target
+                new_col = pa.array(arr.tolist(), type=table.schema.field("observation.state").type)
+                table = table.set_column(col_idx, "observation.state", new_col)
 
         if table_changed:
             changed_files += 1
@@ -148,6 +154,124 @@ def fix_z_pos_in_data(
         "state_z_rows_changed": state_changed_rows,
         "action_z_index": action_z_idx,
         "state_z_index": state_z_idx,
+    }
+
+
+def _patch_vector_stat_column(
+    table: pa.Table, col_name: str, z_idx: int, target_value: float
+) -> tuple[pa.Table, int]:
+    if col_name not in table.column_names:
+        return table, 0
+    col_idx = table.column_names.index(col_name)
+    arr = np.asarray(table[col_name].to_pylist(), dtype=np.float64)
+    if arr.ndim != 2 or z_idx >= arr.shape[1]:
+        return table, 0
+    replaced = int(np.count_nonzero(arr[:, z_idx] != target_value))
+    arr[:, z_idx] = target_value
+    new_col = pa.array(arr.tolist(), type=table.schema.field(col_name).type)
+    table = table.set_column(col_idx, col_name, new_col)
+    return table, replaced
+
+
+def sync_z_pos_metadata(
+    dataset_root: Path,
+    info: dict[str, Any],
+    z_target: float,
+    dry_run: bool,
+    backup_root: Path | None,
+) -> dict[str, Any]:
+    """Sync z.pos-related metadata after data-level fixes.
+
+    Updates:
+    - meta/stats.json for action/observation.state z.pos statistics
+    - meta/episodes/*.parquet per-episode z.pos statistics columns
+    """
+    stats_path = dataset_root / "meta" / "stats.json"
+    action_z_idx = get_z_index(info, "action")
+    state_z_idx = get_z_index(info, "observation.state")
+
+    stats_json_updated = False
+    stats_vectors_updated = 0
+
+    if stats_path.exists():
+        stats = read_json(stats_path)
+        for key, z_idx in (("action", action_z_idx), ("observation.state", state_z_idx)):
+            if z_idx is None:
+                continue
+            block = stats.get(key)
+            if not isinstance(block, dict):
+                continue
+            for metric in ("min", "max", "mean", "q01", "q10", "q50", "q90", "q99"):
+                vec = block.get(metric)
+                if isinstance(vec, list) and len(vec) > z_idx:
+                    if float(vec[z_idx]) != float(z_target):
+                        stats_json_updated = True
+                    vec[z_idx] = float(z_target)
+                    stats_vectors_updated += 1
+            std_vec = block.get("std")
+            if isinstance(std_vec, list) and len(std_vec) > z_idx:
+                if float(std_vec[z_idx]) != 0.0:
+                    stats_json_updated = True
+                std_vec[z_idx] = 0.0
+                stats_vectors_updated += 1
+
+        if stats_json_updated and not dry_run:
+            if backup_root is not None:
+                backup_file(stats_path, backup_root, dataset_root)
+            write_json(stats_path, stats)
+
+    episodes_files = sorted((dataset_root / "meta" / "episodes").rglob("*.parquet"))
+    episodes_files_changed = 0
+    episodes_values_replaced = 0
+    episodes_columns_touched = 0
+
+    metric_targets = {
+        "min": float(z_target),
+        "max": float(z_target),
+        "mean": float(z_target),
+        "q01": float(z_target),
+        "q10": float(z_target),
+        "q50": float(z_target),
+        "q90": float(z_target),
+        "q99": float(z_target),
+        "std": 0.0,
+    }
+
+    for f in episodes_files:
+        table = pq.read_table(f)
+        file_values_replaced = 0
+        file_columns_touched = 0
+
+        for key, z_idx in (("action", action_z_idx), ("observation.state", state_z_idx)):
+            if z_idx is None:
+                continue
+            for metric, target_value in metric_targets.items():
+                col_name = f"stats/{key}/{metric}"
+                new_table, replaced = _patch_vector_stat_column(table, col_name, z_idx, target_value)
+                if replaced > 0:
+                    file_values_replaced += replaced
+                    file_columns_touched += 1
+                table = new_table
+
+        if file_values_replaced > 0:
+            episodes_files_changed += 1
+            episodes_values_replaced += file_values_replaced
+            episodes_columns_touched += file_columns_touched
+            if not dry_run:
+                if backup_root is not None:
+                    backup_file(f, backup_root, dataset_root)
+                atomic_write_table(table, f)
+
+    return {
+        "action_z_index": action_z_idx,
+        "state_z_index": state_z_idx,
+        "stats_json_updated": stats_json_updated,
+        "stats_vectors_updated": stats_vectors_updated,
+        "episodes_files_total": len(episodes_files),
+        "episodes_files_changed": episodes_files_changed,
+        "episodes_columns_touched": episodes_columns_touched,
+        "episodes_values_replaced": episodes_values_replaced,
+        "target_z_value": float(z_target),
     }
 
 
@@ -247,7 +371,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
             "Fix dataset consistency issues: enforce z.pos target, remove meta/episodes "
-            "intervention stats columns, and repair index-related stats metadata."
+            "intervention stats columns, repair index-related stats metadata, and "
+            "sync z.pos metadata fields."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -314,6 +439,14 @@ def main() -> int:
         backup_root=backup_root,
     )
 
+    z_meta_result = sync_z_pos_metadata(
+        dataset_root=dataset_root,
+        info=info,
+        z_target=args.z_target,
+        dry_run=args.dry_run,
+        backup_root=backup_root,
+    )
+
     report = {
         "timestamp": dt.datetime.now().isoformat(),
         "dataset_root": str(dataset_root),
@@ -323,6 +456,7 @@ def main() -> int:
         "z_fix": z_result,
         "episodes_meta_fix": epi_result,
         "stats_fix": stats_result,
+        "z_metadata_fix": z_meta_result,
     }
 
     report_path = (
@@ -353,6 +487,13 @@ def main() -> int:
         "  index stats rewritten for keys: "
         f"{', '.join(stats_result['stats_keys_rewritten'])}; "
         f"total_frames={stats_result['total_frames']} total_episodes={stats_result['total_episodes']}"
+    )
+    print(
+        "  z metadata sync: "
+        f"stats_json_updated={z_meta_result['stats_json_updated']} "
+        f"episodes_files_changed={z_meta_result['episodes_files_changed']}/{z_meta_result['episodes_files_total']} "
+        f"values_replaced={z_meta_result['episodes_values_replaced']} "
+        f"target={z_meta_result['target_z_value']}"
     )
 
     return 0

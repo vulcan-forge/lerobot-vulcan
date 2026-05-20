@@ -175,6 +175,10 @@ sourccey = [
 
     # Battery
     "smbus2>=0.4.3 ; sys_platform == 'linux'",
+    # IMU
+    "adafruit-blinka>=8.52.0 ; sys_platform == 'linux'",
+    "adafruit-circuitpython-lsm6ds>=4.6.1 ; sys_platform == 'linux'",
+    "adafruit-circuitpython-lis3mdl>=1.2.0 ; sys_platform == 'linux'",
 
     # Audio
     "vosk>=0.3.45 ; sys_platform != 'darwin' and sys_platform != 'win32'",
@@ -187,6 +191,9 @@ sourccey-desktop = [
     "torchcodec==0.9.1",
 
     "lerobot[xvla]",
+    "lerobot[sarm]",
+    "lerobot[viz]",
+    "lerobot[pynput-dep]",
 
     # Audio
     # Pin known-good CUDA/cuDNN stack for Windows GPU Whisper.

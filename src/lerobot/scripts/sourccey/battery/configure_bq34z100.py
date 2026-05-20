@@ -22,7 +22,13 @@ import json
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable
+
+from lerobot.scripts.sourccey.battery.golden.flash_bq34z100 import (
+    DEFAULT_PROFILE_FILES,
+    run_flashstream_file,
+)
 
 
 I2C_ADDR_DEFAULT = 0x55
@@ -40,6 +46,7 @@ CTRL_FW_VERSION = 0x0002
 CTRL_CHEM_ID = 0x0008
 CTRL_SEAL = 0x0020
 CTRL_IT_ENABLE = 0x0021
+DEFAULT_TARGET_CHEM_ID = 0x4203
 
 # TRM default unseal key bytes shown as 0x36720414 (two 16-bit writes)
 DEFAULT_UNSEAL_KEY1 = 0x0414
@@ -82,6 +89,9 @@ FIELDS: dict[str, FieldSpec] = {
     "pack_configuration_b": FieldSpec("pack_configuration_b", 64, 2, "H1", "Pack Configuration B flags"),
     "pack_configuration_c": FieldSpec("pack_configuration_c", 64, 3, "H1", "Pack Configuration C flags"),
     "number_of_series_cells": FieldSpec("number_of_series_cells", 64, 7, "U1", "Number of series cells"),
+    "flash_update_ok_cell_volt_mv": FieldSpec(
+        "flash_update_ok_cell_volt_mv", 68, 0, "I2", "Flash Update OK Cell Voltage (mV)"
+    ),
     "design_capacity_mah": FieldSpec("design_capacity_mah", 48, 11, "I2", "Design Capacity (mAh)"),
     "design_energy_cwh": FieldSpec("design_energy_cwh", 48, 13, "I2", "Design Energy (cWh)"),
     "cell_charge_voltage_t1_t2_mv": FieldSpec(
@@ -420,6 +430,23 @@ def wait_for_update_status(
 def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
     maybe_unseal(gauge, args, writing=True)
 
+    observed_chem_id = gauge.read_control_subcmd(CTRL_CHEM_ID)
+    if args.require_chem_id and observed_chem_id != args.chem_id:
+        raise RuntimeError(
+            "CHEM_ID mismatch: "
+            f"observed=0x{observed_chem_id:04X} ({observed_chem_id}), "
+            f"expected=0x{args.chem_id:04X} ({args.chem_id}). "
+            "On bq34z100-R2, Control() subcommand CHEM_ID (0x0008) is a read/report command; "
+            "program the desired chemistry profile (golden image) with TI tooling, then rerun setup."
+        )
+    print(f"CHEM_ID check: 0x{observed_chem_id:04X} ({observed_chem_id})")
+    if not args.require_chem_id and observed_chem_id != args.chem_id:
+        print(
+            "WARNING: CHEM_ID does not match profile expectation "
+            f"(observed=0x{observed_chem_id:04X}, expected=0x{args.chem_id:04X}). "
+            "Continuing because --require-chem-id is disabled."
+        )
+
     writes: list[PendingWrite] = []
 
     # Series cells
@@ -489,12 +516,6 @@ def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
             old = gauge.read_field(spec)
             writes.append(PendingWrite(spec=spec, old_value=old, new_value=cell_cv))
 
-    # Optional: reset UpdateStatus for fresh learning run
-    if args.reset_update_status:
-        spec_us = FIELDS["update_status"]
-        old_us = gauge.read_field(spec_us)
-        writes.append(PendingWrite(spec=spec_us, old_value=old_us, new_value=0x00))
-
     print(
         f"Profile: {args.series_cells}S LiFePO4, design_capacity={args.design_capacity_mah}mAh, "
         f"charge_voltage={args.pack_charge_voltage_mv}mV, "
@@ -502,6 +523,21 @@ def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
         f"divider={divider}, voltsel={'on' if args.set_voltsel else 'unchanged'}"
     )
     apply_writes(gauge, writes, verify=not args.no_verify, dry_run=args.dry_run)
+
+    # Optional: reset UpdateStatus for fresh learning run.
+    # This field is gauge-state managed and may reject host writes in some modes.
+    if args.reset_update_status:
+        spec_us = FIELDS["update_status"]
+        old_us = gauge.read_field(spec_us)
+        update_status_write = [PendingWrite(spec=spec_us, old_value=old_us, new_value=0x00)]
+        try:
+            apply_writes(gauge, update_status_write, verify=not args.no_verify, dry_run=args.dry_run)
+        except RuntimeError as exc:
+            print(
+                "WARNING: Could not reset UpdateStatus to 0x00. "
+                "Continuing setup because this register may be managed by gauge state. "
+                f"Details: {exc}"
+            )
 
     if args.enable_it and not args.dry_run:
         print("Sending IT_ENABLE (0x0021) to start learning.")
@@ -523,6 +559,31 @@ def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
 
     if args.seal_after and not args.dry_run:
         gauge.send_control_subcmd(CTRL_SEAL)
+    return 0
+
+
+def cmd_flash_golden(_: BQ34Z100R2, args: argparse.Namespace) -> int:
+    fs_file = Path(args.fs_file) if args.fs_file is not None else DEFAULT_PROFILE_FILES[args.profile]
+    if not fs_file.exists():
+        raise SystemExit(f"Flashstream file does not exist: {fs_file}")
+
+    print(
+        f"Flashing profile={args.profile} file={fs_file} on I2C bus={args.bus}. "
+        "NOTE: flashstream file controls device addresses/mode transitions."
+    )
+    stats = run_flashstream_file(
+        fs_file=fs_file,
+        bus=args.bus,
+        dry_run=bool(args.dry_run),
+        strict_compare=bool(args.strict_compare),
+        progress_every=int(args.progress_every),
+        quiet=bool(args.quiet),
+    )
+    print(
+        "Flash summary: "
+        f"commands={stats.commands_total}, writes={stats.writes}, compares={stats.compares}, "
+        f"delays={stats.delays}, elapsed_s={stats.elapsed_s:.1f}"
+    )
     return 0
 
 
@@ -565,6 +626,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_setup = sub.add_parser("setup-4s-lifepo4", help="Apply a practical 4S LiFePO4 starter configuration")
     p_setup.add_argument(
+        "--chem-id",
+        type=lambda x: int(x, 0),
+        default=DEFAULT_TARGET_CHEM_ID,
+        help="Expected CHEM_ID before applying setup (default: 0x4203)",
+    )
+    p_setup.add_argument(
+        "--require-chem-id",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Require CHEM_ID to match --chem-id before setup writes (default: disabled)",
+    )
+    p_setup.add_argument(
         "--design-capacity-mah",
         type=int,
         default=10000,
@@ -589,9 +662,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument(
         "--taper-current-ma",
         type=int,
-        default=150,
+        default=250,
         help=(
-            "Taper current in mA (default: 150). "
+            "Taper current in mA (default: 250). "
             "Tune to your charger's end-of-charge tail current."
         ),
     )
@@ -628,8 +701,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument(
         "--reset-update-status",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Set UpdateStatus=0x00 for a fresh learning cycle (default: enabled)",
+        default=False,
+        help="Set UpdateStatus=0x00 for a fresh learning cycle (default: disabled)",
     )
     p_setup.add_argument(
         "--enable-it",
@@ -650,13 +723,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds to wait for UpdateStatus=0x04 after IT_ENABLE (default: 4.0)",
     )
 
+    p_flash = sub.add_parser(
+        "flash-golden",
+        help="Program gauge from TI flashstream (.df.fs/.bq.fs) in battery/golden/",
+    )
+    p_flash.add_argument(
+        "--profile",
+        choices=sorted(DEFAULT_PROFILE_FILES),
+        default="df",
+        help="Built-in flashstream profile when --fs-file is not provided (default: df)",
+    )
+    p_flash.add_argument(
+        "--fs-file",
+        type=Path,
+        default=None,
+        help="Explicit .df.fs/.bq.fs file path to flash",
+    )
+    p_flash.add_argument(
+        "--strict-compare",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Stop on compare mismatch from C: lines (default: enabled)",
+    )
+    p_flash.add_argument(
+        "--progress-every",
+        type=int,
+        default=200,
+        help="Print progress every N commands (0 disables periodic progress)",
+    )
+    p_flash.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Reduce non-progress output from flasher",
+    )
+    p_flash.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse and preview flashstream actions without I2C writes",
+    )
+
     return p
 
 
 def main() -> int:
     parser = build_parser()
     argv = sys.argv[1:]
-    subcommands = {"info", "list-fields", "read-field", "write-field", "set-divider", "setup-4s-lifepo4"}
+    subcommands = {"info", "list-fields", "read-field", "write-field", "set-divider", "setup-4s-lifepo4", "flash-golden"}
 
     # If no subcommand is provided, default to the standard setup profile.
     if not any(token in subcommands for token in argv) and "--help" not in argv and "-h" not in argv:
@@ -678,6 +790,8 @@ def main() -> int:
             return cmd_set_divider(gauge, args)
         if args.cmd == "setup-4s-lifepo4":
             return cmd_setup_4s_lifepo4(gauge, args)
+        if args.cmd == "flash-golden":
+            return cmd_flash_golden(gauge, args)
     except OSError as exc:
         raise SystemExit(f"I2C error (errno={getattr(exc, 'errno', None)}): {exc}") from exc
 
