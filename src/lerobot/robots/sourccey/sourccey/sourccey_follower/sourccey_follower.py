@@ -13,27 +13,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from functools import cached_property
-import time
-from typing import Any
+import json
 import logging
+import os
+import time
+from datetime import UTC, datetime
+from functools import cached_property
+from pathlib import Path
+from typing import Any
 
 import numpy as np
+
 from lerobot.cameras.utils import make_cameras_from_configs
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.motors.feetech.feetech import FeetechMotorsBus, OperatingMode
 from lerobot.motors.motors_bus import Motor, MotorNormMode
 from lerobot.robots.robot import Robot
-from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import SourcceyFollowerCalibrator
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
+from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import (
+    SourcceyFollowerCalibrator,
+)
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_safety import SourcceyFollowerSafety
 from lerobot.robots.utils import ensure_safe_goal_position
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 logger = logging.getLogger(__name__)
 
 class SourcceyFollower(Robot):
     config_class = SourcceyFollowerConfig
     name = "sourccey_follower"
+    _STARTUP_POSITION_MARGIN_TICKS = 32
+    _STS3215_PHASE_ANGLE_FEEDBACK_BIT = 0x10
+    _STARTUP_LOG_ENV = "LEROBOT_SOURCCEY_STARTUP_LOG_PATH"
 
     def __init__(self, config: SourcceyFollowerConfig):
         super().__init__(config)
@@ -69,6 +79,7 @@ class SourcceyFollower(Robot):
         # Track last warning time for throttling
         self._last_write_warning_time = 0.0
         self._write_warning_throttle_interval = 60.0  # seconds
+        self._startup_safety_armed = False
 
     def __del__(self):
         # Destructors can run on partially initialized objects if __init__ raised.
@@ -114,6 +125,7 @@ class SourcceyFollower(Robot):
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} already connected")
 
+        self._startup_safety_armed = False
         self.bus.connect()
         if not self.is_calibrated and calibrate:
             logger.info(
@@ -134,6 +146,7 @@ class SourcceyFollower(Robot):
             return
 
         logger.info(f"Disconnecting Sourccey {self.config.orientation} Follower")
+        self._startup_safety_armed = False
 
         self.bus.disconnect()
         for cam in self.cameras.values():
@@ -160,46 +173,207 @@ class SourcceyFollower(Robot):
             self.calibration = self.calibrator.default_calibrate(reverse=reverse)
 
     def configure(self) -> None:
+        self._startup_safety_armed = False
         self.bus.disable_torque()
-        for motor in self.bus.motors:
-            self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
+        try:
+            # Normalize startup motor registers (including STS3215 phase bit) on every power-on.
+            self.bus.configure_motors()
+            for motor in self.bus.motors:
+                self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
 
-            if motor == "gripper":
-                self.bus.write("P_Coefficient", motor, 24)
-                self.bus.write("I_Coefficient", motor, 0)
-                self.bus.write("D_Coefficient", motor, 48)
-                self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
-                self.bus.write("Protection_Current", motor, 400)  # 50% of max current to avoid burnout
-                self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
-            elif motor == "shoulder_lift":
-                self.bus.write("P_Coefficient", motor, 12)
-                self.bus.write("I_Coefficient", motor, 0)
-                self.bus.write("D_Coefficient", motor, 48)  # Optimal damping (64 was too high)
-                self.bus.write("Max_Torque_Limit", motor, 2000)
-                self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
-                self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
-                self.bus.write("Minimum_Startup_Force", motor, 10)
-                self.bus.write("CW_Dead_Zone", motor, 2)
-                self.bus.write("CCW_Dead_Zone", motor, 2)
-                self.bus.write("Acceleration", motor, 180)
-            elif motor == "elbow_flex":
-                self.bus.write("P_Coefficient", motor, 12)
-                self.bus.write("I_Coefficient", motor, 0)
-                self.bus.write("D_Coefficient", motor, 48)  # Optimal damping (64 was too high)
-                self.bus.write("Max_Torque_Limit", motor, 2000)
-                self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
-                self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
-                self.bus.write("Minimum_Startup_Force", motor, 10)
-                self.bus.write("CW_Dead_Zone", motor, 2)
-                self.bus.write("CCW_Dead_Zone", motor, 2)
-                self.bus.write("Acceleration", motor, 180)
-            else:
-                self.bus.write("P_Coefficient", motor, 16)
-                self.bus.write("I_Coefficient", motor, 2)
-                self.bus.write("D_Coefficient", motor, 32)
-                self.bus.write("Max_Torque_Limit", motor, 1500)  # 80% of max torque
-                self.bus.write("Protection_Current", motor, 1500)  # 80% of max current
-                self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
+                if motor == "gripper":
+                    self.bus.write("P_Coefficient", motor, 24)
+                    self.bus.write("I_Coefficient", motor, 0)
+                    self.bus.write("D_Coefficient", motor, 48)
+                    self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
+                    self.bus.write("Protection_Current", motor, 400)  # 50% of max current to avoid burnout
+                    self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
+                elif motor in {"shoulder_lift", "elbow_flex"}:
+                    self.bus.write("P_Coefficient", motor, 12)
+                    self.bus.write("I_Coefficient", motor, 0)
+                    self.bus.write("D_Coefficient", motor, 48)  # Optimal damping (64 was too high)
+                    self.bus.write("Max_Torque_Limit", motor, 2000)
+                    self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
+                    self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
+                    self.bus.write("Minimum_Startup_Force", motor, 10)
+                    self.bus.write("CW_Dead_Zone", motor, 2)
+                    self.bus.write("CCW_Dead_Zone", motor, 2)
+                    self.bus.write("Acceleration", motor, 180)
+                else:
+                    self.bus.write("P_Coefficient", motor, 16)
+                    self.bus.write("I_Coefficient", motor, 2)
+                    self.bus.write("D_Coefficient", motor, 32)
+                    self.bus.write("Max_Torque_Limit", motor, 1500)  # 80% of max torque
+                    self.bus.write("Protection_Current", motor, 1500)  # 80% of max current
+                    self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
+
+            startup_raw_positions = self.bus.sync_read("Present_Position", normalize=False)
+            startup_phase_faults = self._get_startup_phase_faults()
+            startup_position_faults = self._get_startup_position_faults(startup_raw_positions)
+            self._write_startup_diagnostic(
+                status="precheck",
+                startup_raw_positions=startup_raw_positions,
+                startup_phase_faults=startup_phase_faults,
+                startup_position_faults=startup_position_faults,
+            )
+            if startup_phase_faults or startup_position_faults:
+                raise RuntimeError(
+                    self._build_startup_safety_error(
+                        startup_phase_faults=startup_phase_faults,
+                        startup_position_faults=startup_position_faults,
+                    )
+                )
+
+            # Prime goal to current raw position before re-enabling torque to avoid startup jumps.
+            self.bus.sync_write("Goal_Position", startup_raw_positions, normalize=False)
+
+            self.bus.enable_torque()
+            self._startup_safety_armed = True
+            self._write_startup_diagnostic(
+                status="armed",
+                startup_raw_positions=startup_raw_positions,
+                startup_phase_faults=startup_phase_faults,
+                startup_position_faults=startup_position_faults,
+            )
+        except Exception:
+            self._startup_safety_armed = False
+            try:
+                phase_faults = self._get_startup_phase_faults()
+            except Exception:
+                phase_faults = {}
+            try:
+                raw_positions = self.bus.sync_read("Present_Position", normalize=False)
+            except Exception:
+                raw_positions = {}
+            try:
+                position_faults = self._get_startup_position_faults(raw_positions)
+            except Exception:
+                position_faults = {}
+            self._write_startup_diagnostic(
+                status="failed",
+                startup_raw_positions=raw_positions,
+                startup_phase_faults=phase_faults,
+                startup_position_faults=position_faults,
+            )
+            try:
+                self.bus.disable_torque()
+            except Exception as torque_error:
+                logger.warning(f"Failed to disable torque after startup safety failure on {self}: {torque_error}")
+            raise
+
+    def _get_startup_phase_faults(self) -> dict[str, int]:
+        phase_faults: dict[str, int] = {}
+        for motor, motor_cfg in self.bus.motors.items():
+            if motor_cfg.model != "sts3215":
+                continue
+            phase = int(self.bus.read("Phase", motor, normalize=False))
+            if phase & self._STS3215_PHASE_ANGLE_FEEDBACK_BIT:
+                phase_faults[motor] = phase
+
+        return phase_faults
+
+    def _get_startup_position_faults(self, raw_positions: dict[str, int | float]) -> dict[str, tuple[float, int, int]]:
+        position_faults: dict[str, tuple[float, int, int]] = {}
+        margin = self._STARTUP_POSITION_MARGIN_TICKS
+        for motor, raw_value in raw_positions.items():
+            calibration = self.bus.calibration.get(motor)
+            if calibration is None:
+                continue
+
+            low = calibration.range_min - margin
+            high = calibration.range_max + margin
+            raw = float(raw_value)
+            if raw < low or raw > high:
+                position_faults[motor] = (raw, calibration.range_min, calibration.range_max)
+
+        return position_faults
+
+    def _build_startup_safety_error(
+        self,
+        *,
+        startup_phase_faults: dict[str, int],
+        startup_position_faults: dict[str, tuple[float, int, int]],
+    ) -> str:
+        details = [
+            f"{self} startup safety check failed. Refusing to enable torque.",
+            "Power-cycle the robot and retry. If this keeps happening, verify wiring and calibration files.",
+        ]
+
+        if startup_phase_faults:
+            details.append("STS3215 phase faults (angle-feedback bit 0x10 still set):")
+            for motor, phase in startup_phase_faults.items():
+                details.append(f"  - {motor}: Phase=0x{phase:02x}")
+
+        if startup_position_faults:
+            details.append(
+                "Raw joint positions outside calibrated limits "
+                f"(±{self._STARTUP_POSITION_MARGIN_TICKS} ticks margin):"
+            )
+            for motor, (raw, range_min, range_max) in startup_position_faults.items():
+                details.append(f"  - {motor}: raw={raw:.0f}, range=[{range_min}, {range_max}]")
+
+        return "\n".join(details)
+
+    def _get_startup_diagnostic_path(self) -> Path:
+        configured = os.environ.get(self._STARTUP_LOG_ENV, "").strip()
+        if configured:
+            return Path(configured).expanduser()
+        return Path.home() / "sourccey_startup_diagnostics.jsonl"
+
+    def _write_startup_diagnostic(
+        self,
+        *,
+        status: str,
+        startup_raw_positions: dict[str, int | float],
+        startup_phase_faults: dict[str, int],
+        startup_position_faults: dict[str, tuple[float, int, int]],
+    ) -> None:
+        calibration_snapshot = {}
+        for motor, cal in self.bus.calibration.items():
+            calibration_snapshot[motor] = {
+                "id": cal.id,
+                "range_min": cal.range_min,
+                "range_max": cal.range_max,
+                "homing_offset": cal.homing_offset,
+                "drive_mode": cal.drive_mode,
+            }
+
+        raw_by_motor = {motor: float(val) for motor, val in startup_raw_positions.items()}
+        phase_by_motor = {}
+        for motor, motor_cfg in self.bus.motors.items():
+            if motor_cfg.model != "sts3215":
+                continue
+            try:
+                phase_by_motor[motor] = int(self.bus.read("Phase", motor, normalize=False))
+            except Exception:
+                phase_by_motor[motor] = None
+
+        diagnostic = {
+            "ts_utc": datetime.now(UTC).isoformat(),
+            "status": status,
+            "orientation": self.config.orientation,
+            "port": self.config.port,
+            "is_calibrated": self.is_calibrated,
+            "startup_safety_armed": self._startup_safety_armed,
+            "startup_position_margin_ticks": self._STARTUP_POSITION_MARGIN_TICKS,
+            "raw_present_position": raw_by_motor,
+            "phase_register": phase_by_motor,
+            "phase_faults": startup_phase_faults,
+            "position_faults": {
+                motor: {"raw": raw, "range_min": range_min, "range_max": range_max}
+                for motor, (raw, range_min, range_max) in startup_position_faults.items()
+            },
+            "calibration": calibration_snapshot,
+        }
+
+        try:
+            log_path = self._get_startup_diagnostic_path()
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(diagnostic, sort_keys=True) + "\n")
+            logger.info(f"{self} startup diagnostics logged to {log_path} ({status=})")
+        except Exception as e:
+            logger.warning(f"Failed to write startup diagnostic log for {self}: {e}")
 
     def setup_motors(self) -> None:
         for motor in reversed(self.bus.motors):
@@ -245,6 +419,8 @@ class SourcceyFollower(Robot):
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+        if not self._startup_safety_armed:
+            raise RuntimeError(f"{self} startup safety is not armed. Refusing to command motion.")
 
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
         present_pos: dict[str, float] | None = None
@@ -279,4 +455,3 @@ class SourcceyFollower(Robot):
             # Return present position instead of goal position when write fails
             fallback_pos = present_pos if present_pos is not None else goal_pos
             return {f"{motor}.pos": val for motor, val in fallback_pos.items()}
-
