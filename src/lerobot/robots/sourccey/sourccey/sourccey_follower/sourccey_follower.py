@@ -42,6 +42,7 @@ class SourcceyFollower(Robot):
     config_class = SourcceyFollowerConfig
     name = "sourccey_follower"
     _STARTUP_POSITION_MARGIN_TICKS = 32
+    _STARTUP_POSITION_HARD_FAULT_TICKS = 180
     _STS3215_PHASE_ANGLE_FEEDBACK_BIT = 0x10
     _STARTUP_LOG_ENV = "LEROBOT_SOURCCEY_STARTUP_LOG_PATH"
 
@@ -210,17 +211,18 @@ class SourcceyFollower(Robot):
             startup_raw_positions = self.bus.sync_read("Present_Position", normalize=False)
             startup_phase_faults = self._get_startup_phase_faults()
             startup_position_faults = self._get_startup_position_faults(startup_raw_positions)
+            hard_position_faults = self._filter_hard_startup_position_faults(startup_position_faults)
             self._write_startup_diagnostic(
                 status="precheck",
                 startup_raw_positions=startup_raw_positions,
                 startup_phase_faults=startup_phase_faults,
                 startup_position_faults=startup_position_faults,
             )
-            if startup_phase_faults or startup_position_faults:
+            if startup_phase_faults or hard_position_faults:
                 raise RuntimeError(
                     self._build_startup_safety_error(
                         startup_phase_faults=startup_phase_faults,
-                        startup_position_faults=startup_position_faults,
+                        startup_position_faults=hard_position_faults,
                     )
                 )
 
@@ -233,7 +235,7 @@ class SourcceyFollower(Robot):
                 status="armed",
                 startup_raw_positions=startup_raw_positions,
                 startup_phase_faults=startup_phase_faults,
-                startup_position_faults=startup_position_faults,
+                startup_position_faults=hard_position_faults,
             )
         except Exception:
             self._startup_safety_armed = False
@@ -272,8 +274,10 @@ class SourcceyFollower(Robot):
 
         return phase_faults
 
-    def _get_startup_position_faults(self, raw_positions: dict[str, int | float]) -> dict[str, tuple[float, int, int]]:
-        position_faults: dict[str, tuple[float, int, int]] = {}
+    def _get_startup_position_faults(
+        self, raw_positions: dict[str, int | float]
+    ) -> dict[str, tuple[float, int, int, int, int]]:
+        position_faults: dict[str, tuple[float, int, int, int, int]] = {}
         margin = self._STARTUP_POSITION_MARGIN_TICKS
         for motor, raw_value in raw_positions.items():
             calibration = self.bus.calibration.get(motor)
@@ -283,16 +287,41 @@ class SourcceyFollower(Robot):
             low = calibration.range_min - margin
             high = calibration.range_max + margin
             raw = float(raw_value)
-            if raw < low or raw > high:
-                position_faults[motor] = (raw, calibration.range_min, calibration.range_max)
+            model = self.bus.motors[motor].model
+            resolution = self.bus.model_resolution_table[model]
+            checks = (raw, raw + resolution, raw - resolution)
+            wrapped_in_range = any(low <= candidate <= high for candidate in checks)
+            if wrapped_in_range:
+                continue
+
+            # Circular distance to the nearest interval boundary in encoder ticks.
+            dist_to_min = min(abs(raw - calibration.range_min), resolution - abs(raw - calibration.range_min))
+            dist_to_max = min(abs(raw - calibration.range_max), resolution - abs(raw - calibration.range_max))
+            distance_outside = int(min(dist_to_min, dist_to_max))
+            position_faults[motor] = (
+                raw,
+                calibration.range_min,
+                calibration.range_max,
+                resolution,
+                distance_outside,
+            )
 
         return position_faults
+
+    def _filter_hard_startup_position_faults(
+        self, position_faults: dict[str, tuple[float, int, int, int, int]]
+    ) -> dict[str, tuple[float, int, int, int, int]]:
+        return {
+            motor: fault
+            for motor, fault in position_faults.items()
+            if fault[4] > self._STARTUP_POSITION_HARD_FAULT_TICKS
+        }
 
     def _build_startup_safety_error(
         self,
         *,
         startup_phase_faults: dict[str, int],
-        startup_position_faults: dict[str, tuple[float, int, int]],
+        startup_position_faults: dict[str, tuple[float, int, int, int, int]],
     ) -> str:
         details = [
             f"{self} startup safety check failed. Refusing to enable torque.",
@@ -307,10 +336,14 @@ class SourcceyFollower(Robot):
         if startup_position_faults:
             details.append(
                 "Raw joint positions outside calibrated limits "
-                f"(±{self._STARTUP_POSITION_MARGIN_TICKS} ticks margin):"
+                f"(±{self._STARTUP_POSITION_MARGIN_TICKS} ticks margin, "
+                f"hard fault > {self._STARTUP_POSITION_HARD_FAULT_TICKS} ticks):"
             )
-            for motor, (raw, range_min, range_max) in startup_position_faults.items():
-                details.append(f"  - {motor}: raw={raw:.0f}, range=[{range_min}, {range_max}]")
+            for motor, (raw, range_min, range_max, _resolution, distance_outside) in startup_position_faults.items():
+                details.append(
+                    f"  - {motor}: raw={raw:.0f}, range=[{range_min}, {range_max}], "
+                    f"distance_outside={distance_outside}"
+                )
 
         return "\n".join(details)
 
@@ -326,7 +359,7 @@ class SourcceyFollower(Robot):
         status: str,
         startup_raw_positions: dict[str, int | float],
         startup_phase_faults: dict[str, int],
-        startup_position_faults: dict[str, tuple[float, int, int]],
+        startup_position_faults: dict[str, tuple[float, int, int, int, int]],
     ) -> None:
         calibration_snapshot = {}
         for motor, cal in self.bus.calibration.items():
@@ -356,12 +389,19 @@ class SourcceyFollower(Robot):
             "is_calibrated": self.is_calibrated,
             "startup_safety_armed": self._startup_safety_armed,
             "startup_position_margin_ticks": self._STARTUP_POSITION_MARGIN_TICKS,
+            "startup_position_hard_fault_ticks": self._STARTUP_POSITION_HARD_FAULT_TICKS,
             "raw_present_position": raw_by_motor,
             "phase_register": phase_by_motor,
             "phase_faults": startup_phase_faults,
             "position_faults": {
-                motor: {"raw": raw, "range_min": range_min, "range_max": range_max}
-                for motor, (raw, range_min, range_max) in startup_position_faults.items()
+                motor: {
+                    "raw": raw,
+                    "range_min": range_min,
+                    "range_max": range_max,
+                    "resolution": resolution,
+                    "distance_outside": distance_outside,
+                }
+                for motor, (raw, range_min, range_max, resolution, distance_outside) in startup_position_faults.items()
             },
             "calibration": calibration_snapshot,
         }
