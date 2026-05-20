@@ -43,6 +43,7 @@ class SourcceyFollower(Robot):
     name = "sourccey_follower"
     _STARTUP_POSITION_MARGIN_TICKS = 32
     _STARTUP_POSITION_HARD_FAULT_TICKS = 180
+    _STARTUP_POSITION_HARD_FAULT_FRACTION = 0.125
     _STS3215_PHASE_ANGLE_FEEDBACK_BIT = 0x10
     _STARTUP_LOG_ENV = "LEROBOT_SOURCCEY_STARTUP_LOG_PATH"
 
@@ -311,11 +312,53 @@ class SourcceyFollower(Robot):
     def _filter_hard_startup_position_faults(
         self, position_faults: dict[str, tuple[float, int, int, int, int]]
     ) -> dict[str, tuple[float, int, int, int, int]]:
-        return {
-            motor: fault
-            for motor, fault in position_faults.items()
-            if fault[4] > self._STARTUP_POSITION_HARD_FAULT_TICKS
-        }
+        hard_faults: dict[str, tuple[float, int, int, int, int]] = {}
+        for motor, fault in position_faults.items():
+            resolution = fault[3]
+            dynamic_threshold = int(resolution * self._STARTUP_POSITION_HARD_FAULT_FRACTION)
+            hard_fault_threshold = max(self._STARTUP_POSITION_HARD_FAULT_TICKS, dynamic_threshold)
+            if fault[4] > hard_fault_threshold:
+                hard_faults[motor] = fault
+        return hard_faults
+
+    @staticmethod
+    def _distance_to_interval(value: float, low: float, high: float) -> float:
+        if value < low:
+            return low - value
+        if value > high:
+            return value - high
+        return 0.0
+
+    def _reconcile_raw_present_position(self, motor: str, raw_value: int | float) -> int:
+        calibration = self.bus.calibration.get(motor)
+        if calibration is None:
+            return int(raw_value)
+
+        resolution = self.bus.model_resolution_table[self.bus.motors[motor].model]
+        margin = self._STARTUP_POSITION_MARGIN_TICKS
+        low = calibration.range_min - margin
+        high = calibration.range_max + margin
+
+        raw = float(raw_value)
+        candidates = (raw, raw + resolution, raw - resolution)
+        best_candidate = min(candidates, key=lambda candidate: self._distance_to_interval(candidate, low, high))
+        projected_candidate = min(max(best_candidate, low), high)
+
+        return int(round(projected_candidate)) % resolution
+
+    def _sync_read_present_position_reconciled(self) -> tuple[dict[str, float], dict[str, int], dict[str, int]]:
+        raw_positions = self.bus.sync_read("Present_Position", normalize=False)
+        reconciled_raw: dict[str, int] = {}
+        id_to_raw: dict[int, int] = {}
+        for motor, raw_value in raw_positions.items():
+            reconciled = self._reconcile_raw_present_position(motor, raw_value)
+            reconciled_raw[motor] = reconciled
+            id_to_raw[self.bus.motors[motor].id] = reconciled
+
+        normalized_by_id = self.bus._normalize(id_to_raw)
+        normalized_by_name = {self.bus._id_to_name(id_): value for id_, value in normalized_by_id.items()}
+        raw_by_name = {motor: int(raw) for motor, raw in raw_positions.items()}
+        return normalized_by_name, raw_by_name, reconciled_raw
 
     def _build_startup_safety_error(
         self,
@@ -372,6 +415,10 @@ class SourcceyFollower(Robot):
             }
 
         raw_by_motor = {motor: float(val) for motor, val in startup_raw_positions.items()}
+        reconciled_raw_by_motor = {
+            motor: self._reconcile_raw_present_position(motor, val)
+            for motor, val in startup_raw_positions.items()
+        }
         phase_by_motor = {}
         for motor, motor_cfg in self.bus.motors.items():
             if motor_cfg.model != "sts3215":
@@ -391,6 +438,7 @@ class SourcceyFollower(Robot):
             "startup_position_margin_ticks": self._STARTUP_POSITION_MARGIN_TICKS,
             "startup_position_hard_fault_ticks": self._STARTUP_POSITION_HARD_FAULT_TICKS,
             "raw_present_position": raw_by_motor,
+            "reconciled_raw_present_position": reconciled_raw_by_motor,
             "phase_register": phase_by_motor,
             "phase_faults": startup_phase_faults,
             "position_faults": {
@@ -430,7 +478,7 @@ class SourcceyFollower(Robot):
 
         # Read arm position
         start = time.perf_counter()
-        obs_dict = self.bus.sync_read("Present_Position")
+        obs_dict, _raw_obs, _reconciled_raw_obs = self._sync_read_present_position_reconciled()
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
@@ -467,7 +515,7 @@ class SourcceyFollower(Robot):
 
         try:
             # Check for NaN values and skip sending actions if any are found
-            present_pos = self.bus.sync_read("Present_Position")
+            present_pos, _raw_present_pos, _reconciled_raw_present_pos = self._sync_read_present_position_reconciled()
             if any(np.isnan(v) for v in goal_pos.values()) or any(np.isnan(v) for v in present_pos.values()):
                 logger.warning("NaN values detected in goal positions. Skipping action execution.")
                 return {f"{motor}.pos": val for motor, val in present_pos.items()}
