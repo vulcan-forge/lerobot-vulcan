@@ -191,6 +191,7 @@ sourccey-desktop = [
     "torchcodec==0.9.1",
 
     "lerobot[xvla]",
+    "lerobot[sarm]",
     "lerobot[viz]",
     "lerobot[pynput-dep]",
 
