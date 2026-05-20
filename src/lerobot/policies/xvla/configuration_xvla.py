@@ -80,6 +80,8 @@ class XVLAConfig(PreTrainedConfig):
     # Action & proprioception
     action_mode: str = "ee6d"
     num_denoising_steps: int = 10
+    prefetch_refill_enabled: bool = False
+    prefetch_low_watermark: int = 4
     use_proprio: bool = True
     max_state_dim: int = 32
     max_action_dim: int = 20  # Maximum action dimension for padding (used by "auto" action mode)
@@ -125,6 +127,12 @@ class XVLAConfig(PreTrainedConfig):
         if self.n_action_steps > self.chunk_size:
             raise ValueError(
                 f"`n_action_steps` ({self.n_action_steps}) must be <= `chunk_size` ({self.chunk_size})."
+            )
+        if self.prefetch_low_watermark < 0:
+            raise ValueError("`prefetch_low_watermark` must be >= 0.")
+        if self.prefetch_low_watermark >= self.n_action_steps:
+            raise ValueError(
+                f"`prefetch_low_watermark` ({self.prefetch_low_watermark}) must be < `n_action_steps` ({self.n_action_steps})."
             )
         if self.num_image_views is not None and self.num_image_views <= 0:
             raise ValueError("`num_image_views` must be > 0 when specified.")

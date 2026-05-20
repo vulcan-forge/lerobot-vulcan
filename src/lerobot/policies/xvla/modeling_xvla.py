@@ -19,8 +19,11 @@
 from __future__ import annotations
 
 import builtins
+import concurrent.futures
 import logging
 import os
+import threading
+import time
 from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -115,6 +118,23 @@ class XVLAModel(nn.Module):
 
         # Apply dtype casting based on config
         self._apply_dtype()
+        self._perf: dict[str, float] = {
+            "xvla_model_generate_calls": 0.0,
+            "xvla_model_forward_vlm_avg_ms": 0.0,
+            "xvla_model_forward_vlm_max_ms": 0.0,
+            "xvla_model_denoise_avg_ms": 0.0,
+            "xvla_model_denoise_max_ms": 0.0,
+            "xvla_model_postprocess_avg_ms": 0.0,
+            "xvla_model_postprocess_max_ms": 0.0,
+            "xvla_model_total_avg_ms": 0.0,
+            "xvla_model_total_max_ms": 0.0,
+            "xvla_model_last_forward_vlm_ms": 0.0,
+            "xvla_model_last_denoise_ms": 0.0,
+            "xvla_model_last_postprocess_ms": 0.0,
+            "xvla_model_last_total_ms": 0.0,
+            "xvla_model_last_step_avg_ms": 0.0,
+            "xvla_model_last_step_max_ms": 0.0,
+        }
 
     def _get_target_dtype(self) -> torch.dtype:
         """Get the target dtype based on config."""
@@ -248,12 +268,15 @@ class XVLAModel(nn.Module):
         steps: int,
     ) -> torch.Tensor:
         self.eval()
+        total_start = time.perf_counter()
 
         target_dtype = self._get_target_dtype()
         image_input = image_input.to(dtype=target_dtype)
         proprio = proprio.to(dtype=target_dtype)
 
+        vlm_start = time.perf_counter()
         enc = self.forward_vlm(input_ids, image_input, image_mask)
+        forward_vlm_s = time.perf_counter() - vlm_start
 
         batch_size = input_ids.shape[0]
         action_dim = self.dim_action
@@ -262,7 +285,10 @@ class XVLAModel(nn.Module):
         action = torch.zeros_like(x1)
 
         steps = max(1, int(steps))
+        denoise_total_s = 0.0
+        denoise_max_s = 0.0
         for i in range(steps, 0, -1):
+            step_start = time.perf_counter()
             t = torch.full((batch_size,), i / steps, device=proprio.device, dtype=target_dtype)
             x_t = x1 * t.view(-1, 1, 1) + action * (1 - t).view(-1, 1, 1)
             proprio_m, x_t_m = self.action_space.preprocess(proprio, x_t)
@@ -273,7 +299,51 @@ class XVLAModel(nn.Module):
                 t=t,
                 **enc,
             )
-        return self.action_space.postprocess(action)
+            step_s = time.perf_counter() - step_start
+            denoise_total_s += step_s
+            denoise_max_s = max(denoise_max_s, step_s)
+        postprocess_start = time.perf_counter()
+        action = self.action_space.postprocess(action)
+        postprocess_s = time.perf_counter() - postprocess_start
+        total_s = time.perf_counter() - total_start
+
+        calls = self._perf["xvla_model_generate_calls"] + 1.0
+        self._perf["xvla_model_generate_calls"] = calls
+
+        def _update_avg(key: str, sample_ms: float) -> None:
+            prev_calls = calls - 1.0
+            prev_avg = self._perf[key]
+            self._perf[key] = ((prev_avg * prev_calls) + sample_ms) / calls
+
+        forward_vlm_ms = forward_vlm_s * 1000.0
+        denoise_ms = denoise_total_s * 1000.0
+        postprocess_ms = postprocess_s * 1000.0
+        total_ms = total_s * 1000.0
+        step_avg_ms = (denoise_total_s / steps * 1000.0) if steps > 0 else 0.0
+        step_max_ms = denoise_max_s * 1000.0
+
+        _update_avg("xvla_model_forward_vlm_avg_ms", forward_vlm_ms)
+        _update_avg("xvla_model_denoise_avg_ms", denoise_ms)
+        _update_avg("xvla_model_postprocess_avg_ms", postprocess_ms)
+        _update_avg("xvla_model_total_avg_ms", total_ms)
+        self._perf["xvla_model_forward_vlm_max_ms"] = max(
+            self._perf["xvla_model_forward_vlm_max_ms"], forward_vlm_ms
+        )
+        self._perf["xvla_model_denoise_max_ms"] = max(self._perf["xvla_model_denoise_max_ms"], denoise_ms)
+        self._perf["xvla_model_postprocess_max_ms"] = max(
+            self._perf["xvla_model_postprocess_max_ms"], postprocess_ms
+        )
+        self._perf["xvla_model_total_max_ms"] = max(self._perf["xvla_model_total_max_ms"], total_ms)
+        self._perf["xvla_model_last_forward_vlm_ms"] = forward_vlm_ms
+        self._perf["xvla_model_last_denoise_ms"] = denoise_ms
+        self._perf["xvla_model_last_postprocess_ms"] = postprocess_ms
+        self._perf["xvla_model_last_total_ms"] = total_ms
+        self._perf["xvla_model_last_step_avg_ms"] = step_avg_ms
+        self._perf["xvla_model_last_step_max_ms"] = step_max_ms
+        return action
+
+    def get_perf_snapshot(self) -> dict[str, float]:
+        return dict(self._perf)
 
 
 class XVLAPolicy(PreTrainedPolicy):
@@ -289,12 +359,63 @@ class XVLAPolicy(PreTrainedPolicy):
         florence_config = config.get_florence_config()
         proprio_dim = config.max_state_dim if config.use_proprio else 0
         self.model = XVLAModel(config=config, florence_config=florence_config, proprio_dim=proprio_dim)
+        self._prefetch_enabled = bool(config.prefetch_refill_enabled)
+        self._prefetch_low_watermark = int(config.prefetch_low_watermark)
+        self._chunk_lock = threading.Lock()
+        self._prefetch_executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._prefetch_future: concurrent.futures.Future[Tensor] | None = None
+        if self._prefetch_enabled:
+            self._prefetch_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="xvla_prefetch",
+            )
+        self._perf: dict[str, float] = {}
         self.reset()
 
     def reset(self) -> None:
         self._queues = {
             ACTION: deque(maxlen=self.config.n_action_steps),
         }
+        self._perf = {
+            "xvla_select_calls": 0.0,
+            "xvla_refill_calls": 0.0,
+            "xvla_queue_hit_calls": 0.0,
+            "xvla_select_avg_ms": 0.0,
+            "xvla_select_max_ms": 0.0,
+            "xvla_refill_avg_ms": 0.0,
+            "xvla_refill_max_ms": 0.0,
+            "xvla_last_select_ms": 0.0,
+            "xvla_last_refill_ms": 0.0,
+            "xvla_last_populate_ms": 0.0,
+            "xvla_last_get_chunk_ms": 0.0,
+            "xvla_last_queue_extend_ms": 0.0,
+            "xvla_last_popleft_ms": 0.0,
+            "xvla_last_queue_len_before": 0.0,
+            "xvla_last_queue_len_after": 0.0,
+            "xvla_last_did_refill": 0.0,
+            "xvla_prefetch_enabled": 1.0 if self._prefetch_enabled else 0.0,
+            "xvla_prefetch_low_watermark": float(self._prefetch_low_watermark),
+            "xvla_prefetch_submit_calls": 0.0,
+            "xvla_prefetch_ready_hits": 0.0,
+            "xvla_prefetch_wait_fallback_calls": 0.0,
+            "xvla_prefetch_inflight": 0.0,
+            "xvla_last_prefetch_submit_ms": 0.0,
+            "xvla_last_prefetch_wait_ms": 0.0,
+            "xvla_last_used_prefetched_chunk": 0.0,
+            "xvla_config_n_action_steps": float(self.config.n_action_steps),
+            "xvla_config_chunk_size": float(self.config.chunk_size),
+            "xvla_config_num_denoising_steps": float(self.config.num_denoising_steps),
+        }
+        self._prefetch_future = None
+
+    def _clone_batch_for_prefetch(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
+        cloned: dict[str, Tensor] = {}
+        for key, value in batch.items():
+            if isinstance(value, torch.Tensor):
+                cloned[key] = value.detach().clone()
+            else:
+                cloned[key] = value
+        return cloned
 
     def get_optim_params(self) -> dict:
         """Return trainable named parameters for optimization.
@@ -408,9 +529,48 @@ class XVLAPolicy(PreTrainedPolicy):
         return total_loss, log_dict
 
     def _get_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
+        inputs_start = time.perf_counter()
         inputs = self._build_model_inputs(batch)
+        build_inputs_ms = (time.perf_counter() - inputs_start) * 1000.0
+        gen_start = time.perf_counter()
         actions = self.model.generate_actions(**inputs, steps=self.config.num_denoising_steps)
+        generate_ms = (time.perf_counter() - gen_start) * 1000.0
+        self._perf["xvla_last_build_model_inputs_ms"] = build_inputs_ms
+        self._perf["xvla_last_model_generate_ms"] = generate_ms
         return actions
+
+    def _get_action_chunk_threadsafe(self, batch: dict[str, Tensor]) -> Tensor:
+        with self._chunk_lock:
+            return self._get_action_chunk(batch)
+
+    def _maybe_submit_prefetch(self, batch: dict[str, Tensor]) -> None:
+        if not self._prefetch_enabled or self._prefetch_executor is None:
+            return
+        if self._prefetch_future is not None:
+            self._perf["xvla_prefetch_inflight"] = 0.0 if self._prefetch_future.done() else 1.0
+            return
+        submit_start = time.perf_counter()
+        prefetch_batch = self._clone_batch_for_prefetch(batch)
+        self._prefetch_future = self._prefetch_executor.submit(
+            self._get_action_chunk_threadsafe, prefetch_batch
+        )
+        self._perf["xvla_prefetch_submit_calls"] = self._perf["xvla_prefetch_submit_calls"] + 1.0
+        self._perf["xvla_last_prefetch_submit_ms"] = (time.perf_counter() - submit_start) * 1000.0
+        self._perf["xvla_prefetch_inflight"] = 1.0
+
+    def _maybe_consume_ready_prefetch(self) -> bool:
+        if self._prefetch_future is None:
+            self._perf["xvla_prefetch_inflight"] = 0.0
+            return False
+        if not self._prefetch_future.done():
+            self._perf["xvla_prefetch_inflight"] = 1.0
+            return False
+        actions = self._prefetch_future.result()
+        self._queues[ACTION].extend(actions.transpose(0, 1)[: self.config.n_action_steps])
+        self._prefetch_future = None
+        self._perf["xvla_prefetch_ready_hits"] = self._perf["xvla_prefetch_ready_hits"] + 1.0
+        self._perf["xvla_prefetch_inflight"] = 0.0
+        return True
 
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:  # noqa: ARG002
@@ -421,13 +581,87 @@ class XVLAPolicy(PreTrainedPolicy):
     @torch.no_grad()
     def select_action(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:  # noqa: ARG002
         self.eval()
+        total_start = time.perf_counter()
+        queue_len_before = len(self._queues[ACTION])
+        populate_start = time.perf_counter()
         self._queues = populate_queues(self._queues, batch, exclude_keys=[ACTION])
+        populate_ms = (time.perf_counter() - populate_start) * 1000.0
+        did_refill = 0.0
+        used_prefetched_chunk = 0.0
+
+        if len(self._queues[ACTION]) <= self._prefetch_low_watermark:
+            self._maybe_submit_prefetch(batch)
+
+        if len(self._queues[ACTION]) == 0 and self._maybe_consume_ready_prefetch():
+            used_prefetched_chunk = 1.0
 
         if len(self._queues[ACTION]) == 0:
-            actions = self._get_action_chunk(batch)
+            did_refill = 1.0
+            refill_start = time.perf_counter()
+            if self._prefetch_enabled and self._prefetch_future is not None:
+                wait_start = time.perf_counter()
+                actions = self._prefetch_future.result()
+                wait_ms = (time.perf_counter() - wait_start) * 1000.0
+                self._prefetch_future = None
+                self._perf["xvla_prefetch_wait_fallback_calls"] = (
+                    self._perf["xvla_prefetch_wait_fallback_calls"] + 1.0
+                )
+                self._perf["xvla_last_prefetch_wait_ms"] = wait_ms
+                get_chunk_ms = (time.perf_counter() - refill_start) * 1000.0
+            else:
+                actions = self._get_action_chunk_threadsafe(batch)
+                get_chunk_ms = (time.perf_counter() - refill_start) * 1000.0
+            extend_start = time.perf_counter()
             self._queues[ACTION].extend(actions.transpose(0, 1)[: self.config.n_action_steps])
+            extend_ms = (time.perf_counter() - extend_start) * 1000.0
+            refill_ms = get_chunk_ms + extend_ms
+        else:
+            get_chunk_ms = 0.0
+            extend_ms = 0.0
+            refill_ms = 0.0
 
-        return self._queues[ACTION].popleft()
+        popleft_start = time.perf_counter()
+        action = self._queues[ACTION].popleft()
+        popleft_ms = (time.perf_counter() - popleft_start) * 1000.0
+        total_ms = (time.perf_counter() - total_start) * 1000.0
+
+        calls = self._perf["xvla_select_calls"] + 1.0
+        self._perf["xvla_select_calls"] = calls
+        prev_calls = calls - 1.0
+        self._perf["xvla_select_avg_ms"] = ((self._perf["xvla_select_avg_ms"] * prev_calls) + total_ms) / calls
+        self._perf["xvla_select_max_ms"] = max(self._perf["xvla_select_max_ms"], total_ms)
+        if did_refill == 1.0:
+            refill_calls = self._perf["xvla_refill_calls"] + 1.0
+            prev_refill_calls = refill_calls - 1.0
+            self._perf["xvla_refill_calls"] = refill_calls
+            self._perf["xvla_refill_avg_ms"] = (
+                (self._perf["xvla_refill_avg_ms"] * prev_refill_calls) + refill_ms
+            ) / refill_calls
+            self._perf["xvla_refill_max_ms"] = max(self._perf["xvla_refill_max_ms"], refill_ms)
+        else:
+            self._perf["xvla_queue_hit_calls"] = self._perf["xvla_queue_hit_calls"] + 1.0
+
+        self._perf["xvla_last_select_ms"] = total_ms
+        self._perf["xvla_last_refill_ms"] = refill_ms
+        self._perf["xvla_last_populate_ms"] = populate_ms
+        self._perf["xvla_last_get_chunk_ms"] = get_chunk_ms
+        self._perf["xvla_last_queue_extend_ms"] = extend_ms
+        self._perf["xvla_last_popleft_ms"] = popleft_ms
+        self._perf["xvla_last_queue_len_before"] = float(queue_len_before)
+        self._perf["xvla_last_queue_len_after"] = float(len(self._queues[ACTION]))
+        self._perf["xvla_last_did_refill"] = did_refill
+        self._perf["xvla_last_used_prefetched_chunk"] = used_prefetched_chunk
+        return action
+
+    def get_perf_snapshot(self) -> dict[str, float]:
+        snapshot = dict(self._perf)
+        snapshot.update(self.model.get_perf_snapshot())
+        return snapshot
+
+    def __del__(self):
+        executor = getattr(self, "_prefetch_executor", None)
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     @classmethod
     def from_pretrained(

@@ -17,6 +17,7 @@ import base64
 import json
 import logging
 from functools import cached_property
+from threading import Lock
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -122,6 +123,21 @@ class SourcceyClient(Robot):
         self._no_data_log_interval_s = 5.0
         self._last_no_data_log_ts = 0.0
         self._suppressed_no_data_logs = 0
+        self._perf_lock = Lock()
+        self._perf = {
+            "get_observation_calls": 0,
+            "get_observation_total_s": 0.0,
+            "get_observation_max_s": 0.0,
+            "poll_total_s": 0.0,
+            "poll_max_s": 0.0,
+            "parse_total_s": 0.0,
+            "parse_max_s": 0.0,
+            "process_total_s": 0.0,
+            "process_max_s": 0.0,
+            "stale_returns": 0,
+            "fresh_returns": 0,
+            "no_data_polls": 0,
+        }
 
     ###################################################################
     # Properties and Attributes
@@ -302,6 +318,7 @@ class SourcceyClient(Robot):
         if not self._is_connected:
             raise DeviceNotConnectedError("SourcceyClient is not connected. You need to run `robot.connect()`.")
 
+        total_start = time.perf_counter()
         frames, obs_dict, is_fresh = self._get_data()
 
         # Loop over each configured camera
@@ -313,6 +330,14 @@ class SourcceyClient(Robot):
 
         if is_fresh and self.slam_input_enabled:
             self._publish_slam_input(observation=obs_dict, frames=frames)
+
+        elapsed = time.perf_counter() - total_start
+        with self._perf_lock:
+            self._perf["get_observation_calls"] += 1
+            self._perf["get_observation_total_s"] += elapsed
+            self._perf["get_observation_max_s"] = max(self._perf["get_observation_max_s"], elapsed)
+            key = "fresh_returns" if is_fresh else "stale_returns"
+            self._perf[key] += 1
 
         return obs_dict
 
@@ -370,17 +395,29 @@ class SourcceyClient(Robot):
         """
 
         # 1. Get the latest message bytes from the socket
+        poll_start = time.perf_counter()
         latest_message_bytes = self._poll_and_get_latest_message()
+        poll_s = time.perf_counter() - poll_start
+        with self._perf_lock:
+            self._perf["poll_total_s"] += poll_s
+            self._perf["poll_max_s"] = max(self._perf["poll_max_s"], poll_s)
 
         # 2. If no message, return cached data
         if latest_message_bytes is None:
+            with self._perf_lock:
+                self._perf["no_data_polls"] += 1
             return self.last_frames, self.last_remote_state, False
 
         # 3. Parse the protobuf message
         try:
+            parse_start = time.perf_counter()
             robot_state = sourccey_pb2.SourcceyRobotState()
             robot_state.ParseFromString(latest_message_bytes)
             observation = self.protobuf_converter.protobuf_to_observation(robot_state)
+            parse_s = time.perf_counter() - parse_start
+            with self._perf_lock:
+                self._perf["parse_total_s"] += parse_s
+                self._perf["parse_max_s"] = max(self._perf["parse_max_s"], parse_s)
         except Exception as e:
             logging.error(f"Error parsing protobuf observation: {e}")
             return self.last_frames, self.last_remote_state, False
@@ -391,7 +428,12 @@ class SourcceyClient(Robot):
 
         # 5. Process the valid observation data
         try:
+            process_start = time.perf_counter()
             new_frames, new_state = self._remote_state_from_obs(observation)
+            process_s = time.perf_counter() - process_start
+            with self._perf_lock:
+                self._perf["process_total_s"] += process_s
+                self._perf["process_max_s"] = max(self._perf["process_max_s"], process_s)
         except Exception as e:
             logging.error(f"Error processing observation data, serving last observation: {e}")
             return self.last_frames, self.last_remote_state, False
@@ -400,6 +442,29 @@ class SourcceyClient(Robot):
         self.last_remote_state = new_state
 
         return new_frames, new_state, True
+
+    def get_perf_snapshot(self) -> dict[str, float]:
+        with self._perf_lock:
+            perf = dict(self._perf)
+        calls = max(int(perf["get_observation_calls"]), 1)
+
+        def avg_ms(total_s: float) -> float:
+            return (float(total_s) / calls) * 1000.0
+
+        return {
+            "client_get_observation_calls": float(perf["get_observation_calls"]),
+            "client_get_observation_avg_ms": avg_ms(perf["get_observation_total_s"]),
+            "client_get_observation_max_ms": float(perf["get_observation_max_s"]) * 1000.0,
+            "client_poll_avg_ms": avg_ms(perf["poll_total_s"]),
+            "client_poll_max_ms": float(perf["poll_max_s"]) * 1000.0,
+            "client_parse_avg_ms": avg_ms(perf["parse_total_s"]),
+            "client_parse_max_ms": float(perf["parse_max_s"]) * 1000.0,
+            "client_process_avg_ms": avg_ms(perf["process_total_s"]),
+            "client_process_max_ms": float(perf["process_max_s"]) * 1000.0,
+            "client_no_data_polls": float(perf["no_data_polls"]),
+            "client_fresh_returns": float(perf["fresh_returns"]),
+            "client_stale_returns": float(perf["stale_returns"]),
+        }
 
     ###################################################################
     # Private Message and Parsing Functions

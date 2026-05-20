@@ -87,3 +87,7 @@ class InferenceEngine(abc.ABC):
     def failed(self) -> bool:
         """True if an unrecoverable error occurred in the backend."""
         return False
+
+    def get_perf_snapshot(self) -> dict:
+        """Optional backend perf snapshot for rollout diagnostics."""
+        return {}

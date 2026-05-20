@@ -54,24 +54,56 @@ class BaseStrategy(RolloutStrategy):
 
         while not ctx.runtime.shutdown_event.is_set():
             loop_start = time.perf_counter()
+            obs_s = 0.0
+            process_s = 0.0
+            action_s = 0.0
+            telemetry_s = 0.0
 
             if cfg.duration > 0 and (time.perf_counter() - start_time) >= cfg.duration:
                 logger.info("Duration limit reached (%.0fs)", cfg.duration)
                 break
 
+            obs_start = time.perf_counter()
             obs = robot.get_observation()
+            obs_s = time.perf_counter() - obs_start
+            process_start = time.perf_counter()
             obs_processed = self._process_observation_and_notify(ctx.processors, obs)
+            process_s = time.perf_counter() - process_start
 
             if self._handle_warmup(cfg.use_torch_compile, loop_start, control_interval):
                 continue
 
+            action_start = time.perf_counter()
             action_dict = send_next_action(obs_processed, obs, ctx, interpolator)
+            action_s = time.perf_counter() - action_start
+            telemetry_start = time.perf_counter()
             self._log_telemetry(obs_processed, action_dict, ctx.runtime)
+            telemetry_s = time.perf_counter() - telemetry_start
 
             dt = time.perf_counter() - loop_start
             if (sleep_t := control_interval - dt) > 0:
+                self._record_loop_perf(
+                    ctx=ctx,
+                    loop_s=dt,
+                    obs_s=obs_s,
+                    process_s=process_s,
+                    action_s=action_s,
+                    telemetry_s=telemetry_s,
+                    target_fps=cfg.fps,
+                    slow=False,
+                )
                 precise_sleep(sleep_t)
             else:
+                self._record_loop_perf(
+                    ctx=ctx,
+                    loop_s=dt,
+                    obs_s=obs_s,
+                    process_s=process_s,
+                    action_s=action_s,
+                    telemetry_s=telemetry_s,
+                    target_fps=cfg.fps,
+                    slow=True,
+                )
                 logger.warning(
                     f"Record loop is running slower ({1 / dt:.1f} Hz) than the target FPS ({cfg.fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
                 )

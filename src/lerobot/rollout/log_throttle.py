@@ -22,7 +22,6 @@ from collections.abc import Callable
 
 _DEFAULT_SPAM_PATTERNS = (
     "No new data available within timeout.",
-    "Record loop is running slower (",
 )
 
 

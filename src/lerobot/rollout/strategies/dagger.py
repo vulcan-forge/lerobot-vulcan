@@ -432,6 +432,10 @@ class DAggerStrategy(RolloutStrategy):
             try:
                 while not events.stop_recording.is_set() and not ctx.runtime.shutdown_event.is_set():
                     loop_start = time.perf_counter()
+                    obs_s = 0.0
+                    process_s = 0.0
+                    action_s = 0.0
+                    telemetry_s = 0.0
 
                     if cfg.duration > 0 and (time.perf_counter() - start_time) >= cfg.duration:
                         logger.info("Duration limit reached (%.0fs)", cfg.duration)
@@ -445,21 +449,29 @@ class DAggerStrategy(RolloutStrategy):
                         last_action = None
 
                     phase = events.phase
+                    obs_start = time.perf_counter()
                     obs = robot.get_observation()
+                    obs_s = time.perf_counter() - obs_start
 
                     # --- CORRECTING: human teleop control ---
                     # TODO(Steven): teleop runs at the same FPS as the policy. To
                     # decouple the two, sample teleop at its native rate and
                     # interpolate to the control loop's tick rate.
                     if phase == DAggerPhase.CORRECTING:
+                        process_start = time.perf_counter()
                         obs_processed = ctx.processors.robot_observation_processor(obs)
+                        process_s += time.perf_counter() - process_start
                         teleop_action = teleop.get_action()
+                        action_start = time.perf_counter()
                         processed_teleop = ctx.processors.teleop_action_processor((teleop_action, obs))
                         robot_action_to_send = ctx.processors.robot_action_processor((processed_teleop, obs))
                         sent_action = robot.send_action(robot_action_to_send)
+                        action_s += time.perf_counter() - action_start
                         action_for_record = sent_action if isinstance(sent_action, dict) else robot_action_to_send
                         last_action = action_for_record
+                        telemetry_start = time.perf_counter()
                         self._log_telemetry(obs_processed, processed_teleop, ctx.runtime)
+                        telemetry_s += time.perf_counter() - telemetry_start
                         if record_tick % record_stride == 0:
                             obs_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
                             action_frame = build_dataset_frame(features, action_for_record, prefix=ACTION)
@@ -475,18 +487,26 @@ class DAggerStrategy(RolloutStrategy):
                     # --- PAUSED: hold position ---
                     elif phase == DAggerPhase.PAUSED:
                         if last_action:
+                            action_start = time.perf_counter()
                             robot.send_action(last_action)
+                            action_s += time.perf_counter() - action_start
 
                     # --- AUTONOMOUS: policy control ---
                     else:
+                        process_start = time.perf_counter()
                         obs_processed = self._process_observation_and_notify(ctx.processors, obs)
+                        process_s += time.perf_counter() - process_start
 
                         if self._handle_warmup(cfg.use_torch_compile, loop_start, control_interval):
                             continue
 
+                        action_start = time.perf_counter()
                         action_dict = send_next_action(obs_processed, obs, ctx, interpolator)
+                        action_s += time.perf_counter() - action_start
                         if action_dict is not None:
+                            telemetry_start = time.perf_counter()
                             self._log_telemetry(obs_processed, action_dict, ctx.runtime)
+                            telemetry_s += time.perf_counter() - telemetry_start
                             last_action = ctx.processors.robot_action_processor((action_dict, obs))
                             if record_tick % record_stride == 0:
                                 obs_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
@@ -524,8 +544,28 @@ class DAggerStrategy(RolloutStrategy):
 
                     dt = time.perf_counter() - loop_start
                     if (sleep_t := control_interval - dt) > 0:
+                        self._record_loop_perf(
+                            ctx=ctx,
+                            loop_s=dt,
+                            obs_s=obs_s,
+                            process_s=process_s,
+                            action_s=action_s,
+                            telemetry_s=telemetry_s,
+                            target_fps=cfg.fps,
+                            slow=False,
+                        )
                         precise_sleep(sleep_t)
                     else:
+                        self._record_loop_perf(
+                            ctx=ctx,
+                            loop_s=dt,
+                            obs_s=obs_s,
+                            process_s=process_s,
+                            action_s=action_s,
+                            telemetry_s=telemetry_s,
+                            target_fps=cfg.fps,
+                            slow=True,
+                        )
                         logger.warning(
                             f"Record loop is running slower ({1 / dt:.1f} Hz) than the target FPS ({cfg.fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
                         )
@@ -592,6 +632,10 @@ class DAggerStrategy(RolloutStrategy):
                     and not ctx.runtime.shutdown_event.is_set()
                 ):
                     loop_start = time.perf_counter()
+                    obs_s = 0.0
+                    process_s = 0.0
+                    action_s = 0.0
+                    telemetry_s = 0.0
 
                     if cfg.duration > 0 and (time.perf_counter() - start_time) >= cfg.duration:
                         logger.info("Duration limit reached (%.0fs)", cfg.duration)
@@ -624,21 +668,29 @@ class DAggerStrategy(RolloutStrategy):
                         self._background_push(dataset, cfg)
 
                     phase = events.phase
+                    obs_start = time.perf_counter()
                     obs = robot.get_observation()
+                    obs_s = time.perf_counter() - obs_start
 
                     # --- CORRECTING: human teleop control + recording ---
                     # TODO(Steven): teleop runs at the same FPS as the policy. To
                     # decouple the two, sample teleop at its native rate and
                     # interpolate to the control loop's tick rate.
                     if phase == DAggerPhase.CORRECTING:
+                        process_start = time.perf_counter()
                         obs_processed = ctx.processors.robot_observation_processor(obs)
+                        process_s += time.perf_counter() - process_start
                         teleop_action = teleop.get_action()
+                        action_start = time.perf_counter()
                         processed_teleop = ctx.processors.teleop_action_processor((teleop_action, obs))
                         robot_action_to_send = ctx.processors.robot_action_processor((processed_teleop, obs))
                         sent_action = robot.send_action(robot_action_to_send)
+                        action_s += time.perf_counter() - action_start
                         action_for_record = sent_action if isinstance(sent_action, dict) else robot_action_to_send
                         last_action = action_for_record
+                        telemetry_start = time.perf_counter()
                         self._log_telemetry(obs_processed, processed_teleop, ctx.runtime)
+                        telemetry_s += time.perf_counter() - telemetry_start
 
                         if record_tick % record_stride == 0:
                             obs_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
@@ -656,24 +708,52 @@ class DAggerStrategy(RolloutStrategy):
                     # --- PAUSED: hold position ---
                     elif phase == DAggerPhase.PAUSED:
                         if last_action:
+                            action_start = time.perf_counter()
                             robot.send_action(last_action)
+                            action_s += time.perf_counter() - action_start
 
                     # --- AUTONOMOUS: policy control (no recording) ---
                     else:
+                        process_start = time.perf_counter()
                         obs_processed = self._process_observation_and_notify(ctx.processors, obs)
+                        process_s += time.perf_counter() - process_start
 
                         if self._handle_warmup(cfg.use_torch_compile, loop_start, control_interval):
                             continue
 
+                        action_start = time.perf_counter()
                         action_dict = send_next_action(obs_processed, obs, ctx, interpolator)
+                        action_s += time.perf_counter() - action_start
                         if action_dict is not None:
+                            telemetry_start = time.perf_counter()
                             self._log_telemetry(obs_processed, action_dict, ctx.runtime)
+                            telemetry_s += time.perf_counter() - telemetry_start
                             last_action = ctx.processors.robot_action_processor((action_dict, obs))
 
                     dt = time.perf_counter() - loop_start
                     if (sleep_t := control_interval - dt) > 0:
+                        self._record_loop_perf(
+                            ctx=ctx,
+                            loop_s=dt,
+                            obs_s=obs_s,
+                            process_s=process_s,
+                            action_s=action_s,
+                            telemetry_s=telemetry_s,
+                            target_fps=cfg.fps,
+                            slow=False,
+                        )
                         precise_sleep(sleep_t)
                     else:
+                        self._record_loop_perf(
+                            ctx=ctx,
+                            loop_s=dt,
+                            obs_s=obs_s,
+                            process_s=process_s,
+                            action_s=action_s,
+                            telemetry_s=telemetry_s,
+                            target_fps=cfg.fps,
+                            slow=True,
+                        )
                         logger.warning(
                             f"Record loop is running slower ({1 / dt:.1f} Hz) than the target FPS ({cfg.fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
                         )

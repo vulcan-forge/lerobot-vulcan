@@ -19,6 +19,8 @@ from __future__ import annotations
 import abc
 import logging
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from lerobot.datasets.utils import DEFAULT_VIDEO_FILE_SIZE_IN_MB
@@ -37,6 +39,103 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _store_last_action_perf(runtime_ctx, snapshot: dict[str, float | str]) -> None:
+    runtime_ctx.last_action_perf = snapshot
+
+
+class _LoopPerfReporter:
+    """Overwrite-style rollout loop perf report with slow-loop snapshots."""
+
+    def __init__(self, path: str | None = None, flush_interval_s: float = 5.0) -> None:
+        self.path = Path(path or "~/lerobot_rollout_loop_perf.txt").expanduser()
+        self.flush_interval_s = max(float(flush_interval_s), 0.5)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.start_monotonic = time.monotonic()
+        self.last_flush_ts = self.start_monotonic
+        self.calls = 0
+        self.loop_total_s = 0.0
+        self.loop_max_s = 0.0
+        self.obs_total_s = 0.0
+        self.obs_max_s = 0.0
+        self.process_total_s = 0.0
+        self.process_max_s = 0.0
+        self.action_total_s = 0.0
+        self.action_max_s = 0.0
+        self.telemetry_total_s = 0.0
+        self.telemetry_max_s = 0.0
+        self.slow_events = 0
+        self.last_slow_snapshot: dict[str, float | str] = {}
+        self.path.write_text(self._render(status="starting"))
+
+    def record(
+        self,
+        *,
+        loop_s: float,
+        obs_s: float,
+        process_s: float,
+        action_s: float,
+        telemetry_s: float,
+        slow: bool,
+        slow_snapshot: dict[str, float | str] | None = None,
+    ) -> None:
+        self.calls += 1
+        self.loop_total_s += loop_s
+        self.loop_max_s = max(self.loop_max_s, loop_s)
+        self.obs_total_s += obs_s
+        self.obs_max_s = max(self.obs_max_s, obs_s)
+        self.process_total_s += process_s
+        self.process_max_s = max(self.process_max_s, process_s)
+        self.action_total_s += action_s
+        self.action_max_s = max(self.action_max_s, action_s)
+        self.telemetry_total_s += telemetry_s
+        self.telemetry_max_s = max(self.telemetry_max_s, telemetry_s)
+        if slow:
+            self.slow_events += 1
+            self.last_slow_snapshot = slow_snapshot or {}
+            self.path.write_text(self._render(status="slow_loop"))
+            self.last_flush_ts = time.monotonic()
+            return
+        now = time.monotonic()
+        if now - self.last_flush_ts >= self.flush_interval_s:
+            self.last_flush_ts = now
+            self.path.write_text(self._render(status="running"))
+
+    def finalize(self, status: str = "stopped") -> None:
+        self.path.write_text(self._render(status=status))
+
+    def _render(self, *, status: str) -> str:
+        uptime_s = time.monotonic() - self.start_monotonic
+
+        def avg_ms(total_s: float) -> float:
+            return (total_s / self.calls * 1000.0) if self.calls else 0.0
+
+        lines = [
+            f"status: {status}",
+            f"timestamp_utc: {datetime.now(timezone.utc).isoformat()}",
+            f"uptime_s: {uptime_s:.3f}",
+            f"calls: {self.calls}",
+            f"effective_hz: {(self.calls / uptime_s) if uptime_s > 0 else 0.0:.2f}",
+            f"slow_events: {self.slow_events}",
+            f"loop_avg_ms: {avg_ms(self.loop_total_s):.3f}",
+            f"loop_max_ms: {self.loop_max_s * 1000.0:.3f}",
+            f"obs_avg_ms: {avg_ms(self.obs_total_s):.3f}",
+            f"obs_max_ms: {self.obs_max_s * 1000.0:.3f}",
+            f"process_avg_ms: {avg_ms(self.process_total_s):.3f}",
+            f"process_max_ms: {self.process_max_s * 1000.0:.3f}",
+            f"action_avg_ms: {avg_ms(self.action_total_s):.3f}",
+            f"action_max_ms: {self.action_max_s * 1000.0:.3f}",
+            f"telemetry_avg_ms: {avg_ms(self.telemetry_total_s):.3f}",
+            f"telemetry_max_ms: {self.telemetry_max_s * 1000.0:.3f}",
+        ]
+        for key in sorted(self.last_slow_snapshot):
+            value = self.last_slow_snapshot[key]
+            if isinstance(value, float):
+                lines.append(f"{key}: {value:.3f}")
+            else:
+                lines.append(f"{key}: {value}")
+        return "\n".join(lines) + "\n"
+
+
 class RolloutStrategy(abc.ABC):
     """Abstract base for rollout execution strategies.
 
@@ -51,6 +150,7 @@ class RolloutStrategy(abc.ABC):
         self._interpolator: ActionInterpolator | None = None
         self._warmup_flushed: bool = False
         self._cached_obs_processed: dict | None = None
+        self._loop_perf = _LoopPerfReporter()
 
     def _init_engine(self, ctx: RolloutContext) -> None:
         """Attach the inference engine and action interpolator, then start the backend.
@@ -121,6 +221,7 @@ class RolloutStrategy(abc.ABC):
         if self._engine is not None:
             logger.info("Stopping inference engine...")
             self._engine.stop()
+        self._loop_perf.finalize(status="stopped")
         robot = hw.robot_wrapper.inner
         if robot.is_connected:
             if return_to_initial_position and hw.initial_position:
@@ -170,6 +271,53 @@ class RolloutStrategy(abc.ABC):
             observation=obs_processed,
             action=action_dict,
             compress_images=cfg.display_compressed_images,
+        )
+
+    def _record_loop_perf(
+        self,
+        *,
+        ctx: RolloutContext,
+        loop_s: float,
+        obs_s: float,
+        process_s: float,
+        action_s: float,
+        telemetry_s: float,
+        target_fps: float,
+        slow: bool,
+    ) -> None:
+        snapshot: dict[str, float | str] | None = None
+        if slow:
+            snapshot = {
+                "slow_loop_hz": (1.0 / loop_s) if loop_s > 0 else 0.0,
+                "slow_loop_target_fps": target_fps,
+                "slow_obs_ms": obs_s * 1000.0,
+                "slow_process_ms": process_s * 1000.0,
+                "slow_action_ms": action_s * 1000.0,
+                "slow_telemetry_ms": telemetry_s * 1000.0,
+            }
+            action_snapshot = getattr(ctx.runtime, "last_action_perf", {})
+            robot_snapshot = getattr(ctx.hardware.robot_wrapper.inner, "get_perf_snapshot", lambda: {})()
+            engine_snapshot = ctx.policy.inference.get_perf_snapshot()
+            snapshot.update(action_snapshot)
+            snapshot.update(robot_snapshot)
+            snapshot.update(engine_snapshot)
+            logger.warning(
+                "Slow loop breakdown: hz=%.1f target=%.1f obs=%.1fms process=%.1fms action=%.1fms telemetry=%.1fms",
+                (1.0 / loop_s) if loop_s > 0 else 0.0,
+                target_fps,
+                obs_s * 1000.0,
+                process_s * 1000.0,
+                action_s * 1000.0,
+                telemetry_s * 1000.0,
+            )
+        self._loop_perf.record(
+            loop_s=loop_s,
+            obs_s=obs_s,
+            process_s=process_s,
+            action_s=action_s,
+            telemetry_s=telemetry_s,
+            slow=slow,
+            slow_snapshot=snapshot,
         )
 
     @abc.abstractmethod
@@ -282,23 +430,53 @@ def send_next_action(
     Returns the action dict that was sent, or ``None`` if no action was
     ready (e.g. empty async queue, interpolator not yet primed).
     """
+    total_start = time.perf_counter()
     engine = ctx.policy.inference
     features = ctx.data.dataset_features
     ordered_keys = ctx.data.ordered_action_keys
+    perf: dict[str, float | str] = {
+        "action_needs_new_action": 1.0 if interpolator.needs_new_action() else 0.0,
+        "action_none": 0.0,
+    }
 
-    if interpolator.needs_new_action():
+    if perf["action_needs_new_action"] == 1.0:
+        build_start = time.perf_counter()
         obs_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
+        perf["action_build_frame_ms"] = (time.perf_counter() - build_start) * 1000.0
+        infer_start = time.perf_counter()
         action_tensor = engine.get_action(obs_frame)
+        perf["action_engine_get_ms"] = (time.perf_counter() - infer_start) * 1000.0
         if action_tensor is not None:
+            add_start = time.perf_counter()
             interpolator.add(action_tensor.cpu())
+            perf["action_interpolator_add_ms"] = (time.perf_counter() - add_start) * 1000.0
+        else:
+            perf["action_interpolator_add_ms"] = 0.0
+    else:
+        perf["action_build_frame_ms"] = 0.0
+        perf["action_engine_get_ms"] = 0.0
+        perf["action_interpolator_add_ms"] = 0.0
 
+    interp_start = time.perf_counter()
     interp = interpolator.get()
+    perf["action_interpolator_get_ms"] = (time.perf_counter() - interp_start) * 1000.0
     if interp is None:
+        perf["action_none"] = 1.0
+        perf["action_total_ms"] = (time.perf_counter() - total_start) * 1000.0
+        _store_last_action_perf(ctx.runtime, perf)
         return None
 
     if len(interp) != len(ordered_keys):
         raise ValueError(f"Interpolated tensor length ({len(interp)}) != action keys ({len(ordered_keys)})")
+    dict_start = time.perf_counter()
     action_dict = {k: interp[i].item() for i, k in enumerate(ordered_keys)}
+    perf["action_dict_ms"] = (time.perf_counter() - dict_start) * 1000.0
+    process_start = time.perf_counter()
     processed = ctx.processors.robot_action_processor((action_dict, obs_raw))
+    perf["action_robot_process_ms"] = (time.perf_counter() - process_start) * 1000.0
+    send_start = time.perf_counter()
     ctx.hardware.robot_wrapper.send_action(processed)
+    perf["action_robot_send_ms"] = (time.perf_counter() - send_start) * 1000.0
+    perf["action_total_ms"] = (time.perf_counter() - total_start) * 1000.0
+    _store_last_action_perf(ctx.runtime, perf)
     return action_dict
