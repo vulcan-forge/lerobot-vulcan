@@ -191,6 +191,10 @@ class SourcceyClientConfig(RobotConfig):
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
 
     polling_timeout_ms: int = 15
+    # Toggle periodic timeout logs when no observation packet arrives.
+    log_no_data_timeouts: bool = True
+    # Minimum interval between timeout log lines (seconds) when logging is enabled.
+    no_data_log_interval_s: float = 5.0
     connect_timeout_s: int = 5
 
     def __post_init__(self) -> None:

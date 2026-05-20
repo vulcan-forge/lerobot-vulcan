@@ -1,8 +1,12 @@
 Tasks
 ```
+-------
 Fold the shirt
 Grab a shirt from the pile
 Place the folded shirt to the side
+Grab a shirt from the pile, fold it, then place the folded shirt to the side.
+
+-------
 ```
 
 
@@ -28,11 +32,13 @@ uv run lerobot-record \
  --teleop.id="sourccey_leader" \
  --teleop.left_arm_port="/dev/ttyACM0" \
  --teleop.right_arm_port="/dev/ttyACM1" \
- --dataset.repo_id="sourccey-013/sourccey-013__shirt-place-a/nickm/sourccey-013__shirt-place-a__set008_nickm" \
- --dataset.num_episodes=25 \
+ --teleop_keyboard.type=keyboard \
+ --teleop_keyboard.id="sourccey_keyboard" \
+ --dataset.repo_id="sourccey-013/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-010/nickm/sourccey-013__shirt-fold-blue-c__set009__nickm" \
+ --dataset.num_episodes=1 \
  --dataset.episode_time_s=300 \
  --dataset.reset_time_s=5 \
- --dataset.single_task="Place the folded shirt to the side" \
+ --dataset.single_task="Fold the shirt" \
  --dataset.fps=30 \
  --display_data=true \
  --dataset.push_to_hub=false
@@ -56,12 +62,16 @@ uv run lerobot-rollout \
 # Training commands with retry
 
 ```
+/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-008
+```
+
+```
 CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train_retry.py \
   --max-attempts=30 \
   --retry-delay-seconds=20 \
-  --dataset.repo_id="Combination/sourccey-shirt-place-a-000" \
-  --output_dir="outputs/train/xvla__sourccey-shirt-place-a-000" \
-  --job_name="xvla__sourccey-shirt-grab-a-000" \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-c-008" \
+  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-008" \
+  --job_name="xvla_s_sourccey-shirt-fold-c-008" \
   --policy.path="lerobot/xvla-base" \
   --policy.dtype=bfloat16 \
   --policy.action_mode=auto \
@@ -85,9 +95,9 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train_retry.py \
 CUDA_VISIBLE_DEVICES=0 uv run lerobot-train-retry \
   --max-attempts=30 \
   --retry-delay-seconds=20 \
-  --dataset.repo_id="Combination/sourccey-shirt-place-a-000" \
-  --output_dir="outputs/train/xvla_s_sourccey-shirt-place-a-000-start-c-006" \
-  --job_name="xvla_s_sourccey-shirt-place-a-000" \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-c-008" \
+  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-008" \
+  --job_name="xvla_s_sourccey-shirt-fold-c-008" \
   --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
   --policy.dtype=bfloat16 \
   --policy.action_mode=auto \
@@ -95,7 +105,7 @@ CUDA_VISIBLE_DEVICES=0 uv run lerobot-train-retry \
   --policy.device=cuda \
   --policy.push_to_hub=false \
   --policy.input_features=null \
-  --policy.scheduler_warmup_steps=5000 \
+  --policy.scheduler_warmup_steps=10000 \
   --policy.scheduler_decay_steps=1000000 \
   --policy.scheduler_decay_lr=5e-06 \
   --steps=1000000 \

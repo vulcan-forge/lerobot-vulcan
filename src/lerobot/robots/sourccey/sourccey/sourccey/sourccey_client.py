@@ -61,6 +61,8 @@ class SourcceyClient(Robot):
         self.teleop_keys = config.teleop_keys
 
         self.polling_timeout_ms = config.polling_timeout_ms
+        self.log_no_data_timeouts = config.log_no_data_timeouts
+        self.no_data_log_interval_s = max(0.0, float(config.no_data_log_interval_s))
         self.connect_timeout_s = config.connect_timeout_s
 
         self.zmq_context = None
@@ -119,7 +121,7 @@ class SourcceyClient(Robot):
         self._z_pos_cmd = 100.0
 
         # Log-throttle repeated poll timeouts to avoid terminal spam in teleop loops.
-        self._no_data_log_interval_s = 5.0
+        self._no_data_log_interval_s = self.no_data_log_interval_s
         self._last_no_data_log_ts = 0.0
         self._suppressed_no_data_logs = 0
 
@@ -416,6 +418,8 @@ class SourcceyClient(Robot):
             return None
 
         if self.zmq_observation_socket not in socks:
+            if not self.log_no_data_timeouts:
+                return None
             now = time.monotonic()
             elapsed = now - self._last_no_data_log_ts
             if elapsed >= self._no_data_log_interval_s:
