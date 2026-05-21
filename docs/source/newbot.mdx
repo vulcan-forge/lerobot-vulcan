@@ -1,0 +1,139 @@
+# NewBot
+
+NewBot is a 7-DoF Feetech arm pair supported in LeRobot:
+
+- Follower type: `newbot` or `new_bot`
+- Leader type: `newbot_leader` or `new_bot_leader`
+
+The default joint layout is:
+
+1. `shoulder_roll`
+2. `shoulder_pitch`
+3. `elbow_roll`
+4. `elbow_pitch`
+5. `wrist_pitch`
+6. `wrist_roll`
+7. `gripper`
+
+## Install LeRobot
+
+Follow the main [Installation Guide](./installation), then install the hardware dependencies:
+
+```bash
+pip install -e ".[feetech]"
+```
+
+## Find the USB ports
+
+Connect each controller board over USB and run:
+
+```bash
+lerobot-find-port
+```
+
+Use the discovered ports in the commands below. On Windows these are typically values like `COM25` and `COM26`.
+
+## Setup motors
+
+At the moment, `lerobot-setup-motors` does not list `newbot` in its compatible device table in this repository snapshot, so the reliable path is the Python API.
+
+### Follower
+
+```python
+from lerobot.robots.new_arm import NewBot, NewBotConfig
+
+config = NewBotConfig(
+    port="COM25",
+    id="my_newbot_follower",
+)
+robot = NewBot(config)
+robot.setup_motors()
+```
+
+### Leader
+
+```python
+from lerobot.teleoperators.new_arm_leader import NewBotLeader, NewBotLeaderConfig
+
+config = NewBotLeaderConfig(
+    port="COM26",
+    id="my_newbot_leader",
+)
+leader = NewBotLeader(config)
+leader.setup_motors()
+```
+
+## Calibrate the arms
+
+This repo includes dedicated calibration commands for the NewBot arm pair.
+
+### Calibrate follower
+
+```bash
+lerobot-calibrate-new-arm-follower \
+    --port=COM25 \
+    --id=my_newbot_follower
+```
+
+### Calibrate leader
+
+```bash
+lerobot-calibrate-new-arm-leader \
+    --port=COM26 \
+    --id=my_newbot_leader
+```
+
+These commands save calibration files under your LeRobot calibration directory, for example under the Hugging Face cache.
+
+## Teleoperate
+
+Use the standard teleoperation CLI with the NewBot types:
+
+```bash
+lerobot-teleoperate \
+    --robot.type=newbot \
+    --robot.port=COM25 \
+    --robot.id=my_newbot_follower \
+    --teleop.type=newbot_leader \
+    --teleop.port=COM26 \
+    --teleop.id=my_newbot_leader \
+    --display_data=true
+```
+
+If you want to attach cameras to the follower, add them with `--robot.cameras=...` the same way as the other LeRobot hardware docs.
+
+## Python API
+
+```python
+from lerobot.robots.new_arm import NewBot, NewBotConfig
+from lerobot.teleoperators.new_arm_leader import NewBotLeader, NewBotLeaderConfig
+
+robot = NewBot(
+    NewBotConfig(
+        port="COM25",
+        id="my_newbot_follower",
+    )
+)
+leader = NewBotLeader(
+    NewBotLeaderConfig(
+        port="COM26",
+        id="my_newbot_leader",
+    )
+)
+
+robot.connect()
+leader.connect()
+```
+
+## Command summary
+
+```bash
+lerobot-find-port
+lerobot-calibrate-new-arm-follower --port=COM25 --id=my_newbot_follower
+lerobot-calibrate-new-arm-leader --port=COM26 --id=my_newbot_leader
+lerobot-teleoperate --robot.type=newbot --robot.port=COM25 --robot.id=my_newbot_follower --teleop.type=newbot_leader --teleop.port=COM26 --teleop.id=my_newbot_leader
+```
+
+## Current CLI support note
+
+In this repo snapshot, `lerobot-teleoperate` imports the NewBot modules, and the dedicated calibration CLIs are present. The generic `lerobot-record`, `lerobot-replay`, `lerobot-rollout`, and `lerobot-setup-motors` scripts do not currently import the NewBot modules yet, so they may need a small follow-up patch before `newbot` works there from the CLI.

@@ -113,6 +113,8 @@
 - sections:
   - local: so101
     title: SO-101
+  - local: newbot
+    title: NewBot
   - local: so100
     title: SO-100
   - local: koch

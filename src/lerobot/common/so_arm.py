@@ -170,13 +170,17 @@ def make_new_bot_leader_joint_configs(
         "wrist_roll": 4095,
         "gripper": 3300,
     }
-
+    default_drive_modes = {
+        "shoulder_roll": 1,
+        "elbow_roll": 1,
+        "wrist_roll": 1,
+    }
     motors: dict[str, SOJointConfig] = {}
     for index, joint_name in enumerate(joint_names):
         motors[joint_name] = SOJointConfig(
             id=start_id + index,
             model=models.get(joint_name, default_models[joint_name]),
-            drive_mode=drive_modes.get(joint_name, 0),
+            drive_mode=drive_modes.get(joint_name, default_drive_modes.get(joint_name, 0)),
             homing_position=homing_positions.get(joint_name, default_homing_positions[joint_name]),
             range_min=range_mins.get(joint_name, default_range_mins.get(joint_name, 0)),
             range_max=range_maxes.get(joint_name, default_range_maxes.get(joint_name, 4095)),
@@ -243,7 +247,6 @@ def make_new_bot_follower_joint_configs(
         "wrist_roll": 4095,
         "gripper": 3300,
     }
-
     motors: dict[str, SOJointConfig] = {}
     for index, joint_name in enumerate(joint_names):
         motors[joint_name] = SOJointConfig(

@@ -17,6 +17,7 @@
 from unittest.mock import MagicMock, patch
 
 from lerobot.robots.new_arm import NewBot, NewBotConfig
+from lerobot.common.so_arm import make_new_bot_follower_joint_configs
 
 
 def test_newbot_default_joint_layout():
@@ -39,3 +40,11 @@ def test_newbot_default_joint_layout():
         "roll_3",
         "gripper",
     ]
+
+
+def test_newbot_follower_roll_drive_modes_remain_normal():
+    motors = make_new_bot_follower_joint_configs()
+
+    assert motors["shoulder_roll"].drive_mode == 0
+    assert motors["elbow_roll"].drive_mode == 0
+    assert motors["wrist_roll"].drive_mode == 0

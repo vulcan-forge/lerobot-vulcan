@@ -31,3 +31,11 @@ def test_new_arm_leader_calibration_motor_models():
     }
     assert motors["gripper"].id == 7
     assert motors["gripper"].is_gripper
+
+
+def test_new_arm_leader_roll_drive_modes_are_inverted():
+    motors = make_new_arm_leader_joint_configs()
+
+    assert motors["shoulder_roll"].drive_mode == 1
+    assert motors["elbow_roll"].drive_mode == 1
+    assert motors["wrist_roll"].drive_mode == 1
