@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import time
 from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -372,6 +373,9 @@ class SerialMotorsBus(MotorsBusBase):
         self._sync_read_warning_throttle_interval = 10.0
         self._sync_read_warning_last_time: dict[tuple[int, int, tuple[int, ...]], float] = {}
         self._sync_read_warning_suppressed_count: dict[tuple[int, int, tuple[int, ...]], int] = {}
+        # Selected per-motor branch for Goal_Position writes (`direct` or `mirror`).
+        # This is inferred at startup from raw encoder reads and kept stable until the next power cycle.
+        self._goal_position_branch_by_id: dict[int, str] = {}
 
         self._validate_motors()
 
@@ -448,6 +452,75 @@ class SerialMotorsBus(MotorsBusBase):
             return {self.motors[motor].id: val for motor, val in values.items()}
         else:
             raise TypeError(f"'values' is expected to be a single value or a dict. Got {values}")
+
+    @staticmethod
+    def _distance_to_interval(value: float, low: float, high: float) -> float:
+        if low <= value <= high:
+            return 0.0
+        return min(abs(value - low), abs(value - high))
+
+    def _infer_branch_mode(self, id_: int, raw_value: float) -> str:
+        motor = self._id_to_name(id_)
+        calibration = self.calibration.get(motor)
+        if calibration is None:
+            return "direct"
+
+        norm_mode = self.motors[motor].norm_mode
+        if norm_mode not in (MotorNormMode.RANGE_M100_100, MotorNormMode.RANGE_0_100):
+            return "direct"
+
+        resolution = self.model_resolution_table[self._id_to_model(id_)]
+        low = calibration.range_min
+        high = calibration.range_max
+
+        direct_candidates = (raw_value, raw_value + resolution, raw_value - resolution)
+        mirror_base = (resolution - 1) - raw_value
+        mirror_candidates = (mirror_base, mirror_base + resolution, mirror_base - resolution)
+
+        direct_distance = min(self._distance_to_interval(candidate, low, high) for candidate in direct_candidates)
+        mirror_distance = min(self._distance_to_interval(candidate, low, high) for candidate in mirror_candidates)
+
+        return "mirror" if mirror_distance < direct_distance else "direct"
+
+    def set_goal_position_branch_from_raw(self, raw_positions: dict[str, Value]) -> dict[str, str]:
+        self._goal_position_branch_by_id = {}
+        for motor, raw_value in raw_positions.items():
+            if motor not in self.motors:
+                continue
+            id_ = self.motors[motor].id
+            self._goal_position_branch_by_id[id_] = self._infer_branch_mode(id_, float(raw_value))
+
+        return {
+            self._id_to_name(id_): mode
+            for id_, mode in self._goal_position_branch_by_id.items()
+            if id_ in self._id_to_name_dict
+        }
+
+    def get_goal_position_branch_map(self) -> dict[str, str]:
+        return {
+            self._id_to_name(id_): mode
+            for id_, mode in self._goal_position_branch_by_id.items()
+            if id_ in self._id_to_name_dict
+        }
+
+    def _map_goal_position_to_selected_branch(self, ids_values: dict[int, int]) -> dict[int, int]:
+        mapped = {}
+        for id_, value in ids_values.items():
+            motor = self._id_to_name(id_)
+            norm_mode = self.motors[motor].norm_mode
+            if norm_mode not in (MotorNormMode.RANGE_M100_100, MotorNormMode.RANGE_0_100):
+                mapped[id_] = value
+                continue
+
+            resolution = self.model_resolution_table[self._id_to_model(id_)]
+            branch_mode = self._goal_position_branch_by_id.get(id_, "direct")
+
+            raw_value = int(value) % resolution
+            if branch_mode == "mirror":
+                raw_value = (resolution - 1) - raw_value
+            mapped[id_] = raw_value
+
+        return mapped
 
     def _validate_motors(self) -> None:
         if len(self.ids) != len(set(self.ids)):
@@ -932,16 +1005,20 @@ class SerialMotorsBus(MotorsBusBase):
                 raise ValueError(f"Invalid calibration for motor '{motor}': min and max are equal.")
 
             bounded_val = min(max_, max(min_, val))
-            # For rotary encoders that report in [0, resolution-1], a value can legitimately
-            # appear on either side of the 0/4095 seam after power-cycle. Pick the wrapped
-            # equivalent that is closest to the calibrated interval before clamping.
+            # For rotary encoders, startup can come back in either direct or mirrored branch
+            # depending on motor state at boot. Keep a per-motor branch choice and normalize
+            # readings against that branch so observations stay consistent across power cycles.
             if self.motors[motor].norm_mode in (MotorNormMode.RANGE_M100_100, MotorNormMode.RANGE_0_100):
                 try:
                     resolution = self.model_resolution_table[self._id_to_model(id_)]
                 except Exception:
                     resolution = None
                 if resolution is not None:
-                    candidates = (val, val + resolution, val - resolution)
+                    branch_mode = self._goal_position_branch_by_id.get(id_, "direct")
+                    canonical = float(val)
+                    if branch_mode == "mirror":
+                        canonical = (resolution - 1) - canonical
+                    candidates = (canonical, canonical + resolution, canonical - resolution)
                     bounded_val = min(
                         max_,
                         max(
@@ -1175,6 +1252,8 @@ class SerialMotorsBus(MotorsBusBase):
         int_value = int(value)
         if normalize and data_name in self.normalized_data:
             int_value = self._unnormalize({id_: value})[id_]
+            if data_name == "Goal_Position":
+                int_value = self._map_goal_position_to_selected_branch({id_: int_value})[id_]
 
         int_value = self._encode_sign(data_name, {id_: int_value})[id_]
 
@@ -1422,6 +1501,8 @@ class SerialMotorsBus(MotorsBusBase):
         int_ids_values = {id_: int(val) for id_, val in raw_ids_values.items()}
         if normalize and data_name in self.normalized_data:
             int_ids_values = self._unnormalize(raw_ids_values)
+            if data_name == "Goal_Position":
+                int_ids_values = self._map_goal_position_to_selected_branch(int_ids_values)
 
         int_ids_values = self._encode_sign(data_name, int_ids_values)
 

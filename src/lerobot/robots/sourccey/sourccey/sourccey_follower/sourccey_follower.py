@@ -41,7 +41,6 @@ logger = logging.getLogger(__name__)
 class SourcceyFollower(Robot):
     config_class = SourcceyFollowerConfig
     name = "sourccey_follower"
-    _STARTUP_POSITION_MARGIN_TICKS = 32
     _STARTUP_TORQUE_ENABLE_RETRIES = 10
     _STARTUP_TORQUE_VERIFY_RETRIES = 3
     _STS_PHASE_ANGLE_FEEDBACK_BIT = 0x10
@@ -129,11 +128,18 @@ class SourcceyFollower(Robot):
 
         self._startup_safety_armed = False
         self.bus.connect()
-        if not self.is_calibrated and calibrate:
-            logger.info(
-                "Mismatch between calibration values in the motor and the calibration file or no calibration file found"
-            )
-            self.calibrate()
+        if not self.is_calibrated:
+            if self.calibration:
+                logger.warning(
+                    "Calibration mismatch detected at connect. Reapplying calibration file values to the motors."
+                )
+                self.bus.disable_torque()
+                self.bus.write_calibration(self.calibration)
+            elif calibrate:
+                logger.info(
+                    "Mismatch between calibration values in the motor and the calibration file or no calibration file found"
+                )
+                self.calibrate()
 
         for cam in self.cameras.values():
             cam.connect()
@@ -178,7 +184,7 @@ class SourcceyFollower(Robot):
         self._startup_safety_armed = False
         self.bus.disable_torque()
         try:
-            # Normalize startup motor registers (including STS3215 phase bit) on every power-on.
+            # Normalize startup motor registers on every power-on.
             self.bus.configure_motors()
             for motor in self.bus.motors:
                 self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
@@ -210,20 +216,17 @@ class SourcceyFollower(Robot):
                     self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
 
             startup_raw_positions = self.bus.sync_read("Present_Position", normalize=False)
+            startup_branch_map = self.bus.set_goal_position_branch_from_raw(startup_raw_positions)
             startup_phase_faults = self._get_startup_phase_faults()
             startup_position_faults = self._get_startup_position_faults(startup_raw_positions)
-            repaired_motors = self._attempt_startup_offset_repair(startup_raw_positions, startup_position_faults)
-            if repaired_motors:
-                startup_raw_positions = self.bus.sync_read("Present_Position", normalize=False)
-                startup_phase_faults = self._get_startup_phase_faults()
-                startup_position_faults = self._get_startup_position_faults(startup_raw_positions)
             self._write_startup_diagnostic(
                 status="precheck",
                 startup_raw_positions=startup_raw_positions,
+                startup_branch_map=startup_branch_map,
                 startup_phase_faults=startup_phase_faults,
                 startup_position_faults=startup_position_faults,
             )
-            if startup_phase_faults or startup_position_faults:
+            if startup_phase_faults:
                 raise RuntimeError(
                     self._build_startup_safety_error(
                         startup_phase_faults=startup_phase_faults,
@@ -241,6 +244,7 @@ class SourcceyFollower(Robot):
             self._write_startup_diagnostic(
                 status="armed",
                 startup_raw_positions=startup_raw_positions,
+                startup_branch_map=startup_branch_map,
                 startup_phase_faults=startup_phase_faults,
                 startup_position_faults=startup_position_faults,
             )
@@ -261,6 +265,7 @@ class SourcceyFollower(Robot):
             self._write_startup_diagnostic(
                 status="failed",
                 startup_raw_positions=raw_positions,
+                startup_branch_map=self.bus.get_goal_position_branch_map(),
                 startup_phase_faults=phase_faults,
                 startup_position_faults=position_faults,
             )
@@ -283,80 +288,28 @@ class SourcceyFollower(Robot):
 
     def _get_startup_position_faults(self, raw_positions: dict[str, int | float]) -> dict[str, tuple[float, int, int]]:
         position_faults: dict[str, tuple[float, int, int]] = {}
-        margin = self._STARTUP_POSITION_MARGIN_TICKS
         for motor, raw_value in raw_positions.items():
             calibration = self.bus.calibration.get(motor)
             if calibration is None:
                 continue
 
-            low = calibration.range_min - margin
-            high = calibration.range_max + margin
+            low = calibration.range_min
+            high = calibration.range_max
             raw = float(raw_value)
             resolution = self.bus.model_resolution_table[self.bus.motors[motor].model]
-            candidates = (raw, raw + resolution, raw - resolution)
+            mirror = (resolution - 1) - raw
+            candidates = (
+                raw,
+                raw + resolution,
+                raw - resolution,
+                mirror,
+                mirror + resolution,
+                mirror - resolution,
+            )
             if not any(low <= candidate <= high for candidate in candidates):
                 position_faults[motor] = (raw, calibration.range_min, calibration.range_max)
 
         return position_faults
-
-    def _attempt_startup_offset_repair(
-        self,
-        raw_positions: dict[str, int | float],
-        position_faults: dict[str, tuple[float, int, int]],
-    ) -> list[str]:
-        repaired: list[str] = []
-        margin = self._STARTUP_POSITION_MARGIN_TICKS
-        for motor, (raw, range_min, range_max) in position_faults.items():
-            calibration = self.calibration.get(motor)
-            if calibration is None:
-                continue
-            resolution = self.bus.model_resolution_table[self.bus.motors[motor].model]
-            low = range_min - margin
-            high = range_max + margin
-
-            candidates = [raw + resolution, raw - resolution]
-            in_window_candidates = [candidate for candidate in candidates if low <= candidate <= high]
-            if in_window_candidates:
-                # Pick the candidate closest to the current raw value (usually exactly one turn away).
-                target = min(in_window_candidates, key=lambda candidate: abs(candidate - raw))
-                # Quantize repair to whole-turn correction to avoid partial-turn drift.
-                turns = int(round((raw - target) / resolution))
-                delta = turns * resolution
-            elif raw < low:
-                # Seam/wrap case below the calibrated window: pull it to the high edge.
-                delta = -resolution
-            elif raw > high:
-                # Seam/wrap case above the calibrated window: pull it to the low edge.
-                delta = resolution
-            else:
-                continue
-
-            if delta == 0:
-                continue
-
-            calibration.homing_offset = self._normalize_homing_offset(calibration.homing_offset + delta)
-            repaired.append(motor)
-            logger.warning(
-                f"{self} startup auto-repair on {motor}: raw={raw:.0f}, "
-                f"homing_offset_delta={delta}, "
-                f"new_homing_offset={calibration.homing_offset}"
-            )
-
-        if repaired:
-            # Persist both in motor EEPROM and calibration file so subsequent boots are consistent.
-            self.bus.write_calibration(self.calibration)
-            self._save_calibration()
-
-        return repaired
-
-    @staticmethod
-    def _normalize_homing_offset(offset: int) -> int:
-        # Feetech homing offset is sign-magnitude with sign bit index 11: valid magnitude is 0..2047.
-        # Since one full turn is 4096 ticks, wrap into the representable interval while preserving behavior.
-        wrapped = ((offset + 2048) % 4096) - 2048
-        if wrapped == -2048:
-            return -2047
-        return wrapped
 
     def _read_torque_enable_snapshot(self) -> dict[str, int | None]:
         snapshot: dict[str, int | None] = {}
@@ -418,10 +371,7 @@ class SourcceyFollower(Robot):
                 details.append(f"  - {motor}: Phase=0x{phase:02x}")
 
         if startup_position_faults:
-            details.append(
-                "Raw joint positions outside calibrated limits "
-                f"(±{self._STARTUP_POSITION_MARGIN_TICKS} ticks margin):"
-            )
+            details.append("Raw joint positions outside calibrated limits:")
             for motor, (raw, range_min, range_max) in startup_position_faults.items():
                 details.append(f"  - {motor}: raw={raw:.0f}, range=[{range_min}, {range_max}]")
 
@@ -438,6 +388,7 @@ class SourcceyFollower(Robot):
         *,
         status: str,
         startup_raw_positions: dict[str, int | float],
+        startup_branch_map: dict[str, str],
         startup_phase_faults: dict[str, int],
         startup_position_faults: dict[str, tuple[float, int, int]],
     ) -> None:
@@ -468,7 +419,7 @@ class SourcceyFollower(Robot):
             "port": self.config.port,
             "is_calibrated": self.is_calibrated,
             "startup_safety_armed": self._startup_safety_armed,
-            "startup_position_margin_ticks": self._STARTUP_POSITION_MARGIN_TICKS,
+            "goal_position_branch_map": startup_branch_map,
             "raw_present_position": raw_by_motor,
             "phase_register": phase_by_motor,
             "phase_faults": startup_phase_faults,
