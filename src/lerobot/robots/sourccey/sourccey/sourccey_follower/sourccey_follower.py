@@ -216,17 +216,15 @@ class SourcceyFollower(Robot):
                     self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
 
             startup_raw_positions = self.bus.sync_read("Present_Position", normalize=False)
-            startup_branch_map = self.bus.set_goal_position_branch_from_raw(startup_raw_positions)
             startup_phase_faults = self._get_startup_phase_faults()
             startup_position_faults = self._get_startup_position_faults(startup_raw_positions)
             self._write_startup_diagnostic(
                 status="precheck",
                 startup_raw_positions=startup_raw_positions,
-                startup_branch_map=startup_branch_map,
                 startup_phase_faults=startup_phase_faults,
                 startup_position_faults=startup_position_faults,
             )
-            if startup_phase_faults:
+            if startup_phase_faults or startup_position_faults:
                 raise RuntimeError(
                     self._build_startup_safety_error(
                         startup_phase_faults=startup_phase_faults,
@@ -244,7 +242,6 @@ class SourcceyFollower(Robot):
             self._write_startup_diagnostic(
                 status="armed",
                 startup_raw_positions=startup_raw_positions,
-                startup_branch_map=startup_branch_map,
                 startup_phase_faults=startup_phase_faults,
                 startup_position_faults=startup_position_faults,
             )
@@ -265,7 +262,6 @@ class SourcceyFollower(Robot):
             self._write_startup_diagnostic(
                 status="failed",
                 startup_raw_positions=raw_positions,
-                startup_branch_map=self.bus.get_goal_position_branch_map(),
                 startup_phase_faults=phase_faults,
                 startup_position_faults=position_faults,
             )
@@ -297,15 +293,7 @@ class SourcceyFollower(Robot):
             high = calibration.range_max
             raw = float(raw_value)
             resolution = self.bus.model_resolution_table[self.bus.motors[motor].model]
-            mirror = (resolution - 1) - raw
-            candidates = (
-                raw,
-                raw + resolution,
-                raw - resolution,
-                mirror,
-                mirror + resolution,
-                mirror - resolution,
-            )
+            candidates = (raw, raw + resolution, raw - resolution)
             if not any(low <= candidate <= high for candidate in candidates):
                 position_faults[motor] = (raw, calibration.range_min, calibration.range_max)
 
@@ -388,7 +376,6 @@ class SourcceyFollower(Robot):
         *,
         status: str,
         startup_raw_positions: dict[str, int | float],
-        startup_branch_map: dict[str, str],
         startup_phase_faults: dict[str, int],
         startup_position_faults: dict[str, tuple[float, int, int]],
     ) -> None:
@@ -419,7 +406,6 @@ class SourcceyFollower(Robot):
             "port": self.config.port,
             "is_calibrated": self.is_calibrated,
             "startup_safety_armed": self._startup_safety_armed,
-            "goal_position_branch_map": startup_branch_map,
             "raw_present_position": raw_by_motor,
             "phase_register": phase_by_motor,
             "phase_faults": startup_phase_faults,
