@@ -225,12 +225,12 @@ class SourcceyFollower(Robot):
                 startup_position_faults=startup_position_faults,
             )
             if startup_phase_faults or startup_position_faults:
-                raise RuntimeError(
-                    self._build_startup_safety_error(
-                        startup_phase_faults=startup_phase_faults,
-                        startup_position_faults=startup_position_faults,
-                    )
+                startup_error = self._build_startup_safety_error(
+                    startup_phase_faults=startup_phase_faults,
+                    startup_position_faults=startup_position_faults,
                 )
+                logger.error(startup_error)
+                raise RuntimeError(startup_error)
 
             # Prime goal to current raw position before re-enabling torque to avoid startup jumps.
             # Keep startup physically static: prime to the literal raw position currently reported by the servo.
@@ -350,7 +350,10 @@ class SourcceyFollower(Robot):
     ) -> str:
         details = [
             f"{self} startup safety check failed. Refusing to enable torque.",
-            "Power-cycle the robot and retry. If this keeps happening, verify wiring and calibration files.",
+            (
+                f"Action required: Recalibrate the {self.config.orientation} arm before the next run. "
+                "Do not continue inference until recalibration is complete."
+            ),
         ]
 
         if startup_phase_faults:
