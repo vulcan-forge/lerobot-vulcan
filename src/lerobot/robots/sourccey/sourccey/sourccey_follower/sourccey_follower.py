@@ -212,10 +212,6 @@ class SourcceyFollower(Robot):
                     self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
 
             startup_raw_positions = self.bus.sync_read("Present_Position", normalize=False)
-            startup_reconciled_raw_positions = {
-                motor: self._reconcile_raw_present_position(motor, raw_value)
-                for motor, raw_value in startup_raw_positions.items()
-            }
             startup_phase_faults = self._get_startup_phase_faults()
             startup_position_faults = self._get_startup_position_faults(startup_raw_positions)
             hard_position_faults = self._filter_hard_startup_position_faults(startup_position_faults)
@@ -234,7 +230,9 @@ class SourcceyFollower(Robot):
                 )
 
             # Prime goal to current raw position before re-enabling torque to avoid startup jumps.
-            self.bus.sync_write("Goal_Position", startup_reconciled_raw_positions, normalize=False)
+            # Keep startup physically static: prime to the literal raw position currently reported by the servo.
+            # Reconciled values are only for software-side interpretation of wrap/branch ambiguity.
+            self.bus.sync_write("Goal_Position", startup_raw_positions, normalize=False)
 
             self._enable_torque_with_verification()
             self._startup_safety_armed = True
