@@ -217,9 +217,10 @@ class FeetechMotorsBus(SerialMotorsBus):
             self.write("Acceleration", motor, acceleration)
 
             # Clear bit 4 (0x10) of the Phase register (0x12) to set angle feedback mode to 0.
-            # This forces position readings to be in the range [0, resolution - 1] and prevents overflow or negative values.
-            # Only known to be necessary for the STS3215.
-            if self.motors[motor].model == "sts3215":
+            # This forces position readings to be in the range [0, resolution - 1] and avoids startup branch ambiguity.
+            # Apply to all STS/SMS models (e.g. STS3215, STS3250).
+            model = self.motors[motor].model
+            if model.startswith("sts") or model.startswith("sms"):
                 phase = self.read("Phase", motor, normalize=False)
                 if phase & 0x10:
                     self.write("Phase", motor, phase & ~0x10)
