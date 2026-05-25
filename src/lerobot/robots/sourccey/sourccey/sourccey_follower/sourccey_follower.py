@@ -317,24 +317,26 @@ class SourcceyFollower(Robot):
             if in_window_candidates:
                 # Pick the candidate closest to the current raw value (usually exactly one turn away).
                 target = min(in_window_candidates, key=lambda candidate: abs(candidate - raw))
+                # Quantize repair to whole-turn correction to avoid partial-turn drift.
+                turns = int(round((raw - target) / resolution))
+                delta = turns * resolution
             elif raw < low:
                 # Seam/wrap case below the calibrated window: pull it to the high edge.
-                target = float(high)
+                delta = -resolution
             elif raw > high:
                 # Seam/wrap case above the calibrated window: pull it to the low edge.
-                target = float(low)
+                delta = resolution
             else:
                 continue
 
-            delta = int(round(raw - target))
             if delta == 0:
                 continue
 
-            calibration.homing_offset += delta
+            calibration.homing_offset = self._normalize_homing_offset(calibration.homing_offset + delta)
             repaired.append(motor)
             logger.warning(
                 f"{self} startup auto-repair on {motor}: raw={raw:.0f}, "
-                f"target={target:.0f}, homing_offset_delta={delta}, "
+                f"homing_offset_delta={delta}, "
                 f"new_homing_offset={calibration.homing_offset}"
             )
 
@@ -344,6 +346,15 @@ class SourcceyFollower(Robot):
             self._save_calibration()
 
         return repaired
+
+    @staticmethod
+    def _normalize_homing_offset(offset: int) -> int:
+        # Feetech homing offset is sign-magnitude with sign bit index 11: valid magnitude is 0..2047.
+        # Since one full turn is 4096 ticks, wrap into the representable interval while preserving behavior.
+        wrapped = ((offset + 2048) % 4096) - 2048
+        if wrapped == -2048:
+            return -2047
+        return wrapped
 
     def _read_torque_enable_snapshot(self) -> dict[str, int | None]:
         snapshot: dict[str, int | None] = {}
