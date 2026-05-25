@@ -292,7 +292,9 @@ class SourcceyFollower(Robot):
             low = calibration.range_min - margin
             high = calibration.range_max + margin
             raw = float(raw_value)
-            if raw < low or raw > high:
+            resolution = self.bus.model_resolution_table[self.bus.motors[motor].model]
+            candidates = (raw, raw + resolution, raw - resolution)
+            if not any(low <= candidate <= high for candidate in candidates):
                 position_faults[motor] = (raw, calibration.range_min, calibration.range_max)
 
         return position_faults

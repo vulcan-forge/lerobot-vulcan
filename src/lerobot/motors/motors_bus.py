@@ -932,6 +932,23 @@ class SerialMotorsBus(MotorsBusBase):
                 raise ValueError(f"Invalid calibration for motor '{motor}': min and max are equal.")
 
             bounded_val = min(max_, max(min_, val))
+            # For rotary encoders that report in [0, resolution-1], a value can legitimately
+            # appear on either side of the 0/4095 seam after power-cycle. Pick the wrapped
+            # equivalent that is closest to the calibrated interval before clamping.
+            if self.motors[motor].norm_mode in (MotorNormMode.RANGE_M100_100, MotorNormMode.RANGE_0_100):
+                try:
+                    resolution = self.model_resolution_table[self._id_to_model(id_)]
+                except Exception:
+                    resolution = None
+                if resolution is not None:
+                    candidates = (val, val + resolution, val - resolution)
+                    bounded_val = min(
+                        max_,
+                        max(
+                            min_,
+                            min(candidates, key=lambda c: 0.0 if min_ <= c <= max_ else min(abs(c - min_), abs(c - max_))),
+                        ),
+                    )
             if self.motors[motor].norm_mode is MotorNormMode.RANGE_M100_100:
                 norm = (((bounded_val - min_) / (max_ - min_)) * 200) - 100
                 normalized_values[id_] = -norm if drive_mode else norm
