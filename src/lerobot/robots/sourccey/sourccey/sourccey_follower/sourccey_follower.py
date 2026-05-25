@@ -212,6 +212,11 @@ class SourcceyFollower(Robot):
             startup_raw_positions = self.bus.sync_read("Present_Position", normalize=False)
             startup_phase_faults = self._get_startup_phase_faults()
             startup_position_faults = self._get_startup_position_faults(startup_raw_positions)
+            repaired_motors = self._attempt_startup_offset_repair(startup_raw_positions, startup_position_faults)
+            if repaired_motors:
+                startup_raw_positions = self.bus.sync_read("Present_Position", normalize=False)
+                startup_phase_faults = self._get_startup_phase_faults()
+                startup_position_faults = self._get_startup_position_faults(startup_raw_positions)
             self._write_startup_diagnostic(
                 status="precheck",
                 startup_raw_positions=startup_raw_positions,
@@ -291,6 +296,54 @@ class SourcceyFollower(Robot):
                 position_faults[motor] = (raw, calibration.range_min, calibration.range_max)
 
         return position_faults
+
+    def _attempt_startup_offset_repair(
+        self,
+        raw_positions: dict[str, int | float],
+        position_faults: dict[str, tuple[float, int, int]],
+    ) -> list[str]:
+        repaired: list[str] = []
+        margin = self._STARTUP_POSITION_MARGIN_TICKS
+        for motor, (raw, range_min, range_max) in position_faults.items():
+            calibration = self.calibration.get(motor)
+            if calibration is None:
+                continue
+            resolution = self.bus.model_resolution_table[self.bus.motors[motor].model]
+            low = range_min - margin
+            high = range_max + margin
+
+            candidates = [raw + resolution, raw - resolution]
+            in_window_candidates = [candidate for candidate in candidates if low <= candidate <= high]
+            if in_window_candidates:
+                # Pick the candidate closest to the current raw value (usually exactly one turn away).
+                target = min(in_window_candidates, key=lambda candidate: abs(candidate - raw))
+            elif raw < low:
+                # Seam/wrap case below the calibrated window: pull it to the high edge.
+                target = float(high)
+            elif raw > high:
+                # Seam/wrap case above the calibrated window: pull it to the low edge.
+                target = float(low)
+            else:
+                continue
+
+            delta = int(round(raw - target))
+            if delta == 0:
+                continue
+
+            calibration.homing_offset += delta
+            repaired.append(motor)
+            logger.warning(
+                f"{self} startup auto-repair on {motor}: raw={raw:.0f}, "
+                f"target={target:.0f}, homing_offset_delta={delta}, "
+                f"new_homing_offset={calibration.homing_offset}"
+            )
+
+        if repaired:
+            # Persist both in motor EEPROM and calibration file so subsequent boots are consistent.
+            self.bus.write_calibration(self.calibration)
+            self._save_calibration()
+
+        return repaired
 
     def _read_torque_enable_snapshot(self) -> dict[str, int | None]:
         snapshot: dict[str, int | None] = {}
