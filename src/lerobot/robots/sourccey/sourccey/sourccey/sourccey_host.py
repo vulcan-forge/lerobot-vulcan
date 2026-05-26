@@ -122,6 +122,12 @@ class _IMUReporter:
 
 
 def main():
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(levelname)s %(asctime)s %(filename)s:%(lineno)d %(message)s",
+        force=True,
+    )
+
     def _handle_termination_signal(signum, _frame):
         logging.info(f"Received signal {signum}. Shutting down Sourccey Host.")
         raise KeyboardInterrupt
@@ -235,8 +241,8 @@ def _silence_camera_warnings_for_host() -> None:
     """
     # Silence our OpenCV camera wrapper warnings
     logging.getLogger("lerobot.cameras.opencv.camera_opencv").setLevel(logging.ERROR)
-    # Silence Sourccey camera fallback warnings (black frame fallback)
-    logging.getLogger("lerobot.robots.sourccey.sourccey.sourccey.sourccey").setLevel(logging.ERROR)
+    # Keep Sourccey module logs visible for host-side observation debugging.
+    logging.getLogger("lerobot.robots.sourccey.sourccey.sourccey.sourccey").setLevel(logging.DEBUG)
 
     # Best-effort: silence OpenCV's own internal logging if available
     try:
