@@ -356,11 +356,11 @@ Evaluate a trained model on the robot without saving the run's recording:
 ```
 uv run lerobot-rollout \
  --strategy.type=base \
- --policy.path="outputs/train/xvla__sourccey-012__shorts-fold__cmb__005__mylesr/checkpoints/100000/pretrained_model" \
+ --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-008/checkpoints/1000000/pretrained_model" \
  --robot.type=sourccey_client \
  --robot.id="sourccey" \
- --robot.remote_ip="192.168.1.211" \
- --task="Fold the shorts" \
+ --robot.remote_ip="192.168.1.214" \
+ --task="Fold the shirt" \
  --duration=60 \
  --fps=30 \
  --device=cuda

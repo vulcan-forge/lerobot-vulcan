@@ -12,17 +12,17 @@ Assumptions:
 ## 1) Quick Start (Base, no recording)
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 uv run lerobot-rollout \
+uv run lerobot-rollout \
   --strategy.type=base \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-008/checkpoints/0300000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-008/checkpoints/1000000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
-  --logging.throttle_spam=true \
+  --logging.throttle_spam=false \
   --logging.throttle_interval_s=30.0 \
-  --task="Grab a shirt from the pile" \
+  --task="Fold the shirt" \
   --display_data=true \
-  --duration=1800 \
-  --fps=30
+  --duration=3600 \
+  --fps=10
 ```
 
 To disable throttling and show every message:
@@ -141,21 +141,13 @@ Corrections-only mode:
 uv run lerobot-rollout \
   --strategy.type=dagger \
   --strategy.num_episodes=1 \
-<<<<<<< HEAD
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-003/checkpoints/0500000/pretrained_model" \
-=======
   --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
->>>>>>> vulcan-main
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --teleop.type=bi_sourccey_leader \
   --teleop.left_arm_port=/dev/ttyACM0 \
   --teleop.right_arm_port=/dev/ttyACM1 \
-<<<<<<< HEAD
-  --dataset.repo_id="sourccey-013/rollout__sourccey-013__shirt-fold-blue-c/nickm/dagger-100-nickm" \
-=======
   --dataset.repo_id="sourccey-013/rollout__sourccey-013__shirt-fold-light-blue-c/nickm/dagger-000-nickm" \
->>>>>>> vulcan-main
   --dataset.single_task="Fold the shirt" \
   --fps=30 \
   --display_data=true \
@@ -179,12 +171,8 @@ uv run lerobot-rollout \
   --dataset.single_task="Fold the shirt" \
   --dataset.streaming_encoding=true \
   --display_data=true \
-<<<<<<< HEAD
-  --fps=30
-=======
   --fps=30 \
   --dataset.push_to_hub=false
->>>>>>> vulcan-main
 ```
 
 ---
