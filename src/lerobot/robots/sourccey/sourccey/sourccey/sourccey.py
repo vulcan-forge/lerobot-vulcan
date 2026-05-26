@@ -248,21 +248,37 @@ class Sourccey(Robot):
     # Data Management
     ###################################################################
 
-    def get_observation(self, *, parallel_camera_reads: bool = False) -> dict[str, Any]:
+    def get_observation(
+        self,
+        *,
+        parallel_camera_reads: bool = False,
+        timing: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
         try:
+            obs_start = time.perf_counter()
             obs_dict = {}
 
+            left_start = time.perf_counter()
             left_obs = self.left_arm.get_observation()
+            if timing is not None:
+                timing["left_arm_s"] = time.perf_counter() - left_start
             obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
 
+            right_start = time.perf_counter()
             right_obs = self.right_arm.get_observation()
+            if timing is not None:
+                timing["right_arm_s"] = time.perf_counter() - right_start
             obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
 
+            base_start = time.perf_counter()
             base_wheel_vel = self.dc_motors_controller.get_velocities()
             base_vel = self._wheel_normalized_to_body(base_wheel_vel)
+            if timing is not None:
+                timing["base_s"] = time.perf_counter() - base_start
             obs_dict.update(base_vel)
 
             # Z actuator position (best-effort; keep schema stable)
+            z_start = time.perf_counter()
             try:
                 if self.z_actuator is not None and self.z_actuator.is_connected and self.z_actuator.use_z_actuator:
                     obs_dict["z.pos"] = float(self.z_actuator.read_position())
@@ -270,13 +286,18 @@ class Sourccey(Robot):
                     obs_dict["z.pos"] = 100.0
             except Exception:
                 obs_dict["z.pos"] = 100.0
+            if timing is not None:
+                timing["z_s"] = time.perf_counter() - z_start
 
             if parallel_camera_reads and len(self.cameras) > 1:
+                cameras_start = time.perf_counter()
                 camera_results: dict[str, np.ndarray] = {}
                 camera_errors: dict[str, Exception] = {}
+                camera_elapsed_s: dict[str, float] = {}
                 results_lock = threading.Lock()
 
                 def _read_camera(cam_name: str) -> None:
+                    cam_start = time.perf_counter()
                     try:
                         frame = self.cameras[cam_name].async_read()
                     except Exception as exc:  # noqa: BLE001
@@ -287,6 +308,7 @@ class Sourccey(Robot):
                             camera_errors[cam_name] = exc
                     with results_lock:
                         camera_results[cam_name] = frame
+                        camera_elapsed_s[cam_name] = time.perf_counter() - cam_start
 
                 threads: list[threading.Thread] = []
                 for cam_key in self.cameras.keys():
@@ -300,8 +322,14 @@ class Sourccey(Robot):
                     if cam_key in camera_errors:
                         logger.warning(f"Camera '{cam_key}' read failed: {camera_errors[cam_key]}. Using black frame.")
                     obs_dict[cam_key] = camera_results[cam_key]
+                if timing is not None:
+                    timing["cameras_s"] = time.perf_counter() - cameras_start
+                    for cam_key, elapsed_s in camera_elapsed_s.items():
+                        timing[f"camera_{cam_key}_s"] = elapsed_s
             else:
+                cameras_start = time.perf_counter()
                 for cam_key in self.cameras.keys():
+                    cam_start = time.perf_counter()
                     try:
                         obs_dict[cam_key] = self.cameras[cam_key].async_read()
                     except Exception as e:
@@ -310,6 +338,13 @@ class Sourccey(Robot):
                         w = int(self.config.cameras[cam_key].width)
                         obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)
                         logger.warning(f"Camera '{cam_key}' read failed: {e}. Using black frame.")
+                    if timing is not None:
+                        timing[f"camera_{cam_key}_s"] = time.perf_counter() - cam_start
+                if timing is not None:
+                    timing["cameras_s"] = time.perf_counter() - cameras_start
+
+            if timing is not None:
+                timing["observation_total_s"] = time.perf_counter() - obs_start
 
             return obs_dict
         except Exception as e:
