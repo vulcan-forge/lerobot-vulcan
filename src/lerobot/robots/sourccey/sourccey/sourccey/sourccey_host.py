@@ -204,7 +204,7 @@ def main():
     fps_window_encode_s = 0.0
     fps_window_sleep_s = 0.0
     fps_window_cmd_count = 0
-    last_observation_capture_t = 0.0
+    next_observation_capture_deadline_t = time.monotonic()
     latest_observation_wire_bytes: bytes | None = None
 
     try:
@@ -260,13 +260,17 @@ def main():
             if host.enable_host_fps_fix:
                 min_capture_dt_s = 1.0 / HOST_FIX_OBSERVATION_FPS
                 now_mono = time.monotonic()
-                should_capture = (now_mono - last_observation_capture_t) >= min_capture_dt_s
+                should_capture = now_mono >= next_observation_capture_deadline_t
                 if should_capture:
                     if observation is not None and observation != {}:
                         previous_observation = observation
                     observation = robot.get_observation(parallel_camera_reads=True, timing=observation_timing)
                     fps_window_fresh_captures += 1
-                    last_observation_capture_t = time.monotonic()
+                    # Keep a stable capture cadence; avoid phase-locking into every-other-loop capture.
+                    next_observation_capture_deadline_t += min_capture_dt_s
+                    # If we fell far behind, re-anchor to "now + period" instead of chasing old deadlines.
+                    if next_observation_capture_deadline_t < now_mono - min_capture_dt_s:
+                        next_observation_capture_deadline_t = now_mono + min_capture_dt_s
                     latest_observation_wire_bytes = None
             else:
                 if observation is not None and observation != {}:
