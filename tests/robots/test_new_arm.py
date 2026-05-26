@@ -19,18 +19,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lerobot.common.so_arm import make_new_bot_follower_joint_configs
 from lerobot.robots.new_arm import NewArm, NewArmConfig
-from lerobot.scripts.lerobot_calibrate_new_arm_follower import make_new_arm_follower_joint_configs
 from lerobot.teleoperators.new_arm_leader import NewArmLeader, NewArmLeaderConfig
 
 
 EXPECTED_MOTORS = [
-    "shoulder_twist",
-    "shoulder_lift",
-    "elbow_twist",
-    "elbow_lift",
-    "wrist_twist",
-    "wrist_lift",
+    "shoulder_roll",
+    "shoulder_pitch",
+    "elbow_roll",
+    "elbow_pitch",
+    "wrist_pitch",
+    "wrist_roll",
     "gripper",
 ]
 
@@ -61,6 +61,7 @@ def _bus_side_effect(bus_mock):
         bus_mock.motors = kwargs["motors"]
         motors_order: list[str] = list(bus_mock.motors)
         bus_mock.sync_read.return_value = {motor: idx for idx, motor in enumerate(motors_order, 1)}
+        bus_mock._normalize.side_effect = lambda ids_values: dict(ids_values)
         bus_mock.sync_write.return_value = None
         bus_mock.write.return_value = None
         bus_mock.disable_torque.return_value = None
@@ -93,8 +94,15 @@ def test_new_arm_get_observation(new_arm):
     obs = new_arm.get_observation()
 
     assert set(obs) == {f"{motor}.pos" for motor in EXPECTED_MOTORS}
-    for idx, motor in enumerate(EXPECTED_MOTORS, 1):
-        assert obs[f"{motor}.pos"] == idx
+    assert obs == {
+        "shoulder_roll.pos": -0.5,
+        "shoulder_pitch.pos": -1.0,
+        "elbow_roll.pos": -1.5,
+        "elbow_pitch.pos": 2.0,
+        "wrist_pitch.pos": 5,
+        "wrist_roll.pos": -6,
+        "gripper.pos": 7,
+    }
 
 
 def test_new_arm_send_action(new_arm):
@@ -104,7 +112,15 @@ def test_new_arm_send_action(new_arm):
     returned = new_arm.send_action(action)
 
     assert returned == action
-    goal_pos = {motor: (i + 1) * 10 for i, motor in enumerate(EXPECTED_MOTORS)}
+    goal_pos = {
+        "shoulder_roll": -20,
+        "shoulder_pitch": -40,
+        "elbow_roll": -60,
+        "elbow_pitch": 80,
+        "wrist_pitch": 50,
+        "wrist_roll": -60,
+        "gripper": 70,
+    }
     new_arm.bus.sync_write.assert_called_once_with("Goal_Position", goal_pos)
 
 
@@ -126,15 +142,15 @@ def test_new_arm_leader_reads_matching_action_keys():
 
 
 def test_new_arm_follower_calibration_motor_models():
-    motors = make_new_arm_follower_joint_configs()
+    motors = make_new_bot_follower_joint_configs()
 
     assert {name: cfg.model for name, cfg in motors.items()} == {
-        "roll_1": "sts3032",
-        "pitch_1": "sts3032",
-        "roll_2": "sts3250",
-        "pitch_2": "sts3250",
-        "roll_3": "sts3215",
-        "pitch_3": "sts3215",
+        "shoulder_roll": "sts3032",
+        "shoulder_pitch": "sts3032",
+        "elbow_roll": "sts3250",
+        "elbow_pitch": "sts3250",
+        "wrist_pitch": "sts3215",
+        "wrist_roll": "sts3215",
         "gripper": "sts3215",
     }
     assert motors["gripper"].id == 7

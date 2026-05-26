@@ -31,6 +31,14 @@ from .config_new_arm import NewBotRobotConfig
 
 logger = logging.getLogger(__name__)
 
+NEW_BOT_FOLLOWER_GEAR_RATIOS = {
+    "shoulder_roll": -2.0,
+    "shoulder_pitch": -2.0,
+    "elbow_roll": -2.0,
+    "elbow_pitch": 2.0,
+    "wrist_roll": -1.0,
+}
+
 
 class NewBot(Robot):
     """Seven-DOF Feetech robot using the NewBot joint layout."""
@@ -51,6 +59,18 @@ class NewBot(Robot):
         self._wrap_guard_state: dict[str, str | None] = {motor: None for motor in self._wrap_guard_motors}
         self._last_effective_raw: dict[str, int] = {}
         self._last_load_print_time = 0.0
+
+    def _motor_to_joint_positions(self, motor_positions: dict[str, float]) -> dict[str, float]:
+        return {
+            motor: value / NEW_BOT_FOLLOWER_GEAR_RATIOS.get(motor, 1.0)
+            for motor, value in motor_positions.items()
+        }
+
+    def _joint_to_motor_positions(self, joint_positions: dict[str, float]) -> dict[str, float]:
+        return {
+            motor: value * NEW_BOT_FOLLOWER_GEAR_RATIOS.get(motor, 1.0)
+            for motor, value in joint_positions.items()
+        }
 
     def _apply_wrap_guards(self, raw_positions: dict[str, int]) -> dict[str, int]:
         if not self.calibration:
@@ -216,7 +236,11 @@ class NewBot(Robot):
         guarded_positions = self._apply_wrap_guards(raw_positions)
         ids_values = {self.bus.motors[motor].id: int(value) for motor, value in guarded_positions.items()}
         normalized_positions = self.bus._normalize(ids_values)
-        obs_dict = {f"{motor}.pos": normalized_positions[self.bus.motors[motor].id] for motor in guarded_positions}
+        motor_positions = {
+            motor: normalized_positions[self.bus.motors[motor].id] for motor in guarded_positions
+        }
+        joint_positions = self._motor_to_joint_positions(motor_positions)
+        obs_dict = {f"{motor}.pos": value for motor, value in joint_positions.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 
@@ -230,14 +254,18 @@ class NewBot(Robot):
 
     @check_if_not_connected
     def send_action(self, action: RobotAction) -> RobotAction:
-        goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
+        joint_goal_pos = {
+            key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")
+        }
 
         if self.config.max_relative_target is not None:
-            present_pos = self.bus.sync_read("Present_Position")
-            goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
-            goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
+            motor_present_pos = self.bus.sync_read("Present_Position")
+            joint_present_pos = self._motor_to_joint_positions(motor_present_pos)
+            goal_present_pos = {key: (g_pos, joint_present_pos[key]) for key, g_pos in joint_goal_pos.items()}
+            joint_goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
-        self.bus.sync_write("Goal_Position", goal_pos)
+        motor_goal_pos = self._joint_to_motor_positions(joint_goal_pos)
+        self.bus.sync_write("Goal_Position", motor_goal_pos)
         now = time.perf_counter()
         if now - self._last_load_print_time >= 1.0:
             try:
@@ -252,7 +280,7 @@ class NewBot(Robot):
             except Exception:
                 pass
             self._last_load_print_time = now
-        return {f"{motor}.pos": val for motor, val in goal_pos.items()}
+        return {f"{motor}.pos": val for motor, val in joint_goal_pos.items()}
 
     @check_if_not_connected
     def disconnect(self):
