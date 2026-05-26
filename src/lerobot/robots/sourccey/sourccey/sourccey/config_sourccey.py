@@ -139,15 +139,10 @@ class SourcceyHostConfig:
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
-    # Enable/disable observation capture rate limiting (A/B test switch).
-    # When disabled, host captures a fresh observation every loop (legacy behavior).
-    enable_observation_rate_limit: bool = True
-    # Cap expensive fresh observation capture rate; host loop can still run faster
-    # and republish the latest observation between fresh captures.
-    max_observation_fps: float = 15.0
-    # Periodic host loop FPS logging for runtime debugging.
-    log_fps: bool = True
-    fps_log_interval_s: float = 5.0
+    # Single switch for the host FPS patch:
+    # - False: exact vulcan-main behavior (no host-loop patch path)
+    # - True: patched behavior (observation capture decoupling + host FPS print)
+    enable_host_fps_patch: bool = True
 
     # IMU periodic logging on host (disabled by default to avoid loop spam)
     imu_print_enabled: bool = False

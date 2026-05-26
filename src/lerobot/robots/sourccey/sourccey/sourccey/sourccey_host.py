@@ -27,6 +27,11 @@ from .sourccey import Sourccey
 # Import protobuf modules
 from ..protobuf.generated import sourccey_pb2
 
+
+PATCH_OBSERVATION_FPS = 15.0
+PATCH_FPS_LOG_INTERVAL_S = 5.0
+
+
 class SourcceyHost:
     def __init__(self, config: SourcceyHostConfig):
         self.zmq_context = zmq.Context()
@@ -41,10 +46,7 @@ class SourcceyHost:
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
         self.max_loop_freq_hz = config.max_loop_freq_hz
-        self.enable_observation_rate_limit = bool(config.enable_observation_rate_limit)
-        self.max_observation_fps = max(0.0, float(config.max_observation_fps))
-        self.log_fps = bool(config.log_fps)
-        self.fps_log_interval_s = max(0.1, float(config.fps_log_interval_s))
+        self.enable_host_fps_patch = bool(config.enable_host_fps_patch)
 
     def disconnect(self):
         self.zmq_observation_socket.close()
@@ -151,9 +153,9 @@ def main():
 
     last_cmd_time = time.time()
     watchdog_active = False
-    fps_window_start = time.monotonic()
-    fps_window_loops = 0
-    last_observation_capture_t = 0.0
+    patch_fps_window_start = time.monotonic()
+    patch_fps_window_loops = 0
+    patch_last_observation_capture_t = 0.0
 
     try:
         # Business logic
@@ -164,7 +166,8 @@ def main():
         previous_observation = None
         while duration < host.connection_time_s:
             loop_start_time = time.time()
-            fps_window_loops += 1
+            if host.enable_host_fps_patch:
+                patch_fps_window_loops += 1
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
@@ -197,17 +200,19 @@ def main():
                 )
                 watchdog_active = True
 
-            capture_now = True
-            if host.enable_observation_rate_limit and host.max_observation_fps > 0:
-                min_capture_dt_s = 1.0 / host.max_observation_fps
+            if host.enable_host_fps_patch:
+                min_capture_dt_s = 1.0 / PATCH_OBSERVATION_FPS
                 now_mono = time.monotonic()
-                capture_now = (now_mono - last_observation_capture_t) >= min_capture_dt_s
-
-            if capture_now:
+                capture_now = (now_mono - patch_last_observation_capture_t) >= min_capture_dt_s
+                if capture_now:
+                    if observation is not None and observation != {}:
+                        previous_observation = observation
+                    observation = robot.get_observation()
+                    patch_last_observation_capture_t = time.monotonic()
+            else:
                 if observation is not None and observation != {}:
                     previous_observation = observation
                 observation = robot.get_observation()
-                last_observation_capture_t = time.monotonic()
 
             # Send the observation to the remote agent
             try:
@@ -231,17 +236,17 @@ def main():
             elapsed = time.time() - loop_start_time
 
             time.sleep(max(1 / host.max_loop_freq_hz - elapsed, 0))
-            if host.log_fps:
+            if host.enable_host_fps_patch:
                 now_mono = time.monotonic()
-                fps_window_elapsed = now_mono - fps_window_start
-                if fps_window_elapsed >= max(0.1, float(host.fps_log_interval_s)):
-                    host_fps = fps_window_loops / fps_window_elapsed
+                fps_window_elapsed = now_mono - patch_fps_window_start
+                if fps_window_elapsed >= PATCH_FPS_LOG_INTERVAL_S:
+                    host_fps = patch_fps_window_loops / fps_window_elapsed
                     print(
                         f"Host FPS: {host_fps:.2f} Hz "
                         f"(target={float(host.max_loop_freq_hz):.2f} Hz, window={fps_window_elapsed:.2f}s)"
                     )
-                    fps_window_start = now_mono
-                    fps_window_loops = 0
+                    patch_fps_window_start = now_mono
+                    patch_fps_window_loops = 0
             duration = time.perf_counter() - start
         print("Cycle time reached.")
 
