@@ -139,6 +139,9 @@ class SourcceyHostConfig:
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
+    # Enable/disable observation capture rate limiting (A/B test switch).
+    # When disabled, host captures a fresh observation every loop (legacy behavior).
+    enable_observation_rate_limit: bool = True
     # Cap expensive fresh observation capture rate; host loop can still run faster
     # and republish the latest observation between fresh captures.
     max_observation_fps: float = 15.0

@@ -41,6 +41,7 @@ class SourcceyHost:
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
         self.max_loop_freq_hz = config.max_loop_freq_hz
+        self.enable_observation_rate_limit = bool(config.enable_observation_rate_limit)
         self.max_observation_fps = max(0.0, float(config.max_observation_fps))
         self.log_fps = bool(config.log_fps)
         self.fps_log_interval_s = max(0.1, float(config.fps_log_interval_s))
@@ -197,7 +198,7 @@ def main():
                 watchdog_active = True
 
             capture_now = True
-            if host.max_observation_fps > 0:
+            if host.enable_observation_rate_limit and host.max_observation_fps > 0:
                 min_capture_dt_s = 1.0 / host.max_observation_fps
                 now_mono = time.monotonic()
                 capture_now = (now_mono - last_observation_capture_t) >= min_capture_dt_s
