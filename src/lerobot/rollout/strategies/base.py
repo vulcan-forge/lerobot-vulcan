@@ -48,6 +48,10 @@ class BaseStrategy(RolloutStrategy):
 
         control_interval = interpolator.get_control_interval(cfg.fps)
 
+        # Logging configuration
+        warning_interval_s = 60.0
+        last_slow_loop_warning_t = -float("inf")
+
         start_time = time.perf_counter()
         engine.resume()
         logger.info("Base strategy control loop started")
@@ -72,9 +76,12 @@ class BaseStrategy(RolloutStrategy):
             if (sleep_t := control_interval - dt) > 0:
                 precise_sleep(sleep_t)
             else:
-                logger.warning(
-                    f"Record loop is running slower ({1 / dt:.1f} Hz) than the target FPS ({cfg.fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
-                )
+                now = time.perf_counter()
+                if (now - last_slow_loop_warning_t) >= warning_interval_s:
+                    logger.warning(
+                        f"Record loop is running slower ({1 / dt:.1f} Hz) than the target FPS ({cfg.fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
+                    )
+                    last_slow_loop_warning_t = now
 
     def teardown(self, ctx: RolloutContext) -> None:
         """Disconnect hardware and stop inference."""
