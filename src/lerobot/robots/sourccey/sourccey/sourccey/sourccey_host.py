@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
 import logging
 import signal
 import threading
@@ -28,6 +29,42 @@ from .sourccey import Sourccey
 from ..protobuf.generated import sourccey_pb2
 
 HOST_FPS_LOG_INTERVAL_S = 5.0
+HOST_FIX_OBSERVATION_FPS = 15.0
+
+
+def _parse_bool_arg(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(
+        f"Invalid boolean value '{value}'. Use true/false, 1/0, yes/no, or on/off."
+    )
+
+
+def _load_host_config_from_cli() -> SourcceyHostConfig:
+    parser = argparse.ArgumentParser(
+        description="Run Sourccey host.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--enable_host_fps_fix",
+        "--enable-host-fps-fix",
+        dest="enable_host_fps_fix",
+        type=_parse_bool_arg,
+        default=None,
+        help=(
+            "Enable host FPS fix. false keeps legacy behavior, "
+            "true decouples observation capture rate from publish/control loop rate."
+        ),
+    )
+    args, _unknown = parser.parse_known_args()
+
+    cfg = SourcceyHostConfig()
+    if args.enable_host_fps_fix is not None:
+        cfg.enable_host_fps_fix = args.enable_host_fps_fix
+    return cfg
 
 class SourcceyHost:
     def __init__(self, config: SourcceyHostConfig):
@@ -43,6 +80,7 @@ class SourcceyHost:
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
         self.max_loop_freq_hz = config.max_loop_freq_hz
+        self.enable_host_fps_fix = bool(config.enable_host_fps_fix)
 
     def disconnect(self):
         self.zmq_observation_socket.close()
@@ -140,11 +178,15 @@ def main():
     robot.connect()
 
     logging.info("Starting Host")
-    host_config = SourcceyHostConfig()
+    host_config = _load_host_config_from_cli()
     host = SourcceyHost(host_config)
     imu_reporter = _IMUReporter(host_config)
     imu_reporter.start()
 
+    print(
+        "Host mode: "
+        + ("patched (enable_host_fps_fix=true)" if host.enable_host_fps_fix else "legacy (enable_host_fps_fix=false)")
+    )
     print("Waiting for commands...")
 
     last_cmd_time = time.time()
@@ -153,6 +195,7 @@ def main():
     fps_window_loops = 0
     fps_window_fresh_captures = 0
     fps_window_publishes = 0
+    last_observation_capture_t = 0.0
 
     try:
         # Business logic
@@ -196,10 +239,21 @@ def main():
                 )
                 watchdog_active = True
 
-            if observation is not None and observation != {}:
-                previous_observation = observation
-            observation = robot.get_observation()
-            fps_window_fresh_captures += 1
+            if host.enable_host_fps_fix:
+                min_capture_dt_s = 1.0 / HOST_FIX_OBSERVATION_FPS
+                now_mono = time.monotonic()
+                should_capture = (now_mono - last_observation_capture_t) >= min_capture_dt_s
+                if should_capture:
+                    if observation is not None and observation != {}:
+                        previous_observation = observation
+                    observation = robot.get_observation()
+                    fps_window_fresh_captures += 1
+                    last_observation_capture_t = time.monotonic()
+            else:
+                if observation is not None and observation != {}:
+                    previous_observation = observation
+                observation = robot.get_observation()
+                fps_window_fresh_captures += 1
 
             # Send the observation to the remote agent
             try:

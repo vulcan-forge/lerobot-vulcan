@@ -139,6 +139,10 @@ class SourcceyHostConfig:
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
+    # Optional host FPS fix:
+    # - False: legacy behavior (capture fresh observation every loop iteration).
+    # - True: decouple observation capture rate from publish/control loop rate.
+    enable_host_fps_fix: bool = False
 
     # IMU periodic logging on host (disabled by default to avoid loop spam)
     imu_print_enabled: bool = False
