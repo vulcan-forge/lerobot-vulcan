@@ -195,6 +195,9 @@ class SourcceyClientConfig(RobotConfig):
     log_no_data_timeouts: bool = True
     # Minimum interval between timeout log lines (seconds) when logging is enabled.
     no_data_log_interval_s: float = 5.0
+    # When enabled, the client blocks until a fresh observation packet arrives.
+    # This prevents stale observations from being fed to inference.
+    wait_for_fresh_observation: bool = True
     connect_timeout_s: int = 5
 
     def __post_init__(self) -> None:

@@ -140,3 +140,35 @@ def test_get_observation_only_publishes_slam_for_fresh_packets() -> None:
     client._get_data = MagicMock(return_value=(frames, state, True))
     _ = client.get_observation()
     assert client._publish_slam_input.call_count == 1
+
+
+def test_get_observation_waits_for_fresh_packet_when_enabled() -> None:
+    config = SourcceyClientConfig(
+        id="test-client",
+        remote_ip="127.0.0.1",
+        wait_for_fresh_observation=True,
+        slam=SlamInputConfig(
+            input_enabled=False,
+        ),
+    )
+    client = SourcceyClient(config)
+    client._is_connected = True
+
+    stale_frames = {"front_left": np.full((24, 24, 3), 50, dtype=np.uint8)}
+    stale_state = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+    fresh_frames = {"front_left": np.full((24, 24, 3), 120, dtype=np.uint8)}
+    fresh_state = {"x.vel": 0.1, "y.vel": 0.2, "theta.vel": 0.3}
+
+    client._get_data = MagicMock(
+        side_effect=[
+            (stale_frames, stale_state, False),
+            (stale_frames, stale_state, False),
+            (fresh_frames, fresh_state, True),
+        ]
+    )
+    obs = client.get_observation()
+
+    assert client._get_data.call_count == 3
+    assert "front_left" in obs
+    assert obs["front_left"].shape == (24, 24, 3)
+    assert obs["x.vel"] == 0.1

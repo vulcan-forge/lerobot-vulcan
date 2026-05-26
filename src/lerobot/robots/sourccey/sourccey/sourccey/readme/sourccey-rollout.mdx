@@ -17,12 +17,12 @@ uv run lerobot-rollout \
   --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-008/checkpoints/1000000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
-  --logging.throttle_spam=false \
+  --logging.throttle_spam=true \
   --logging.throttle_interval_s=30.0 \
   --task="Fold the shirt" \
   --display_data=true \
   --duration=3600 \
-  --fps=10
+  --fps=30
 ```
 
 To disable throttling and show every message:

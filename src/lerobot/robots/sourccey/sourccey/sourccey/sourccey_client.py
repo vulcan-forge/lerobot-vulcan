@@ -63,6 +63,7 @@ class SourcceyClient(Robot):
         self.polling_timeout_ms = config.polling_timeout_ms
         self.log_no_data_timeouts = config.log_no_data_timeouts
         self.no_data_log_interval_s = max(0.0, float(config.no_data_log_interval_s))
+        self.wait_for_fresh_observation = config.wait_for_fresh_observation
         self.connect_timeout_s = config.connect_timeout_s
 
         self.zmq_context = None
@@ -305,6 +306,18 @@ class SourcceyClient(Robot):
             raise DeviceNotConnectedError("SourcceyClient is not connected. You need to run `robot.connect()`.")
 
         frames, obs_dict, is_fresh = self._get_data()
+        if self.wait_for_fresh_observation and not is_fresh:
+            stale_start = time.monotonic()
+            stale_loops = 0
+            while not is_fresh:
+                stale_loops += 1
+                frames, obs_dict, is_fresh = self._get_data()
+            waited_s = time.monotonic() - stale_start
+            logging.debug(
+                "Fresh observation restored after %.3fs (%d stale polls)",
+                waited_s,
+                stale_loops,
+            )
 
         # Loop over each configured camera
         for cam_name, frame in frames.items():
