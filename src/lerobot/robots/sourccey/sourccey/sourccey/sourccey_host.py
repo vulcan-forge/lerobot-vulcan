@@ -41,6 +41,8 @@ class SourcceyHost:
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
         self.max_loop_freq_hz = config.max_loop_freq_hz
+        self.log_fps = bool(config.log_fps)
+        self.fps_log_interval_s = max(0.1, float(config.fps_log_interval_s))
 
     def disconnect(self):
         self.zmq_observation_socket.close()
