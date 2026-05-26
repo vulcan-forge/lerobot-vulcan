@@ -29,7 +29,7 @@ from .sourccey import Sourccey
 from ..protobuf.generated import sourccey_pb2
 
 HOST_FPS_LOG_INTERVAL_S = 5.0
-HOST_FIX_OBSERVATION_FPS = 15.0
+HOST_FIX_OBSERVATION_FPS = 30.0
 
 
 def _parse_bool_arg(value: str) -> bool:
