@@ -250,6 +250,7 @@ class Sourccey(Robot):
 
     def get_observation(self) -> dict[str, Any]:
         try:
+            obs_start = time.perf_counter()
             obs_dict = {}
 
             left_obs = self.left_arm.get_observation()
@@ -272,14 +273,22 @@ class Sourccey(Robot):
                 obs_dict["z.pos"] = 100.0
 
             for cam_key in self.cameras.keys():
+                cam_start = time.perf_counter()
                 try:
-                    obs_dict[cam_key] = self.cameras[cam_key].async_read()
+                    # Prefer latest-frame peek to avoid serially blocking each camera read.
+                    obs_dict[cam_key] = self.cameras[cam_key].read_latest(max_age_ms=200)
                 except Exception as e:
                     # Keep the observation schema stable even if a camera is down.
                     h = int(self.config.cameras[cam_key].height)
                     w = int(self.config.cameras[cam_key].width)
                     obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)
                     logger.warning(f"Camera '{cam_key}' read failed: {e}. Using black frame.")
+                finally:
+                    cam_dt_ms = (time.perf_counter() - cam_start) * 1e3
+                    logger.debug("%s read %s: %.1fms", self, cam_key, cam_dt_ms)
+
+            obs_dt_ms = (time.perf_counter() - obs_start) * 1e3
+            logger.debug("%s get_observation took: %.1fms", self, obs_dt_ms)
 
             return obs_dict
         except Exception as e:
