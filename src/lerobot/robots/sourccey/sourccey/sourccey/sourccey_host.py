@@ -122,11 +122,11 @@ class _IMUReporter:
 
 
 def main():
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(levelname)s %(asctime)s %(filename)s:%(lineno)d %(message)s",
-        force=True,
-    )
+    # logging.basicConfig(
+    #     level=logging.DEBUG,
+    #     format="%(levelname)s %(asctime)s %(filename)s:%(lineno)d %(message)s",
+    #     force=True,
+    # )
 
     def _handle_termination_signal(signum, _frame):
         logging.info(f"Received signal {signum}. Shutting down Sourccey Host.")
