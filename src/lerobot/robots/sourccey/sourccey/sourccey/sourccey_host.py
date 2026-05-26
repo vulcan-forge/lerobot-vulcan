@@ -147,6 +147,8 @@ def main():
 
     last_cmd_time = time.time()
     watchdog_active = False
+    fps_window_start = time.monotonic()
+    fps_window_loops = 0
 
     try:
         # Business logic
@@ -157,6 +159,7 @@ def main():
         previous_observation = None
         while duration < host.connection_time_s:
             loop_start_time = time.time()
+            fps_window_loops += 1
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
@@ -215,6 +218,19 @@ def main():
             elapsed = time.time() - loop_start_time
 
             time.sleep(max(1 / host.max_loop_freq_hz - elapsed, 0))
+            if host.log_fps:
+                now_mono = time.monotonic()
+                fps_window_elapsed = now_mono - fps_window_start
+                if fps_window_elapsed >= max(0.1, float(host.fps_log_interval_s)):
+                    host_fps = fps_window_loops / fps_window_elapsed
+                    logging.info(
+                        "Host FPS: %.2f Hz (target=%.2f Hz, window=%.2fs)",
+                        host_fps,
+                        float(host.max_loop_freq_hz),
+                        fps_window_elapsed,
+                    )
+                    fps_window_start = now_mono
+                    fps_window_loops = 0
             duration = time.perf_counter() - start
         print("Cycle time reached.")
 

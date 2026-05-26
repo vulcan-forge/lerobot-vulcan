@@ -139,6 +139,9 @@ class SourcceyHostConfig:
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
+    # Periodic host loop FPS logging for runtime debugging.
+    log_fps: bool = True
+    fps_log_interval_s: float = 5.0
 
     # IMU periodic logging on host (disabled by default to avoid loop spam)
     imu_print_enabled: bool = False
@@ -195,6 +198,9 @@ class SourcceyClientConfig(RobotConfig):
     log_no_data_timeouts: bool = True
     # Minimum interval between timeout log lines (seconds) when logging is enabled.
     no_data_log_interval_s: float = 5.0
+    # Periodic client-side FPS logging (loop + fresh observation rates).
+    log_fps: bool = True
+    fps_log_interval_s: float = 5.0
     connect_timeout_s: int = 5
 
     def __post_init__(self) -> None:

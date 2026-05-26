@@ -63,6 +63,8 @@ class SourcceyClient(Robot):
         self.polling_timeout_ms = config.polling_timeout_ms
         self.log_no_data_timeouts = config.log_no_data_timeouts
         self.no_data_log_interval_s = max(0.0, float(config.no_data_log_interval_s))
+        self.log_fps = bool(config.log_fps)
+        self.fps_log_interval_s = max(0.1, float(config.fps_log_interval_s))
         self.connect_timeout_s = config.connect_timeout_s
 
         self.zmq_context = None
@@ -124,6 +126,11 @@ class SourcceyClient(Robot):
         self._no_data_log_interval_s = self.no_data_log_interval_s
         self._last_no_data_log_ts = 0.0
         self._suppressed_no_data_logs = 0
+
+        # Periodic FPS telemetry for rollout debugging.
+        self._fps_window_start = time.monotonic()
+        self._fps_window_calls = 0
+        self._fps_window_fresh = 0
 
     ###################################################################
     # Properties and Attributes
@@ -305,6 +312,9 @@ class SourcceyClient(Robot):
             raise DeviceNotConnectedError("SourcceyClient is not connected. You need to run `robot.connect()`.")
 
         frames, obs_dict, is_fresh = self._get_data()
+        self._fps_window_calls += 1
+        if is_fresh:
+            self._fps_window_fresh += 1
 
         # Loop over each configured camera
         for cam_name, frame in frames.items():
@@ -316,7 +326,33 @@ class SourcceyClient(Robot):
         if is_fresh and self.slam_input_enabled:
             self._publish_slam_input(observation=obs_dict, frames=frames)
 
+        self._maybe_log_fps()
+
         return obs_dict
+
+    def _maybe_log_fps(self) -> None:
+        if not self.log_fps:
+            return
+
+        now = time.monotonic()
+        elapsed = now - self._fps_window_start
+        if elapsed < self.fps_log_interval_s:
+            return
+
+        loop_fps = self._fps_window_calls / elapsed if elapsed > 0 else 0.0
+        fresh_fps = self._fps_window_fresh / elapsed if elapsed > 0 else 0.0
+        logging.info(
+            "Client FPS: loop=%.2f Hz, fresh_obs=%.2f Hz (fresh=%d/%d, poll_timeout=%dms, window=%.2fs)",
+            loop_fps,
+            fresh_fps,
+            self._fps_window_fresh,
+            self._fps_window_calls,
+            int(self.polling_timeout_ms),
+            elapsed,
+        )
+        self._fps_window_start = now
+        self._fps_window_calls = 0
+        self._fps_window_fresh = 0
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         """Command sourccey to move to a target joint configuration. Translates to motor space + sends over ZMQ
