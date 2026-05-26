@@ -241,8 +241,6 @@ def _silence_camera_warnings_for_host() -> None:
     """
     # Silence our OpenCV camera wrapper warnings
     logging.getLogger("lerobot.cameras.opencv.camera_opencv").setLevel(logging.ERROR)
-    # Keep Sourccey module logs visible for host-side observation debugging.
-    logging.getLogger("lerobot.robots.sourccey.sourccey.sourccey.sourccey").setLevel(logging.DEBUG)
 
     # Best-effort: silence OpenCV's own internal logging if available
     try:
