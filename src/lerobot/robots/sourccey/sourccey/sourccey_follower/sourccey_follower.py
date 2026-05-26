@@ -34,8 +34,6 @@ logger = logging.getLogger(__name__)
 class SourcceyFollower(Robot):
     config_class = SourcceyFollowerConfig
     name = "sourccey_follower"
-    _STARTUP_RECOVERY_MAX_TICKS = 192
-    _STARTUP_RECOVERY_SETTLE_S = 0.20
 
     def __init__(self, config: SourcceyFollowerConfig):
         super().__init__(config)
@@ -209,11 +207,7 @@ class SourcceyFollower(Robot):
             return
 
         startup_raw_positions = self.bus.sync_read("Present_Position", normalize=False)
-        startup_faults, startup_corrections = self._get_startup_faults_and_corrections(startup_raw_positions)
-        if startup_corrections:
-            self._apply_startup_boundary_recovery(startup_corrections)
-            startup_raw_positions = self.bus.sync_read("Present_Position", normalize=False)
-            startup_faults, _ = self._get_startup_faults_and_corrections(startup_raw_positions)
+        startup_faults = self._get_startup_position_faults(startup_raw_positions)
 
         if startup_faults:
             details = "\n".join(
@@ -223,14 +217,11 @@ class SourcceyFollower(Robot):
             raise RuntimeError(
                 f"{self} startup safety check failed. Refusing to continue.\n"
                 f"Action required: Recalibrate the {self.config.orientation} arm before the next run.\n"
-                f"Raw joint positions outside calibrated limits after startup recovery:\n{details}"
+                f"Raw joint positions outside calibrated limits:\n{details}"
             )
 
-    def _get_startup_faults_and_corrections(
-        self, raw_positions: dict[str, int | float]
-    ) -> tuple[dict[str, tuple[int, int, int]], dict[str, int]]:
+    def _get_startup_position_faults(self, raw_positions: dict[str, int | float]) -> dict[str, tuple[int, int, int]]:
         faults: dict[str, tuple[int, int, int]] = {}
-        corrections: dict[str, int] = {}
 
         for motor, raw_value in raw_positions.items():
             calibration = self.bus.calibration.get(motor)
@@ -240,62 +231,10 @@ class SourcceyFollower(Robot):
             raw = int(round(float(raw_value)))
             range_min = calibration.range_min
             range_max = calibration.range_max
-            if range_min <= raw <= range_max:
-                continue
-
-            model = self.bus.motors[motor].model
-            resolution = self.bus.model_resolution_table[model]
-            nearest = self._nearest_range_boundary(raw, range_min, range_max, resolution)
-            if nearest is None:
-                faults[motor] = (raw, range_min, range_max)
-                continue
-
-            target_raw, distance_to_range = nearest
-            if distance_to_range <= self._STARTUP_RECOVERY_MAX_TICKS:
-                corrections[motor] = target_raw
-            else:
+            if not (range_min <= raw <= range_max):
                 faults[motor] = (raw, range_min, range_max)
 
-        return faults, corrections
-
-    def _nearest_range_boundary(
-        self, raw: int, range_min: int, range_max: int, resolution: int
-    ) -> tuple[int, int] | None:
-        best_distance: int | None = None
-        best_target: int | None = None
-
-        # Handle one-turn startup ambiguity by evaluating equivalent wrapped representations.
-        for candidate in (raw - resolution, raw, raw + resolution):
-            if range_min <= candidate <= range_max:
-                return None
-
-            dist_to_min = abs(candidate - range_min)
-            dist_to_max = abs(candidate - range_max)
-            if dist_to_min <= dist_to_max:
-                distance = dist_to_min
-                target = range_min
-            else:
-                distance = dist_to_max
-                target = range_max
-
-            if best_distance is None or distance < best_distance:
-                best_distance = distance
-                best_target = target
-
-        if best_distance is None or best_target is None:
-            return None
-
-        return int(best_target % resolution), int(best_distance)
-
-    def _apply_startup_boundary_recovery(self, corrections: dict[str, int]) -> None:
-        logger.warning(f"{self} startup recovery: forcing joints to nearest calibrated boundary {corrections}")
-        motors = list(corrections.keys())
-        try:
-            self.bus.enable_torque(motors=motors, num_retry=1)
-            self.bus.sync_write("Goal_Position", corrections, normalize=False, num_retry=1)
-            time.sleep(self._STARTUP_RECOVERY_SETTLE_S)
-        finally:
-            self.bus.disable_torque(motors=motors, num_retry=1)
+        return faults
 
     def setup_motors(self) -> None:
         for motor in reversed(self.bus.motors):
