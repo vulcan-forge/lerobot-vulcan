@@ -194,6 +194,7 @@ sourccey-desktop = [
     "lerobot[sarm]",
     "lerobot[viz]",
     "lerobot[pynput-dep]",
+    "lerbot[dataset]",
 
     # Audio
     # Pin known-good CUDA/cuDNN stack for Windows GPU Whisper.
