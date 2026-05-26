@@ -195,7 +195,9 @@ def main():
     fps_window_loops = 0
     fps_window_fresh_captures = 0
     fps_window_publishes = 0
+    fps_window_encodes = 0
     last_observation_capture_t = 0.0
+    latest_observation_wire_bytes: bytes | None = None
 
     try:
         # Business logic
@@ -246,9 +248,10 @@ def main():
                 if should_capture:
                     if observation is not None and observation != {}:
                         previous_observation = observation
-                    observation = robot.get_observation()
+                    observation = robot.get_observation(parallel_camera_reads=True)
                     fps_window_fresh_captures += 1
                     last_observation_capture_t = time.monotonic()
+                    latest_observation_wire_bytes = None
             else:
                 if observation is not None and observation != {}:
                     previous_observation = observation
@@ -263,11 +266,18 @@ def main():
                     logging.warning("No observation received. Sending previous observation.")
 
                 if observation is not None and observation != {}:
-                    # Convert observation to protobuf using existing method
-                    robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
-
-                    # Send protobuf message instead of JSON
-                    host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
+                    if host.enable_host_fps_fix:
+                        if latest_observation_wire_bytes is None:
+                            # Encode only when a fresh observation is captured; reuse cached bytes otherwise.
+                            robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
+                            latest_observation_wire_bytes = robot_state.SerializeToString()
+                            fps_window_encodes += 1
+                        host.zmq_observation_socket.send(latest_observation_wire_bytes, flags=zmq.NOBLOCK)
+                    else:
+                        # Legacy behavior: re-encode observation every publish.
+                        robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
+                        host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
+                        fps_window_encodes += 1
                     fps_window_publishes += 1
             except zmq.Again:
                 logging.info("Dropping observation, no client connected")
@@ -284,17 +294,20 @@ def main():
                 host_loop_fps = fps_window_loops / fps_window_elapsed
                 host_capture_fps = fps_window_fresh_captures / fps_window_elapsed
                 host_publish_fps = fps_window_publishes / fps_window_elapsed
+                host_encode_fps = fps_window_encodes / fps_window_elapsed
                 print(
                     "Host FPS: "
                     f"loop={host_loop_fps:.2f} Hz, "
                     f"fresh_capture={host_capture_fps:.2f} Hz, "
-                    f"publish={host_publish_fps:.2f} Hz "
+                    f"publish={host_publish_fps:.2f} Hz, "
+                    f"encode={host_encode_fps:.2f} Hz "
                     f"(target={float(host.max_loop_freq_hz):.2f} Hz, window={fps_window_elapsed:.2f}s)"
                 )
                 fps_window_start = now_mono
                 fps_window_loops = 0
                 fps_window_fresh_captures = 0
                 fps_window_publishes = 0
+                fps_window_encodes = 0
             duration = time.perf_counter() - start
         print("Cycle time reached.")
 

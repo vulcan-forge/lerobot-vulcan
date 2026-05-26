@@ -248,7 +248,7 @@ class Sourccey(Robot):
     # Data Management
     ###################################################################
 
-    def get_observation(self) -> dict[str, Any]:
+    def get_observation(self, *, parallel_camera_reads: bool = False) -> dict[str, Any]:
         try:
             obs_dict = {}
 
@@ -271,15 +271,45 @@ class Sourccey(Robot):
             except Exception:
                 obs_dict["z.pos"] = 100.0
 
-            for cam_key in self.cameras.keys():
-                try:
-                    obs_dict[cam_key] = self.cameras[cam_key].async_read()
-                except Exception as e:
-                    # Keep the observation schema stable even if a camera is down.
-                    h = int(self.config.cameras[cam_key].height)
-                    w = int(self.config.cameras[cam_key].width)
-                    obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)
-                    logger.warning(f"Camera '{cam_key}' read failed: {e}. Using black frame.")
+            if parallel_camera_reads and len(self.cameras) > 1:
+                camera_results: dict[str, np.ndarray] = {}
+                camera_errors: dict[str, Exception] = {}
+                results_lock = threading.Lock()
+
+                def _read_camera(cam_name: str) -> None:
+                    try:
+                        frame = self.cameras[cam_name].async_read()
+                    except Exception as exc:  # noqa: BLE001
+                        h = int(self.config.cameras[cam_name].height)
+                        w = int(self.config.cameras[cam_name].width)
+                        frame = np.zeros((h, w, 3), dtype=np.uint8)
+                        with results_lock:
+                            camera_errors[cam_name] = exc
+                    with results_lock:
+                        camera_results[cam_name] = frame
+
+                threads: list[threading.Thread] = []
+                for cam_key in self.cameras.keys():
+                    t = threading.Thread(target=_read_camera, args=(cam_key,), daemon=True)
+                    t.start()
+                    threads.append(t)
+                for t in threads:
+                    t.join()
+
+                for cam_key in self.cameras.keys():
+                    if cam_key in camera_errors:
+                        logger.warning(f"Camera '{cam_key}' read failed: {camera_errors[cam_key]}. Using black frame.")
+                    obs_dict[cam_key] = camera_results[cam_key]
+            else:
+                for cam_key in self.cameras.keys():
+                    try:
+                        obs_dict[cam_key] = self.cameras[cam_key].async_read()
+                    except Exception as e:
+                        # Keep the observation schema stable even if a camera is down.
+                        h = int(self.config.cameras[cam_key].height)
+                        w = int(self.config.cameras[cam_key].width)
+                        obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)
+                        logger.warning(f"Camera '{cam_key}' read failed: {e}. Using black frame.")
 
             return obs_dict
         except Exception as e:
