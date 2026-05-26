@@ -61,6 +61,7 @@ class SourcceyClient(Robot):
         self.teleop_keys = config.teleop_keys
 
         self.polling_timeout_ms = config.polling_timeout_ms
+        self.require_fresh_observation = bool(config.require_fresh_observation)
         self.log_no_data_timeouts = config.log_no_data_timeouts
         self.no_data_log_interval_s = max(0.0, float(config.no_data_log_interval_s))
         self.connect_timeout_s = config.connect_timeout_s
@@ -373,6 +374,13 @@ class SourcceyClient(Robot):
 
         # 1. Get the latest message bytes from the socket
         latest_message_bytes = self._poll_and_get_latest_message()
+
+        # Optional strict mode: wait until a fresh packet arrives.
+        # This avoids stale observation reuse at the cost of potentially
+        # slower control-loop cadence if host/network is delayed.
+        if latest_message_bytes is None and self.require_fresh_observation:
+            while self._is_connected and latest_message_bytes is None:
+                latest_message_bytes = self._poll_and_get_latest_message()
 
         # 2. If no message, return cached data
         if latest_message_bytes is None:
