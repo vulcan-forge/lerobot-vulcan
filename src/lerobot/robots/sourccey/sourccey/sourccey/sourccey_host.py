@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
 import logging
 import signal
 import threading
@@ -30,6 +31,41 @@ from ..protobuf.generated import sourccey_pb2
 
 PATCH_OBSERVATION_FPS = 15.0
 PATCH_FPS_LOG_INTERVAL_S = 5.0
+
+
+def _parse_bool_arg(value: str) -> bool:
+    value_normalized = value.strip().lower()
+    if value_normalized in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if value_normalized in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(
+        f"Invalid boolean value '{value}'. Use one of: true/false, 1/0, yes/no, on/off."
+    )
+
+
+def _load_host_config_from_cli() -> SourcceyHostConfig:
+    parser = argparse.ArgumentParser(
+        description="Run Sourccey host.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--enable_host_fps_patch",
+        "--enable-host-fps-patch",
+        dest="enable_host_fps_patch",
+        type=_parse_bool_arg,
+        default=None,
+        help=(
+            "Enable host FPS lag fix. false = vulcan-main host loop behavior, "
+            "true = patched host behavior with decoupled observation capture."
+        ),
+    )
+    args, _unknown = parser.parse_known_args()
+
+    host_config = SourcceyHostConfig()
+    if args.enable_host_fps_patch is not None:
+        host_config.enable_host_fps_patch = args.enable_host_fps_patch
+    return host_config
 
 
 class SourcceyHost:
@@ -144,11 +180,15 @@ def main():
     robot.connect()
 
     logging.info("Starting Host")
-    host_config = SourcceyHostConfig()
+    host_config = _load_host_config_from_cli()
     host = SourcceyHost(host_config)
     imu_reporter = _IMUReporter(host_config)
     imu_reporter.start()
 
+    print(
+        "Host mode: "
+        + ("patched (enable_host_fps_patch=true)" if host.enable_host_fps_patch else "vulcan-main (enable_host_fps_patch=false)")
+    )
     print("Waiting for commands...")
 
     last_cmd_time = time.time()
