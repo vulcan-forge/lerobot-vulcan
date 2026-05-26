@@ -74,6 +74,8 @@ class Sourccey(Robot):
         self.cameras = make_cameras_from_configs(config.cameras)
         # Cameras are treated as best-effort: startup should not fail if a camera fails to connect/read.
         self._connected_cameras: set[str] = set()
+        # Last good frame cache used by non-blocking host reads to avoid black-frame flicker.
+        self._last_camera_frames: dict[str, np.ndarray] = {}
 
         self.dc_motors_controller = PWMDCMotorsController(
             motors=self.config.dc_motors,
@@ -252,6 +254,7 @@ class Sourccey(Robot):
         self,
         *,
         parallel_camera_reads: bool = False,
+        prefer_latest_camera_frames: bool = False,
         timing: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         try:
@@ -294,21 +297,35 @@ class Sourccey(Robot):
                 camera_results: dict[str, np.ndarray] = {}
                 camera_errors: dict[str, Exception] = {}
                 camera_elapsed_s: dict[str, float] = {}
+                camera_reused_count = 0
+                camera_black_count = 0
                 results_lock = threading.Lock()
 
                 def _read_camera(cam_name: str) -> None:
+                    nonlocal camera_reused_count, camera_black_count
                     cam_start = time.perf_counter()
                     try:
-                        frame = self.cameras[cam_name].async_read()
+                        if prefer_latest_camera_frames:
+                            frame = self.cameras[cam_name].read_latest()
+                        else:
+                            frame = self.cameras[cam_name].async_read()
                     except Exception as exc:  # noqa: BLE001
-                        h = int(self.config.cameras[cam_name].height)
-                        w = int(self.config.cameras[cam_name].width)
-                        frame = np.zeros((h, w, 3), dtype=np.uint8)
+                        if cam_name in self._last_camera_frames:
+                            frame = self._last_camera_frames[cam_name]
+                            with results_lock:
+                                camera_reused_count += 1
+                        else:
+                            h = int(self.config.cameras[cam_name].height)
+                            w = int(self.config.cameras[cam_name].width)
+                            frame = np.zeros((h, w, 3), dtype=np.uint8)
+                            with results_lock:
+                                camera_black_count += 1
                         with results_lock:
                             camera_errors[cam_name] = exc
                     with results_lock:
                         camera_results[cam_name] = frame
                         camera_elapsed_s[cam_name] = time.perf_counter() - cam_start
+                        self._last_camera_frames[cam_name] = frame
 
                 threads: list[threading.Thread] = []
                 for cam_key in self.cameras.keys():
@@ -326,22 +343,37 @@ class Sourccey(Robot):
                     timing["cameras_s"] = time.perf_counter() - cameras_start
                     for cam_key, elapsed_s in camera_elapsed_s.items():
                         timing[f"camera_{cam_key}_s"] = elapsed_s
+                    timing["camera_reused_count"] = float(camera_reused_count)
+                    timing["camera_black_count"] = float(camera_black_count)
             else:
                 cameras_start = time.perf_counter()
+                camera_reused_count = 0
+                camera_black_count = 0
                 for cam_key in self.cameras.keys():
                     cam_start = time.perf_counter()
                     try:
-                        obs_dict[cam_key] = self.cameras[cam_key].async_read()
+                        if prefer_latest_camera_frames:
+                            obs_dict[cam_key] = self.cameras[cam_key].read_latest()
+                        else:
+                            obs_dict[cam_key] = self.cameras[cam_key].async_read()
                     except Exception as e:
-                        # Keep the observation schema stable even if a camera is down.
-                        h = int(self.config.cameras[cam_key].height)
-                        w = int(self.config.cameras[cam_key].width)
-                        obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)
+                        if cam_key in self._last_camera_frames:
+                            obs_dict[cam_key] = self._last_camera_frames[cam_key]
+                            camera_reused_count += 1
+                        else:
+                            # Keep the observation schema stable even if a camera is down.
+                            h = int(self.config.cameras[cam_key].height)
+                            w = int(self.config.cameras[cam_key].width)
+                            obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)
+                            camera_black_count += 1
                         logger.warning(f"Camera '{cam_key}' read failed: {e}. Using black frame.")
+                    self._last_camera_frames[cam_key] = obs_dict[cam_key]
                     if timing is not None:
                         timing[f"camera_{cam_key}_s"] = time.perf_counter() - cam_start
                 if timing is not None:
                     timing["cameras_s"] = time.perf_counter() - cameras_start
+                    timing["camera_reused_count"] = float(camera_reused_count)
+                    timing["camera_black_count"] = float(camera_black_count)
 
             if timing is not None:
                 timing["observation_total_s"] = time.perf_counter() - obs_start

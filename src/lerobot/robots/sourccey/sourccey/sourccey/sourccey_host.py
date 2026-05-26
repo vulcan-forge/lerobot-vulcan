@@ -264,7 +264,11 @@ def main():
                 if should_capture:
                     if observation is not None and observation != {}:
                         previous_observation = observation
-                    observation = robot.get_observation(parallel_camera_reads=True, timing=observation_timing)
+                    observation = robot.get_observation(
+                        parallel_camera_reads=True,
+                        prefer_latest_camera_frames=True,
+                        timing=observation_timing,
+                    )
                     fps_window_fresh_captures += 1
                     # Keep a stable capture cadence; avoid phase-locking into every-other-loop capture.
                     next_observation_capture_deadline_t += min_capture_dt_s
@@ -345,6 +349,8 @@ def main():
                 avg_base_ms = (fps_window_observation_timing_sums.get("base_s", 0.0) / obs_count) * 1000.0
                 avg_z_ms = (fps_window_observation_timing_sums.get("z_s", 0.0) / obs_count) * 1000.0
                 avg_cameras_ms = (fps_window_observation_timing_sums.get("cameras_s", 0.0) / obs_count) * 1000.0
+                avg_camera_reused = fps_window_observation_timing_sums.get("camera_reused_count", 0.0) / obs_count
+                avg_camera_black = fps_window_observation_timing_sums.get("camera_black_count", 0.0) / obs_count
                 avg_cmd_parse_ms = (fps_window_cmd_parse_s / cmd_count) * 1000.0
                 avg_send_action_ms = (fps_window_send_action_s / cmd_count) * 1000.0
                 avg_robot_update_ms = (fps_window_robot_update_s / cmd_count) * 1000.0
@@ -374,7 +380,8 @@ def main():
                     f"cmd_parse={avg_cmd_parse_ms:.2f}ms, send_action={avg_send_action_ms:.2f}ms, "
                     f"update={avg_robot_update_ms:.2f}ms, obs_total={avg_obs_total_ms:.2f}ms "
                     f"[left={avg_left_ms:.2f}, right={avg_right_ms:.2f}, base={avg_base_ms:.2f}, "
-                    f"z={avg_z_ms:.2f}, cameras={avg_cameras_ms:.2f}, per_cam={camera_avg_str}], "
+                    f"z={avg_z_ms:.2f}, cameras={avg_cameras_ms:.2f}, per_cam={camera_avg_str}, "
+                    f"reused={avg_camera_reused:.2f}/obs, black={avg_camera_black:.2f}/obs], "
                     f"encode={avg_encode_ms:.2f}ms, publish_send={avg_publish_send_ms:.2f}ms, "
                     f"sleep={avg_sleep_ms:.2f}ms"
                 )
