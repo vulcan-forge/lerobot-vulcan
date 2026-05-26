@@ -65,6 +65,8 @@ class SourcceyClient(Robot):
         self.no_data_log_interval_s = max(0.0, float(config.no_data_log_interval_s))
         self.wait_for_fresh_observation = config.wait_for_fresh_observation
         self.connect_timeout_s = config.connect_timeout_s
+        self.timing_log_enabled = bool(config.timing_log_enabled)
+        self.timing_log_interval_s = max(0.1, float(config.timing_log_interval_s))
 
         self.zmq_context = None
         self.zmq_cmd_socket = None
@@ -125,6 +127,16 @@ class SourcceyClient(Robot):
         self._no_data_log_interval_s = self.no_data_log_interval_s
         self._last_no_data_log_ts = 0.0
         self._suppressed_no_data_logs = 0
+        self._timing_window_start = time.monotonic()
+        self._timing_iters = 0
+        self._timing_fresh = 0
+        self._timing_stale = 0
+        self._timing_poll_s = 0.0
+        self._timing_parse_s = 0.0
+        self._timing_extract_s = 0.0
+        self._timing_get_obs_s = 0.0
+        self._timing_bytes = 0
+        self._timing_no_data = 0
 
     ###################################################################
     # Properties and Attributes
@@ -305,6 +317,7 @@ class SourcceyClient(Robot):
         if not self._is_connected:
             raise DeviceNotConnectedError("SourcceyClient is not connected. You need to run `robot.connect()`.")
 
+        get_obs_start = time.perf_counter()
         frames, obs_dict, is_fresh = self._get_data()
         if self.wait_for_fresh_observation and not is_fresh:
             stale_start = time.monotonic()
@@ -328,6 +341,15 @@ class SourcceyClient(Robot):
 
         if is_fresh and self.slam_input_enabled:
             self._publish_slam_input(observation=obs_dict, frames=frames)
+
+        if self.timing_log_enabled:
+            self._timing_iters += 1
+            self._timing_get_obs_s += time.perf_counter() - get_obs_start
+            if is_fresh:
+                self._timing_fresh += 1
+            else:
+                self._timing_stale += 1
+            self._maybe_log_timing()
 
         return obs_dict
 
@@ -390,12 +412,17 @@ class SourcceyClient(Robot):
         # 2. If no message, return cached data
         if latest_message_bytes is None:
             return self.last_frames, self.last_remote_state, False
+        if self.timing_log_enabled:
+            self._timing_bytes += len(latest_message_bytes)
 
         # 3. Parse the protobuf message
         try:
+            parse_start = time.perf_counter()
             robot_state = sourccey_pb2.SourcceyRobotState()
             robot_state.ParseFromString(latest_message_bytes)
             observation = self.protobuf_converter.protobuf_to_observation(robot_state)
+            if self.timing_log_enabled:
+                self._timing_parse_s += time.perf_counter() - parse_start
         except Exception as e:
             logging.error(f"Error parsing protobuf observation: {e}")
             return self.last_frames, self.last_remote_state, False
@@ -406,7 +433,10 @@ class SourcceyClient(Robot):
 
         # 5. Process the valid observation data
         try:
+            extract_start = time.perf_counter()
             new_frames, new_state = self._remote_state_from_obs(observation)
+            if self.timing_log_enabled:
+                self._timing_extract_s += time.perf_counter() - extract_start
         except Exception as e:
             logging.error(f"Error processing observation data, serving last observation: {e}")
             return self.last_frames, self.last_remote_state, False
@@ -423,14 +453,22 @@ class SourcceyClient(Robot):
         """Polls the ZMQ socket for a limited time and returns the latest message bytes."""
         poller = zmq.Poller()
         poller.register(self.zmq_observation_socket, zmq.POLLIN)
+        # In stale-tolerant mode we avoid blocking the control loop on network I/O.
+        # In fresh-only mode we allow bounded blocking to wait for a new packet.
+        effective_timeout_ms = self.polling_timeout_ms if self.wait_for_fresh_observation else 0
 
         try:
-            socks = dict(poller.poll(self.polling_timeout_ms))
+            poll_start = time.perf_counter()
+            socks = dict(poller.poll(effective_timeout_ms))
+            if self.timing_log_enabled:
+                self._timing_poll_s += time.perf_counter() - poll_start
         except zmq.ZMQError as e:
             logging.error(f"ZMQ polling error: {e}")
             return None
 
         if self.zmq_observation_socket not in socks:
+            if self.timing_log_enabled:
+                self._timing_no_data += 1
             if not self.log_no_data_timeouts:
                 return None
             now = time.monotonic()
@@ -461,6 +499,47 @@ class SourcceyClient(Robot):
             logging.warning("Poller indicated data, but failed to retrieve message.")
 
         return last_msg
+
+    def _maybe_log_timing(self) -> None:
+        if not self.timing_log_enabled:
+            return
+        now = time.monotonic()
+        window_s = now - self._timing_window_start
+        if window_s < self.timing_log_interval_s or self._timing_iters <= 0:
+            return
+
+        iters = self._timing_iters
+        observed_hz = iters / window_s
+        avg_get_obs_ms = (self._timing_get_obs_s / iters) * 1e3
+        avg_poll_ms = (self._timing_poll_s / iters) * 1e3
+        fresh_pct = (self._timing_fresh / iters) * 100.0
+        avg_parse_ms = (self._timing_parse_s / max(1, self._timing_fresh)) * 1e3
+        avg_extract_ms = (self._timing_extract_s / max(1, self._timing_fresh)) * 1e3
+        mbps = (self._timing_bytes / window_s) / (1024.0 * 1024.0)
+        logging.info(
+            "CLIENT_TIMING %.1fs iters=%d observed=%.1fHz fresh=%.0f%% poll=%.2fms get_obs=%.2fms parse=%.2fms extract=%.2fms no_data=%d rx=%.2fMiB/s",
+            window_s,
+            iters,
+            observed_hz,
+            fresh_pct,
+            avg_poll_ms,
+            avg_get_obs_ms,
+            avg_parse_ms,
+            avg_extract_ms,
+            self._timing_no_data,
+            mbps,
+        )
+
+        self._timing_window_start = now
+        self._timing_iters = 0
+        self._timing_fresh = 0
+        self._timing_stale = 0
+        self._timing_poll_s = 0.0
+        self._timing_parse_s = 0.0
+        self._timing_extract_s = 0.0
+        self._timing_get_obs_s = 0.0
+        self._timing_bytes = 0
+        self._timing_no_data = 0
 
     def _parse_observation_json(self, obs_string: str) -> Optional[Dict[str, Any]]:
         """Parses the JSON observation string."""

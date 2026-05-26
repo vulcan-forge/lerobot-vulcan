@@ -122,11 +122,11 @@ class _IMUReporter:
 
 
 def main():
-    # logging.basicConfig(
-    #     level=logging.DEBUG,
-    #     format="%(levelname)s %(asctime)s %(filename)s:%(lineno)d %(message)s",
-    #     force=True,
-    # )
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(asctime)s %(filename)s:%(lineno)d %(message)s",
+        force=True,
+    )
 
     def _handle_termination_signal(signum, _frame):
         logging.info(f"Received signal {signum}. Shutting down Sourccey Host.")
@@ -158,11 +158,21 @@ def main():
         # Business logic
         start = time.perf_counter()
         duration = 0
+        timing_window_start = time.perf_counter()
+        timing_iters = 0
+        timing_cmd_s = 0.0
+        timing_obs_s = 0.0
+        timing_encode_s = 0.0
+        timing_send_s = 0.0
+        timing_sleep_s = 0.0
+        timing_loop_s = 0.0
+        timing_tx_bytes = 0
 
         observation = None
         previous_observation = None
         while duration < host.connection_time_s:
-            loop_start_time = time.time()
+            loop_start_time = time.perf_counter()
+            cmd_start = time.perf_counter()
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
@@ -187,6 +197,7 @@ def main():
                     pass
             except Exception as e:
                 logging.error("Message fetching failed: %s", e)
+            timing_cmd_s += time.perf_counter() - cmd_start
 
             now = time.time()
             if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
@@ -195,9 +206,11 @@ def main():
                 )
                 watchdog_active = True
 
+            obs_start = time.perf_counter()
             if observation is not None and observation != {}:
                 previous_observation = observation
             observation = robot.get_observation()
+            timing_obs_s += time.perf_counter() - obs_start
 
             # Send the observation to the remote agent
             try:
@@ -208,19 +221,57 @@ def main():
 
                 if observation is not None and observation != {}:
                     # Convert observation to protobuf using existing method
+                    encode_start = time.perf_counter()
                     robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
+                    payload = robot_state.SerializeToString()
+                    timing_encode_s += time.perf_counter() - encode_start
 
                     # Send protobuf message instead of JSON
-                    host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
+                    send_start = time.perf_counter()
+                    host.zmq_observation_socket.send(payload, flags=zmq.NOBLOCK)
+                    timing_send_s += time.perf_counter() - send_start
+                    timing_tx_bytes += len(payload)
             except zmq.Again:
                 logging.info("Dropping observation, no client connected")
             except Exception as e:
                 logging.error(f"Failed to send observation: {e}")
 
             # Ensure a short sleep to avoid overloading the CPU.
-            elapsed = time.time() - loop_start_time
+            elapsed = time.perf_counter() - loop_start_time
+            sleep_s = max(1 / host.max_loop_freq_hz - elapsed, 0)
+            sleep_start = time.perf_counter()
+            time.sleep(sleep_s)
+            timing_sleep_s += time.perf_counter() - sleep_start
 
-            time.sleep(max(1 / host.max_loop_freq_hz - elapsed, 0))
+            timing_iters += 1
+            loop_dt = time.perf_counter() - loop_start_time
+            timing_loop_s += loop_dt
+            window_s = time.perf_counter() - timing_window_start
+            if host_config.timing_log_enabled and window_s >= host_config.timing_log_interval_s and timing_iters > 0:
+                observed_hz = timing_iters / window_s
+                tx_mib_s = (timing_tx_bytes / window_s) / (1024.0 * 1024.0)
+                logging.info(
+                    "HOST_TIMING %.1fs iters=%d observed=%.1fHz cmd=%.2fms obs=%.2fms encode=%.2fms send=%.2fms sleep=%.2fms loop=%.2fms tx=%.2fMiB/s",
+                    window_s,
+                    timing_iters,
+                    observed_hz,
+                    (timing_cmd_s / timing_iters) * 1e3,
+                    (timing_obs_s / timing_iters) * 1e3,
+                    (timing_encode_s / timing_iters) * 1e3,
+                    (timing_send_s / timing_iters) * 1e3,
+                    (timing_sleep_s / timing_iters) * 1e3,
+                    (timing_loop_s / timing_iters) * 1e3,
+                    tx_mib_s,
+                )
+                timing_window_start = time.perf_counter()
+                timing_iters = 0
+                timing_cmd_s = 0.0
+                timing_obs_s = 0.0
+                timing_encode_s = 0.0
+                timing_send_s = 0.0
+                timing_sleep_s = 0.0
+                timing_loop_s = 0.0
+                timing_tx_bytes = 0
             duration = time.perf_counter() - start
         print("Cycle time reached.")
 

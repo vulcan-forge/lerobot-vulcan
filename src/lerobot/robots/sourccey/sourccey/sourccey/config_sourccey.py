@@ -147,6 +147,10 @@ class SourcceyHostConfig:
     imu_lsm6dsox_address: int = 0x6A
     imu_lis3mdl_address: int = 0x1C
 
+    # Host performance observability
+    timing_log_enabled: bool = True
+    timing_log_interval_s: float = 1.0
+
 
 @RobotConfig.register_subclass("sourccey_client")
 @dataclass
@@ -190,15 +194,26 @@ class SourcceyClientConfig(RobotConfig):
 
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
 
-    polling_timeout_ms: int = 15
+    # Max time (seconds) to wait while establishing initial host/client connection before failing startup.
+    connect_timeout_s: int = 5
+
+    # Max time (ms) to wait for a new observation packet from host before treating this poll as "no new data".
+    # For 30 FPS streams (~33 ms period), 33-40 ms is a practical range: lower = lower latency, higher = fewer false timeouts.
+    polling_timeout_ms: int = 40
+
     # Toggle periodic timeout logs when no observation packet arrives.
     log_no_data_timeouts: bool = True
+
     # Minimum interval between timeout log lines (seconds) when logging is enabled.
     no_data_log_interval_s: float = 5.0
+
     # When enabled, the client blocks until a fresh observation packet arrives.
     # This prevents stale observations from being fed to inference.
     wait_for_fresh_observation: bool = True
-    connect_timeout_s: int = 5
+
+    # Client performance observability
+    timing_log_enabled: bool = True
+    timing_log_interval_s: float = 1.0
 
     def __post_init__(self) -> None:
         super().__post_init__()
