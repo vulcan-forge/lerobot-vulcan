@@ -196,14 +196,6 @@ def main():
     fps_window_fresh_captures = 0
     fps_window_publishes = 0
     fps_window_encodes = 0
-    fps_window_cmd_parse_s = 0.0
-    fps_window_send_action_s = 0.0
-    fps_window_robot_update_s = 0.0
-    fps_window_observation_timing_sums: dict[str, float] = {}
-    fps_window_publish_send_s = 0.0
-    fps_window_encode_s = 0.0
-    fps_window_sleep_s = 0.0
-    fps_window_cmd_count = 0
     next_observation_capture_deadline_t = time.monotonic()
     latest_observation_wire_bytes: bytes | None = None
 
@@ -219,7 +211,6 @@ def main():
             fps_window_loops += 1
             try:
                 # Receive protobuf message instead of JSON
-                cmd_parse_start = time.perf_counter()
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
 
                 # Convert protobuf to action dictionary using existing method
@@ -227,18 +218,12 @@ def main():
                 robot_action.ParseFromString(msg_bytes)
 
                 data = robot.protobuf_converter.protobuf_to_action(robot_action)
-                fps_window_cmd_parse_s += time.perf_counter() - cmd_parse_start
-                fps_window_cmd_count += 1
 
                 # Send action to robot
-                send_action_start = time.perf_counter()
                 _action_sent = robot.send_action(data)
-                fps_window_send_action_s += time.perf_counter() - send_action_start
 
                 # Update the robot
-                robot_update_start = time.perf_counter()
                 robot.update()
-                fps_window_robot_update_s += time.perf_counter() - robot_update_start
 
                 last_cmd_time = time.time()
                 watchdog_active = False
@@ -256,7 +241,6 @@ def main():
                 )
                 watchdog_active = True
 
-            observation_timing: dict[str, float] = {}
             if host.enable_host_fps_fix:
                 min_capture_dt_s = 1.0 / HOST_FIX_OBSERVATION_FPS
                 now_mono = time.monotonic()
@@ -267,7 +251,6 @@ def main():
                     observation = robot.get_observation(
                         parallel_camera_reads=True,
                         prefer_latest_camera_frames=True,
-                        timing=observation_timing,
                     )
                     fps_window_fresh_captures += 1
                     # Keep a stable capture cadence; avoid phase-locking into every-other-loop capture.
@@ -279,11 +262,8 @@ def main():
             else:
                 if observation is not None and observation != {}:
                     previous_observation = observation
-                observation = robot.get_observation(timing=observation_timing)
+                observation = robot.get_observation()
                 fps_window_fresh_captures += 1
-
-            for key, value in observation_timing.items():
-                fps_window_observation_timing_sums[key] = fps_window_observation_timing_sums.get(key, 0.0) + value
 
             # Send the observation to the remote agent
             try:
@@ -296,23 +276,15 @@ def main():
                     if host.enable_host_fps_fix:
                         if latest_observation_wire_bytes is None:
                             # Encode only when a fresh observation is captured; reuse cached bytes otherwise.
-                            encode_start = time.perf_counter()
                             robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
                             latest_observation_wire_bytes = robot_state.SerializeToString()
-                            fps_window_encode_s += time.perf_counter() - encode_start
                             fps_window_encodes += 1
-                        publish_send_start = time.perf_counter()
                         host.zmq_observation_socket.send(latest_observation_wire_bytes, flags=zmq.NOBLOCK)
-                        fps_window_publish_send_s += time.perf_counter() - publish_send_start
                     else:
                         # Legacy behavior: re-encode observation every publish.
-                        encode_start = time.perf_counter()
                         robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
                         encoded_bytes = robot_state.SerializeToString()
-                        fps_window_encode_s += time.perf_counter() - encode_start
-                        publish_send_start = time.perf_counter()
                         host.zmq_observation_socket.send(encoded_bytes, flags=zmq.NOBLOCK)
-                        fps_window_publish_send_s += time.perf_counter() - publish_send_start
                         fps_window_encodes += 1
                     fps_window_publishes += 1
             except zmq.Again:
@@ -324,9 +296,7 @@ def main():
             elapsed = time.time() - loop_start_time
 
             requested_sleep_s = max(1 / host.max_loop_freq_hz - elapsed, 0)
-            sleep_start = time.perf_counter()
             time.sleep(requested_sleep_s)
-            fps_window_sleep_s += time.perf_counter() - sleep_start
             now_mono = time.monotonic()
             fps_window_elapsed = now_mono - fps_window_start
             if fps_window_elapsed >= HOST_FPS_LOG_INTERVAL_S:
@@ -334,38 +304,6 @@ def main():
                 host_capture_fps = fps_window_fresh_captures / fps_window_elapsed
                 host_publish_fps = fps_window_publishes / fps_window_elapsed
                 host_encode_fps = fps_window_encodes / fps_window_elapsed
-                fresh_publish_ratio = 0.0
-                if host_publish_fps > 0:
-                    fresh_publish_ratio = (host_capture_fps / host_publish_fps) * 100.0
-
-                obs_count = max(fps_window_fresh_captures, 1)
-                loop_count = max(fps_window_loops, 1)
-                cmd_count = max(fps_window_cmd_count, 1)
-                publish_count = max(fps_window_publishes, 1)
-                encode_count = max(fps_window_encodes, 1)
-                avg_obs_total_ms = (fps_window_observation_timing_sums.get("observation_total_s", 0.0) / obs_count) * 1000.0
-                avg_left_ms = (fps_window_observation_timing_sums.get("left_arm_s", 0.0) / obs_count) * 1000.0
-                avg_right_ms = (fps_window_observation_timing_sums.get("right_arm_s", 0.0) / obs_count) * 1000.0
-                avg_base_ms = (fps_window_observation_timing_sums.get("base_s", 0.0) / obs_count) * 1000.0
-                avg_z_ms = (fps_window_observation_timing_sums.get("z_s", 0.0) / obs_count) * 1000.0
-                avg_cameras_ms = (fps_window_observation_timing_sums.get("cameras_s", 0.0) / obs_count) * 1000.0
-                avg_camera_reused = fps_window_observation_timing_sums.get("camera_reused_count", 0.0) / obs_count
-                avg_camera_black = fps_window_observation_timing_sums.get("camera_black_count", 0.0) / obs_count
-                avg_cmd_parse_ms = (fps_window_cmd_parse_s / cmd_count) * 1000.0
-                avg_send_action_ms = (fps_window_send_action_s / cmd_count) * 1000.0
-                avg_robot_update_ms = (fps_window_robot_update_s / cmd_count) * 1000.0
-                avg_encode_ms = (fps_window_encode_s / encode_count) * 1000.0
-                avg_publish_send_ms = (fps_window_publish_send_s / publish_count) * 1000.0
-                avg_sleep_ms = (fps_window_sleep_s / loop_count) * 1000.0
-                camera_keys = sorted(
-                    key for key in fps_window_observation_timing_sums if key.startswith("camera_") and key.endswith("_s")
-                )
-                camera_avg_parts = []
-                for key in camera_keys:
-                    cam_name = key.removeprefix("camera_").removesuffix("_s")
-                    cam_avg_ms = (fps_window_observation_timing_sums[key] / obs_count) * 1000.0
-                    camera_avg_parts.append(f"{cam_name}={cam_avg_ms:.1f}")
-                camera_avg_str = ", ".join(camera_avg_parts) if camera_avg_parts else "none"
                 print(
                     "Host FPS: "
                     f"loop={host_loop_fps:.2f} Hz, "
@@ -374,30 +312,11 @@ def main():
                     f"encode={host_encode_fps:.2f} Hz "
                     f"(target={float(host.max_loop_freq_hz):.2f} Hz, window={fps_window_elapsed:.2f}s)"
                 )
-                print(
-                    "Host Timing: "
-                    f"fresh/publish={fresh_publish_ratio:.1f}%, "
-                    f"cmd_parse={avg_cmd_parse_ms:.2f}ms, send_action={avg_send_action_ms:.2f}ms, "
-                    f"update={avg_robot_update_ms:.2f}ms, obs_total={avg_obs_total_ms:.2f}ms "
-                    f"[left={avg_left_ms:.2f}, right={avg_right_ms:.2f}, base={avg_base_ms:.2f}, "
-                    f"z={avg_z_ms:.2f}, cameras={avg_cameras_ms:.2f}, per_cam={camera_avg_str}, "
-                    f"reused={avg_camera_reused:.2f}/obs, black={avg_camera_black:.2f}/obs], "
-                    f"encode={avg_encode_ms:.2f}ms, publish_send={avg_publish_send_ms:.2f}ms, "
-                    f"sleep={avg_sleep_ms:.2f}ms"
-                )
                 fps_window_start = now_mono
                 fps_window_loops = 0
                 fps_window_fresh_captures = 0
                 fps_window_publishes = 0
                 fps_window_encodes = 0
-                fps_window_cmd_parse_s = 0.0
-                fps_window_send_action_s = 0.0
-                fps_window_robot_update_s = 0.0
-                fps_window_observation_timing_sums = {}
-                fps_window_publish_send_s = 0.0
-                fps_window_encode_s = 0.0
-                fps_window_sleep_s = 0.0
-                fps_window_cmd_count = 0
             duration = time.perf_counter() - start
         print("Cycle time reached.")
 
