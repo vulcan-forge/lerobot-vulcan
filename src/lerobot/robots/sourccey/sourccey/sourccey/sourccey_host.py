@@ -155,6 +155,8 @@ def main():
     watchdog_active = False
     fps_window_start = time.monotonic()
     fps_window_loops = 0
+    fps_window_fresh_captures = 0
+    fps_window_publishes = 0
     patch_last_observation_capture_t = 0.0
 
     try:
@@ -207,11 +209,13 @@ def main():
                     if observation is not None and observation != {}:
                         previous_observation = observation
                     observation = robot.get_observation()
+                    fps_window_fresh_captures += 1
                     patch_last_observation_capture_t = time.monotonic()
             else:
                 if observation is not None and observation != {}:
                     previous_observation = observation
                 observation = robot.get_observation()
+                fps_window_fresh_captures += 1
 
             # Send the observation to the remote agent
             try:
@@ -226,6 +230,7 @@ def main():
 
                     # Send protobuf message instead of JSON
                     host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
+                    fps_window_publishes += 1
             except zmq.Again:
                 logging.info("Dropping observation, no client connected")
             except Exception as e:
@@ -238,13 +243,20 @@ def main():
             now_mono = time.monotonic()
             fps_window_elapsed = now_mono - fps_window_start
             if fps_window_elapsed >= PATCH_FPS_LOG_INTERVAL_S:
-                host_fps = fps_window_loops / fps_window_elapsed
+                host_loop_fps = fps_window_loops / fps_window_elapsed
+                host_capture_fps = fps_window_fresh_captures / fps_window_elapsed
+                host_publish_fps = fps_window_publishes / fps_window_elapsed
                 print(
-                    f"Host FPS: {host_fps:.2f} Hz "
+                    "Host FPS: "
+                    f"loop={host_loop_fps:.2f} Hz, "
+                    f"fresh_capture={host_capture_fps:.2f} Hz, "
+                    f"publish={host_publish_fps:.2f} Hz "
                     f"(target={float(host.max_loop_freq_hz):.2f} Hz, window={fps_window_elapsed:.2f}s)"
                 )
                 fps_window_start = now_mono
                 fps_window_loops = 0
+                fps_window_fresh_captures = 0
+                fps_window_publishes = 0
             duration = time.perf_counter() - start
         print("Cycle time reached.")
 
