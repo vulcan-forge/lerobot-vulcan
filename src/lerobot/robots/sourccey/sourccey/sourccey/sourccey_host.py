@@ -153,8 +153,8 @@ def main():
 
     last_cmd_time = time.time()
     watchdog_active = False
-    patch_fps_window_start = time.monotonic()
-    patch_fps_window_loops = 0
+    fps_window_start = time.monotonic()
+    fps_window_loops = 0
     patch_last_observation_capture_t = 0.0
 
     try:
@@ -166,8 +166,7 @@ def main():
         previous_observation = None
         while duration < host.connection_time_s:
             loop_start_time = time.time()
-            if host.enable_host_fps_patch:
-                patch_fps_window_loops += 1
+            fps_window_loops += 1
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
@@ -236,17 +235,16 @@ def main():
             elapsed = time.time() - loop_start_time
 
             time.sleep(max(1 / host.max_loop_freq_hz - elapsed, 0))
-            if host.enable_host_fps_patch:
-                now_mono = time.monotonic()
-                fps_window_elapsed = now_mono - patch_fps_window_start
-                if fps_window_elapsed >= PATCH_FPS_LOG_INTERVAL_S:
-                    host_fps = patch_fps_window_loops / fps_window_elapsed
-                    print(
-                        f"Host FPS: {host_fps:.2f} Hz "
-                        f"(target={float(host.max_loop_freq_hz):.2f} Hz, window={fps_window_elapsed:.2f}s)"
-                    )
-                    patch_fps_window_start = now_mono
-                    patch_fps_window_loops = 0
+            now_mono = time.monotonic()
+            fps_window_elapsed = now_mono - fps_window_start
+            if fps_window_elapsed >= PATCH_FPS_LOG_INTERVAL_S:
+                host_fps = fps_window_loops / fps_window_elapsed
+                print(
+                    f"Host FPS: {host_fps:.2f} Hz "
+                    f"(target={float(host.max_loop_freq_hz):.2f} Hz, window={fps_window_elapsed:.2f}s)"
+                )
+                fps_window_start = now_mono
+                fps_window_loops = 0
             duration = time.perf_counter() - start
         print("Cycle time reached.")
 
