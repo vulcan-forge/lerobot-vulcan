@@ -225,11 +225,9 @@ def main():
                 fps_window_elapsed = now_mono - fps_window_start
                 if fps_window_elapsed >= max(0.1, float(host.fps_log_interval_s)):
                     host_fps = fps_window_loops / fps_window_elapsed
-                    logging.info(
-                        "Host FPS: %.2f Hz (target=%.2f Hz, window=%.2fs)",
-                        host_fps,
-                        float(host.max_loop_freq_hz),
-                        fps_window_elapsed,
+                    print(
+                        f"Host FPS: {host_fps:.2f} Hz "
+                        f"(target={float(host.max_loop_freq_hz):.2f} Hz, window={fps_window_elapsed:.2f}s)"
                     )
                     fps_window_start = now_mono
                     fps_window_loops = 0
