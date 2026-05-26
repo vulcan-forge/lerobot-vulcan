@@ -139,6 +139,9 @@ class SourcceyHostConfig:
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
+    # Cap expensive fresh observation capture rate; host loop can still run faster
+    # and republish the latest observation between fresh captures.
+    max_observation_fps: float = 15.0
     # Periodic host loop FPS logging for runtime debugging.
     log_fps: bool = True
     fps_log_interval_s: float = 5.0

@@ -41,6 +41,7 @@ class SourcceyHost:
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
         self.max_loop_freq_hz = config.max_loop_freq_hz
+        self.max_observation_fps = max(0.0, float(config.max_observation_fps))
         self.log_fps = bool(config.log_fps)
         self.fps_log_interval_s = max(0.1, float(config.fps_log_interval_s))
 
@@ -151,6 +152,7 @@ def main():
     watchdog_active = False
     fps_window_start = time.monotonic()
     fps_window_loops = 0
+    last_observation_capture_t = 0.0
 
     try:
         # Business logic
@@ -194,9 +196,17 @@ def main():
                 )
                 watchdog_active = True
 
-            if observation is not None and observation != {}:
-                previous_observation = observation
-            observation = robot.get_observation()
+            capture_now = True
+            if host.max_observation_fps > 0:
+                min_capture_dt_s = 1.0 / host.max_observation_fps
+                now_mono = time.monotonic()
+                capture_now = (now_mono - last_observation_capture_t) >= min_capture_dt_s
+
+            if capture_now:
+                if observation is not None and observation != {}:
+                    previous_observation = observation
+                observation = robot.get_observation()
+                last_observation_capture_t = time.monotonic()
 
             # Send the observation to the remote agent
             try:
