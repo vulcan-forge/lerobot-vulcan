@@ -2,8 +2,10 @@
 
 NewBot is a 7-DoF Feetech arm pair supported in LeRobot:
 
-- Follower type: `newbot` or `new_bot`
-- Leader type: `newbot_leader` or `new_bot_leader`
+- Follower type: `newbot`, `new_bot`, or `new_arm`
+- Leader type: `newbot_leader`, `new_bot_leader`, or `new_arm_leader`
+- Bimanual follower type: `bi_new_arm`
+- Bimanual leader type: `bi_new_arm_leader`
 
 The default joint layout is:
 
@@ -102,6 +104,45 @@ lerobot-teleoperate \
 
 If you want to attach cameras to the follower, add them with `--robot.cameras=...` the same way as the other LeRobot hardware docs.
 
+## Bimanual NewArm
+
+`bi_new_arm` uses one bus per arm. The right arm uses motor IDs `1` through `7`; the left arm uses motor IDs `8` through `14`. A bimanual teleoperation setup uses four ports total.
+
+Calibrate the leader pair:
+
+```bash
+lerobot-calibrate \
+    --teleop.type=bi_new_arm_leader \
+    --teleop.left_arm_config.port=COM* \
+    --teleop.right_arm_config.port=COM* \
+    --teleop.id=my_bi_new_arm_leader
+```
+
+Calibrate the follower pair:
+
+```bash
+lerobot-calibrate \
+    --robot.type=bi_new_arm \
+    --robot.left_arm_config.port=COM* \
+    --robot.right_arm_config.port=COM* \
+    --robot.id=my_bi_new_arm_follower
+```
+
+Teleoperate with all four ports:
+
+```bash
+lerobot-teleoperate \
+    --robot.type=bi_new_arm \
+    --robot.left_arm_config.port=COM* \
+    --robot.right_arm_config.port=COM* \
+    --robot.id=my_bi_new_arm_follower \
+    --teleop.type=bi_new_arm_leader \
+    --teleop.left_arm_config.port=COM* \
+    --teleop.right_arm_config.port=COM* \
+    --teleop.id=my_bi_new_arm_leader \
+    --display_data=true
+```
+
 ## Python API
 
 ```python
@@ -136,4 +177,4 @@ lerobot-teleoperate --robot.type=newbot --robot.port=COM25 --robot.id=my_newbot_
 
 ## Current CLI support note
 
-In this repo snapshot, `lerobot-teleoperate` imports the NewBot modules, and the dedicated calibration CLIs are present. The generic `lerobot-record`, `lerobot-replay`, `lerobot-rollout`, and `lerobot-setup-motors` scripts do not currently import the NewBot modules yet, so they may need a small follow-up patch before `newbot` works there from the CLI.
+In this repo snapshot, `lerobot-teleoperate`, `lerobot-record`, and `lerobot-calibrate` import the bimanual NewArm modules. Use `bi_new_arm` with `bi_new_arm_leader` for paired-arm teleoperation and recording.

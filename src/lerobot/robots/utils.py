@@ -60,6 +60,10 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .bi_so_follower import BiSOFollower
 
         return BiSOFollower(config)
+    elif config.type == "bi_new_arm":
+        from .bi_new_arm import BiNewArm
+
+        return BiNewArm(config)
     elif config.type == "reachy2":
         from .reachy2 import Reachy2Robot
 

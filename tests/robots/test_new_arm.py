@@ -20,7 +20,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lerobot.common.so_arm import make_new_bot_follower_joint_configs
+from lerobot.robots.bi_new_arm import (
+    BiNewArm,
+    BiNewArmConfig,
+    LeftBiNewArmFollowerArmConfig,
+    RightBiNewArmFollowerArmConfig,
+)
 from lerobot.robots.new_arm import NewArm, NewArmConfig
+from lerobot.teleoperators.bi_new_arm_leader import (
+    BiNewArmLeader,
+    BiNewArmLeaderConfig,
+    LeftBiNewArmLeaderArmConfig,
+    RightBiNewArmLeaderArmConfig,
+)
 from lerobot.teleoperators.new_arm_leader import NewArmLeader, NewArmLeaderConfig
 
 
@@ -155,3 +167,73 @@ def test_new_arm_follower_calibration_motor_models():
     }
     assert motors["gripper"].id == 7
     assert motors["gripper"].is_gripper
+
+
+def test_bi_new_arm_default_motor_ids():
+    left_follower = LeftBiNewArmFollowerArmConfig(port="/dev/left-follower")
+    right_follower = RightBiNewArmFollowerArmConfig(port="/dev/right-follower")
+    left_leader = LeftBiNewArmLeaderArmConfig(port="/dev/left-leader")
+    right_leader = RightBiNewArmLeaderArmConfig(port="/dev/right-leader")
+
+    assert [cfg.id for cfg in right_follower.motors.values()] == list(range(1, 8))
+    assert [cfg.id for cfg in left_follower.motors.values()] == list(range(8, 15))
+    assert [cfg.id for cfg in right_leader.motors.values()] == list(range(1, 8))
+    assert [cfg.id for cfg in left_leader.motors.values()] == list(range(8, 15))
+
+
+def _fresh_bus_side_effect():
+    def _side_effect(*_args, **kwargs):
+        bus_mock = _make_bus_mock()
+        return _bus_side_effect(bus_mock)(*_args, **kwargs)
+
+    return _side_effect
+
+
+def test_bi_new_arm_uses_left_right_action_keys():
+    with (
+        patch("lerobot.robots.new_arm.new_arm.FeetechMotorsBus", side_effect=_fresh_bus_side_effect()),
+        patch.object(NewArm, "configure", lambda self: None),
+    ):
+        robot = BiNewArm(
+            BiNewArmConfig(
+                left_arm_config=LeftBiNewArmFollowerArmConfig(port="/dev/left-follower"),
+                right_arm_config=RightBiNewArmFollowerArmConfig(port="/dev/right-follower"),
+            )
+        )
+        robot.connect()
+        action = {key: index for index, key in enumerate(robot.action_features, 1)}
+
+        returned = robot.send_action(action)
+        obs = robot.get_observation()
+        robot.disconnect()
+
+    assert set(robot.action_features) == {
+        *(f"left_{motor}.pos" for motor in EXPECTED_MOTORS),
+        *(f"right_{motor}.pos" for motor in EXPECTED_MOTORS),
+    }
+    assert returned == action
+    assert set(obs) == set(robot.observation_features)
+
+
+def test_bi_new_arm_leader_reads_left_right_action_keys():
+    with (
+        patch(
+            "lerobot.teleoperators.new_arm_leader.new_arm_leader.FeetechMotorsBus",
+            side_effect=_fresh_bus_side_effect(),
+        ),
+        patch.object(NewArmLeader, "configure", lambda self: None),
+    ):
+        leader = BiNewArmLeader(
+            BiNewArmLeaderConfig(
+                left_arm_config=LeftBiNewArmLeaderArmConfig(port="/dev/left-leader"),
+                right_arm_config=RightBiNewArmLeaderArmConfig(port="/dev/right-leader"),
+            )
+        )
+        leader.connect()
+        action = leader.get_action()
+        leader.disconnect()
+
+    assert set(action) == {
+        *(f"left_{motor}.pos" for motor in EXPECTED_MOTORS),
+        *(f"right_{motor}.pos" for motor in EXPECTED_MOTORS),
+    }
