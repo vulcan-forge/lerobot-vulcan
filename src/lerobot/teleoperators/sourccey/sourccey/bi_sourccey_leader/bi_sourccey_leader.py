@@ -88,14 +88,25 @@ class BiSourcceyLeader(Teleoperator):
         """
         Auto-calibrate both arms simultaneously using threading.
         """
+        calibration_errors: list[tuple[str, BaseException]] = []
+
+        def run_arm_calibration(arm_name: str, arm_obj, **kwargs) -> None:
+            try:
+                arm_obj.auto_calibrate(**kwargs)
+            except BaseException as exc:
+                logger.exception("Auto-calibration failed for %s leader arm", arm_name)
+                calibration_errors.append((arm_name, exc))
+
         # Create threads for each arm
         left_thread = threading.Thread(
-            target=self.left_arm.auto_calibrate,
-            kwargs={"reverse": False}
+            target=run_arm_calibration,
+            args=("left", self.left_arm),
+            kwargs={"reverse": False},
         )
         right_thread = threading.Thread(
-            target=self.right_arm.auto_calibrate,
-            kwargs={"reverse": True}
+            target=run_arm_calibration,
+            args=("right", self.right_arm),
+            kwargs={"reverse": True},
         )
 
         # Start both threads
@@ -105,6 +116,10 @@ class BiSourcceyLeader(Teleoperator):
         # Wait for both threads to complete
         left_thread.join()
         right_thread.join()
+
+        if calibration_errors:
+            error_messages = ", ".join(f"{arm_name}: {exc}" for arm_name, exc in calibration_errors)
+            raise RuntimeError(f"Desktop leader auto-calibration failed ({error_messages})") from calibration_errors[0][1]
 
     def configure(self) -> None:
         self.left_arm.configure()

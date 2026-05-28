@@ -205,14 +205,25 @@ class Sourccey(Robot):
             # Calibrate the z actuator first so vertical motion is available before arm calibration.
             self.z_actuator.calibrator.auto_calibrate()
 
+            calibration_errors: list[tuple[str, BaseException]] = []
+
+            def run_arm_calibration(arm_name: str, arm_obj, **kwargs) -> None:
+                try:
+                    arm_obj.auto_calibrate(**kwargs)
+                except BaseException as exc:
+                    logger.exception("Auto-calibration failed for %s arm", arm_name)
+                    calibration_errors.append((arm_name, exc))
+
             # Create threads for each arm
             left_thread = threading.Thread(
-                target=self.left_arm.auto_calibrate,
-                kwargs={"reverse": False, "full_reset": full_reset}
+                target=run_arm_calibration,
+                args=("left", self.left_arm),
+                kwargs={"reverse": False, "full_reset": full_reset},
             )
             right_thread = threading.Thread(
-                target=self.right_arm.auto_calibrate,
-                kwargs={"reverse": True, "full_reset": full_reset}
+                target=run_arm_calibration,
+                args=("right", self.right_arm),
+                kwargs={"reverse": True, "full_reset": full_reset},
             )
 
             # Start left arm immediately
@@ -225,6 +236,10 @@ class Sourccey(Robot):
             # Wait for both threads to complete
             left_thread.join()
             right_thread.join()
+
+            if calibration_errors:
+                error_messages = ", ".join(f"{arm_name}: {exc}" for arm_name, exc in calibration_errors)
+                raise RuntimeError(f"Arm auto-calibration failed ({error_messages})") from calibration_errors[0][1]
 
         elif arm == "left":
             self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)
