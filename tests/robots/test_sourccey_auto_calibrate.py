@@ -22,10 +22,10 @@ class _DummyArm:
 
 class _DummyZCalibrator:
     def __init__(self):
-        self.calls = 0
+        self.calls: list[bool] = []
 
-    def auto_calibrate(self) -> None:
-        self.calls += 1
+    def auto_calibrate(self, *, full_reset: bool = False) -> None:
+        self.calls.append(full_reset)
 
 
 class _DummyZActuator:
@@ -44,7 +44,7 @@ def test_sourccey_auto_calibrate_raises_when_arm_thread_fails(monkeypatch: pytes
     with pytest.raises(RuntimeError, match="left arm"):
         robot.auto_calibrate(full_reset=True)
 
-    assert robot.z_actuator.calibrator.calls == 1
+    assert robot.z_actuator.calibrator.calls == [True]
     assert robot.right_arm.calls == [{"reverse": True, "full_reset": True}]
 
 
