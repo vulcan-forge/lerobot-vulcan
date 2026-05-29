@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 from pathlib import Path
 import threading
 import time
@@ -17,6 +18,9 @@ try:
     from gpiozero import MCP3008  # type: ignore
 except Exception:  # pragma: no cover
     MCP3008 = None  # type: ignore
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -77,9 +81,12 @@ class ZSensor:
         if self._adc is None:
             candidate = None
             try:
+                logger.info("Connecting ZSensor MCP3008 on channel=%s", self.adc_channel)
                 candidate = MCP3008(channel=self.adc_channel)
                 _ = candidate.raw_value  # probe once to confirm the ADC responds
+                logger.info("ZSensor MCP3008 probe succeeded on channel=%s", self.adc_channel)
             except RuntimeError:
+                logger.exception("ZSensor MCP3008 runtime error during connect on channel=%s", self.adc_channel)
                 raise  # Re-raise our floating signal error
             except Exception as exc:
                 if candidate is not None:
@@ -90,13 +97,16 @@ class ZSensor:
                 print(f"Failed to initialize MCP3008 on channel {self.adc_channel}. {exc}")
 
             self._adc = candidate
+            logger.info("ZSensor connected: channel=%s connected=%s", self.adc_channel, self.is_connected)
 
     def disconnect(self) -> None:
         if self._adc is not None:
+            logger.info("Disconnecting ZSensor MCP3008 on channel=%s", self.adc_channel)
             close = getattr(self._adc, "close", None)
             if callable(close):
                 close()
             self._adc = None
+            logger.info("ZSensor disconnected on channel=%s", self.adc_channel)
 
     def set_calibration(self, *, raw_min: int, raw_max: int, invert: Optional[bool] = None) -> None:
         self.calibration_min = int(raw_min)
@@ -234,13 +244,23 @@ class SourcceyZActuator:
         return self.sensor.is_connected
 
     def connect(self) -> None:
+        logger.info("Connecting SourcceyZActuator: motor=%s", self.motor)
         self.sensor.connect()
         self.use_z_actuator = True if self.sensor.is_connected else False
+        logger.info(
+            "SourcceyZActuator connect complete: motor=%s sensor_connected=%s use_z_actuator=%s calibration_path=%s",
+            self.motor,
+            self.sensor.is_connected,
+            self.use_z_actuator,
+            self.calibration_fpath,
+        )
 
     def disconnect(self) -> None:
         # Ensure no background thread is still calling update() while we disconnect the ADC.
+        logger.info("Disconnecting SourcceyZActuator: motor=%s", self.motor)
         self.stop_position_controller()
         self.sensor.disconnect()
+        logger.info("SourcceyZActuator disconnected: motor=%s", self.motor)
 
     def update(self, dt_s: float, *, instant: bool = True) -> None:
         if self.driver is None:
@@ -410,8 +430,9 @@ class SourcceyZActuator:
         self._ctl_thread.start()
 
     def stop_position_controller(self, *, join_timeout_s: float = 1.0) -> None:
-        print("Stopping Z actuator position controller")
         """Stop the background position controller (if running) and stop motor output."""
+        logger.info("Stopping Z actuator position controller: motor=%s join_timeout_s=%s", self.motor, join_timeout_s)
+        print("Stopping Z actuator position controller")
         self._ctl_stop_event.set()
         t = self._ctl_thread
         if t is not None and t.is_alive():
@@ -422,6 +443,7 @@ class SourcceyZActuator:
     def stop(self) -> None:
         """Stop motor output and reset integrator."""
         if self.driver is not None:
+            logger.info("Sending Z actuator stop command: motor=%s", self.motor)
             self.driver.set_velocity(self.motor, 0.0, normalize=True, instant=True)
 
     ############################################################
@@ -522,6 +544,14 @@ class SourcceyZActuator:
             raise RuntimeError("No driver provided. Pass `driver=...` to move the actuator.")
 
         # Avoid concurrent control from background thread.
+        logger.info(
+            "Starting blocking Z move: motor=%s target=%s timeout_s=%s hz=%s instant=%s",
+            self.motor,
+            target_pos_m100_100,
+            timeout_s,
+            hz,
+            instant,
+        )
         self.stop_position_controller()
 
         self.write_position(float(target_pos_m100_100))
@@ -534,6 +564,7 @@ class SourcceyZActuator:
             now = time.monotonic()
             if now >= t_end:
                 self.stop()
+                logger.error("Blocking Z move timed out: motor=%s target=%s", self.motor, target_pos_m100_100)
                 raise TimeoutError(f"Timed out moving Z to {target_pos_m100_100}")
 
             dt = now - last_t
@@ -544,6 +575,13 @@ class SourcceyZActuator:
 
             if abs(pos - float(target_pos_m100_100)) <= float(self.deadband):
                 self.stop()
+                logger.info(
+                    "Blocking Z move reached target: motor=%s target=%s final_pos=%s deadband=%s",
+                    self.motor,
+                    target_pos_m100_100,
+                    pos,
+                    self.deadband,
+                )
                 return pos
 
             time.sleep(period)

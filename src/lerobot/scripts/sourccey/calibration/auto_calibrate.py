@@ -81,30 +81,49 @@ def auto_calibrate(cfg: AutoCalibrateConfig):
     init_logging()
     logging.info("Starting automatic calibration process...")
     logging.info(pformat(asdict(cfg)))
+    logging.info(
+        "Auto-calibrate request received: device_type=%s full_reset=%s arm=%s",
+        type(cfg.device).__name__,
+        cfg.full_reset,
+        cfg.arm,
+    )
 
     # Create device instance
     if isinstance(cfg.device, RobotConfig):
+        logging.info("Creating robot from config: %s", type(cfg.device).__name__)
         device = make_robot_from_config(cfg.device)
     elif isinstance(cfg.device, TeleoperatorConfig):
+        logging.info("Creating teleoperator from config: %s", type(cfg.device).__name__)
         device = make_teleoperator_from_config(cfg.device)
     else:
         raise ValueError(f"Unsupported device type: {type(cfg.device)}")
 
     try:
         # Connect without calibration (we'll do auto-calibration)
+        logging.info("Connecting device with calibrate=False before auto-calibration")
         device.connect(calibrate=False)
+        logging.info(
+            "Device connected: device_class=%s is_connected=%s supports_auto_calibrate=%s",
+            type(device).__name__,
+            getattr(device, "is_connected", "unknown"),
+            hasattr(device, "auto_calibrate"),
+        )
 
         # Check if device supports auto-calibration
         if hasattr(device, 'auto_calibrate'):
+            logging.info("Invoking device.auto_calibrate(full_reset=%s)", cfg.full_reset)
             device.auto_calibrate(full_reset=cfg.full_reset)
+            logging.info("device.auto_calibrate(...) returned successfully")
         else:
             logging.warning("Device does not support auto-calibration. Returning")
 
     except Exception as e:
-        logging.error(f"Calibration failed: {e}")
+        logging.exception("Calibration failed with exception: %s", e)
         raise
     finally:
+        logging.info("Disconnecting device after auto-calibration")
         device.disconnect()
+        logging.info("Device disconnect complete")
 
 
 if __name__ == "__main__":

@@ -200,11 +200,27 @@ class Sourccey(Robot):
         Auto-calibrate robot joints. If arm is None, calibrate Z first, then both arms in parallel.
         arm can be "left" or "right" to calibrate only that side.
         """
+        logger.info(
+            "Sourccey.auto_calibrate start: full_reset=%s arm=%s left_connected=%s right_connected=%s z_connected=%s",
+            full_reset,
+            arm,
+            getattr(self.left_arm, "is_connected", None),
+            getattr(self.right_arm, "is_connected", None),
+            getattr(self.z_actuator, "is_connected", None),
+        )
 
         if arm is None:
             # Soft robot calibration should not physically move the Z actuator.
             # Only a full reset re-detects Z limits by movement.
-            self.z_actuator.calibrator.auto_calibrate(full_reset=full_reset)
+            logger.info(
+                "Starting Z actuator calibration before arm calibration: full_reset=%s sensor_calibration=(min=%s max=%s invert=%s)",
+                full_reset,
+                getattr(self.z_actuator.sensor, "calibration_min", None),
+                getattr(self.z_actuator.sensor, "calibration_max", None),
+                getattr(self.z_actuator.sensor, "invert", None),
+            )
+            z_result = self.z_actuator.calibrator.auto_calibrate(full_reset=full_reset)
+            logger.info("Z actuator calibration finished: result=%s", z_result)
 
             calibration_errors: list[tuple[str, BaseException]] = []
 
@@ -229,26 +245,33 @@ class Sourccey(Robot):
 
             # Start left arm immediately
             left_thread.start()
+            logger.info("Started left arm calibration thread: full_reset=%s", full_reset)
 
             # Wait 3 seconds before starting right arm
             time.sleep(3)
             right_thread.start()
+            logger.info("Started right arm calibration thread after delay: full_reset=%s", full_reset)
 
             # Wait for both threads to complete
             left_thread.join()
             right_thread.join()
+            logger.info("Arm calibration threads joined")
 
             if calibration_errors:
                 error_messages = ", ".join(f"{arm_name}: {exc}" for arm_name, exc in calibration_errors)
+                logger.error("Arm auto-calibration encountered errors: %s", error_messages)
                 raise RuntimeError(f"Arm auto-calibration failed ({error_messages})") from calibration_errors[0][1]
 
         elif arm == "left":
+            logger.info("Running left-arm-only auto-calibration: full_reset=%s", full_reset)
             self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)
         elif arm == "right":
+            logger.info("Running right-arm-only auto-calibration: full_reset=%s", full_reset)
             self.right_arm.auto_calibrate(reverse=True, full_reset=full_reset)
         else:
             raise ValueError("arm must be one of: None, 'left', 'right'")
 
+        logger.info("Sourccey.auto_calibrate completed successfully: full_reset=%s arm=%s", full_reset, arm)
         print("Auto-calibration completed")
         return True
 
