@@ -164,10 +164,20 @@ unitree_g1 = [
 ]
 reachy2 = ["reachy2_sdk>=1.0.15,<1.1.0"]
 sourccey = [
+    # One-stop Sourccey setup: `uv sync --extra sourccey`
+    # Pull in the desktop/training policy stack so rollouts + training
+    # don't require separate extras.
+    "lerobot[dataset]",
+    "lerobot[training]",
+    "lerobot[viz]",
+    "lerobot[xvla]",
+    "lerobot[sarm]",
+    "lerobot[pynput-dep]",
+    "lerobot[pyzmq-dep]",
+
     "lerobot[feetech]",
     "lerobot[grpcio-dep]",
 
-    "pyzmq>=26.2.1",
     "gpiozero>=2.0.1 ; sys_platform == 'linux'",
     "lgpio>=0.2.2 ; sys_platform == 'linux'",
     "numpy>=1.24",
