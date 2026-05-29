@@ -196,15 +196,11 @@ sourccey = [
     "faster-whisper>=1.1.1",
 ]
 sourccey-desktop = [
+    "lerobot[sourccey]",
+
     "torch==2.9.1",
     "torchvision>=0.24.1",
     "torchcodec==0.9.1",
-
-    "lerobot[xvla]",
-    "lerobot[sarm]",
-    "lerobot[viz]",
-    "lerobot[pynput-dep]",
-    "lerobot[dataset]",
 
     # Audio
     # Pin known-good CUDA/cuDNN stack for Windows GPU Whisper.
