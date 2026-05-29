@@ -210,12 +210,17 @@ class SourcceyZCalibrator:
         raw_max = int(max(raw_bottom, raw_top))
 
         self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
-
-        # Set the actuator to 100
-        self.actuator.move_to_position_blocking(100.0)
-
-        # Save the calibration
         self.actuator._save_calibration()
+
+        # Repositioning after calibration is best-effort only. A failure here
+        # should not invalidate the newly detected calibration bounds.
+        try:
+            self.actuator.move_to_position_blocking(100.0)
+        except TimeoutError as exc:
+            logger.warning(
+                "Z calibration saved, but reposition to 100.0 timed out: %s",
+                exc,
+            )
 
         return ZCalibrationResult(
             raw_bottom=int(raw_bottom),
