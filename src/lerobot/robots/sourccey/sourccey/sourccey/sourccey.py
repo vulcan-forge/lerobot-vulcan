@@ -210,6 +210,11 @@ class Sourccey(Robot):
         )
 
         if arm is None:
+            if full_reset:
+                logger.info("Full-reset preflight: disabling torque on both arms before calibration")
+                self.disable_arm_torque()
+                logger.info("Full-reset preflight: both arms requested to untorque before calibration")
+
             # Soft robot calibration should not physically move the Z actuator.
             # Only a full reset re-detects Z limits by movement.
             logger.info(
