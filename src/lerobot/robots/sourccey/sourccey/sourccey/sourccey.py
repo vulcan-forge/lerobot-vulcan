@@ -202,8 +202,9 @@ class Sourccey(Robot):
         """
 
         if arm is None:
-            # Calibrate the z actuator first so vertical motion is available before arm calibration.
-            self.z_actuator.calibrator.auto_calibrate()
+            # Soft robot calibration should not physically move the Z actuator.
+            # Only a full reset re-detects Z limits by movement.
+            self.z_actuator.calibrator.auto_calibrate(full_reset=full_reset)
 
             calibration_errors: list[tuple[str, BaseException]] = []
 

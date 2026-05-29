@@ -1,6 +1,10 @@
 import time
 from dataclasses import dataclass
 from typing import Optional
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -119,10 +123,53 @@ class SourcceyZCalibrator:
 
         return int(last_raw)
 
-    def auto_calibrate(self) -> ZCalibrationResult:
+    def default_calibrate(self) -> ZCalibrationResult:
+        """
+        Soft calibration path.
+
+        This path intentionally does not move the Z actuator. It reuses the
+        currently loaded sensor calibration values and persists them, which is
+        the expected behavior for non-`full_reset` robot auto-calibration.
+        """
+        try:
+            if not self.actuator.is_connected:
+                return None
+        except Exception as e:
+            print(f"Error: actuator is not connected: {e}")
+            return None
+
+        try:
+            self.actuator.stop_position_controller()
+        except Exception:
+            pass
+
+        raw_min = int(self.actuator.sensor.calibration_min)
+        raw_max = int(self.actuator.sensor.calibration_max)
+        invert = bool(self.actuator.sensor.invert)
+
+        self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
+        self.actuator._save_calibration()
+        logger.info(
+            "Z default calibration completed without movement: raw_min=%s raw_max=%s invert=%s",
+            raw_min,
+            raw_max,
+            invert,
+        )
+
+        return ZCalibrationResult(
+            raw_bottom=int(raw_min),
+            raw_top=int(raw_max),
+            raw_min=raw_min,
+            raw_max=raw_max,
+            invert=invert,
+        )
+
+    def auto_calibrate(self, full_reset: bool = False) -> ZCalibrationResult:
         """
         Returns calibration and also writes it to ZSensor.
         """
+        if not full_reset:
+            return self.default_calibrate()
 
         try:
             if (not self.actuator.is_connected):
