@@ -1,4 +1,5 @@
 Tasks
+
 ```
 -------
 Fold the shirt
@@ -9,7 +10,6 @@ Grab a shirt from the pile, fold it, then place the folded shirt to the side.
 -------
 ```
 
-
 ```
 uv run lerobot-teleoperate \
  --robot.type=sourccey_client \
@@ -19,6 +19,8 @@ uv run lerobot-teleoperate \
  --teleop.id="sourccey_leader" \
  --teleop.left_arm_port="/dev/ttyACM0" \
  --teleop.right_arm_port="/dev/ttyACM1" \
+ --teleop_keyboard.type=keyboard \
+ --teleop_keyboard.id="sourccey_keyboard" \
  --fps=30 \
  --display_data=true
 ```
@@ -88,7 +90,6 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train_retry.py \
   --wandb.enable=false
 ```
 
-
 #Fine tune
 
 ```
@@ -114,7 +115,6 @@ CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --wandb.enable=false
 ```
 
-
 # Resume
 
 ```
@@ -128,7 +128,6 @@ CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --config_path="outputs/train/xvla_s_sourccey-shirt-fold-c-008/checkpoints/last/pretrained_model/train_config.json"
 
 ```
-
 
 ## SARM
 
