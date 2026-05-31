@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+import os
 
 from lerobot.cameras.configs import CameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
@@ -98,6 +99,45 @@ def sourccey_dc_motors_config() -> dict:
         "pwm_frequency": 10000,  # 5 kHz - balance between performance and noise reduction
     }
 
+def _env_str(name: str, default: str) -> str:
+    return os.getenv(name, default).strip() or default
+
+
+def _env_optional(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @RobotConfig.register_subclass("sourccey")
 @dataclass
 class SourcceyConfig(RobotConfig):
@@ -139,6 +179,18 @@ class SourcceyHostConfig:
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
+
+    # Relay agent autostart controls
+    relay_agent_autostart: bool = _env_bool("VULCAN_RELAY_AGENT_AUTOSTART", True)
+    relay_agent_module: str = _env_str(
+        "VULCAN_RELAY_AGENT_MODULE",
+        "lerobot.robots.sourccey.sourccey.sourccey.relay_agent.main",
+    )
+    relay_agent_python_executable: str | None = _env_optional("VULCAN_RELAY_AGENT_PYTHON_EXECUTABLE")
+    relay_agent_restart_on_exit: bool = _env_bool("VULCAN_RELAY_AGENT_RESTART_ON_EXIT", True)
+    relay_agent_restart_backoff_s: float = _env_float("VULCAN_RELAY_AGENT_RESTART_BACKOFF_S", 2.0)
+    relay_agent_max_restarts: int = _env_int("VULCAN_RELAY_AGENT_MAX_RESTARTS", 5)
+
 
     # IMU periodic logging on host (disabled by default to avoid loop spam)
     imu_print_enabled: bool = False

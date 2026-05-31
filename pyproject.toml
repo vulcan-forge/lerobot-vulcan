@@ -155,6 +155,7 @@ lekiwi = ["lerobot[feetech]", "lerobot[pyzmq-dep]"]
 unitree_g1 = [
     # "unitree-sdk2==1.0.1",
     "lerobot[pyzmq-dep]",
+    "websockets>=12.0.0,<16.0.0",
     "lerobot[pyserial-dep]",
     "onnxruntime>=1.16.0,<2.0.0",
     "onnx>=1.16.0,<2.0.0",
@@ -336,6 +337,7 @@ lerobot-imgtransform-viz="lerobot.scripts.lerobot_imgtransform_viz:main"
 lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
 lerobot-setup-can="lerobot.scripts.lerobot_setup_can:main"
 lerobot-rollout="lerobot.scripts.lerobot_rollout:main"
+lerobot-sourccey-relay-agent="lerobot.robots.sourccey.sourccey.sourccey.relay_agent.main:main"
 
 # ---------------- Custom Commands ----------------
 lerobot-audit-video-decode-errors="lerobot.scripts.sourccey.dataset.audit_video_decode_errors:main"

@@ -15,6 +15,8 @@
 
 import logging
 import signal
+import sys
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -46,6 +48,79 @@ class SourcceyHost:
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
+
+
+
+class _RelayAgentProcessManager:
+    def __init__(self, config: SourcceyHostConfig):
+        self.config = config
+        self._process: subprocess.Popen[Any] | None = None
+        self._restart_count = 0
+        self._next_restart_at = 0.0
+
+    def start(self) -> None:
+        if self._is_running():
+            return
+        self._spawn()
+
+    def poll(self) -> None:
+        if not self.config.relay_agent_autostart:
+            return
+        if self._is_running():
+            return
+        if self._process is None:
+            return
+
+        return_code = self._process.poll()
+        if return_code is None:
+            return
+
+        logging.warning("Relay agent exited with code %s", return_code)
+        self._process = None
+
+        if not self.config.relay_agent_restart_on_exit:
+            return
+        if self._restart_count >= max(0, self.config.relay_agent_max_restarts):
+            logging.warning("Relay agent restart budget exhausted.")
+            return
+
+        now = time.monotonic()
+        if now < self._next_restart_at:
+            return
+
+        self._spawn()
+
+    def stop(self) -> None:
+        process = self._process
+        self._process = None
+        if process is None:
+            return
+
+        try:
+            process.terminate()
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logging.warning("Relay agent did not exit on terminate; killing process.")
+            process.kill()
+            process.wait(timeout=3)
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Failed to stop relay agent cleanly: %s", exc)
+
+    def _spawn(self) -> None:
+        python_exec = self.config.relay_agent_python_executable or sys.executable
+        command = [python_exec, "-m", self.config.relay_agent_module]
+        try:
+            self._process = subprocess.Popen(command)  # noqa: S603
+            self._restart_count += 1
+            self._next_restart_at = time.monotonic() + max(0.0, self.config.relay_agent_restart_backoff_s)
+            logging.info("Started relay agent subprocess: %s", " ".join(command))
+        except Exception as exc:  # noqa: BLE001
+            self._process = None
+            self._next_restart_at = time.monotonic() + max(0.0, self.config.relay_agent_restart_backoff_s)
+            logging.warning("Failed to start relay agent subprocess: %s", exc)
+
+    def _is_running(self) -> bool:
+        return self._process is not None and self._process.poll() is None
 
 
 class _IMUReporter:
@@ -143,6 +218,10 @@ def main():
     imu_reporter = _IMUReporter(host_config)
     imu_reporter.start()
 
+    relay_agent_manager = _RelayAgentProcessManager(host_config)
+    if host_config.relay_agent_autostart:
+        relay_agent_manager.start()
+
     print("Waiting for commands...")
 
     last_cmd_time = time.time()
@@ -157,6 +236,7 @@ def main():
         previous_observation = None
         while duration < host.connection_time_s:
             loop_start_time = time.time()
+            relay_agent_manager.poll()
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
@@ -222,6 +302,7 @@ def main():
         print("Keyboard interrupt received. Exiting...")
     finally:
         print("Shutting down Sourccey Host.")
+        relay_agent_manager.stop()
         imu_reporter.stop()
         robot.disconnect()
         host.disconnect()
