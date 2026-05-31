@@ -14,6 +14,8 @@ class RelayAgentConfig:
     zmq_cmd_endpoint: str
     zmq_obs_endpoint: str
     heartbeat_seconds: int
+    connect_retry_backoff_s: float
+    connect_retry_max_backoff_s: float
 
     @classmethod
     def from_env(cls) -> "RelayAgentConfig":
@@ -25,6 +27,8 @@ class RelayAgentConfig:
             zmq_cmd_endpoint=os.getenv("VULCAN_ZMQ_CMD_ENDPOINT", "tcp://127.0.0.1:5555").strip(),
             zmq_obs_endpoint=os.getenv("VULCAN_ZMQ_OBS_ENDPOINT", "tcp://127.0.0.1:5556").strip(),
             heartbeat_seconds=max(1, int(os.getenv("VULCAN_HEARTBEAT_SECONDS", "5"))),
+            connect_retry_backoff_s=max(0.5, float(os.getenv("VULCAN_RELAY_CONNECT_RETRY_BACKOFF_S", "2.0"))),
+            connect_retry_max_backoff_s=max(1.0, float(os.getenv("VULCAN_RELAY_CONNECT_RETRY_MAX_BACKOFF_S", "30.0"))),
         )
         cfg.validate()
         return cfg
