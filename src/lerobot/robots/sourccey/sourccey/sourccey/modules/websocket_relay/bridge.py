@@ -12,13 +12,13 @@ import zmq
 import zmq.asyncio
 
 from .codec import RelayCodec
-from .config import RelayAgentConfig
+from .config import WebsocketRelayConfig
 
 
-class RelayBridge:
+class WebsocketRelayBridge:
     def __init__(
         self,
-        config: RelayAgentConfig,
+        config: WebsocketRelayConfig,
         *,
         forward_observations: bool = True,
         forward_commands: bool = True,
@@ -67,8 +67,8 @@ class RelayBridge:
             ping_timeout=ping_timeout,
         )
         print(
-            f"[{datetime.now(UTC).isoformat()}] relay_agent.connected "
-            f"session_id={self._config.relay_session_id} "
+            f"[{datetime.now(UTC).isoformat()}] websocket_relay.connected "
+            f"session_id={self._config.websocket_relay_session_id} "
             f"robot_id={self._config.robot_id}"
         )
         self._tasks = [asyncio.create_task(self._heartbeat_loop())]
@@ -115,7 +115,7 @@ class RelayBridge:
 
             message = {
                 "type": "robot.observation.v1",
-                "session_id": self._config.relay_session_id,
+                "session_id": self._config.websocket_relay_session_id,
                 "robot_id": self._config.robot_id,
                 "observation_seq": self._sequence,
                 "sent_at_utc": datetime.now(UTC).isoformat(),
@@ -170,7 +170,7 @@ class RelayBridge:
 
             ack = {
                 "type": "robot.action_ack.v1",
-                "session_id": self._config.relay_session_id,
+                "session_id": self._config.websocket_relay_session_id,
                 "robot_id": self._config.robot_id,
                 "ack_at_utc": datetime.now(UTC).isoformat(),
             }
@@ -181,7 +181,7 @@ class RelayBridge:
             return
         error = {
             "type": "robot.error.v1",
-            "session_id": self._config.relay_session_id,
+            "session_id": self._config.websocket_relay_session_id,
             "robot_id": self._config.robot_id,
             "error": code,
             "message": detail,
@@ -200,7 +200,7 @@ class RelayBridge:
         if now - self._last_action_log_in_s < interval_s:
             return
         print(
-            f"[{datetime.now(UTC).isoformat()}] relay_agent.command_in_summary "
+            f"[{datetime.now(UTC).isoformat()}] websocket_relay.command_in_summary "
             f"window_s={interval_s:.1f} count={self._action_in_count} "
             f"last_type={self._last_action_type} last_source={self._last_action_source}"
         )
@@ -217,7 +217,7 @@ class RelayBridge:
         if now - self._last_action_log_out_s < interval_s:
             return
         print(
-            f"[{datetime.now(UTC).isoformat()}] relay_agent.command_out_summary "
+            f"[{datetime.now(UTC).isoformat()}] websocket_relay.command_out_summary "
             f"window_s={interval_s:.1f} count={self._action_out_count} "
             f"last_bytes={self._last_action_out_bytes}"
         )

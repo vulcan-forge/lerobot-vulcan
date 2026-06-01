@@ -14,7 +14,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-import os
 
 from lerobot.cameras.configs import CameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
@@ -99,23 +98,6 @@ def sourccey_dc_motors_config() -> dict:
         "pwm_frequency": 10000,  # 5 kHz - balance between performance and noise reduction
     }
 
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_float(name: str, default: float) -> float:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
 @RobotConfig.register_subclass("sourccey")
 @dataclass
 class SourcceyConfig(RobotConfig):
@@ -158,15 +140,10 @@ class SourcceyHostConfig:
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
 
-    # Relay agent (embedded) controls
-    relay_agent_autostart: bool = _env_bool("VULCAN_RELAY_AGENT_AUTOSTART", True)
-    # Start with command-only bridge mode by default; enable when observation uplink is needed.
-    relay_agent_forward_observations: bool = _env_bool("VULCAN_RELAY_AGENT_FORWARD_OBSERVATIONS", False)
-    # Suppress reconnect/error logs when websocket is unavailable; keep host running quietly.
-    relay_agent_silent_failures: bool = _env_bool("VULCAN_RELAY_AGENT_SILENT_FAILURES", True)
-    relay_agent_restart_on_exit: bool = _env_bool("VULCAN_RELAY_AGENT_RESTART_ON_EXIT", True)
-    relay_agent_restart_backoff_s: float = _env_float("VULCAN_RELAY_AGENT_RESTART_BACKOFF_S", 2.0)
-
+    # Websocket relay controls.
+    websocket_relay_autostart: bool = True
+    # Start command-only by default; set True to uplink observations too.
+    websocket_relay_forward_observations: bool = False
 
     # IMU periodic logging on host (disabled by default to avoid loop spam)
     imu_print_enabled: bool = False

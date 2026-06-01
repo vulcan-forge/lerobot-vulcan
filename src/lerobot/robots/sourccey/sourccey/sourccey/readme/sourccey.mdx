@@ -202,18 +202,18 @@ uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 ```
 
 
-Relay agent autostarts with `sourccey_host` by default (control/data bridge only).
+Websocket relay autostarts with `sourccey_host` by default (control/data bridge only).
 
-Required relay environment variables on robot host:
+Required websocket relay environment variables on robot host:
 
-- `VULCAN_RELAY_WS_BASE_URL`
-- `VULCAN_RELAY_SESSION_ID`
-- `VULCAN_RELAY_ROBOT_TOKEN`
+- `VULCAN_WEBSOCKET_RELAY_WS_BASE_URL` (legacy `VULCAN_RELAY_WS_BASE_URL` still supported)
+- `VULCAN_WEBSOCKET_RELAY_SESSION_ID` (legacy `VULCAN_RELAY_SESSION_ID` still supported)
+- `VULCAN_WEBSOCKET_RELAY_ROBOT_TOKEN` (legacy `VULCAN_RELAY_ROBOT_TOKEN` still supported)
 - `VULCAN_ROBOT_ID` (optional, defaults to `sourccey`)
 
 Autostart toggle:
 
-- `VULCAN_RELAY_AGENT_AUTOSTART=true|false` (default `true`)
+- `VULCAN_WEBSOCKET_RELAY_AUTOSTART=true|false` (legacy `VULCAN_RELAY_AGENT_AUTOSTART` supported; default `true`)
 
 Current v1 scope: control + observation relay is active; WebRTC media publication is deferred.
 

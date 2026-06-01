@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .manager import RelayAgentManager
+from .manager import WebsocketRelayManager
 
 
 def main() -> None:
@@ -9,4 +9,4 @@ def main() -> None:
     _main()
 
 
-__all__ = ["main", "RelayAgentManager"]
+__all__ = ["main", "WebsocketRelayManager"]

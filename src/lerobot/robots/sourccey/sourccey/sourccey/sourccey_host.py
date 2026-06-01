@@ -22,7 +22,7 @@ import zmq
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
 from .sourccey import Sourccey
 from .modules.imu import IMUReporter
-from .modules.relay_agent.manager import RelayAgentManager
+from .modules.websocket_relay.manager import WebsocketRelayManager
 
 # Import protobuf modules
 from ..protobuf.generated import sourccey_pb2
@@ -69,17 +69,17 @@ def main():
     imu_reporter = IMUReporter(host_config)
     imu_reporter.start()
 
-    relay_agent_manager = RelayAgentManager(host_config)
+    websocket_relay_manager = WebsocketRelayManager(host_config)
 
-    if host_config.relay_agent_autostart:
-        mode = "full_bridge" if host_config.relay_agent_forward_observations else "commands_only"
-        logging.info("Relay agent autostart enabled (mode=%s).", mode)
+    if host_config.websocket_relay_autostart:
+        mode = "full_bridge" if host_config.websocket_relay_forward_observations else "commands_only"
+        logging.info("Websocket relay autostart enabled (mode=%s).", mode)
         try:
-            relay_agent_manager.start()
+            websocket_relay_manager.start()
         except Exception as exc:  # noqa: BLE001
-            logging.warning("Relay agent failed to start (continuing without relay): %s", exc)
+            logging.warning("Websocket relay failed to start (continuing without relay): %s", exc)
     else:
-        logging.info("Relay agent autostart disabled.")
+        logging.info("Websocket relay autostart disabled.")
 
     print("Waiting for commands...")
 
@@ -96,9 +96,9 @@ def main():
         while duration < host.connection_time_s:
             loop_start_time = time.time()
             try:
-                relay_agent_manager.poll()
+                websocket_relay_manager.poll()
             except Exception as exc:  # noqa: BLE001
-                logging.warning("Relay agent poll failed (continuing host loop): %s", exc)
+                logging.warning("Websocket relay poll failed (continuing host loop): %s", exc)
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
@@ -165,9 +165,9 @@ def main():
     finally:
         print("Shutting down Sourccey Host.")
         try:
-            relay_agent_manager.stop()
+            websocket_relay_manager.stop()
         except Exception as exc:  # noqa: BLE001
-            logging.warning("Relay agent stop failed: %s", exc)
+            logging.warning("Websocket relay stop failed: %s", exc)
         imu_reporter.stop()
         robot.disconnect()
         host.disconnect()
