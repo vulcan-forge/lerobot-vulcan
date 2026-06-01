@@ -77,6 +77,7 @@ class SourcceyClient(Robot):
             stereo_left_key=self.slam_stereo_left_key,
             stereo_right_key=self.slam_stereo_right_key,
             jpeg_quality=self.slam_jpeg_quality,
+            eye_only_mode=slam_cfg.eye_only_mode,
         )
 
         # Define three speed levels and a current index

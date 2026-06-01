@@ -20,8 +20,13 @@ import time
 from datetime import datetime, timezone
 
 import zmq
+from lerobot.configs import parser
 
-from .config_sourccey import SourcceyConfig, SourcceyHostConfig
+from .config_sourccey import (
+    SourcceyConfig,
+    SourcceyHostConfig,
+    sourccey_slam_eye_only_cameras_config,
+)
 from .sourccey import Sourccey
 
 # Import protobuf modules
@@ -40,7 +45,11 @@ class SourcceyHost:
 
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
-        self.max_loop_freq_hz = config.max_loop_freq_hz
+        self.max_loop_freq_hz = (
+            max(config.max_loop_freq_hz, config.slam_eye_loop_freq_hz)
+            if config.slam_eye_only_mode
+            else config.max_loop_freq_hz
+        )
 
     def disconnect(self):
         self.zmq_observation_socket.close()
@@ -121,7 +130,8 @@ class _IMUReporter:
             self._stop_event.wait(interval_s)
 
 
-def main():
+@parser.wrap()
+def main(host_config: SourcceyHostConfig):
     def _handle_termination_signal(signum, _frame):
         logging.info(f"Received signal {signum}. Shutting down Sourccey Host.")
         raise KeyboardInterrupt
@@ -132,13 +142,21 @@ def main():
 
     logging.info("Configuring Sourccey")
     robot_config = SourcceyConfig(id="sourccey")
+    if host_config.slam_eye_only_mode:
+        robot_config.cameras = sourccey_slam_eye_only_cameras_config(
+            front_fps=host_config.slam_eye_camera_fps
+        )
+        logging.info(
+            "Sourccey Host eye-only SLAM mode enabled: front cameras only at %d FPS, host loop target %d Hz",
+            host_config.slam_eye_camera_fps,
+            max(host_config.max_loop_freq_hz, host_config.slam_eye_loop_freq_hz),
+        )
     robot = Sourccey(robot_config)
 
     logging.info("Connecting Sourccey")
     robot.connect()
 
     logging.info("Starting Host")
-    host_config = SourcceyHostConfig()
     host = SourcceyHost(host_config)
     imu_reporter = _IMUReporter(host_config)
     imu_reporter.start()

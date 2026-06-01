@@ -11,7 +11,7 @@ from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyCl
 from lerobot.robots.sourccey.sourccey.sourccey.modules.slam import SlamInputConfig
 
 
-def _make_client() -> SourcceyClient:
+def _make_client(*, eye_only_mode: bool = False) -> SourcceyClient:
     config = SourcceyClientConfig(
         id="test-client",
         remote_ip="127.0.0.1",
@@ -21,6 +21,7 @@ def _make_client() -> SourcceyClient:
             stereo_left_key="front_left",
             stereo_right_key="front_right",
             jpeg_quality=80,
+            eye_only_mode=eye_only_mode,
         ),
     )
     return SourcceyClient(config)
@@ -35,12 +36,14 @@ def test_legacy_flat_slam_config_fields_still_work() -> None:
         slam_stereo_left_key="left_cam",
         slam_stereo_right_key="right_cam",
         slam_jpeg_quality=72,
+        slam_eye_only_mode=True,
     )
     assert config.slam.input_enabled is True
     assert config.slam.input_endpoint == "tcp://127.0.0.1:5561"
     assert config.slam.stereo_left_key == "left_cam"
     assert config.slam.stereo_right_key == "right_cam"
     assert config.slam.jpeg_quality == 72
+    assert config.slam.eye_only_mode is True
 
 
 def _make_frames() -> dict[str, np.ndarray]:
@@ -90,6 +93,21 @@ def test_build_slam_input_packet_increments_frame_ids_per_camera() -> None:
     assert packet_2["cameras"]["front_left"]["frame_id"] == 2
     assert packet_1["cameras"]["front_right"]["frame_id"] == 1
     assert packet_2["cameras"]["front_right"]["frame_id"] == 2
+
+
+def test_build_slam_input_packet_eye_only_mode_omits_wrist_cameras() -> None:
+    client = _make_client(eye_only_mode=True)
+    frames = {
+        **_make_frames(),
+        "wrist_left": np.full((24, 24, 3), 220, dtype=np.uint8),
+    }
+    observation = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+
+    payload = client._build_slam_input_packet(observation=observation, frames=frames)
+    assert payload is not None
+
+    packet = json.loads(payload.decode("utf-8"))
+    assert set(packet["cameras"]) == {"front_left", "front_right"}
 
 
 def test_build_slam_input_packet_returns_none_when_required_stereo_missing() -> None:

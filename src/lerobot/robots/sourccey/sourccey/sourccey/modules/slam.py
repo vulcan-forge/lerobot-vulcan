@@ -34,6 +34,7 @@ class SlamInputConfig:
     stereo_left_key: str = "front_left"
     stereo_right_key: str = "front_right"
     jpeg_quality: int = 80
+    eye_only_mode: bool = False
 
 
 def create_slam_pub_socket(zmq_context: zmq.Context, endpoint: str) -> zmq.Socket:
@@ -62,12 +63,14 @@ class SlamInputPublisher:
         stereo_left_key: str,
         stereo_right_key: str,
         jpeg_quality: int,
+        eye_only_mode: bool,
         warn_log_interval_s: float = 5.0,
     ) -> None:
         self._source_id = source_id
         self._stereo_left_key = stereo_left_key
         self._stereo_right_key = stereo_right_key
         self._jpeg_quality = int(np.clip(jpeg_quality, 1, 100))
+        self._eye_only_mode = bool(eye_only_mode)
         self._warn_log_interval_s = warn_log_interval_s
 
         self._camera_frame_ids: dict[str, int] = {}
@@ -114,7 +117,13 @@ class SlamInputPublisher:
 
         cameras_payload: dict[str, dict[str, Any]] = {}
         now_ns = time.monotonic_ns()
-        for cam_name, frame in frames.items():
+        camera_keys = (
+            tuple(dict.fromkeys(required_keys))
+            if self._eye_only_mode
+            else tuple(frames.keys())
+        )
+        for cam_name in camera_keys:
+            frame = frames.get(cam_name)
             if not isinstance(frame, np.ndarray):
                 continue
 

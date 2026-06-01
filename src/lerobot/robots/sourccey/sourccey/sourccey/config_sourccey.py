@@ -23,54 +23,69 @@ from lerobot.robots.config import RobotConfig
 from .modules.slam import SlamInputConfig
 
 
-def sourccey_cameras_config() -> dict[str, CameraConfig]:
+def sourccey_cameras_config(
+    *,
+    front_fps: int = 30,
+    wrist_fps: int = 30,
+    include_wrist: bool = True,
+) -> dict[str, CameraConfig]:
     config = {
-         "front_left": OpenCVCameraConfig(
-             index_or_path="/dev/cameraFrontLeft",
-             fps=30,
-             width=320,
-             height=240,
-             auto_reconnect=True,
-             max_consecutive_read_failures=2,
-             fast_reconnect_interval_s=0.05,
-             fast_reconnect_window_s=2.0,
-             reconnect_interval_s=0.5,
-         ),
-         "front_right": OpenCVCameraConfig(
-             index_or_path="/dev/cameraFrontRight",
-             fps=30,
-             width=320,
-             height=240,
-             auto_reconnect=True,
-             max_consecutive_read_failures=2,
-             fast_reconnect_interval_s=0.05,
-             fast_reconnect_window_s=2.0,
-             reconnect_interval_s=0.5,
-         ),
-         "wrist_left": OpenCVCameraConfig(
-             index_or_path="/dev/cameraWristLeft",
-             fps=30,
-             width=320,
-             height=240,
-             auto_reconnect=True,
-             max_consecutive_read_failures=2,
-             fast_reconnect_interval_s=0.05,
-             fast_reconnect_window_s=2.0,
-             reconnect_interval_s=0.5,
-         ),
-         "wrist_right": OpenCVCameraConfig(
-             index_or_path="/dev/cameraWristRight",
-             fps=30,
-             width=320,
-             height=240,
-             auto_reconnect=True,
-             max_consecutive_read_failures=2,
-             fast_reconnect_interval_s=0.05,
-             fast_reconnect_window_s=2.0,
-             reconnect_interval_s=0.5,
-         ),
+        "front_left": OpenCVCameraConfig(
+            index_or_path="/dev/cameraFrontLeft",
+            fps=front_fps,
+            width=320,
+            height=240,
+            auto_reconnect=True,
+            max_consecutive_read_failures=2,
+            fast_reconnect_interval_s=0.05,
+            fast_reconnect_window_s=2.0,
+            reconnect_interval_s=0.5,
+        ),
+        "front_right": OpenCVCameraConfig(
+            index_or_path="/dev/cameraFrontRight",
+            fps=front_fps,
+            width=320,
+            height=240,
+            auto_reconnect=True,
+            max_consecutive_read_failures=2,
+            fast_reconnect_interval_s=0.05,
+            fast_reconnect_window_s=2.0,
+            reconnect_interval_s=0.5,
+        ),
     }
+    if include_wrist:
+        config["wrist_left"] = OpenCVCameraConfig(
+            index_or_path="/dev/cameraWristLeft",
+            fps=wrist_fps,
+            width=320,
+            height=240,
+            auto_reconnect=True,
+            max_consecutive_read_failures=2,
+            fast_reconnect_interval_s=0.05,
+            fast_reconnect_window_s=2.0,
+            reconnect_interval_s=0.5,
+        )
+        config["wrist_right"] = OpenCVCameraConfig(
+            index_or_path="/dev/cameraWristRight",
+            fps=wrist_fps,
+            width=320,
+            height=240,
+            auto_reconnect=True,
+            max_consecutive_read_failures=2,
+            fast_reconnect_interval_s=0.05,
+            fast_reconnect_window_s=2.0,
+            reconnect_interval_s=0.5,
+        )
     return config
+
+
+def sourccey_slam_eye_only_cameras_config(front_fps: int = 60) -> dict[str, CameraConfig]:
+    return sourccey_cameras_config(
+        front_fps=front_fps,
+        wrist_fps=front_fps,
+        include_wrist=False,
+    )
+
 
 def sourccey_motor_models() -> dict[str, str]:
     return {
@@ -82,6 +97,7 @@ def sourccey_motor_models() -> dict[str, str]:
         "gripper": "sts3215",
     }
 
+
 def sourccey_dc_motors() -> dict[str, DCMotor]:
     return {
         "front_left": DCMotor(id=1, model="mecanum_wheel", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
@@ -90,6 +106,7 @@ def sourccey_dc_motors() -> dict[str, DCMotor]:
         "rear_right": DCMotor(id=4, model="mecanum_wheel", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
         "linear_actuator": DCMotor(id=5, model="linear_actuator", norm_mode=MotorNormMode.PWM_DUTY_CYCLE),
     }
+
 
 def sourccey_dc_motors_config() -> dict:
     return {
@@ -139,6 +156,9 @@ class SourcceyHostConfig:
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
+    slam_eye_only_mode: bool = False
+    slam_eye_camera_fps: int = 60
+    slam_eye_loop_freq_hz: int = 60
 
     # IMU periodic logging on host (disabled by default to avoid loop spam)
     imu_print_enabled: bool = False
@@ -165,6 +185,7 @@ class SourcceyClientConfig(RobotConfig):
     slam_stereo_left_key: str | None = None
     slam_stereo_right_key: str | None = None
     slam_jpeg_quality: int | None = None
+    slam_eye_only_mode: bool | None = None
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {
@@ -211,3 +232,5 @@ class SourcceyClientConfig(RobotConfig):
             self.slam.stereo_right_key = self.slam_stereo_right_key
         if self.slam_jpeg_quality is not None:
             self.slam.jpeg_quality = self.slam_jpeg_quality
+        if self.slam_eye_only_mode is not None:
+            self.slam.eye_only_mode = self.slam_eye_only_mode

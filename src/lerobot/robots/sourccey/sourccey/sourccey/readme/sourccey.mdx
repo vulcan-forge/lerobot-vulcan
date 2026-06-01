@@ -201,6 +201,16 @@ On the Raspberry Pi, start the robot host to enable remote control
 uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 ```
 
+For SLAM-focused runs, you can disable the wrist cameras and raise just the front
+eye cameras to 60 FPS:
+
+```
+uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host \
+ --slam_eye_only_mode=true \
+ --slam_eye_camera_fps=60 \
+ --slam_eye_loop_freq_hz=60
+```
+
 ## Teleoperation
 
 On your computer, activate the virtual environment and start teleoperation:
@@ -234,6 +244,26 @@ uv run lerobot-teleoperate \
 
 ```
 
+For a SLAM-focused teleop run, raise the client loop to 60 FPS and publish only
+the front stereo pair into the SLAM sidecar:
+
+```
+uv run lerobot-teleoperate \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.212" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop_keyboard.type=keyboard \
+ --teleop_keyboard.id="sourccey_keyboard" \
+ --teleop.left_arm_port="COM17" \
+ --teleop.right_arm_port="COM18" \
+ --fps=60 \
+ --display_data=true \
+ --robot.slam.input_enabled=true \
+ --robot.slam.eye_only_mode=true
+```
+
 # On Linux Then run:
 
 ```
@@ -250,6 +280,25 @@ uv run lerobot-teleoperate \
  --fps=30 \
  --display_data=true \
  --robot.slam.input_enabled=true
+```
+
+For a SLAM-focused Linux teleop run, use:
+
+```
+uv run lerobot-teleoperate \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.212" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop_keyboard.type=keyboard \
+ --teleop_keyboard.id="sourccey_keyboard" \
+ --teleop.left_arm_port="/dev/ttyACM1" \
+ --teleop.right_arm_port="/dev/ttyACM0" \
+ --fps=60 \
+ --display_data=true \
+ --robot.slam.input_enabled=true \
+ --robot.slam.eye_only_mode=true
 ```
 
 **Parameters:**
