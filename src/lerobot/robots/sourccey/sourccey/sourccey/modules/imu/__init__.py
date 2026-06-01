@@ -1,3 +1,3 @@
-from .reporter import IMUReporterConfig
+from .reporter import IMUReporter, IMUReporterConfig
 
-__all__ = ["IMUReporterConfig"]
+__all__ = ["IMUReporter", "IMUReporterConfig"]
