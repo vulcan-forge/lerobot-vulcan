@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import traceback
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -57,10 +58,13 @@ def main() -> None:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
+                error_type = type(exc).__name__
+                error_traceback = traceback.format_exc()
                 print(
                     f"[{_utc_now()}] relay_agent.connect_failed "
-                    f"retry_in_s={backoff_s:.1f} error={exc}"
+                    f"retry_in_s={backoff_s:.1f} error_type={error_type} error={exc!r}"
                 )
+                print(f"[{_utc_now()}] relay_agent.connect_failed_traceback\n{error_traceback}")
                 await asyncio.sleep(backoff_s)
                 backoff_s = min(max_backoff_s, backoff_s * 2.0)
             else:
