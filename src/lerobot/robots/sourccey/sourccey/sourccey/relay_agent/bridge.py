@@ -31,7 +31,22 @@ class RelayBridge:
         self._cmd_socket.connect(self._config.zmq_cmd_endpoint)
         self._obs_socket.connect(self._config.zmq_obs_endpoint)
 
-        self._ws = await websockets.connect(self._config.ws_url, max_size=2**22)
+        ping_interval = (
+            self._config.websocket_ping_interval_s
+            if self._config.websocket_ping_interval_s > 0
+            else None
+        )
+        ping_timeout = (
+            self._config.websocket_ping_timeout_s
+            if self._config.websocket_ping_timeout_s > 0
+            else None
+        )
+        self._ws = await websockets.connect(
+            self._config.ws_url,
+            max_size=2**22,
+            ping_interval=ping_interval,
+            ping_timeout=ping_timeout,
+        )
         print(
             f"[{datetime.now(UTC).isoformat()}] relay_agent.connected "
             f"session_id={self._config.relay_session_id} "
@@ -112,6 +127,13 @@ class RelayBridge:
             if not isinstance(command, dict):
                 await self._send_error("invalid_command_payload", "command field is required")
                 continue
+            if self._config.log_actions:
+                print(
+                    f"[{datetime.now(UTC).isoformat()}] relay_agent.command_in "
+                    f"type={command.get('type', 'unknown')} "
+                    f"source={message.get('source', 'unknown')} "
+                    f"payload={json.dumps(command, separators=(',', ':'))[:800]}"
+                )
 
             encoded, error_code = self._codec.encode_action(command)
             if encoded is None:
@@ -120,6 +142,11 @@ class RelayBridge:
 
             try:
                 await self._cmd_socket.send(encoded)
+                if self._config.log_actions:
+                    print(
+                        f"[{datetime.now(UTC).isoformat()}] relay_agent.command_out "
+                        f"bytes={len(encoded)}"
+                    )
             except Exception as exc:
                 await self._send_error("zmq_send_failed", str(exc))
                 continue

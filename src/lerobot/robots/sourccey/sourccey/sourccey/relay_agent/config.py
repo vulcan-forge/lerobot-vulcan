@@ -16,11 +16,14 @@ class RelayAgentConfig:
     heartbeat_seconds: int
     connect_retry_backoff_s: float
     connect_retry_max_backoff_s: float
+    websocket_ping_interval_s: float
+    websocket_ping_timeout_s: float
+    log_actions: bool
 
     @classmethod
     def from_env(cls) -> "RelayAgentConfig":
         cfg = cls(
-            relay_ws_base_url=os.getenv("VULCAN_RELAY_WS_BASE_URL", "ws://127.0.0.1:5180").strip(),
+            relay_ws_base_url=os.getenv("VULCAN_RELAY_WS_BASE_URL", "ws://127.0.0.1:5100").strip(),
             relay_session_id=os.getenv("VULCAN_RELAY_SESSION_ID", "").strip(),
             relay_robot_token=os.getenv("VULCAN_RELAY_ROBOT_TOKEN", "").strip(),
             robot_id=os.getenv("VULCAN_ROBOT_ID", "sourccey").strip(),
@@ -29,6 +32,9 @@ class RelayAgentConfig:
             heartbeat_seconds=max(1, int(os.getenv("VULCAN_HEARTBEAT_SECONDS", "5"))),
             connect_retry_backoff_s=max(0.5, float(os.getenv("VULCAN_RELAY_CONNECT_RETRY_BACKOFF_S", "2.0"))),
             connect_retry_max_backoff_s=max(1.0, float(os.getenv("VULCAN_RELAY_CONNECT_RETRY_MAX_BACKOFF_S", "30.0"))),
+            websocket_ping_interval_s=float(os.getenv("VULCAN_RELAY_WS_PING_INTERVAL_S", "0")),
+            websocket_ping_timeout_s=float(os.getenv("VULCAN_RELAY_WS_PING_TIMEOUT_S", "0")),
+            log_actions=os.getenv("VULCAN_RELAY_LOG_ACTIONS", "true").strip().lower() in {"1", "true", "yes", "on"},
         )
         cfg.validate()
         return cfg
