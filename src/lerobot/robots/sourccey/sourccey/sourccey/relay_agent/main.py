@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import traceback
 from datetime import UTC, datetime
 from urllib.parse import urlparse
+
+import websockets
 
 from .bridge import RelayBridge
 from .config import RelayAgentConfig
@@ -16,6 +19,11 @@ def _parse_args() -> argparse.Namespace:
         "--once",
         action="store_true",
         help="Validate config and print websocket URL, then exit.",
+    )
+    parser.add_argument(
+        "--ws-only",
+        action="store_true",
+        help="Run websocket probe mode only (no ZMQ bridge).",
     )
     return parser.parse_args()
 
@@ -32,12 +40,101 @@ def _is_localhost_ws_url(ws_base_url: str) -> bool:
     return host in {"127.0.0.1", "localhost", "::1"}
 
 
+def _redact_ws_url(ws_url: str) -> str:
+    token_marker = "token="
+    token_idx = ws_url.find(token_marker)
+    if token_idx == -1:
+        return ws_url
+    token_start = token_idx + len(token_marker)
+    token_end = ws_url.find("&", token_start)
+    if token_end == -1:
+        token_end = len(ws_url)
+    visible = ws_url[token_start : min(token_start + 4, token_end)]
+    return f"{ws_url[:token_start]}{visible}...redacted{ws_url[token_end:]}"
+
+
+def _summarize_ws_message(raw_message: str | bytes) -> str:
+    if isinstance(raw_message, bytes):
+        return f"bytes={len(raw_message)}"
+
+    try:
+        parsed = json.loads(raw_message)
+    except json.JSONDecodeError:
+        snippet = raw_message[:160].replace("\n", " ")
+        return f"text_len={len(raw_message)} snippet={snippet!r}"
+
+    if isinstance(parsed, dict):
+        message_type = str(parsed.get("type", "unknown")).strip() or "unknown"
+        return f"type={message_type}"
+
+    return f"json_type={type(parsed).__name__}"
+
+
+async def _run_ws_probe(cfg: RelayAgentConfig) -> None:
+    backoff_s = cfg.connect_retry_backoff_s
+    max_backoff_s = max(cfg.connect_retry_backoff_s, cfg.connect_retry_max_backoff_s)
+    ping_interval = cfg.websocket_ping_interval_s if cfg.websocket_ping_interval_s > 0 else None
+    ping_timeout = cfg.websocket_ping_timeout_s if cfg.websocket_ping_timeout_s > 0 else None
+    redacted_ws_url = _redact_ws_url(cfg.ws_url)
+
+    while True:
+        ws = None
+        try:
+            print(f"[{_utc_now()}] relay_agent.ws_probe_connecting ws_url={redacted_ws_url}")
+            ws = await websockets.connect(
+                cfg.ws_url,
+                max_size=2**22,
+                ping_interval=ping_interval,
+                ping_timeout=ping_timeout,
+            )
+            print(
+                f"[{_utc_now()}] relay_agent.ws_probe_connected "
+                f"session_id={cfg.relay_session_id} robot_id={cfg.robot_id}"
+            )
+
+            async def _heartbeat_loop() -> None:
+                while True:
+                    await asyncio.sleep(cfg.heartbeat_seconds)
+                    assert ws is not None
+                    await ws.send('{"type":"heartbeat"}')
+                    print(f"[{_utc_now()}] relay_agent.ws_probe_heartbeat_sent")
+
+            async def _receive_loop() -> None:
+                assert ws is not None
+                async for raw_message in ws:
+                    print(
+                        f"[{_utc_now()}] relay_agent.ws_probe_message_in "
+                        f"{_summarize_ws_message(raw_message)}"
+                    )
+
+            await asyncio.gather(_heartbeat_loop(), _receive_loop())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            error_type = type(exc).__name__
+            error_traceback = traceback.format_exc()
+            print(
+                f"[{_utc_now()}] relay_agent.ws_probe_failed "
+                f"retry_in_s={backoff_s:.1f} error_type={error_type} error={exc!r}"
+            )
+            print(f"[{_utc_now()}] relay_agent.ws_probe_failed_traceback\n{error_traceback}")
+            await asyncio.sleep(backoff_s)
+            backoff_s = min(max_backoff_s, backoff_s * 2.0)
+        finally:
+            if ws is not None:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+
+
 def main() -> None:
     args = _parse_args()
     cfg = RelayAgentConfig.from_env()
+    redacted_ws_url = _redact_ws_url(cfg.ws_url)
 
     if args.once:
-        print(f"relay_agent.ready=true ws_url={cfg.ws_url}")
+        print(f"relay_agent.ready=true ws_url={redacted_ws_url}")
         return
 
     if _is_localhost_ws_url(cfg.relay_ws_base_url):
@@ -53,7 +150,7 @@ def main() -> None:
         while True:
             bridge = RelayBridge(cfg)
             try:
-                print(f"[{_utc_now()}] relay_agent.connecting ws_url={cfg.ws_url}")
+                print(f"[{_utc_now()}] relay_agent.connecting ws_url={redacted_ws_url}")
                 await bridge.run_forever()
             except asyncio.CancelledError:
                 raise
@@ -72,6 +169,10 @@ def main() -> None:
                 await asyncio.sleep(1.0)
             finally:
                 await bridge.close()
+
+    if args.ws_only:
+        asyncio.run(_run_ws_probe(cfg))
+        return
 
     asyncio.run(_runner())
 
