@@ -23,6 +23,20 @@ class WebsocketRelayManager:
         self._stop_event = threading.Event()
         self._started = False
 
+    def start_if_configured(self) -> bool:
+        if not self.config.websocket_relay_autostart:
+            logging.info("Websocket relay autostart disabled.")
+            return False
+
+        mode = "full_bridge" if self.config.websocket_relay_forward_observations else "commands_only"
+        logging.info("Websocket relay autostart enabled (mode=%s).", mode)
+        try:
+            self.start()
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Websocket relay failed to start (continuing without relay): %s", exc)
+            return False
+
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
@@ -36,20 +50,26 @@ class WebsocketRelayManager:
         self._started = True
 
     def poll(self) -> None:
-        if not self.config.websocket_relay_autostart:
-            return
-        if self._thread is not None and self._thread.is_alive():
-            return
-        if not self._started:
-            return
-        self.start()
+        try:
+            if not self.config.websocket_relay_autostart:
+                return
+            if self._thread is not None and self._thread.is_alive():
+                return
+            if not self._started:
+                return
+            self.start()
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Websocket relay poll failed (continuing host loop): %s", exc)
 
     def stop(self) -> None:
-        self._stop_event.set()
-        thread = self._thread
-        self._thread = None
-        if thread is not None:
-            thread.join(timeout=3.0)
+        try:
+            self._stop_event.set()
+            thread = self._thread
+            self._thread = None
+            if thread is not None:
+                thread.join(timeout=3.0)
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Websocket relay stop failed: %s", exc)
 
     def _thread_main(self) -> None:
         import asyncio

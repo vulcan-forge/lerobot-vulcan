@@ -21,6 +21,7 @@ import zmq
 
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
 from .sourccey import Sourccey
+from .modules.host import silence_camera_warnings_for_host
 from .modules.imu import IMUReporter
 from .modules.websocket_relay.manager import WebsocketRelayManager
 
@@ -51,10 +52,8 @@ def main():
     def _handle_termination_signal(signum, _frame):
         logging.info(f"Received signal {signum}. Shutting down Sourccey Host.")
         raise KeyboardInterrupt
-
     signal.signal(signal.SIGTERM, _handle_termination_signal)
-
-    _silence_camera_warnings_for_host()
+    silence_camera_warnings_for_host()
 
     logging.info("Configuring Sourccey")
     robot_config = SourcceyConfig(id="sourccey")
@@ -70,16 +69,7 @@ def main():
     imu_reporter.start()
 
     websocket_relay_manager = WebsocketRelayManager(host_config)
-
-    if host_config.websocket_relay_autostart:
-        mode = "full_bridge" if host_config.websocket_relay_forward_observations else "commands_only"
-        logging.info("Websocket relay autostart enabled (mode=%s).", mode)
-        try:
-            websocket_relay_manager.start()
-        except Exception as exc:  # noqa: BLE001
-            logging.warning("Websocket relay failed to start (continuing without relay): %s", exc)
-    else:
-        logging.info("Websocket relay autostart disabled.")
+    websocket_relay_manager.start_if_configured()
 
     print("Waiting for commands...")
 
@@ -95,10 +85,7 @@ def main():
         previous_observation = None
         while duration < host.connection_time_s:
             loop_start_time = time.time()
-            try:
-                websocket_relay_manager.poll()
-            except Exception as exc:  # noqa: BLE001
-                logging.warning("Websocket relay poll failed (continuing host loop): %s", exc)
+            websocket_relay_manager.poll()
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
@@ -164,49 +151,12 @@ def main():
         print("Keyboard interrupt received. Exiting...")
     finally:
         print("Shutting down Sourccey Host.")
-        try:
-            websocket_relay_manager.stop()
-        except Exception as exc:  # noqa: BLE001
-            logging.warning("Websocket relay stop failed: %s", exc)
+        websocket_relay_manager.stop()
         imu_reporter.stop()
         robot.disconnect()
         host.disconnect()
 
     logging.info("Finished Sourccey cleanly")
-
-
-def _silence_camera_warnings_for_host() -> None:
-    """
-    Host-mode ergonomics: camera disconnects are expected sometimes; don't spam WARNING logs.
-    """
-    # Silence our OpenCV camera wrapper warnings
-    logging.getLogger("lerobot.cameras.opencv.camera_opencv").setLevel(logging.ERROR)
-    # Silence Sourccey camera fallback warnings (black frame fallback)
-    logging.getLogger("lerobot.robots.sourccey.sourccey.sourccey.sourccey").setLevel(logging.ERROR)
-
-    # Best-effort: silence OpenCV's own internal logging if available
-    try:
-        import cv2  # type: ignore
-
-        # OpenCV 4.x often exposes cv2.utils.logging.setLogLevel
-        if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging") and hasattr(cv2.utils.logging, "setLogLevel"):
-            level = getattr(cv2.utils.logging, "LOG_LEVEL_ERROR", None)
-            if level is None:
-                level = getattr(cv2.utils.logging, "LOG_LEVEL_SILENT", None)
-            if level is not None:
-                cv2.utils.logging.setLogLevel(level)
-            return
-
-        # Some builds expose cv2.setLogLevel
-        if hasattr(cv2, "setLogLevel"):
-            level = getattr(cv2, "LOG_LEVEL_ERROR", None)
-            if level is None:
-                level = getattr(cv2, "LOG_LEVEL_SILENT", None)
-            if level is not None:
-                cv2.setLogLevel(level)
-    except Exception:
-        # Don't fail startup just because OpenCV logging APIs differ
-        pass
 
 if __name__ == "__main__":
     main()
