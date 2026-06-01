@@ -32,6 +32,11 @@ class RelayBridge:
         self._obs_socket.connect(self._config.zmq_obs_endpoint)
 
         self._ws = await websockets.connect(self._config.ws_url, max_size=2**22)
+        print(
+            f"[{datetime.now(UTC).isoformat()}] relay_agent.connected "
+            f"session_id={self._config.relay_session_id} "
+            f"robot_id={self._config.robot_id}"
+        )
         self._tasks = [
             asyncio.create_task(self._heartbeat_loop()),
             asyncio.create_task(self._forward_observations_loop()),
@@ -43,7 +48,7 @@ class RelayBridge:
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         self._tasks.clear()
 
