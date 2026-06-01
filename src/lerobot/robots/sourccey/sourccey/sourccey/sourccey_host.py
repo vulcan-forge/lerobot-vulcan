@@ -27,8 +27,8 @@ import zmq
 
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
 from .sourccey import Sourccey
-from .relay_agent.bridge import RelayBridge
-from .relay_agent.config import RelayAgentConfig
+from .modules.relay_agent.bridge import RelayBridge
+from .modules.relay_agent.config import RelayAgentConfig
 
 # Import protobuf modules
 from ..protobuf.generated import sourccey_pb2

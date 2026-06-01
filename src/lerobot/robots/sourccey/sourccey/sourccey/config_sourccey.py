@@ -191,7 +191,7 @@ class SourcceyHostConfig:
     relay_agent_silent_failures: bool = _env_bool("VULCAN_RELAY_AGENT_SILENT_FAILURES", True)
     relay_agent_module: str = _env_str(
         "VULCAN_RELAY_AGENT_MODULE",
-        "lerobot.robots.sourccey.sourccey.sourccey.relay_agent.main",
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.relay_agent.main",
     )
     relay_agent_python_executable: str | None = _env_optional("VULCAN_RELAY_AGENT_PYTHON_EXECUTABLE")
     relay_agent_restart_on_exit: bool = _env_bool("VULCAN_RELAY_AGENT_RESTART_ON_EXIT", True)
