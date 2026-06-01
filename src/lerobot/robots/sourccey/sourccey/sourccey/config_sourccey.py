@@ -182,6 +182,13 @@ class SourcceyHostConfig:
 
     # Relay agent autostart controls
     relay_agent_autostart: bool = _env_bool("VULCAN_RELAY_AGENT_AUTOSTART", True)
+    # Run relay websocket bridge in-process (embedded thread) instead of launching subprocess.
+    # Default keeps relay lifecycle inside `sourccey_host`.
+    relay_agent_embedded: bool = _env_bool("VULCAN_RELAY_AGENT_EMBEDDED", True)
+    # Start with command-only bridge mode by default; enable when observation uplink is needed.
+    relay_agent_forward_observations: bool = _env_bool("VULCAN_RELAY_AGENT_FORWARD_OBSERVATIONS", False)
+    # Suppress reconnect/error logs when websocket is unavailable; keep host running quietly.
+    relay_agent_silent_failures: bool = _env_bool("VULCAN_RELAY_AGENT_SILENT_FAILURES", True)
     relay_agent_module: str = _env_str(
         "VULCAN_RELAY_AGENT_MODULE",
         "lerobot.robots.sourccey.sourccey.sourccey.relay_agent.main",

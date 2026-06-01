@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import math
 from typing import Any
 
 from ...protobuf.generated import sourccey_pb2
@@ -74,7 +75,12 @@ def _action_from_command(command: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _json_safe(value: Any) -> Any:
-    if isinstance(value, (str, int, float, bool)) or value is None:
+    if isinstance(value, float):
+        # JSON doesn't support NaN/Inf. Return None to keep payload valid and avoid server-side parse failures.
+        if not math.isfinite(value):
+            return None
+        return value
+    if isinstance(value, (str, int, bool)) or value is None:
         return value
     if isinstance(value, dict):
         return {str(key): _json_safe(val) for key, val in value.items()}
@@ -82,6 +88,10 @@ def _json_safe(value: Any) -> Any:
         if value and isinstance(value[0], list):
             return {"omitted": "camera_frame"}
         return [_json_safe(item) for item in value]
+    # Fast-path ndarray-like camera frames without materializing huge nested Python lists.
+    ndim = getattr(value, "ndim", None)
+    if isinstance(ndim, int) and ndim >= 2:
+        return {"omitted": "camera_frame"}
     if hasattr(value, "tolist"):
         converted = value.tolist()
         if isinstance(converted, list) and converted and isinstance(converted[0], list):

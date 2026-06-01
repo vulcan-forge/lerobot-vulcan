@@ -337,7 +337,6 @@ lerobot-imgtransform-viz="lerobot.scripts.lerobot_imgtransform_viz:main"
 lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
 lerobot-setup-can="lerobot.scripts.lerobot_setup_can:main"
 lerobot-rollout="lerobot.scripts.lerobot_rollout:main"
-lerobot-sourccey-relay-agent="lerobot.robots.sourccey.sourccey.sourccey.relay_agent.main:main"
 
 # ---------------- Custom Commands ----------------
 lerobot-audit-video-decode-errors="lerobot.scripts.sourccey.dataset.audit_video_decode_errors:main"

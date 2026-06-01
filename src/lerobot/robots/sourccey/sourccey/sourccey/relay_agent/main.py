@@ -25,6 +25,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run websocket probe mode only (no ZMQ bridge).",
     )
+    parser.add_argument(
+        "--commands-only",
+        action="store_true",
+        help="Run relay bridge with command forwarding only (disable observation uplink).",
+    )
     return parser.parse_args()
 
 
@@ -130,6 +135,9 @@ async def _run_ws_probe(cfg: RelayAgentConfig) -> None:
 
 def main() -> None:
     args = _parse_args()
+    if args.ws_only and args.commands_only:
+        raise SystemExit("--ws-only and --commands-only are mutually exclusive.")
+
     cfg = RelayAgentConfig.from_env()
     redacted_ws_url = _redact_ws_url(cfg.ws_url)
 
@@ -148,9 +156,14 @@ def main() -> None:
         backoff_s = cfg.connect_retry_backoff_s
         max_backoff_s = max(cfg.connect_retry_backoff_s, cfg.connect_retry_max_backoff_s)
         while True:
-            bridge = RelayBridge(cfg)
+            bridge = RelayBridge(
+                cfg,
+                forward_observations=not args.commands_only,
+                forward_commands=True,
+            )
             try:
-                print(f"[{_utc_now()}] relay_agent.connecting ws_url={redacted_ws_url}")
+                mode = "commands_only" if args.commands_only else "full_bridge"
+                print(f"[{_utc_now()}] relay_agent.connecting mode={mode} ws_url={redacted_ws_url}")
                 await bridge.run_forever()
             except asyncio.CancelledError:
                 raise

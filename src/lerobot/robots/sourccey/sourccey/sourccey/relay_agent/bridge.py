@@ -15,8 +15,16 @@ from .config import RelayAgentConfig
 
 
 class RelayBridge:
-    def __init__(self, config: RelayAgentConfig) -> None:
+    def __init__(
+        self,
+        config: RelayAgentConfig,
+        *,
+        forward_observations: bool = True,
+        forward_commands: bool = True,
+    ) -> None:
         self._config = config
+        self._forward_observations = forward_observations
+        self._forward_commands = forward_commands
         self._codec = RelayCodec()
         self._context = zmq.asyncio.Context.instance()
         self._cmd_socket = self._context.socket(zmq.PUSH)
@@ -26,10 +34,12 @@ class RelayBridge:
         self._sequence = 0
 
     async def run_forever(self) -> None:
-        self._cmd_socket.setsockopt(zmq.CONFLATE, 1)
-        self._obs_socket.setsockopt(zmq.CONFLATE, 1)
-        self._cmd_socket.connect(self._config.zmq_cmd_endpoint)
-        self._obs_socket.connect(self._config.zmq_obs_endpoint)
+        if self._forward_commands:
+            self._cmd_socket.setsockopt(zmq.CONFLATE, 1)
+            self._cmd_socket.connect(self._config.zmq_cmd_endpoint)
+        if self._forward_observations:
+            self._obs_socket.setsockopt(zmq.CONFLATE, 1)
+            self._obs_socket.connect(self._config.zmq_obs_endpoint)
 
         ping_interval = (
             self._config.websocket_ping_interval_s
@@ -52,11 +62,11 @@ class RelayBridge:
             f"session_id={self._config.relay_session_id} "
             f"robot_id={self._config.robot_id}"
         )
-        self._tasks = [
-            asyncio.create_task(self._heartbeat_loop()),
-            asyncio.create_task(self._forward_observations_loop()),
-            asyncio.create_task(self._receive_commands_loop()),
-        ]
+        self._tasks = [asyncio.create_task(self._heartbeat_loop())]
+        if self._forward_observations:
+            self._tasks.append(asyncio.create_task(self._forward_observations_loop()))
+        if self._forward_commands:
+            self._tasks.append(asyncio.create_task(self._receive_commands_loop()))
         await asyncio.gather(*self._tasks)
 
     async def close(self) -> None:
@@ -102,7 +112,12 @@ class RelayBridge:
                 "sent_at_utc": datetime.now(UTC).isoformat(),
                 "payload": payload,
             }
-            await self._ws.send(json.dumps(message, separators=(",", ":")))
+            try:
+                encoded_message = json.dumps(message, separators=(",", ":"), allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                await self._send_error("observation_json_encode_failed", str(exc))
+                continue
+            await self._ws.send(encoded_message)
 
     async def _receive_commands_loop(self) -> None:
         assert self._ws is not None
