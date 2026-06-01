@@ -19,6 +19,7 @@ class RelayAgentConfig:
     websocket_ping_interval_s: float
     websocket_ping_timeout_s: float
     log_actions: bool
+    log_actions_interval_s: float
 
     @classmethod
     def from_env(cls) -> "RelayAgentConfig":
@@ -35,6 +36,9 @@ class RelayAgentConfig:
             websocket_ping_interval_s=float(os.getenv("VULCAN_RELAY_WS_PING_INTERVAL_S", "0")),
             websocket_ping_timeout_s=float(os.getenv("VULCAN_RELAY_WS_PING_TIMEOUT_S", "0")),
             log_actions=os.getenv("VULCAN_RELAY_LOG_ACTIONS", "true").strip().lower() in {"1", "true", "yes", "on"},
+            log_actions_interval_s=max(
+                1.0, float(os.getenv("VULCAN_RELAY_LOG_ACTIONS_INTERVAL_S", "30.0"))
+            ),
         )
         cfg.validate()
         return cfg
