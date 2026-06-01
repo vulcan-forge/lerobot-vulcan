@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .manager import RelayAgentManager
+
 
 def main() -> None:
     from .main import main as _main
@@ -7,4 +9,4 @@ def main() -> None:
     _main()
 
 
-__all__ = ["main"]
+__all__ = ["main", "RelayAgentManager"]

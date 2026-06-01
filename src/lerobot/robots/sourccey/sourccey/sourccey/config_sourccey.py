@@ -99,33 +99,11 @@ def sourccey_dc_motors_config() -> dict:
         "pwm_frequency": 10000,  # 5 kHz - balance between performance and noise reduction
     }
 
-def _env_str(name: str, default: str) -> str:
-    return os.getenv(name, default).strip() or default
-
-
-def _env_optional(name: str) -> str | None:
-    value = os.getenv(name)
-    if value is None:
-        return None
-    value = value.strip()
-    return value or None
-
-
 def _env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _env_float(name: str, default: float) -> float:
@@ -180,23 +158,14 @@ class SourcceyHostConfig:
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
 
-    # Relay agent autostart controls
+    # Relay agent (embedded) controls
     relay_agent_autostart: bool = _env_bool("VULCAN_RELAY_AGENT_AUTOSTART", True)
-    # Run relay websocket bridge in-process (embedded thread) instead of launching subprocess.
-    # Default keeps relay lifecycle inside `sourccey_host`.
-    relay_agent_embedded: bool = _env_bool("VULCAN_RELAY_AGENT_EMBEDDED", True)
     # Start with command-only bridge mode by default; enable when observation uplink is needed.
     relay_agent_forward_observations: bool = _env_bool("VULCAN_RELAY_AGENT_FORWARD_OBSERVATIONS", False)
     # Suppress reconnect/error logs when websocket is unavailable; keep host running quietly.
     relay_agent_silent_failures: bool = _env_bool("VULCAN_RELAY_AGENT_SILENT_FAILURES", True)
-    relay_agent_module: str = _env_str(
-        "VULCAN_RELAY_AGENT_MODULE",
-        "lerobot.robots.sourccey.sourccey.sourccey.modules.relay_agent.main",
-    )
-    relay_agent_python_executable: str | None = _env_optional("VULCAN_RELAY_AGENT_PYTHON_EXECUTABLE")
     relay_agent_restart_on_exit: bool = _env_bool("VULCAN_RELAY_AGENT_RESTART_ON_EXIT", True)
     relay_agent_restart_backoff_s: float = _env_float("VULCAN_RELAY_AGENT_RESTART_BACKOFF_S", 2.0)
-    relay_agent_max_restarts: int = _env_int("VULCAN_RELAY_AGENT_MAX_RESTARTS", 5)
 
 
     # IMU periodic logging on host (disabled by default to avoid loop spam)
