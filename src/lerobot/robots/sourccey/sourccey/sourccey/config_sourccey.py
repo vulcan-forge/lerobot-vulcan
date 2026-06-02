@@ -26,15 +26,22 @@ from .modules.slam import SlamInputConfig
 def sourccey_cameras_config(
     *,
     front_fps: int = 30,
+    front_width: int = 320,
+    front_height: int = 240,
+    front_fourcc: str | None = None,
     wrist_fps: int = 30,
+    wrist_width: int = 320,
+    wrist_height: int = 240,
+    wrist_fourcc: str | None = None,
     include_wrist: bool = True,
 ) -> dict[str, CameraConfig]:
     config = {
         "front_left": OpenCVCameraConfig(
             index_or_path="/dev/cameraFrontLeft",
             fps=front_fps,
-            width=320,
-            height=240,
+            width=front_width,
+            height=front_height,
+            fourcc=front_fourcc,
             auto_reconnect=True,
             max_consecutive_read_failures=2,
             fast_reconnect_interval_s=0.05,
@@ -44,8 +51,9 @@ def sourccey_cameras_config(
         "front_right": OpenCVCameraConfig(
             index_or_path="/dev/cameraFrontRight",
             fps=front_fps,
-            width=320,
-            height=240,
+            width=front_width,
+            height=front_height,
+            fourcc=front_fourcc,
             auto_reconnect=True,
             max_consecutive_read_failures=2,
             fast_reconnect_interval_s=0.05,
@@ -57,8 +65,9 @@ def sourccey_cameras_config(
         config["wrist_left"] = OpenCVCameraConfig(
             index_or_path="/dev/cameraWristLeft",
             fps=wrist_fps,
-            width=320,
-            height=240,
+            width=wrist_width,
+            height=wrist_height,
+            fourcc=wrist_fourcc,
             auto_reconnect=True,
             max_consecutive_read_failures=2,
             fast_reconnect_interval_s=0.05,
@@ -68,8 +77,9 @@ def sourccey_cameras_config(
         config["wrist_right"] = OpenCVCameraConfig(
             index_or_path="/dev/cameraWristRight",
             fps=wrist_fps,
-            width=320,
-            height=240,
+            width=wrist_width,
+            height=wrist_height,
+            fourcc=wrist_fourcc,
             auto_reconnect=True,
             max_consecutive_read_failures=2,
             fast_reconnect_interval_s=0.05,
@@ -79,10 +89,22 @@ def sourccey_cameras_config(
     return config
 
 
-def sourccey_slam_eye_only_cameras_config(front_fps: int = 60) -> dict[str, CameraConfig]:
+def sourccey_slam_eye_only_cameras_config(
+    *,
+    front_fps: int = 30,
+    front_width: int = 320,
+    front_height: int = 240,
+    front_fourcc: str | None = "MJPG",
+) -> dict[str, CameraConfig]:
     return sourccey_cameras_config(
         front_fps=front_fps,
+        front_width=front_width,
+        front_height=front_height,
+        front_fourcc=front_fourcc,
         wrist_fps=front_fps,
+        wrist_width=front_width,
+        wrist_height=front_height,
+        wrist_fourcc=front_fourcc,
         include_wrist=False,
     )
 
@@ -157,8 +179,22 @@ class SourcceyHostConfig:
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
     slam_eye_only_mode: bool = False
-    slam_eye_camera_fps: int = 60
-    slam_eye_loop_freq_hz: int = 60
+    slam_eye_camera_fps: int = 30
+    slam_eye_loop_freq_hz: int = 30
+    slam_eye_width: int = 320
+    slam_eye_height: int = 240
+    slam_eye_fourcc: str = "MJPG"
+    # 0=disabled, 1=50Hz, 2=60Hz. US indoor lighting usually wants 2.
+    slam_eye_power_line_frequency: int = 2
+    # 1=manual, 3=aperture priority for these UVC cameras.
+    slam_eye_auto_exposure: int | None = 3
+    slam_eye_exposure_dynamic_framerate: bool = False
+    slam_eye_exposure_time_absolute: int | None = None
+    slam_eye_gain: int | None = None
+    slam_eye_sharpness: int | None = None
+    slam_eye_backlight_compensation: int | None = None
+    # Keep camera fallback warnings visible in SLAM mode so black-frame issues aren't silent.
+    slam_eye_log_camera_warnings: bool = True
 
     # IMU periodic logging on host (disabled by default to avoid loop spam)
     imu_print_enabled: bool = False

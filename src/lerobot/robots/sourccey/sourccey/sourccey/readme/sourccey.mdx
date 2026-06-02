@@ -202,14 +202,29 @@ uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 ```
 
 For SLAM-focused runs, you can disable the wrist cameras and raise just the front
-eye cameras to 60 FPS:
+eye cameras while exposing the key tuning knobs:
 
 ```
 uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host \
  --slam_eye_only_mode=true \
- --slam_eye_camera_fps=60 \
- --slam_eye_loop_freq_hz=60
+ --slam_eye_camera_fps=30 \
+ --slam_eye_loop_freq_hz=30 \
+ --slam_eye_width=320 \
+ --slam_eye_height=240 \
+ --slam_eye_fourcc=MJPG \
+ --slam_eye_power_line_frequency=2 \
+ --slam_eye_exposure_dynamic_framerate=false \
+ --slam_eye_auto_exposure=3
 ```
+
+Useful experiment knobs:
+
+- `--slam_eye_width=640 --slam_eye_height=480`
+- `--slam_eye_exposure_time_absolute=180` with `--slam_eye_auto_exposure=1`
+- `--slam_eye_gain=12`
+- `--slam_eye_sharpness=4`
+- `--slam_eye_backlight_compensation=32`
+- `--slam_eye_log_camera_warnings=true`
 
 ## Teleoperation
 
