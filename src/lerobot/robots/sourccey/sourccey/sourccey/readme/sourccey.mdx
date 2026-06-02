@@ -218,9 +218,9 @@ uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host \
  --slam_input_enabled=true \
  --slam_input_endpoint="tcp://*:5560" \
  --slam_publish_eye_only_mode=true \
- --slam_publish_fps=10 \
- --slam_resize_width=160 \
- --slam_resize_height=120
+ --slam_publish_fps=30 \
+ --slam_resize_width=320 \
+ --slam_resize_height=240
 ```
 
 Useful experiment knobs:
@@ -259,7 +259,7 @@ uv run lerobot-teleoperate \
  --teleop_keyboard.id="sourccey_keyboard" \
  --teleop.left_arm_port="COM17" \
  --teleop.right_arm_port="COM18" \
- --fps=20 \
+ --fps=30 \
  --display_data=true \
  --robot.slam.input_enabled=false
 
