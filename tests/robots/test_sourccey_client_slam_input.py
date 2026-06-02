@@ -37,6 +37,9 @@ def test_legacy_flat_slam_config_fields_still_work() -> None:
         slam_stereo_right_key="right_cam",
         slam_jpeg_quality=72,
         slam_eye_only_mode=True,
+        slam_publish_fps=5.0,
+        slam_resize_width=160,
+        slam_resize_height=120,
     )
     assert config.slam.input_enabled is True
     assert config.slam.input_endpoint == "tcp://127.0.0.1:5561"
@@ -44,6 +47,9 @@ def test_legacy_flat_slam_config_fields_still_work() -> None:
     assert config.slam.stereo_right_key == "right_cam"
     assert config.slam.jpeg_quality == 72
     assert config.slam.eye_only_mode is True
+    assert config.slam.publish_fps == 5.0
+    assert config.slam.resize_width == 160
+    assert config.slam.resize_height == 120
 
 
 def _make_frames() -> dict[str, np.ndarray]:
@@ -76,6 +82,34 @@ def test_build_slam_input_packet_contains_required_fields() -> None:
         decoded = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_COLOR)
         assert decoded is not None
         assert decoded.shape == (24, 24, 3)
+
+
+def test_build_slam_input_packet_resizes_frames_when_requested() -> None:
+    config = SourcceyClientConfig(
+        id="test-client",
+        remote_ip="127.0.0.1",
+        slam=SlamInputConfig(
+            input_enabled=True,
+            input_endpoint="tcp://127.0.0.1:5560",
+            stereo_left_key="front_left",
+            stereo_right_key="front_right",
+            jpeg_quality=80,
+            resize_width=12,
+            resize_height=10,
+        ),
+    )
+    client = SourcceyClient(config)
+    frames = _make_frames()
+    observation = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+
+    payload = client._build_slam_input_packet(observation=observation, frames=frames)
+    assert payload is not None
+    data = json.loads(payload.decode("utf-8"))
+
+    encoded = base64.b64decode(data["cameras"]["front_left"]["jpeg_b64"])
+    decoded = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert decoded is not None
+    assert decoded.shape == (10, 12, 3)
 
 
 def test_build_slam_input_packet_increments_frame_ids_per_camera() -> None:
@@ -133,6 +167,30 @@ def test_publish_slam_input_sends_packet_when_build_succeeds() -> None:
     assert sent_data["schema"] == "slam_input.v1"
 
 
+def test_publish_slam_input_respects_publish_fps_throttle() -> None:
+    config = SourcceyClientConfig(
+        id="test-client",
+        remote_ip="127.0.0.1",
+        slam=SlamInputConfig(
+            input_enabled=True,
+            input_endpoint="tcp://127.0.0.1:5560",
+            stereo_left_key="front_left",
+            stereo_right_key="front_right",
+            jpeg_quality=80,
+            publish_fps=1.0,
+        ),
+    )
+    client = SourcceyClient(config)
+    client.zmq_slam_input_socket = MagicMock()
+    frames = _make_frames()
+    observation = {"x.vel": 0.1, "y.vel": 0.2, "theta.vel": 0.3}
+
+    client._publish_slam_input(observation=observation, frames=frames)
+    client._publish_slam_input(observation=observation, frames=frames)
+
+    assert client.zmq_slam_input_socket.send.call_count == 1
+
+
 def test_publish_slam_input_does_not_send_when_required_stereo_missing() -> None:
     client = _make_client()
     client.zmq_slam_input_socket = MagicMock()
@@ -147,14 +205,34 @@ def test_publish_slam_input_does_not_send_when_required_stereo_missing() -> None
 def test_get_observation_only_publishes_slam_for_fresh_packets() -> None:
     client = _make_client()
     client._is_connected = True
-    client._publish_slam_input = MagicMock()
+    client._enqueue_slam_input = MagicMock()
     frames = _make_frames()
     state = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
 
     client._get_data = MagicMock(return_value=(frames, state, False))
     _ = client.get_observation()
-    client._publish_slam_input.assert_not_called()
+    client._enqueue_slam_input.assert_not_called()
 
     client._get_data = MagicMock(return_value=(frames, state, True))
     _ = client.get_observation()
-    assert client._publish_slam_input.call_count == 1
+    assert client._enqueue_slam_input.call_count == 1
+
+
+def test_enqueue_slam_input_keeps_only_latest_pending_job() -> None:
+    client = _make_client()
+    observation_1 = {"x.vel": 0.1}
+    observation_2 = {"x.vel": 0.2}
+    frames_1 = _make_frames()
+    frames_2 = {
+        "front_left": np.full((24, 24, 3), 10, dtype=np.uint8),
+        "front_right": np.full((24, 24, 3), 20, dtype=np.uint8),
+    }
+
+    client._enqueue_slam_input(observation=observation_1, frames=frames_1)
+    client._enqueue_slam_input(observation=observation_2, frames=frames_2)
+
+    pending = client._slam_publish_pending
+    assert pending is not None
+    observation, frames = pending
+    assert observation["x.vel"] == 0.2
+    assert np.array_equal(frames["front_left"], frames_2["front_left"])

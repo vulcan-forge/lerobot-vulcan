@@ -17,6 +17,7 @@ import base64
 import json
 import logging
 from functools import cached_property
+import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -72,12 +73,20 @@ class SourcceyClient(Robot):
 
         self.last_frames = {}
         self.last_remote_state = {}
+        self._slam_publish_thread: threading.Thread | None = None
+        self._slam_publish_stop_event: threading.Event | None = None
+        self._slam_publish_pending_event = threading.Event()
+        self._slam_publish_lock = threading.Lock()
+        self._slam_publish_pending: tuple[dict[str, Any], dict[str, np.ndarray]] | None = None
         self._slam_input_publisher = SlamInputPublisher(
             source_id=self.id,
             stereo_left_key=self.slam_stereo_left_key,
             stereo_right_key=self.slam_stereo_right_key,
             jpeg_quality=self.slam_jpeg_quality,
             eye_only_mode=slam_cfg.eye_only_mode,
+            publish_fps=slam_cfg.publish_fps,
+            resize_width=slam_cfg.resize_width,
+            resize_height=slam_cfg.resize_height,
         )
 
         # Define three speed levels and a current index
@@ -225,6 +234,7 @@ class SourcceyClient(Robot):
                 self.zmq_slam_input_socket = create_slam_pub_socket(
                     self.zmq_context, self.slam_input_endpoint
                 )
+                self._start_slam_publish_thread()
 
             poller = zmq.Poller()
             poller.register(self.zmq_observation_socket, zmq.POLLIN)
@@ -234,6 +244,7 @@ class SourcceyClient(Robot):
 
             self._is_connected = True
         except Exception:
+            self._stop_slam_publish_thread()
             if self.zmq_slam_input_socket is not None:
                 close_slam_pub_socket(self.zmq_slam_input_socket)
                 self.zmq_slam_input_socket = None
@@ -285,6 +296,7 @@ class SourcceyClient(Robot):
             logging.debug("Could not send final relax command before disconnect: socket not ready.")
         except Exception as e:
             logging.debug(f"Could not send final relax command before disconnect: {e}")
+        self._stop_slam_publish_thread()
         if self.zmq_slam_input_socket is not None:
             close_slam_pub_socket(self.zmq_slam_input_socket)
             self.zmq_slam_input_socket = None
@@ -315,7 +327,7 @@ class SourcceyClient(Robot):
             obs_dict[cam_name] = frame
 
         if is_fresh and self.slam_input_enabled:
-            self._publish_slam_input(observation=obs_dict, frames=frames)
+            self._enqueue_slam_input(observation=obs_dict, frames=frames)
 
         return obs_dict
 
@@ -505,6 +517,60 @@ class SourcceyClient(Robot):
             observation=observation,
             frames=frames,
         )
+
+    def _enqueue_slam_input(self, observation: Dict[str, Any], frames: Dict[str, np.ndarray]) -> None:
+        if not self.slam_input_enabled:
+            return
+
+        with self._slam_publish_lock:
+            # Keep only the latest observation so teleop never blocks on stale SLAM work.
+            self._slam_publish_pending = (dict(observation), dict(frames))
+        self._slam_publish_pending_event.set()
+
+    def _start_slam_publish_thread(self) -> None:
+        self._stop_slam_publish_thread()
+        self._slam_publish_stop_event = threading.Event()
+        self._slam_publish_pending_event.clear()
+        self._slam_publish_thread = threading.Thread(
+            target=self._slam_publish_loop,
+            name=f"{self.id}_slam_publish",
+            daemon=True,
+        )
+        self._slam_publish_thread.start()
+
+    def _stop_slam_publish_thread(self) -> None:
+        if self._slam_publish_stop_event is not None:
+            self._slam_publish_stop_event.set()
+        self._slam_publish_pending_event.set()
+        if self._slam_publish_thread is not None and self._slam_publish_thread.is_alive():
+            self._slam_publish_thread.join(timeout=2.0)
+        self._slam_publish_thread = None
+        self._slam_publish_stop_event = None
+        self._slam_publish_pending_event.clear()
+        with self._slam_publish_lock:
+            self._slam_publish_pending = None
+
+    def _slam_publish_loop(self) -> None:
+        while self._slam_publish_stop_event is not None and not self._slam_publish_stop_event.is_set():
+            self._slam_publish_pending_event.wait(timeout=0.1)
+            self._slam_publish_pending_event.clear()
+            if self._slam_publish_stop_event.is_set():
+                break
+
+            pending: tuple[dict[str, Any], dict[str, np.ndarray]] | None = None
+            with self._slam_publish_lock:
+                if self._slam_publish_pending is not None:
+                    pending = self._slam_publish_pending
+                    self._slam_publish_pending = None
+
+            if pending is None:
+                continue
+
+            observation, frames = pending
+            try:
+                self._publish_slam_input(observation=observation, frames=frames)
+            except Exception as e:
+                logging.warning("SLAM publish loop error: %s", e)
 
     def _build_slam_input_packet(
         self, observation: Dict[str, Any], frames: Dict[str, np.ndarray]

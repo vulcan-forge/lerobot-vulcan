@@ -201,8 +201,8 @@ On the Raspberry Pi, start the robot host to enable remote control
 uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 ```
 
-For SLAM-focused runs, you can disable the wrist cameras and raise just the front
-eye cameras while exposing the key tuning knobs:
+For SLAM-focused runs, you can disable the wrist cameras and have the robot host
+publish the front-eye SLAM stream directly:
 
 ```
 uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host \
@@ -213,8 +213,14 @@ uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host \
  --slam_eye_height=240 \
  --slam_eye_fourcc=MJPG \
  --slam_eye_power_line_frequency=2 \
- --slam_eye_exposure_dynamic_framerate=false \
- --slam_eye_auto_exposure=3
+ --slam_eye_exposure_dynamic_framerate=true \
+ --slam_eye_auto_exposure=3 \
+ --slam_input_enabled=true \
+ --slam_input_endpoint="tcp://*:5560" \
+ --slam_publish_eye_only_mode=true \
+ --slam_publish_fps=10 \
+ --slam_resize_width=160 \
+ --slam_resize_height=120
 ```
 
 Useful experiment knobs:
@@ -246,16 +252,16 @@ source .venv/Scripts/activate
 uv run lerobot-teleoperate \
  --robot.type=sourccey_client \
  --robot.id="sourccey" \
- --robot.remote_ip="192.168.1.212" \
+ --robot.remote_ip="192.168.1.211" \
  --teleop.type=bi_sourccey_leader \
  --teleop.id="sourccey_leader" \
  --teleop_keyboard.type=keyboard \
  --teleop_keyboard.id="sourccey_keyboard" \
  --teleop.left_arm_port="COM17" \
  --teleop.right_arm_port="COM18" \
- --fps=30 \
+ --fps=20 \
  --display_data=true \
- --robot.slam.input_enabled=true
+ --robot.slam.input_enabled=false
 
 ```
 
@@ -277,6 +283,30 @@ uv run lerobot-teleoperate \
  --display_data=true \
  --robot.slam.input_enabled=true \
  --robot.slam.eye_only_mode=true
+```
+
+If SLAM publishing stalls teleop while the base is moving, throttle and shrink the
+SLAM sidecar packets separately from the teleop loop:
+
+```
+uv run lerobot-teleoperate \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.212" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop_keyboard.type=keyboard \
+ --teleop_keyboard.id="sourccey_keyboard" \
+ --teleop.left_arm_port="COM17" \
+ --teleop.right_arm_port="COM18" \
+ --fps=20 \
+ --display_data=false \
+ --robot.slam.input_enabled=true \
+ --robot.slam.eye_only_mode=true \
+ --robot.slam.jpeg_quality=60 \
+ --robot.slam.publish_fps=5 \
+ --robot.slam.resize_width=160 \
+ --robot.slam.resize_height=120
 ```
 
 # On Linux Then run:

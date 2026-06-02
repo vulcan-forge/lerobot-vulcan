@@ -195,6 +195,16 @@ class SourcceyHostConfig:
     slam_eye_backlight_compensation: int | None = None
     # Keep camera fallback warnings visible in SLAM mode so black-frame issues aren't silent.
     slam_eye_log_camera_warnings: bool = True
+    # Direct SLAM sidecar publishing from the robot host.
+    slam_input_enabled: bool = False
+    slam_input_endpoint: str = "tcp://*:5560"
+    slam_stereo_left_key: str = "front_left"
+    slam_stereo_right_key: str = "front_right"
+    slam_jpeg_quality: int = 80
+    slam_publish_eye_only_mode: bool = True
+    slam_publish_fps: float = 0.0
+    slam_resize_width: int | None = None
+    slam_resize_height: int | None = None
 
     # IMU periodic logging on host (disabled by default to avoid loop spam)
     imu_print_enabled: bool = False
@@ -222,6 +232,9 @@ class SourcceyClientConfig(RobotConfig):
     slam_stereo_right_key: str | None = None
     slam_jpeg_quality: int | None = None
     slam_eye_only_mode: bool | None = None
+    slam_publish_fps: float | None = None
+    slam_resize_width: int | None = None
+    slam_resize_height: int | None = None
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {
@@ -270,3 +283,9 @@ class SourcceyClientConfig(RobotConfig):
             self.slam.jpeg_quality = self.slam_jpeg_quality
         if self.slam_eye_only_mode is not None:
             self.slam.eye_only_mode = self.slam_eye_only_mode
+        if self.slam_publish_fps is not None:
+            self.slam.publish_fps = self.slam_publish_fps
+        if self.slam_resize_width is not None:
+            self.slam.resize_width = self.slam_resize_width
+        if self.slam_resize_height is not None:
+            self.slam.resize_height = self.slam_resize_height

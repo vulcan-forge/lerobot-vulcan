@@ -35,6 +35,9 @@ class SlamInputConfig:
     stereo_right_key: str = "front_right"
     jpeg_quality: int = 80
     eye_only_mode: bool = False
+    publish_fps: float = 0.0
+    resize_width: int | None = None
+    resize_height: int | None = None
 
 
 def create_slam_pub_socket(zmq_context: zmq.Context, endpoint: str) -> zmq.Socket:
@@ -59,23 +62,32 @@ class SlamInputPublisher:
     def __init__(
         self,
         *,
+        source_prefix: str = "sourccey_client",
         source_id: str,
         stereo_left_key: str,
         stereo_right_key: str,
         jpeg_quality: int,
         eye_only_mode: bool,
+        publish_fps: float,
+        resize_width: int | None,
+        resize_height: int | None,
         warn_log_interval_s: float = 5.0,
     ) -> None:
+        self._source_prefix = source_prefix
         self._source_id = source_id
         self._stereo_left_key = stereo_left_key
         self._stereo_right_key = stereo_right_key
         self._jpeg_quality = int(np.clip(jpeg_quality, 1, 100))
         self._eye_only_mode = bool(eye_only_mode)
+        self._publish_interval_s = 0.0 if publish_fps <= 0 else 1.0 / float(publish_fps)
+        self._resize_width = None if resize_width is None else int(resize_width)
+        self._resize_height = None if resize_height is None else int(resize_height)
         self._warn_log_interval_s = warn_log_interval_s
 
         self._camera_frame_ids: dict[str, int] = {}
         self._warn_last_ts: dict[str, float] = {}
         self._warn_suppressed: dict[str, int] = {}
+        self._last_publish_ts: float = 0.0
 
     def publish(
         self,
@@ -84,11 +96,16 @@ class SlamInputPublisher:
         observation: dict[str, Any],
         frames: dict[str, np.ndarray],
     ) -> None:
+        now = time.monotonic()
+        if self._publish_interval_s > 0 and (now - self._last_publish_ts) < self._publish_interval_s:
+            return
+
         payload = self.build_packet(observation=observation, frames=frames)
         if payload is None or socket is None:
             return
         try:
             socket.send(payload, flags=zmq.NOBLOCK)
+            self._last_publish_ts = now
         except zmq.Again:
             logging.debug("Dropping SLAM input packet, no subscriber connected.")
         except Exception as e:
@@ -127,9 +144,17 @@ class SlamInputPublisher:
             if not isinstance(frame, np.ndarray):
                 continue
 
+            encode_frame = frame
+            if self._resize_width is not None and self._resize_height is not None:
+                encode_frame = cv2.resize(
+                    frame,
+                    (self._resize_width, self._resize_height),
+                    interpolation=cv2.INTER_AREA,
+                )
+
             ok, encoded_jpg = cv2.imencode(
                 ".jpg",
-                frame,
+                encode_frame,
                 [int(cv2.IMWRITE_JPEG_QUALITY), int(self._jpeg_quality)],
             )
             if not ok or encoded_jpg is None:
@@ -162,7 +187,7 @@ class SlamInputPublisher:
 
         packet = {
             "schema": "slam_input.v1",
-            "source": f"sourccey_client:{self._source_id}",
+            "source": f"{self._source_prefix}:{self._source_id}",
             "host_monotonic_ns": now_ns,
             "base_velocity": {
                 "x.vel": float(observation.get("x.vel", 0.0)),

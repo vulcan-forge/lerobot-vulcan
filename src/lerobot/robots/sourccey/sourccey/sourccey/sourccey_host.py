@@ -21,6 +21,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import zmq
 from lerobot.configs import parser
 
@@ -29,6 +30,7 @@ from .config_sourccey import (
     SourcceyHostConfig,
     sourccey_slam_eye_only_cameras_config,
 )
+from .modules.slam import SlamInputPublisher, close_slam_pub_socket, create_slam_pub_socket
 from .sourccey import Sourccey
 
 # Import protobuf modules
@@ -36,6 +38,7 @@ from ..protobuf.generated import sourccey_pb2
 
 class SourcceyHost:
     def __init__(self, config: SourcceyHostConfig):
+        self.config = config
         self.zmq_context = zmq.Context()
         self.zmq_cmd_socket = self.zmq_context.socket(zmq.PULL)
         self.zmq_cmd_socket.setsockopt(zmq.CONFLATE, 1)
@@ -44,6 +47,21 @@ class SourcceyHost:
         self.zmq_observation_socket = self.zmq_context.socket(zmq.PUSH)
         self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
         self.zmq_observation_socket.bind(f"tcp://*:{config.port_zmq_observations}")
+
+        self.zmq_slam_input_socket = None
+        self.slam_input_publisher = _build_host_slam_input_publisher(config)
+        if config.slam_input_enabled:
+            self.zmq_slam_input_socket = create_slam_pub_socket(self.zmq_context, config.slam_input_endpoint)
+            logging.info(
+                "Host SLAM publisher enabled: endpoint=%s left=%s right=%s jpeg=%d publish_fps=%.2f resize=%sx%s",
+                config.slam_input_endpoint,
+                config.slam_stereo_left_key,
+                config.slam_stereo_right_key,
+                config.slam_jpeg_quality,
+                config.slam_publish_fps,
+                config.slam_resize_width,
+                config.slam_resize_height,
+            )
 
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
@@ -54,9 +72,24 @@ class SourcceyHost:
         )
 
     def disconnect(self):
+        close_slam_pub_socket(self.zmq_slam_input_socket)
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
+
+    def publish_slam_input(self, observation: dict) -> None:
+        if self.slam_input_publisher is None:
+            return
+        frames = {
+            key: value
+            for key, value in observation.items()
+            if isinstance(value, np.ndarray)
+        }
+        self.slam_input_publisher.publish(
+            socket=self.zmq_slam_input_socket,
+            observation=observation,
+            frames=frames,
+        )
 
 
 def _build_slam_eye_v4l2_controls(config: SourcceyHostConfig) -> dict[str, int]:
@@ -75,6 +108,22 @@ def _build_slam_eye_v4l2_controls(config: SourcceyHostConfig) -> dict[str, int]:
     if config.slam_eye_backlight_compensation is not None:
         controls["backlight_compensation"] = int(config.slam_eye_backlight_compensation)
     return controls
+
+
+def _build_host_slam_input_publisher(config: SourcceyHostConfig) -> SlamInputPublisher | None:
+    if not config.slam_input_enabled:
+        return None
+    return SlamInputPublisher(
+        source_prefix="sourccey_host",
+        source_id="sourccey",
+        stereo_left_key=config.slam_stereo_left_key,
+        stereo_right_key=config.slam_stereo_right_key,
+        jpeg_quality=config.slam_jpeg_quality,
+        eye_only_mode=config.slam_publish_eye_only_mode,
+        publish_fps=config.slam_publish_fps,
+        resize_width=config.slam_resize_width,
+        resize_height=config.slam_resize_height,
+    )
 
 
 def _configure_slam_eye_camera_devices(robot_config: SourcceyConfig, host_config: SourcceyHostConfig) -> None:
@@ -305,6 +354,9 @@ def main(host_config: SourcceyHostConfig):
                     logging.warning("No observation received. Sending previous observation.")
 
                 if observation is not None and observation != {}:
+                    host.publish_slam_input(observation)
+
+                    # Convert observation to protobuf using existing method
                     # Convert observation to protobuf using existing method
                     robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
 
