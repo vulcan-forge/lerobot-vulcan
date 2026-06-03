@@ -1,7 +1,7 @@
 import argparse
 
-from ..config_sourccey import SourcceyConfig
-from ..sourccey import Sourccey
+from ...config_sourccey import SourcceyConfig
+from ...sourccey import Sourccey
 
 
 def main() -> None:

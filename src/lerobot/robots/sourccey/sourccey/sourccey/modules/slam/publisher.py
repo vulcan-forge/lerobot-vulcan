@@ -18,7 +18,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import cv2
 import numpy as np
@@ -47,7 +47,7 @@ def create_slam_pub_socket(zmq_context: zmq.Context, endpoint: str) -> zmq.Socke
     return socket
 
 
-def close_slam_pub_socket(socket: Optional[zmq.Socket]) -> None:
+def close_slam_pub_socket(socket: zmq.Socket | None) -> None:
     if socket is not None:
         socket.close(0)
 
@@ -77,7 +77,7 @@ class SlamInputPublisher:
     def publish(
         self,
         *,
-        socket: Optional[zmq.Socket],
+        socket: zmq.Socket | None,
         observation: dict[str, Any],
         frames: dict[str, np.ndarray],
     ) -> None:
@@ -96,7 +96,7 @@ class SlamInputPublisher:
 
     def build_packet(
         self, *, observation: dict[str, Any], frames: dict[str, np.ndarray]
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         left_key = self._stereo_left_key
         right_key = self._stereo_right_key
         required_keys = (left_key, right_key)
