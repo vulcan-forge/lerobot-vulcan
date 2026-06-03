@@ -20,13 +20,13 @@ import time
 import zmq
 
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
-from .sourccey import Sourccey
 from .modules.host import silence_camera_warnings_for_host
 from .modules.imu import IMUReporter
-from .modules.websocket_relay.manager import WebsocketRelayManager
+from .modules.relay import poll_relay, start_relay, stop_relay
+from .sourccey import Sourccey
 
-# Import protobuf modules
 from ..protobuf.generated import sourccey_pb2
+
 
 class SourcceyHost:
     def __init__(self, config: SourcceyHostConfig):
@@ -48,10 +48,12 @@ class SourcceyHost:
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
 
+
 def main():
     def _handle_termination_signal(signum, _frame):
         logging.info(f"Received signal {signum}. Shutting down Sourccey Host.")
         raise KeyboardInterrupt
+
     signal.signal(signal.SIGTERM, _handle_termination_signal)
     silence_camera_warnings_for_host()
 
@@ -67,9 +69,7 @@ def main():
     host = SourcceyHost(host_config)
     imu_reporter = IMUReporter(host_config)
     imu_reporter.start()
-
-    websocket_relay_manager = WebsocketRelayManager(host_config)
-    websocket_relay_manager.start_if_configured()
+    relay = start_relay(host_config)
 
     print("Waiting for commands...")
 
@@ -85,7 +85,7 @@ def main():
         previous_observation = None
         while duration < host.connection_time_s:
             loop_start_time = time.time()
-            websocket_relay_manager.poll()
+            poll_relay(relay)
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
@@ -151,12 +151,13 @@ def main():
         print("Keyboard interrupt received. Exiting...")
     finally:
         print("Shutting down Sourccey Host.")
-        websocket_relay_manager.stop()
+        stop_relay(relay)
         imu_reporter.stop()
         robot.disconnect()
         host.disconnect()
 
     logging.info("Finished Sourccey cleanly")
+
 
 if __name__ == "__main__":
     main()
