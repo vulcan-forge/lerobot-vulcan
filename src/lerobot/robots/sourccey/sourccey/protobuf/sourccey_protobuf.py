@@ -24,6 +24,7 @@ class SourcceyProtobuf:
             left_target_positions = sourccey_pb2.MotorJoint()
             left_target_positions.shoulder_pan = float(action.get("left_shoulder_pan.pos", 0.0))
             left_target_positions.shoulder_lift = float(action.get("left_shoulder_lift.pos", 0.0))
+            left_target_positions.elbow_twist = float(action.get("left_elbow_twist.pos", 0.0))
             left_target_positions.elbow_flex = float(action.get("left_elbow_flex.pos", 0.0))
             left_target_positions.wrist_flex = float(action.get("left_wrist_flex.pos", 0.0))
             left_target_positions.wrist_roll = float(action.get("left_wrist_roll.pos", 0.0))
@@ -34,6 +35,7 @@ class SourcceyProtobuf:
             right_target_positions = sourccey_pb2.MotorJoint()
             right_target_positions.shoulder_pan = float(action.get("right_shoulder_pan.pos", 0.0))
             right_target_positions.shoulder_lift = float(action.get("right_shoulder_lift.pos", 0.0))
+            right_target_positions.elbow_twist = float(action.get("right_elbow_twist.pos", 0.0))
             right_target_positions.elbow_flex = float(action.get("right_elbow_flex.pos", 0.0))
             right_target_positions.wrist_flex = float(action.get("right_wrist_flex.pos", 0.0))
             right_target_positions.wrist_roll = float(action.get("right_wrist_roll.pos", 0.0))
@@ -83,6 +85,7 @@ class SourcceyProtobuf:
             left_motor_pos = msg.left_arm_joints
             left_motor_pos.shoulder_pan = observation.get("left_shoulder_pan.pos", 0.0)
             left_motor_pos.shoulder_lift = observation.get("left_shoulder_lift.pos", 0.0)
+            left_motor_pos.elbow_twist = observation.get("left_elbow_twist.pos", 0.0)
             left_motor_pos.elbow_flex = observation.get("left_elbow_flex.pos", 0.0)
             left_motor_pos.wrist_flex = observation.get("left_wrist_flex.pos", 0.0)
             left_motor_pos.wrist_roll = observation.get("left_wrist_roll.pos", 0.0)
@@ -92,6 +95,7 @@ class SourcceyProtobuf:
             right_motor_pos = msg.right_arm_joints
             right_motor_pos.shoulder_pan = observation.get("right_shoulder_pan.pos", 0.0)
             right_motor_pos.shoulder_lift = observation.get("right_shoulder_lift.pos", 0.0)
+            right_motor_pos.elbow_twist = observation.get("right_elbow_twist.pos", 0.0)
             right_motor_pos.elbow_flex = observation.get("right_elbow_flex.pos", 0.0)
             right_motor_pos.wrist_flex = observation.get("right_wrist_flex.pos", 0.0)
             right_motor_pos.wrist_roll = observation.get("right_wrist_roll.pos", 0.0)
@@ -137,6 +141,7 @@ class SourcceyProtobuf:
             action.update({
                 "left_shoulder_pan.pos": left_motor_pos.shoulder_pan,
                 "left_shoulder_lift.pos": left_motor_pos.shoulder_lift,
+                "left_elbow_twist.pos": left_motor_pos.elbow_twist,
                 "left_elbow_flex.pos": left_motor_pos.elbow_flex,
                 "left_wrist_flex.pos": left_motor_pos.wrist_flex,
                 "left_wrist_roll.pos": left_motor_pos.wrist_roll,
@@ -148,6 +153,7 @@ class SourcceyProtobuf:
             action.update({
                 "right_shoulder_pan.pos": right_motor_pos.shoulder_pan,
                 "right_shoulder_lift.pos": right_motor_pos.shoulder_lift,
+                "right_elbow_twist.pos": right_motor_pos.elbow_twist,
                 "right_elbow_flex.pos": right_motor_pos.elbow_flex,
                 "right_wrist_flex.pos": right_motor_pos.wrist_flex,
                 "right_wrist_roll.pos": right_motor_pos.wrist_roll,
@@ -188,6 +194,7 @@ class SourcceyProtobuf:
             left_motor_pos = robot_state.left_arm_joints
             observation["left_shoulder_pan.pos"] = left_motor_pos.shoulder_pan
             observation["left_shoulder_lift.pos"] = left_motor_pos.shoulder_lift
+            observation["left_elbow_twist.pos"] = left_motor_pos.elbow_twist
             observation["left_elbow_flex.pos"] = left_motor_pos.elbow_flex
             observation["left_wrist_flex.pos"] = left_motor_pos.wrist_flex
             observation["left_wrist_roll.pos"] = left_motor_pos.wrist_roll
@@ -197,6 +204,7 @@ class SourcceyProtobuf:
             right_motor_pos = robot_state.right_arm_joints
             observation["right_shoulder_pan.pos"] = right_motor_pos.shoulder_pan
             observation["right_shoulder_lift.pos"] = right_motor_pos.shoulder_lift
+            observation["right_elbow_twist.pos"] = right_motor_pos.elbow_twist
             observation["right_elbow_flex.pos"] = right_motor_pos.elbow_flex
             observation["right_wrist_flex.pos"] = right_motor_pos.wrist_flex
             observation["right_wrist_roll.pos"] = right_motor_pos.wrist_roll

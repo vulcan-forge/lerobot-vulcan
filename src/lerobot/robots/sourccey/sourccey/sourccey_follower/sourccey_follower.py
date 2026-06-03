@@ -40,19 +40,20 @@ class SourcceyFollower(Robot):
         self.config = config
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
 
-        motor_ids = [1, 2, 3, 4, 5, 6]
+        motor_ids = [1, 2, 3, 4, 5, 6, 7]
         if self.config.orientation == "right":
-            motor_ids = [7, 8, 9, 10, 11, 12]
+            motor_ids = [8, 9, 10, 11, 12, 13, 14]
 
         self.bus = FeetechMotorsBus(
             port=self.config.port,
             motors={
                 "shoulder_pan": Motor(motor_ids[0], config.motor_models["shoulder_pan"], norm_mode_body),
                 "shoulder_lift": Motor(motor_ids[1], config.motor_models["shoulder_lift"], norm_mode_body),
-                "elbow_flex": Motor(motor_ids[2], config.motor_models["elbow_flex"], norm_mode_body),
-                "wrist_flex": Motor(motor_ids[3], config.motor_models["wrist_flex"], norm_mode_body),
-                "wrist_roll": Motor(motor_ids[4], config.motor_models["wrist_roll"], norm_mode_body),
-                "gripper": Motor(motor_ids[5], config.motor_models["gripper"], MotorNormMode.RANGE_0_100),
+                "elbow_twist": Motor(motor_ids[2], config.motor_models["elbow_twist"], norm_mode_body),
+                "elbow_flex": Motor(motor_ids[3], config.motor_models["elbow_flex"], norm_mode_body),
+                "wrist_flex": Motor(motor_ids[4], config.motor_models["wrist_flex"], norm_mode_body),
+                "wrist_roll": Motor(motor_ids[5], config.motor_models["wrist_roll"], norm_mode_body),
+                "gripper": Motor(motor_ids[6], config.motor_models["gripper"], MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )

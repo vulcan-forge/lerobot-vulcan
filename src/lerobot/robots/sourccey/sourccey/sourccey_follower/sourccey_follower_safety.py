@@ -18,6 +18,7 @@ class SourcceyFollowerSafety:
     DEFAULT_CURRENT_LIMITS = {
         "shoulder_pan": 900,
         "shoulder_lift": 1800,
+        "elbow_twist": 900,
         "elbow_flex": 1800,
         "wrist_flex": 900,
         "wrist_roll": 900,

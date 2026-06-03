@@ -205,7 +205,7 @@ class SourcceyFollowerCalibrator:
     def _create_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
         """Create default calibration data for the robot."""
         if not reverse:
-            # Left arm calibration (IDs 1-6)
+            # Left arm calibration (IDs 1-7)
             return {
                 "shoulder_pan": {
                     "id": 1,
@@ -221,29 +221,36 @@ class SourcceyFollowerCalibrator:
                     "range_min": 0,
                     "range_max": 3800
                 },
-                "elbow_flex": {
+                "elbow_twist": {
                     "id": 3,
+                    "drive_mode": 0,
+                    "homing_offset": 0,
+                    "range_min": 0,
+                    "range_max": 4095
+                },
+                "elbow_flex": {
+                    "id": 4,
                     "drive_mode": 0,
                     "homing_offset": -1515,
                     "range_min": 200,
                     "range_max": 3800
                 },
                 "wrist_flex": {
-                    "id": 4,
+                    "id": 5,
                     "drive_mode": 0,
                     "homing_offset": -1100,
                     "range_min": 850,
                     "range_max": 3350
                 },
                 "wrist_roll": {
-                    "id": 5,
+                    "id": 6,
                     "drive_mode": 0,
                     "homing_offset": 975,
                     "range_min": 0,
                     "range_max": 4095
                 },
                 "gripper": {
-                    "id": 6,
+                    "id": 7,
                     "drive_mode": 0,
                     "homing_offset": 1640,
                     "range_min": 425,
@@ -251,45 +258,52 @@ class SourcceyFollowerCalibrator:
                 }
             }
         else:
-            # Right arm calibration (IDs 7-12)
+            # Right arm calibration (IDs 8-14)
             return {
                 "shoulder_pan": {
-                    "id": 7,
+                    "id": 8,
                     "drive_mode": 0,
                     "homing_offset": 2000,
                     "range_min": 925,
                     "range_max": 3050
                 },
                 "shoulder_lift": {
-                    "id": 8,
+                    "id": 9,
                     "drive_mode": 1,
                     "homing_offset": 1645,
                     "range_min": 296,
                     "range_max": 4095
                 },
+                "elbow_twist": {
+                    "id": 10,
+                    "drive_mode": 0,
+                    "homing_offset": 0,
+                    "range_min": 0,
+                    "range_max": 4095
+                },
                 "elbow_flex": {
-                    "id": 9,
+                    "id": 11,
                     "drive_mode": 0,
                     "homing_offset": 20,
                     "range_min": 275,
                     "range_max": 3850
                 },
                 "wrist_flex": {
-                    "id": 10,
+                    "id": 12,
                     "drive_mode": 0,
                     "homing_offset": 1960,
                     "range_min": 770,
                     "range_max": 3350
                 },
                 "wrist_roll": {
-                    "id": 11,
+                    "id": 13,
                     "drive_mode": 0,
                     "homing_offset": 1025,
                     "range_min": 75,
                     "range_max": 4020
                 },
                 "gripper": {
-                    "id": 12,
+                    "id": 14,
                     "drive_mode": 1,
                     "homing_offset": 515,
                     "range_min": 425,

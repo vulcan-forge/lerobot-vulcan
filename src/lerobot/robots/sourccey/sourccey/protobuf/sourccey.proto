@@ -12,10 +12,11 @@ message CameraImage {
 message MotorJoint {
     float shoulder_pan = 1;
     float shoulder_lift = 2;
-    float elbow_flex = 3;
-    float wrist_flex = 4;
-    float wrist_roll = 5;
-    float gripper = 6;
+    float elbow_twist = 3;
+    float elbow_flex = 4;
+    float wrist_flex = 5;
+    float wrist_roll = 6;
+    float gripper = 7;
 }
 
 // Base velocity information (mobile base + yaw)

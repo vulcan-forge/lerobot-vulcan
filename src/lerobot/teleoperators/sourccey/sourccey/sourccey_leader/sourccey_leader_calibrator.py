@@ -55,6 +55,7 @@ class SourcceyLeaderCalibrator:
             {
                 "shoulder_pan": 2568 if reverse else 1544,
                 "shoulder_lift": 379 if reverse else 3636,
+                "elbow_twist": 2048,
                 "elbow_flex": 3923 if reverse else 112,
                 "wrist_flex": 2172 if reverse else 2084,
                 "wrist_roll": 2074 if reverse else 1996,
@@ -66,6 +67,7 @@ class SourcceyLeaderCalibrator:
         homing_offsets = {
             "shoulder_pan": shoulder_pan_homing_offset["shoulder_pan"],
             "shoulder_lift": shoulder_pan_homing_offset["shoulder_lift"],
+            "elbow_twist": shoulder_pan_homing_offset["elbow_twist"],
             "elbow_flex": shoulder_pan_homing_offset["elbow_flex"],
             "wrist_flex": shoulder_pan_homing_offset["wrist_flex"],
             "wrist_roll": shoulder_pan_homing_offset["wrist_roll"],
@@ -129,45 +131,52 @@ class SourcceyLeaderCalibrator:
         """Create default calibration data for the robot."""
         print("Creating default calibration data for the robot... CURRENTLY NOT CORRECT WILL BE FIXING LATER")
         if reverse:
-            # Right arm calibration (IDs 7-12)
+            # Right arm calibration (IDs 8-14)
             return {
                 "shoulder_pan": {
-                    "id": 7,
+                    "id": 8,
                     "drive_mode": 0,
                     "homing_offset": -1849,
                     "range_min": 1021,
                     "range_max": 3058
                 },
                 "shoulder_lift": {
-                    "id": 8,
+                    "id": 9,
                     "drive_mode": 0,
                     "homing_offset": 1520,
                     "range_min": 434,
                     "range_max": 3443
                 },
+                "elbow_twist": {
+                    "id": 10,
+                    "drive_mode": 0,
+                    "homing_offset": 0,
+                    "range_min": 0,
+                    "range_max": 4095
+                },
                 "elbow_flex": {
-                    "id": 9,
+                    "id": 11,
                     "drive_mode": 0,
                     "homing_offset": -954,
                     "range_min": 223,
                     "range_max": 3898
                 },
                 "wrist_flex": {
-                    "id": 10,
+                    "id": 12,
                     "drive_mode": 0,
                     "homing_offset": -2038,
                     "range_min": 1035,
                     "range_max": 3245
                 },
                 "wrist_roll": {
-                    "id": 11,
+                    "id": 13,
                     "drive_mode": 0,
                     "homing_offset": -516,
                     "range_min": 768,
                     "range_max": 3328
                 },
                 "gripper": {
-                    "id": 12,
+                    "id": 14,
                     "drive_mode": 0,
                     "homing_offset": -2009,
                     "range_min": 1471,
@@ -175,7 +184,7 @@ class SourcceyLeaderCalibrator:
                 }
             }
         else:
-            # Left arm calibration (IDs 1-6)
+            # Left arm calibration (IDs 1-7)
             return {
                 "shoulder_pan": {
                     "id": 1,
@@ -191,29 +200,36 @@ class SourcceyLeaderCalibrator:
                     "range_min": 378,
                     "range_max": 3578
                 },
-                "elbow_flex": {
+                "elbow_twist": {
                     "id": 3,
+                    "drive_mode": 0,
+                    "homing_offset": 0,
+                    "range_min": 0,
+                    "range_max": 4095
+                },
+                "elbow_flex": {
+                    "id": 4,
                     "drive_mode": 0,
                     "homing_offset": 1964,
                     "range_min": 109,
                     "range_max": 3787
                 },
                 "wrist_flex": {
-                    "id": 4,
+                    "id": 5,
                     "drive_mode": 0,
                     "homing_offset": -1080,
                     "range_min": 1020,
                     "range_max": 3157
                 },
                 "wrist_roll": {
-                    "id": 5,
+                    "id": 6,
                     "drive_mode": 0,
                     "homing_offset": -215,
                     "range_min": 0,
                     "range_max": 4095
                 },
                 "gripper": {
-                    "id": 6,
+                    "id": 7,
                     "drive_mode": 0,
                     "homing_offset": -1660,
                     "range_min": 1215,

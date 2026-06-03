@@ -44,19 +44,20 @@ class SourcceyLeader(Teleoperator):
         super().__init__(config)
         self.config = config
 
-        motor_ids = [1, 2, 3, 4, 5, 6]
+        motor_ids = [1, 2, 3, 4, 5, 6, 7]
         if self.config.orientation == "right":
-            motor_ids = [7, 8, 9, 10, 11, 12]
+            motor_ids = [8, 9, 10, 11, 12, 13, 14]
 
         self.bus = FeetechMotorsBus(
             port=self.config.port,
             motors={
                 "shoulder_pan": Motor(motor_ids[0], "sts3215", MotorNormMode.RANGE_M100_100),
                 "shoulder_lift": Motor(motor_ids[1], "sts3215", MotorNormMode.RANGE_M100_100),
-                "elbow_flex": Motor(motor_ids[2], "sts3215", MotorNormMode.RANGE_M100_100),
-                "wrist_flex": Motor(motor_ids[3], "sts3215", MotorNormMode.RANGE_M100_100),
-                "wrist_roll": Motor(motor_ids[4], "sts3215", MotorNormMode.RANGE_M100_100),
-                "gripper": Motor(motor_ids[5], "sts3215", MotorNormMode.RANGE_0_100),
+                "elbow_twist": Motor(motor_ids[2], "sts3215", MotorNormMode.RANGE_M100_100),
+                "elbow_flex": Motor(motor_ids[3], "sts3215", MotorNormMode.RANGE_M100_100),
+                "wrist_flex": Motor(motor_ids[4], "sts3215", MotorNormMode.RANGE_M100_100),
+                "wrist_roll": Motor(motor_ids[5], "sts3215", MotorNormMode.RANGE_M100_100),
+                "gripper": Motor(motor_ids[6], "sts3215", MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )

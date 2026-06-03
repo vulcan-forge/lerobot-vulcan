@@ -181,6 +181,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 self.config.joint_offsets_deg = {
                     "shoulder_pan": 0.0,
                     "shoulder_lift": 0.0,
+                    "elbow_twist": 0.0,
                     "elbow_flex": 0.0,
                     "wrist_flex": 0.0,
                     "wrist_roll": 0.0,
@@ -226,6 +227,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         self._joint_names = [
             "shoulder_pan",
             "shoulder_lift",
+            "elbow_twist",
             "elbow_flex",
             "wrist_flex",
             "wrist_roll",
@@ -260,7 +262,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         self._elbow_block_direction = getattr(self.config, "elbow_block_direction", "increase")
         
         # Tuning parameters (can be edited in-script)
-        # Joint indices: 0 shoulder_pan, 1 shoulder_lift, 2 elbow_flex, 3 wrist_flex, 4 wrist_roll, 5 gripper
+        # Joint indices: 0 shoulder_pan, 1 shoulder_lift, 2 elbow_twist, 3 elbow_flex, 4 wrist_flex, 5 wrist_roll, 6 gripper
         self.tune = {
             "lowpass_alpha": 0.25,  # 0..1; lower = smoother
             "delta_scale": {  # per-joint delta multipliers (post-IK, relative to previous)
@@ -270,16 +272,17 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 3: 1.0,
                 4: 1.0,
                 5: 1.0,
+                6: 1.0,
             },
             "wrist_roll_overhand_bias": {
                 "enabled": True,
-                "index": 4,
+                "index": 5,
                 "target": 0.0,   # radians
                 "blend": 0.05,   # 0..1 small bias
             },
             "elbow_soft_stop": {
                 "enabled": True,
-                "index": 2,
+                "index": 3,
                 "fraction_from_lower": 0.25,  # 0..1; 0.25 ~ 6:00 soft stop
                 "below_small_step_deg": 3.0,
                 "below_margin_deg": 8.0,
@@ -287,7 +290,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             },
             "elbow_back_block": {
                 "enabled": True,
-                "index": 2,
+                "index": 3,
                 "direction": getattr(self.config, "elbow_block_direction", "increase"),
                 "tolerance_deg": 2.0,
             },
@@ -310,6 +313,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         joints = [
             "shoulder_pan.pos",
             "shoulder_lift.pos",
+            "elbow_twist.pos",
             "elbow_flex.pos",
             "wrist_flex.pos",
             "wrist_roll.pos",
@@ -644,7 +648,15 @@ class PhoneTeleoperatorSourccey(Teleoperator):
         if observation is not None:
             try:
                 # Define joint name patterns to look for (without any prefix requirements)
-                joint_base_names = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+                joint_base_names = [
+                    "shoulder_pan",
+                    "shoulder_lift",
+                    "elbow_twist",
+                    "elbow_flex",
+                    "wrist_flex",
+                    "wrist_roll",
+                    "gripper",
+                ]
                 
                 # Try to find keys that contain these joint names with .pos suffix
                 found_keys = []
@@ -926,7 +938,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
             solution_rad = alpha * solution_rad + (1.0 - alpha) * self._prev_q
 
             # Discourage elbow going down past soft stop (≈ quarter range from lower)
-            ELBOW_IDX = int(self.tune["elbow_soft_stop"]["index"])  # shoulder_pan, shoulder_lift, elbow_flex, ...
+            ELBOW_IDX = int(self.tune["elbow_soft_stop"]["index"])  # shoulder_pan, shoulder_lift, elbow_twist, elbow_flex, ...
             soft_stop = self._elbow_soft_stop
             if soft_stop is not None:
                 if solution_rad[ELBOW_IDX] < soft_stop:
@@ -951,7 +963,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 )
 
             # Gentle overhand bias on wrist roll
-            WRIST_ROLL_IDX = 4
+            WRIST_ROLL_IDX = 5
             overhand_roll_target = 0.0  # rad
             solution_rad[WRIST_ROLL_IDX] = 0.95 * solution_rad[WRIST_ROLL_IDX] + 0.05 * overhand_roll_target
 
@@ -1010,7 +1022,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
 
             # shoulder_lift: no sign flip (use IK direction)
 
-            # elbow_flex (index 2): no fixed offset or sign change
+            # elbow_flex (index 3): no fixed offset or sign change
             #   (axis is +X and rpy now embeds the old –90° roll)
 
             # Apply joint-level reversals based on arm side
@@ -1020,16 +1032,18 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                     solution_final[0] = -solution_final[0]
                 if len(solution_final) > 1:  # shoulder_lift  
                     solution_final[1] = -solution_final[1]
-                if len(solution_final) > 2:  # elbow_flex
+                if len(solution_final) > 2:  # elbow_twist
                     solution_final[2] = -solution_final[2]
-                if len(solution_final) > 3:  # wrist_flex
+                if len(solution_final) > 3:  # elbow_flex
                     solution_final[3] = -solution_final[3]
-                if len(solution_final) > 4:  # wrist_roll
+                if len(solution_final) > 4:  # wrist_flex
                     solution_final[4] = -solution_final[4]
+                if len(solution_final) > 5:  # wrist_roll
+                    solution_final[5] = -solution_final[5]
             else:
                 # Left arm: only wrist_roll flip for consistency
-                if len(solution_final) > 4:
-                    solution_final[4] = -solution_final[4]
+                if len(solution_final) > 5:
+                    solution_final[5] = -solution_final[5]
 
             # Apply optional per-joint offsets (degrees)
             if getattr(self.config, "joint_offsets_deg", None):
@@ -1037,6 +1051,7 @@ class PhoneTeleoperatorSourccey(Teleoperator):
                 name_by_index = [
                     "shoulder_pan",
                     "shoulder_lift",
+                    "elbow_twist",
                     "elbow_flex",
                     "wrist_flex",
                     "wrist_roll",

@@ -15,20 +15,22 @@ class CameraImage(_message.Message):
     def __init__(self, name: _Optional[str] = ..., image_data: _Optional[bytes] = ...) -> None: ...
 
 class MotorJoint(_message.Message):
-    __slots__ = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
+    __slots__ = ("shoulder_pan", "shoulder_lift", "elbow_twist", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
     SHOULDER_PAN_FIELD_NUMBER: _ClassVar[int]
     SHOULDER_LIFT_FIELD_NUMBER: _ClassVar[int]
+    ELBOW_TWIST_FIELD_NUMBER: _ClassVar[int]
     ELBOW_FLEX_FIELD_NUMBER: _ClassVar[int]
     WRIST_FLEX_FIELD_NUMBER: _ClassVar[int]
     WRIST_ROLL_FIELD_NUMBER: _ClassVar[int]
     GRIPPER_FIELD_NUMBER: _ClassVar[int]
     shoulder_pan: float
     shoulder_lift: float
+    elbow_twist: float
     elbow_flex: float
     wrist_flex: float
     wrist_roll: float
     gripper: float
-    def __init__(self, shoulder_pan: _Optional[float] = ..., shoulder_lift: _Optional[float] = ..., elbow_flex: _Optional[float] = ..., wrist_flex: _Optional[float] = ..., wrist_roll: _Optional[float] = ..., gripper: _Optional[float] = ...) -> None: ...
+    def __init__(self, shoulder_pan: _Optional[float] = ..., shoulder_lift: _Optional[float] = ..., elbow_twist: _Optional[float] = ..., elbow_flex: _Optional[float] = ..., wrist_flex: _Optional[float] = ..., wrist_roll: _Optional[float] = ..., gripper: _Optional[float] = ...) -> None: ...
 
 class BaseVelocity(_message.Message):
     __slots__ = ("x_vel", "y_vel", "theta_vel")

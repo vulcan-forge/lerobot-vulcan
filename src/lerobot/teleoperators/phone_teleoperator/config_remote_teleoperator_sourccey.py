@@ -46,6 +46,7 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     rest_pose: tuple[float, ...] = (
         -0.864068,   # shoulder_pan  (-49.506903 deg)
         2.095329,    # shoulder_lift (100.0 deg)
+        0.0,         # elbow_twist
         -2.205474,   # elbow_flex    (-97.716150 deg)
         0.093922,    # wrist_flex    (5.381376 deg)
         0.014914,    # wrist_roll    (0.854701 deg)
@@ -56,6 +57,7 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     rest_pose_right: tuple[float, ...] = (
         0.640044,    # right_shoulder_pan  (36.671576 deg)
         -2.474699,   # right_shoulder_lift (-141.809571 deg)
+        0.0,         # right_elbow_twist
         2.518931,    # right_elbow_flex    (144.292517 deg)
         -0.235352,   # right_wrist_flex    (-13.484163 deg)
         0.020884,    # right_wrist_roll    (1.196581 deg)
@@ -84,6 +86,7 @@ class PhoneTeleoperatorSourcceyConfig(TeleoperatorConfig):
     joint_offsets_deg: dict[str, float] = field(default_factory=lambda: {
         "shoulder_pan": 0.0,  # Will be set based on arm_side: -30.0 for left, 30.0 for right
         "shoulder_lift": 0.0,
+        "elbow_twist": 0.0,
         "elbow_flex": 0.0,
         "wrist_flex": 0.0,
         "wrist_roll": 0.0,

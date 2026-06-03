@@ -181,10 +181,11 @@ def test_protobuf_functionality():
         motor_joint = sourccey_pb2.MotorJoint()
         motor_joint.shoulder_pan = 1.0
         motor_joint.shoulder_lift = 2.0
-        motor_joint.elbow_flex = 3.0
-        motor_joint.wrist_flex = 4.0
-        motor_joint.wrist_roll = 5.0
-        motor_joint.gripper = 6.0
+        motor_joint.elbow_twist = 3.0
+        motor_joint.elbow_flex = 4.0
+        motor_joint.wrist_flex = 5.0
+        motor_joint.wrist_roll = 6.0
+        motor_joint.gripper = 7.0
         print("  ✓ MotorJoint can be created and populated")
 
         # Test BaseVelocity

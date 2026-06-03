@@ -13,29 +13,36 @@
         "range_min": 53,
         "range_max": 3800
     },
-    "elbow_flex": {
+    "elbow_twist": {
         "id": 3,
+        "drive_mode": 0,
+        "homing_offset": 0,
+        "range_min": 0,
+        "range_max": 4095
+    },
+    "elbow_flex": {
+        "id": 4,
         "drive_mode": 0,
         "homing_offset": -1658,
         "range_min": 517,
         "range_max": 3658
     },
     "wrist_flex": {
-        "id": 4,
+        "id": 5,
         "drive_mode": 0,
         "homing_offset": -1863,
         "range_min": 866,
         "range_max": 3233
     },
     "wrist_roll": {
-        "id": 5,
+        "id": 6,
         "drive_mode": 0,
         "homing_offset": 25,
         "range_min": 850,
         "range_max": 3229
     },
     "gripper": {
-        "id": 6,
+        "id": 7,
         "drive_mode": 1,
         "homing_offset": 189,
         "range_min": 2022,
