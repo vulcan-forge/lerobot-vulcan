@@ -140,6 +140,15 @@ class SourcceyHostConfig:
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
 
+<<<<<<< HEAD
+||||||| 29a99b275
+=======
+    # Websocket relay controls.
+    websocket_relay_autostart: bool = True
+    # Start command-only by default; set True to uplink observations too.
+    websocket_relay_forward_observations: bool = False
+
+>>>>>>> vulcan-main
     # IMU periodic logging on host (disabled by default to avoid loop spam)
     imu_print_enabled: bool = False
     imu_print_interval_s: float = 10.0

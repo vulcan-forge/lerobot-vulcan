@@ -1,0 +1,235 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import time
+from datetime import UTC, datetime
+from typing import Any
+
+import websockets
+import zmq
+import zmq.asyncio
+
+from .codec import RelayCodec
+from .config import WebsocketRelayConfig
+
+
+class WebsocketRelayBridge:
+    def __init__(
+        self,
+        config: WebsocketRelayConfig,
+        *,
+        forward_observations: bool = True,
+        forward_commands: bool = True,
+    ) -> None:
+        self._config = config
+        self._forward_observations = forward_observations
+        self._forward_commands = forward_commands
+        self._codec = RelayCodec()
+        self._context = zmq.asyncio.Context.instance()
+        self._cmd_socket = self._context.socket(zmq.PUSH)
+        self._obs_socket = self._context.socket(zmq.PULL)
+        self._ws: Any = None
+        self._tasks: list[asyncio.Task[None]] = []
+        self._sequence = 0
+        now = time.monotonic()
+        self._last_action_log_in_s = now
+        self._last_action_log_out_s = now
+        self._action_in_count = 0
+        self._action_out_count = 0
+        self._last_action_type = "unknown"
+        self._last_action_source = "unknown"
+        self._last_action_out_bytes = 0
+
+    async def run_forever(self) -> None:
+        if self._forward_commands:
+            self._cmd_socket.setsockopt(zmq.CONFLATE, 1)
+            self._cmd_socket.connect(self._config.zmq_cmd_endpoint)
+        if self._forward_observations:
+            self._obs_socket.setsockopt(zmq.CONFLATE, 1)
+            self._obs_socket.connect(self._config.zmq_obs_endpoint)
+
+        ping_interval = (
+            self._config.websocket_ping_interval_s
+            if self._config.websocket_ping_interval_s > 0
+            else None
+        )
+        ping_timeout = (
+            self._config.websocket_ping_timeout_s
+            if self._config.websocket_ping_timeout_s > 0
+            else None
+        )
+        self._ws = await websockets.connect(
+            self._config.ws_url,
+            max_size=2**22,
+            ping_interval=ping_interval,
+            ping_timeout=ping_timeout,
+        )
+        print(
+            f"[{datetime.now(UTC).isoformat()}] websocket_relay.connected "
+            f"session_id={self._config.websocket_relay_session_id} "
+            f"robot_id={self._config.robot_id}"
+        )
+        self._tasks = [asyncio.create_task(self._heartbeat_loop())]
+        if self._forward_observations:
+            self._tasks.append(asyncio.create_task(self._forward_observations_loop()))
+        if self._forward_commands:
+            self._tasks.append(asyncio.create_task(self._receive_commands_loop()))
+        await asyncio.gather(*self._tasks)
+
+    async def close(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        for task in self._tasks:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        self._tasks.clear()
+
+        if self._ws is not None:
+            with contextlib.suppress(Exception):
+                await self._ws.close()
+            self._ws = None
+
+        with contextlib.suppress(Exception):
+            self._cmd_socket.close(0)
+        with contextlib.suppress(Exception):
+            self._obs_socket.close(0)
+
+    async def _heartbeat_loop(self) -> None:
+        assert self._ws is not None
+        while True:
+            await asyncio.sleep(self._config.heartbeat_seconds)
+            await self._ws.send('{"type":"heartbeat"}')
+
+    async def _forward_observations_loop(self) -> None:
+        assert self._ws is not None
+        while True:
+            raw_payload = await self._obs_socket.recv()
+            self._sequence += 1
+            try:
+                payload = self._codec.decode_observation(raw_payload)
+            except Exception as exc:
+                await self._send_error("observation_decode_failed", str(exc))
+                continue
+
+            message = {
+                "type": "robot.observation.v1",
+                "session_id": self._config.websocket_relay_session_id,
+                "robot_id": self._config.robot_id,
+                "observation_seq": self._sequence,
+                "sent_at_utc": datetime.now(UTC).isoformat(),
+                "payload": payload,
+            }
+            try:
+                encoded_message = json.dumps(message, separators=(",", ":"), allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                await self._send_error("observation_json_encode_failed", str(exc))
+                continue
+            await self._ws.send(encoded_message)
+
+    async def _receive_commands_loop(self) -> None:
+        assert self._ws is not None
+        async for raw_message in self._ws:
+            if isinstance(raw_message, bytes):
+                try:
+                    raw_message = raw_message.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+
+            message = _parse_json(raw_message)
+            if not message:
+                continue
+
+            message_type = str(message.get("type", "")).strip()
+            if message_type in {"session.state", "webrtc.offer", "webrtc.answer", "webrtc.ice"}:
+                continue
+            if message_type != "robot.command.v1":
+                continue
+
+            command = message.get("command")
+            if not isinstance(command, dict):
+                await self._send_error("invalid_command_payload", "command field is required")
+                continue
+            self._maybe_log_command_in(
+                command_type=str(command.get("type", "unknown")),
+                source=str(message.get("source", "unknown")),
+            )
+
+            encoded, error_code = self._codec.encode_action(command)
+            if encoded is None:
+                await self._send_error(error_code or "encode_failed", "failed to encode action")
+                continue
+
+            try:
+                await self._cmd_socket.send(encoded)
+                self._maybe_log_command_out(bytes_sent=len(encoded))
+            except Exception as exc:
+                await self._send_error("zmq_send_failed", str(exc))
+                continue
+
+            ack = {
+                "type": "robot.action_ack.v1",
+                "session_id": self._config.websocket_relay_session_id,
+                "robot_id": self._config.robot_id,
+                "ack_at_utc": datetime.now(UTC).isoformat(),
+            }
+            await self._ws.send(json.dumps(ack, separators=(",", ":")))
+
+    async def _send_error(self, code: str, detail: str) -> None:
+        if self._ws is None:
+            return
+        error = {
+            "type": "robot.error.v1",
+            "session_id": self._config.websocket_relay_session_id,
+            "robot_id": self._config.robot_id,
+            "error": code,
+            "message": detail,
+            "created_at_utc": datetime.now(UTC).isoformat(),
+        }
+        await self._ws.send(json.dumps(error, separators=(",", ":")))
+
+    def _maybe_log_command_in(self, *, command_type: str, source: str) -> None:
+        if not self._config.log_actions:
+            return
+        self._action_in_count += 1
+        self._last_action_type = command_type or "unknown"
+        self._last_action_source = source or "unknown"
+        now = time.monotonic()
+        interval_s = self._config.log_actions_interval_s
+        if now - self._last_action_log_in_s < interval_s:
+            return
+        print(
+            f"[{datetime.now(UTC).isoformat()}] websocket_relay.command_in_summary "
+            f"window_s={interval_s:.1f} count={self._action_in_count} "
+            f"last_type={self._last_action_type} last_source={self._last_action_source}"
+        )
+        self._last_action_log_in_s = now
+        self._action_in_count = 0
+
+    def _maybe_log_command_out(self, *, bytes_sent: int) -> None:
+        if not self._config.log_actions:
+            return
+        self._action_out_count += 1
+        self._last_action_out_bytes = bytes_sent
+        now = time.monotonic()
+        interval_s = self._config.log_actions_interval_s
+        if now - self._last_action_log_out_s < interval_s:
+            return
+        print(
+            f"[{datetime.now(UTC).isoformat()}] websocket_relay.command_out_summary "
+            f"window_s={interval_s:.1f} count={self._action_out_count} "
+            f"last_bytes={self._last_action_out_bytes}"
+        )
+        self._last_action_log_out_s = now
+        self._action_out_count = 0
+
+
+def _parse_json(raw: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed

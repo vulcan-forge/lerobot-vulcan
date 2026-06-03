@@ -1,6 +1,9 @@
 import time
 from dataclasses import dataclass
-from typing import Optional
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -50,7 +53,6 @@ class SourcceyZCalibrator:
         self.up_cmd = float(up_cmd)
 
     def _drive(self, cmd: float) -> None:
-
         cmd = -cmd if self.actuator.invert else cmd
         if self.actuator.driver is None:
             raise RuntimeError("SourcceyZActuator has no driver; cannot drive motor.")
@@ -119,15 +121,62 @@ class SourcceyZCalibrator:
 
         return int(last_raw)
 
-    def auto_calibrate(self) -> ZCalibrationResult:
+    def default_calibrate(self) -> ZCalibrationResult:
+        """
+        Soft calibration path.
+
+        This path intentionally does not move the Z actuator. It reuses the
+        currently loaded sensor calibration values and persists them, which is
+        the expected behavior for non-`full_reset` robot auto-calibration.
+        """
+        try:
+            if not self.actuator.is_connected:
+                logger.warning("Z default calibration aborted: actuator is not connected")
+                return None
+        except Exception as e:
+            logger.exception("Z default calibration failed while checking actuator connection: %s", e)
+            print(f"Error: actuator is not connected: {e}")
+            return None
+
+        try:
+            self.actuator.stop_position_controller()
+        except Exception:
+            pass
+
+        raw_min = int(self.actuator.sensor.calibration_min)
+        raw_max = int(self.actuator.sensor.calibration_max)
+        invert = bool(self.actuator.sensor.invert)
+
+        self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
+        self.actuator._save_calibration()
+        logger.info(
+            "Z default calibration completed without movement: raw_min=%s raw_max=%s invert=%s",
+            raw_min,
+            raw_max,
+            invert,
+        )
+
+        return ZCalibrationResult(
+            raw_bottom=int(raw_min),
+            raw_top=int(raw_max),
+            raw_min=raw_min,
+            raw_max=raw_max,
+            invert=invert,
+        )
+
+    def auto_calibrate(self, full_reset: bool = False) -> ZCalibrationResult:
         """
         Returns calibration and also writes it to ZSensor.
         """
+        if not full_reset:
+            return self.default_calibrate()
 
         try:
             if (not self.actuator.is_connected):
+                logger.warning("Z full calibration aborted: actuator is not connected")
                 return None
         except Exception as e:
+            logger.exception("Z full calibration failed while checking actuator connection: %s", e)
             print(f"Error: actuator is not connected: {e}")
             return None
 
@@ -163,12 +212,17 @@ class SourcceyZCalibrator:
         raw_max = int(max(raw_bottom, raw_top))
 
         self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
-
-        # Set the actuator to 100
-        self.actuator.move_to_position_blocking(100.0)
-
-        # Save the calibration
         self.actuator._save_calibration()
+
+        # Repositioning after calibration is best-effort only. A failure here
+        # should not invalidate the newly detected calibration bounds.
+        try:
+            self.actuator.move_to_position_blocking(100.0)
+        except TimeoutError as exc:
+            logger.warning(
+                "Z calibration saved, but reposition to 100.0 timed out: %s",
+                exc,
+            )
 
         return ZCalibrationResult(
             raw_bottom=int(raw_bottom),

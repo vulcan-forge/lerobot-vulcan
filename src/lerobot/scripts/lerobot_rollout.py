@@ -111,16 +111,6 @@ Usage examples
         --display_data=true \\
         --use_torch_compile=true
 
-    # Optional log spam throttling controls (enabled by default)
-    lerobot-rollout \\
-        --strategy.type=base \\
-        --policy.path=lerobot/act_koch_real \\
-        --robot.type=koch_follower \\
-        --robot.port=/dev/ttyACM0 \\
-        --task="pick up cube" --duration=60 \\
-        --logging.throttle_spam=true \\
-        --logging.throttle_interval_s=5.0
-
     # Resume a previous sentry recording session
     lerobot-rollout \\
         --strategy.type=sentry \\
@@ -153,7 +143,6 @@ from lerobot.robots import (  # noqa: F401
     unitree_g1 as unitree_g1_robot,
 )
 from lerobot.rollout import RolloutConfig, build_rollout_context, create_strategy
-from lerobot.rollout.log_throttle import configure_rollout_log_throttling
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
@@ -179,11 +168,7 @@ logger = logging.getLogger(__name__)
 @parser.wrap()
 def rollout(cfg: RolloutConfig):
     """Main entry point for policy deployment."""
-    init_logging()
-    configure_rollout_log_throttling(
-        enabled=cfg.logging.throttle_spam,
-        throttle_interval_s=cfg.logging.throttle_interval_s,
-    )
+    init_logging(console_level=cfg.log_level)
 
     if cfg.display_data:
         logger.info("Initializing Rerun visualization (ip=%s, port=%s)", cfg.display_ip, cfg.display_port)

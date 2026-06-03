@@ -99,6 +99,11 @@ class SourcceyFollowerCalibrator:
         Ensure the robot arm is clear of obstacles and people during calibration.
         """
         logger.info(f"Starting automatic calibration of robot {self.robot.id}")
+        try:
+            self.robot.bus.disable_torque()
+        except Exception as exc:
+            logger.warning("Failed to disable torque before full calibration: %s", exc)
+
         if (not self.robot.is_calibrated):
             logger.info("Performing preliminary default calibration...")
             self.default_calibrate(reverse)
@@ -321,6 +326,10 @@ class SourcceyFollowerCalibrator:
         logger.info("Starting mechanical limit detection...")
 
         # Enable torque for all motors to allow movement
+        try:
+            self.robot.bus.disable_torque()
+        except Exception as exc:
+            logger.warning("Failed to reset torque state before mechanical limit detection: %s", exc)
         self.robot.bus.enable_torque()
 
         # Get current positions as starting points

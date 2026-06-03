@@ -1,29 +1,35 @@
+from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING
 
 from ...config_sourccey import SourcceyHostConfig
 
 if TYPE_CHECKING:
-    from .bridge import RelayRobotBridge
+    from ..websocket_relay.manager import WebsocketRelayManager
 
 
-def start_relay_bridge(host_config: SourcceyHostConfig) -> "RelayRobotBridge | None":
+def start_relay(host_config: SourcceyHostConfig) -> WebsocketRelayManager | None:
     try:
-        from .bridge import RelayRobotBridge
+        from ..websocket_relay.manager import WebsocketRelayManager
 
-        relay_bridge = RelayRobotBridge.from_environment(host_config)
-        if relay_bridge is not None:
-            relay_bridge.start()
-            print("Relay robot bridge started.")
+        relay = WebsocketRelayManager(host_config)
+        if relay.start_if_configured():
+            print("Relay started.")
         else:
-            print("Relay robot bridge disabled.")
-        return relay_bridge
-    except Exception as exc:
-        logging.info("Relay robot bridge unavailable: %s", exc)
-        print("Relay robot bridge disabled.")
+            print("Relay disabled.")
+        return relay
+    except Exception as exc:  # noqa: BLE001
+        logging.info("Relay unavailable: %s", exc)
+        print("Relay disabled.")
         return None
 
 
-def stop_relay_bridge(relay_bridge: "RelayRobotBridge | None") -> None:
-    if relay_bridge is not None:
-        relay_bridge.stop()
+def poll_relay(relay: WebsocketRelayManager | None) -> None:
+    if relay is not None:
+        relay.poll()
+
+
+def stop_relay(relay: WebsocketRelayManager | None) -> None:
+    if relay is not None:
+        relay.stop()

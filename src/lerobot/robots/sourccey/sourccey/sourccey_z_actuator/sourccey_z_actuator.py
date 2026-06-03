@@ -410,8 +410,8 @@ class SourcceyZActuator:
         self._ctl_thread.start()
 
     def stop_position_controller(self, *, join_timeout_s: float = 1.0) -> None:
-        print("Stopping Z actuator position controller")
         """Stop the background position controller (if running) and stop motor output."""
+        print("Stopping Z actuator position controller")
         self._ctl_stop_event.set()
         t = self._ctl_thread
         if t is not None and t.is_alive():

@@ -14,19 +14,74 @@ Assumptions:
 ```bash
 CUDA_VISIBLE_DEVICES=1 uv run lerobot-rollout \
   --strategy.type=base \
+<<<<<<< HEAD
   --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-008/checkpoints/0300000/pretrained_model" \
+||||||| 29a99b275
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-004/checkpoints/0120000/pretrained_model" \
+=======
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-008/checkpoints/1000000/pretrained_model" \
+>>>>>>> vulcan-main
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
+<<<<<<< HEAD
   --logging.throttle_spam=true \
   --logging.throttle_interval_s=30.0 \
   --task="Grab a shirt from the pile" \
+||||||| 29a99b275
+  --logging.throttle_spam=true \
+  --logging.throttle_interval_s=30.0 \
+  --task="Fold the shirt" \
+=======
+  --task="Fold the shirt" \
+>>>>>>> vulcan-main
   --display_data=true \
+<<<<<<< HEAD
   --duration=1800 \
+||||||| 29a99b275
+  --duration=600 \
+=======
+  --duration=3600 \
+>>>>>>> vulcan-main
   --fps=30
 ```
 
-To disable throttling and show every message:
-- `--logging.throttle_spam=false`
+## 1b) Performance-tuned Base Rollout (Sourccey + XVLA)
+
+If you see repeated warnings like:
+- `Record loop is running slower (...) than target FPS (...)`
+- `No new data available within timeout`
+
+use this profile first:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
+  --strategy.type=base \
+  --inference.type=rtc \
+  --inference.rtc.enabled=false \
+  --inference.rtc.execution_horizon=30 \
+  --interpolation_multiplier=2 \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --robot.polling_timeout_ms=5 \
+  --task="Fold the shirt" \
+  --display_data=false \
+  --duration=1800 \
+  --fps=20 \
+  --device=cuda
+```
+
+Notes:
+- `--inference.type=rtc` enables async inference in a background thread.
+- `--inference.rtc.enabled=false` keeps queue-append mode (useful for policies without RTC overlap kwargs, like XVLA).
+- `--interpolation_multiplier=2` smooths control by emitting interpolated actions between policy outputs.
+- `--robot.polling_timeout_ms=5` reduces blocking when no new observation packet is available.
+- `--display_data=false` removes Rerun visualization overhead from the control loop.
+
+If 20 FPS is stable, try increasing:
+- `--fps=24`, then `--fps=30`
+
+If 30 FPS is still unstable, keep `--fps` near sustained sensor rate and use interpolation for smoother actuation.
 
 ---
 
@@ -142,6 +197,12 @@ uv run lerobot-rollout \
   --strategy.type=dagger \
   --strategy.num_episodes=1 \
 <<<<<<< HEAD
+<<<<<<< HEAD
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-003/checkpoints/0500000/pretrained_model" \
+=======
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+>>>>>>> vulcan-main
+||||||| 29a99b275
   --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-003/checkpoints/0500000/pretrained_model" \
 =======
   --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
@@ -152,6 +213,12 @@ uv run lerobot-rollout \
   --teleop.left_arm_port=/dev/ttyACM0 \
   --teleop.right_arm_port=/dev/ttyACM1 \
 <<<<<<< HEAD
+<<<<<<< HEAD
+  --dataset.repo_id="sourccey-013/rollout__sourccey-013__shirt-fold-blue-c/nickm/dagger-100-nickm" \
+=======
+  --dataset.repo_id="sourccey-013/rollout__sourccey-013__shirt-fold-light-blue-c/nickm/dagger-000-nickm" \
+>>>>>>> vulcan-main
+||||||| 29a99b275
   --dataset.repo_id="sourccey-013/rollout__sourccey-013__shirt-fold-blue-c/nickm/dagger-100-nickm" \
 =======
   --dataset.repo_id="sourccey-013/rollout__sourccey-013__shirt-fold-light-blue-c/nickm/dagger-000-nickm" \
@@ -180,6 +247,13 @@ uv run lerobot-rollout \
   --dataset.streaming_encoding=true \
   --display_data=true \
 <<<<<<< HEAD
+<<<<<<< HEAD
+  --fps=30
+=======
+  --fps=30 \
+  --dataset.push_to_hub=false
+>>>>>>> vulcan-main
+||||||| 29a99b275
   --fps=30
 =======
   --fps=30 \

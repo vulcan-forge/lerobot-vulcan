@@ -201,6 +201,22 @@ On the Raspberry Pi, start the robot host to enable remote control
 uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 ```
 
+
+Websocket relay autostarts with `sourccey_host` by default (control/data bridge only).
+
+Required websocket relay environment variables on robot host:
+
+- `VULCAN_WEBSOCKET_RELAY_WS_BASE_URL` (legacy `VULCAN_RELAY_WS_BASE_URL` still supported)
+- `VULCAN_WEBSOCKET_RELAY_SESSION_ID` (legacy `VULCAN_RELAY_SESSION_ID` still supported)
+- `VULCAN_WEBSOCKET_RELAY_ROBOT_TOKEN` (legacy `VULCAN_RELAY_ROBOT_TOKEN` still supported)
+- `VULCAN_ROBOT_ID` (optional, defaults to `sourccey`)
+
+Autostart toggle:
+
+- `VULCAN_WEBSOCKET_RELAY_AUTOSTART=true|false` (legacy `VULCAN_RELAY_AGENT_AUTOSTART` supported; default `true`)
+
+Current v1 scope: control + observation relay is active; WebRTC media publication is deferred.
+
 ## Teleoperation
 
 On your computer, activate the virtual environment and start teleoperation:
@@ -356,11 +372,11 @@ Evaluate a trained model on the robot without saving the run's recording:
 ```
 uv run lerobot-rollout \
  --strategy.type=base \
- --policy.path="outputs/train/xvla__sourccey-012__shorts-fold__cmb__005__mylesr/checkpoints/100000/pretrained_model" \
+ --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-008/checkpoints/1000000/pretrained_model" \
  --robot.type=sourccey_client \
  --robot.id="sourccey" \
- --robot.remote_ip="192.168.1.211" \
- --task="Fold the shorts" \
+ --robot.remote_ip="192.168.1.214" \
+ --task="Fold the shirt" \
  --duration=60 \
  --fps=30 \
  --device=cuda

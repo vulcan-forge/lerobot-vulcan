@@ -200,19 +200,33 @@ class Sourccey(Robot):
         Auto-calibrate robot joints. If arm is None, calibrate Z first, then both arms in parallel.
         arm can be "left" or "right" to calibrate only that side.
         """
-
         if arm is None:
-            # Calibrate the z actuator first so vertical motion is available before arm calibration.
-            self.z_actuator.calibrator.auto_calibrate()
+            if full_reset:
+                self.disable_arm_torque()
+
+            # Soft robot calibration should not physically move the Z actuator.
+            # Only a full reset re-detects Z limits by movement.
+            self.z_actuator.calibrator.auto_calibrate(full_reset=full_reset)
+
+            calibration_errors: list[tuple[str, BaseException]] = []
+
+            def run_arm_calibration(arm_name: str, arm_obj, **kwargs) -> None:
+                try:
+                    arm_obj.auto_calibrate(**kwargs)
+                except BaseException as exc:
+                    logger.exception("Auto-calibration failed for %s arm", arm_name)
+                    calibration_errors.append((arm_name, exc))
 
             # Create threads for each arm
             left_thread = threading.Thread(
-                target=self.left_arm.auto_calibrate,
-                kwargs={"reverse": False, "full_reset": full_reset}
+                target=run_arm_calibration,
+                args=("left", self.left_arm),
+                kwargs={"reverse": False, "full_reset": full_reset},
             )
             right_thread = threading.Thread(
-                target=self.right_arm.auto_calibrate,
-                kwargs={"reverse": True, "full_reset": full_reset}
+                target=run_arm_calibration,
+                args=("right", self.right_arm),
+                kwargs={"reverse": True, "full_reset": full_reset},
             )
 
             # Start left arm immediately
@@ -225,6 +239,10 @@ class Sourccey(Robot):
             # Wait for both threads to complete
             left_thread.join()
             right_thread.join()
+
+            if calibration_errors:
+                error_messages = ", ".join(f"{arm_name}: {exc}" for arm_name, exc in calibration_errors)
+                raise RuntimeError(f"Arm auto-calibration failed ({error_messages})") from calibration_errors[0][1]
 
         elif arm == "left":
             self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)
@@ -250,6 +268,8 @@ class Sourccey(Robot):
 
     def get_observation(self) -> dict[str, Any]:
         try:
+            start = time.perf_counter()
+
             obs_dict = {}
 
             left_obs = self.left_arm.get_observation()
@@ -273,13 +293,19 @@ class Sourccey(Robot):
 
             for cam_key in self.cameras.keys():
                 try:
-                    obs_dict[cam_key] = self.cameras[cam_key].async_read()
+                    start = time.perf_counter()
+                    obs_dict[cam_key] = self.cameras[cam_key].read_latest()
+                    dt_ms = (time.perf_counter() - start) * 1e3
+                    logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
                 except Exception as e:
                     # Keep the observation schema stable even if a camera is down.
                     h = int(self.config.cameras[cam_key].height)
                     w = int(self.config.cameras[cam_key].width)
                     obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)
                     logger.warning(f"Camera '{cam_key}' read failed: {e}. Using black frame.")
+
+            dt_ms = (time.perf_counter() - start) * 1e3
+            logger.debug(f"{self} get_observation took: {dt_ms:.1f}ms")
 
             return obs_dict
         except Exception as e:

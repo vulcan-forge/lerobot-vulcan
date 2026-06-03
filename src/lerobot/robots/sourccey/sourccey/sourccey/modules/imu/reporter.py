@@ -1,14 +1,35 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import logging
 import threading
-from datetime import datetime, timezone
+from typing import Protocol
 
-from ...config_sourccey import SourcceyHostConfig
+
+class IMUHostConfig(Protocol):
+    imu_print_enabled: bool
+    imu_print_interval_s: float
+    imu_bus_num: int
+    imu_lsm6dsox_address: int
+    imu_lis3mdl_address: int
+
+
+@dataclass(slots=True)
+class IMUReporterConfig:
+    """Standalone config for an IMU telemetry reporter."""
+
+    enabled: bool = False
+    interval_s: float = 10.0
+    bus_num: int = 1
+    lsm6dsox_address: int = 0x6A
+    lis3mdl_address: int = 0x1C
 
 
 class IMUReporter:
     """Background logger that prints IMU telemetry at a fixed interval."""
 
-    def __init__(self, config: SourcceyHostConfig):
+    def __init__(self, config: IMUHostConfig):
         self.config = config
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None

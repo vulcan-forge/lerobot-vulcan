@@ -20,11 +20,17 @@ import time
 import zmq
 
 from .config_sourccey import SourcceyConfig, SourcceyHostConfig
+<<<<<<< HEAD
 from .modules.imu import IMUReporter
 from .modules.relay import start_relay_bridge, stop_relay_bridge
+||||||| 29a99b275
+=======
+from .modules.host import silence_camera_warnings_for_host
+from .modules.imu import IMUReporter
+from .modules.relay import poll_relay, start_relay, stop_relay
+>>>>>>> vulcan-main
 from .sourccey import Sourccey
 
-# Import protobuf modules
 from ..protobuf.generated import sourccey_pb2
 
 
@@ -55,8 +61,7 @@ def main():
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, _handle_termination_signal)
-
-    _silence_camera_warnings_for_host()
+    silence_camera_warnings_for_host()
 
     logging.info("Configuring Sourccey")
     robot_config = SourcceyConfig(id="sourccey")
@@ -70,8 +75,13 @@ def main():
     host = SourcceyHost(host_config)
     imu_reporter = IMUReporter(host_config)
     imu_reporter.start()
+<<<<<<< HEAD
 
     relay_bridge = start_relay_bridge(host_config)
+||||||| 29a99b275
+=======
+    relay = start_relay(host_config)
+>>>>>>> vulcan-main
 
     print("Waiting for commands...")
 
@@ -87,6 +97,7 @@ def main():
         previous_observation = None
         while duration < host.connection_time_s:
             loop_start_time = time.time()
+            poll_relay(relay)
             try:
                 # Receive protobuf message instead of JSON
                 msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
@@ -152,7 +163,12 @@ def main():
         print("Keyboard interrupt received. Exiting...")
     finally:
         print("Shutting down Sourccey Host.")
+<<<<<<< HEAD
         stop_relay_bridge(relay_bridge)
+||||||| 29a99b275
+=======
+        stop_relay(relay)
+>>>>>>> vulcan-main
         imu_reporter.stop()
         robot.disconnect()
         host.disconnect()
@@ -160,6 +176,7 @@ def main():
     logging.info("Finished Sourccey cleanly")
 
 
+<<<<<<< HEAD
 def _silence_camera_warnings_for_host() -> None:
     """
     Host-mode ergonomics: camera disconnects are expected sometimes; don't spam WARNING logs.
@@ -194,5 +211,41 @@ def _silence_camera_warnings_for_host() -> None:
         pass
 
 
+||||||| 29a99b275
+def _silence_camera_warnings_for_host() -> None:
+    """
+    Host-mode ergonomics: camera disconnects are expected sometimes; don't spam WARNING logs.
+    """
+    # Silence our OpenCV camera wrapper warnings
+    logging.getLogger("lerobot.cameras.opencv.camera_opencv").setLevel(logging.ERROR)
+    # Silence Sourccey camera fallback warnings (black frame fallback)
+    logging.getLogger("lerobot.robots.sourccey.sourccey.sourccey.sourccey").setLevel(logging.ERROR)
+
+    # Best-effort: silence OpenCV's own internal logging if available
+    try:
+        import cv2  # type: ignore
+
+        # OpenCV 4.x often exposes cv2.utils.logging.setLogLevel
+        if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging") and hasattr(cv2.utils.logging, "setLogLevel"):
+            level = getattr(cv2.utils.logging, "LOG_LEVEL_ERROR", None)
+            if level is None:
+                level = getattr(cv2.utils.logging, "LOG_LEVEL_SILENT", None)
+            if level is not None:
+                cv2.utils.logging.setLogLevel(level)
+            return
+
+        # Some builds expose cv2.setLogLevel
+        if hasattr(cv2, "setLogLevel"):
+            level = getattr(cv2, "LOG_LEVEL_ERROR", None)
+            if level is None:
+                level = getattr(cv2, "LOG_LEVEL_SILENT", None)
+            if level is not None:
+                cv2.setLogLevel(level)
+    except Exception:
+        # Don't fail startup just because OpenCV logging APIs differ
+        pass
+
+=======
+>>>>>>> vulcan-main
 if __name__ == "__main__":
     main()
