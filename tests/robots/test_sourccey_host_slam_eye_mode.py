@@ -9,6 +9,7 @@ from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import (
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey_host import (
     _build_host_slam_input_publisher,
     _build_slam_eye_v4l2_controls,
+    _handle_command_watchdog_timeout,
 )
 
 
@@ -99,3 +100,18 @@ def test_build_host_slam_input_publisher_uses_host_source_and_knobs() -> None:
     assert packet["stereo_left"] == "front_left"
     assert packet["stereo_right"] == "front_right"
     assert set(packet["cameras"]) == {"front_left", "front_right"}
+
+
+def test_handle_command_watchdog_timeout_stops_motion() -> None:
+    class _FakeRobot:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def watchdog_stop_motion(self) -> None:
+            self.calls += 1
+
+    robot = _FakeRobot()
+
+    _handle_command_watchdog_timeout(robot, 250)
+
+    assert robot.calls == 1

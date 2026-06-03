@@ -34,6 +34,13 @@ class NavFollowBridgeConfig:
     max_theta_vel_rad_s: float = 0.35
     x_vel_scale: float = 1.0
     theta_vel_scale: float = 1.0
+    min_effective_x_vel_m_s: float = 0.0
+    min_effective_theta_vel_rad_s: float = 0.0
+    turn_only_heading_enter_deg: float = 14.0
+    turn_only_heading_exit_deg: float = 7.0
+    drive_theta_heading_deadband_deg: float = 10.0
+    drive_theta_mix: float = 0.0
+    lock_turn_direction: bool = True
     exit_on_completed: bool = True
 
 
@@ -99,8 +106,11 @@ def _is_status_stale(status: NavFollowBridgeStatus, stale_timeout_s: float) -> b
 def _build_base_action_from_status(
     status: NavFollowBridgeStatus,
     cfg: NavFollowBridgeConfig,
+    *,
+    mode: str,
+    turn_sign: float | None = None,
 ) -> dict[str, float]:
-    if status.completed or status.recommended_kind == "stop":
+    if status.completed or status.recommended_kind == "stop" or mode == "stop":
         return {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
 
     x_vel = status.recommended_x_vel_m_s * float(cfg.x_vel_scale)
@@ -110,12 +120,82 @@ def _build_base_action_from_status(
         -float(cfg.max_theta_vel_rad_s),
         min(float(cfg.max_theta_vel_rad_s), theta_vel),
     )
-    if status.recommended_kind == "turn":
+    if mode == "turn":
         x_vel = 0.0
-    elif status.recommended_kind != "drive":
+        if turn_sign is None:
+            turn_sign = _recommended_turn_sign(status)
+        theta_vel = abs(theta_vel) * float(turn_sign)
+        theta_vel = _apply_min_effective_magnitude(
+            theta_vel,
+            minimum_abs=float(cfg.min_effective_theta_vel_rad_s),
+        )
+    elif mode == "drive":
+        x_vel = _apply_min_effective_magnitude(
+            x_vel,
+            minimum_abs=float(cfg.min_effective_x_vel_m_s),
+        )
+        if abs(float(cfg.drive_theta_mix)) > 1e-9:
+            theta_vel *= float(cfg.drive_theta_mix)
+            heading_error_abs = (
+                None if status.heading_error_deg is None else abs(float(status.heading_error_deg))
+            )
+            if (
+                heading_error_abs is not None
+                and heading_error_abs < float(cfg.drive_theta_heading_deadband_deg)
+            ):
+                theta_vel = 0.0
+            else:
+                theta_vel = _apply_min_effective_magnitude(
+                    theta_vel,
+                    minimum_abs=float(cfg.min_effective_theta_vel_rad_s),
+                )
+        else:
+            theta_vel = 0.0
+    else:
         x_vel = 0.0
         theta_vel = 0.0
     return {"x.vel": float(x_vel), "y.vel": 0.0, "theta.vel": float(theta_vel)}
+
+
+def _apply_min_effective_magnitude(value: float, *, minimum_abs: float) -> float:
+    minimum_abs = max(float(minimum_abs), 0.0)
+    if abs(value) <= 1e-9 or minimum_abs <= 1e-9:
+        return float(value)
+    if abs(value) < minimum_abs:
+        return float(minimum_abs if value > 0.0 else -minimum_abs)
+    return float(value)
+
+
+def _resolve_motion_mode(
+    status: NavFollowBridgeStatus | None,
+    cfg: NavFollowBridgeConfig,
+    *,
+    previous_mode: str,
+) -> str:
+    if status is None or status.completed or status.recommended_kind == "stop":
+        return "stop"
+
+    heading_error_abs = (
+        None if status.heading_error_deg is None else abs(float(status.heading_error_deg))
+    )
+    if previous_mode == "turn":
+        if heading_error_abs is None:
+            return "turn" if status.recommended_kind == "turn" else "drive"
+        if heading_error_abs > float(cfg.turn_only_heading_exit_deg):
+            return "turn"
+    if status.recommended_kind == "turn":
+        return "turn"
+    if heading_error_abs is not None and heading_error_abs >= float(cfg.turn_only_heading_enter_deg):
+        return "turn"
+    return "drive"
+
+
+def _recommended_turn_sign(status: NavFollowBridgeStatus) -> float:
+    if abs(float(status.recommended_theta_vel_rad_s)) > 1e-9:
+        return 1.0 if float(status.recommended_theta_vel_rad_s) > 0.0 else -1.0
+    if status.heading_error_deg is not None and abs(float(status.heading_error_deg)) > 1e-9:
+        return 1.0 if float(status.heading_error_deg) > 0.0 else -1.0
+    return 1.0
 
 
 @parser.wrap()
@@ -130,6 +210,8 @@ def nav_follow_bridge(cfg: NavFollowBridgeConfig):
     last_observation: dict[str, object] = {}
     last_log_time = 0.0
     last_summary: str | None = None
+    motion_mode = "stop"
+    locked_turn_sign: float | None = None
 
     print(
         "Nav follow bridge started "
@@ -160,11 +242,24 @@ def nav_follow_bridge(cfg: NavFollowBridgeConfig):
                 reason = "status_stale"
                 status = None
 
+            resolved_mode = _resolve_motion_mode(status, cfg, previous_mode=motion_mode)
+
+            if resolved_mode != "turn":
+                locked_turn_sign = None
+            elif locked_turn_sign is None or not bool(cfg.lock_turn_direction):
+                locked_turn_sign = _recommended_turn_sign(status) if status is not None else None
+
             if status is None:
                 base_action = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
             else:
                 reason = status.detail or "tracking"
-                base_action = _build_base_action_from_status(status, cfg)
+                base_action = _build_base_action_from_status(
+                    status,
+                    cfg,
+                    mode=resolved_mode,
+                    turn_sign=locked_turn_sign,
+                )
+            motion_mode = resolved_mode
 
             action = {**arm_hold, **base_action, "z.pos": z_hold}
             robot.send_action(action)
@@ -173,7 +268,7 @@ def nav_follow_bridge(cfg: NavFollowBridgeConfig):
                 "stopping"
                 if status is None
                 else (
-                    f"kind={status.recommended_kind} "
+                    f"mode={motion_mode} kind={status.recommended_kind} "
                     f"x={base_action['x.vel']:.2f} theta={base_action['theta.vel']:.2f} "
                     f"target_wp={status.target_waypoint_index} "
                     f"progress={status.progress_ratio * 100.0:.1f}% "

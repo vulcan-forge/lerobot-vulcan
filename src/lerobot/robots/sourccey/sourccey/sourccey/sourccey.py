@@ -433,6 +433,20 @@ class Sourccey(Robot):
             logger.warning(f"Failed to stop z actuator during watchdog: {e}")
         self.disable_arm_torque()
 
+    def watchdog_stop_motion(self) -> None:
+        """
+        Host watchdog fail-safe for command-stream loss during active operation.
+
+        Stops only the mobile base and z actuator motion without relaxing follower-arm torque.
+        This is safer for autonomous/teleop command dropouts where we want motion to halt
+        immediately but do not want the arms to suddenly go limp.
+        """
+        self.stop_base()
+        try:
+            self.z_actuator.stop()
+        except Exception as e:
+            logger.warning(f"Failed to stop z actuator during motion watchdog: {e}")
+
     ##################################################################################
     # Private Kinematic Functions
     ##################################################################################

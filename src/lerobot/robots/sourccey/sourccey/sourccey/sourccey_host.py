@@ -92,6 +92,14 @@ class SourcceyHost:
         )
 
 
+def _handle_command_watchdog_timeout(robot: Sourccey, watchdog_timeout_ms: int) -> None:
+    logging.warning(
+        "Command not received for more than %d milliseconds. Stopping base motion.",
+        watchdog_timeout_ms,
+    )
+    robot.watchdog_stop_motion()
+
+
 def _build_slam_eye_v4l2_controls(config: SourcceyHostConfig) -> dict[str, int]:
     controls: dict[str, int] = {
         "power_line_frequency": int(config.slam_eye_power_line_frequency),
@@ -337,9 +345,10 @@ def main(host_config: SourcceyHostConfig):
 
             now = time.time()
             if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
-                logging.debug(
-                    f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. "
-                )
+                try:
+                    _handle_command_watchdog_timeout(robot, host.watchdog_timeout_ms)
+                except Exception as e:
+                    logging.error("Failed to stop robot motion on watchdog timeout: %s", e)
                 watchdog_active = True
 
             if observation is not None and observation != {}:
