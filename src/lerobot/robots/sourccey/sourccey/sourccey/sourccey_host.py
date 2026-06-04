@@ -98,6 +98,11 @@ def _handle_command_watchdog_timeout(robot: Sourccey, watchdog_timeout_ms: int) 
         watchdog_timeout_ms,
     )
     robot.watchdog_stop_motion()
+    # Flush the zero-motion target out to the hardware immediately so a lost client
+    # cannot leave the base latched on its previous wheel command.
+    update_fn = getattr(robot, "update", None)
+    if callable(update_fn):
+        update_fn()
 
 
 def _build_slam_eye_v4l2_controls(config: SourcceyHostConfig) -> dict[str, int]:

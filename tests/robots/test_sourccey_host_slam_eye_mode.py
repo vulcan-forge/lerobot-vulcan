@@ -105,13 +105,18 @@ def test_build_host_slam_input_publisher_uses_host_source_and_knobs() -> None:
 def test_handle_command_watchdog_timeout_stops_motion() -> None:
     class _FakeRobot:
         def __init__(self) -> None:
-            self.calls = 0
+            self.stop_calls = 0
+            self.update_calls = 0
 
         def watchdog_stop_motion(self) -> None:
-            self.calls += 1
+            self.stop_calls += 1
+
+        def update(self) -> None:
+            self.update_calls += 1
 
     robot = _FakeRobot()
 
     _handle_command_watchdog_timeout(robot, 250)
 
-    assert robot.calls == 1
+    assert robot.stop_calls == 1
+    assert robot.update_calls == 1
