@@ -13,6 +13,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .config_sourccey import SourcceyClientConfig, SourcceyConfig
+from .config_sourccey import SourcceyConfig
 from .sourccey import Sourccey
-from .sourccey_client import SourcceyClient
+
+__all__ = [
+    "Sourccey",
+    "SourcceyConfig",
+    "SourcceyClient",
+    "SourcceyClientConfig",
+]
+
+
+def __getattr__(name: str):
+    if name == "SourcceyClient":
+        from .sourccey_client import SourcceyClient
+
+        return SourcceyClient
+    if name == "SourcceyClientConfig":
+        from .config_sourccey import SourcceyClientConfig
+
+        return SourcceyClientConfig
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
