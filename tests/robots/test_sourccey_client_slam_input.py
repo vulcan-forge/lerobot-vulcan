@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
-from lerobot.robots.sourccey.sourccey.sourccey.modules.slam import SlamInputConfig
+from lerobot.robots.sourccey.sourccey.sourccey.modules.slam.config import SlamInputConfig
 
 
 def _make_client() -> SourcceyClient:
