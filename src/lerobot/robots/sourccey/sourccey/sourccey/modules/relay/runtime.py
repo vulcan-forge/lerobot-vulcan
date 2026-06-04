@@ -47,8 +47,34 @@ def _relay_env_snapshot() -> str:
     )
 
 
+def _relay_effective_snapshot() -> str:
+    credentials_path = os.getenv("VULCAN_DEVICE_CREDENTIALS_PATH") or os.getenv(
+        "SOURCCEY_CLOUD_CREDENTIALS_PATH"
+    )
+    try:
+        from ..websocket_relay.config import WebsocketRelayConfig
+
+        cfg = WebsocketRelayConfig.from_env()
+        return (
+            "Relay resolved config: "
+            f"ws_base_url={cfg.websocket_relay_ws_base_url}, "
+            f"session_id={cfg.websocket_relay_session_id}, "
+            f"robot_token={cfg.websocket_relay_robot_token}, "
+            f"robot_id={cfg.robot_id}, "
+            f"ws_url={cfg.ws_url}, "
+            f"credentials_path={credentials_path or '<unset>'}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        return (
+            "Relay resolved config unavailable: "
+            f"error={exc}, "
+            f"credentials_path={credentials_path or '<unset>'}"
+        )
+
+
 def start_relay(host_config: SourcceyHostConfig) -> WebsocketRelayManager | None:
     print(_relay_env_snapshot())
+    print(_relay_effective_snapshot())
     try:
         from ..websocket_relay.manager import WebsocketRelayManager
 
