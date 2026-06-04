@@ -95,6 +95,7 @@ def sourccey_slam_eye_only_cameras_config(
     front_width: int = 320,
     front_height: int = 240,
     front_fourcc: str | None = "MJPG",
+    include_wrist: bool = False,
 ) -> dict[str, CameraConfig]:
     return sourccey_cameras_config(
         front_fps=front_fps,
@@ -105,7 +106,7 @@ def sourccey_slam_eye_only_cameras_config(
         wrist_width=front_width,
         wrist_height=front_height,
         wrist_fourcc=front_fourcc,
-        include_wrist=False,
+        include_wrist=include_wrist,
     )
 
 
@@ -205,6 +206,16 @@ class SourcceyHostConfig:
     slam_publish_fps: float = 0.0
     slam_resize_width: int | None = None
     slam_resize_height: int | None = None
+    # Secondary wrist-camera stereo stream for near-field obstacle detection.
+    slam_obstacle_input_enabled: bool = False
+    slam_obstacle_input_endpoint: str = "tcp://*:5562"
+    slam_obstacle_stereo_left_key: str = "wrist_left"
+    slam_obstacle_stereo_right_key: str = "wrist_right"
+    slam_obstacle_jpeg_quality: int = 80
+    slam_obstacle_publish_eye_only_mode: bool = True
+    slam_obstacle_publish_fps: float = 15.0
+    slam_obstacle_resize_width: int | None = 320
+    slam_obstacle_resize_height: int | None = 240
 
     # IMU periodic logging on host (disabled by default to avoid loop spam)
     imu_print_enabled: bool = False

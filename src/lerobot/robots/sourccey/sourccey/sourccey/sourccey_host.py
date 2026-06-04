@@ -62,6 +62,23 @@ class SourcceyHost:
                 config.slam_resize_width,
                 config.slam_resize_height,
             )
+        self.zmq_slam_obstacle_socket = None
+        self.slam_obstacle_publisher = _build_host_slam_obstacle_publisher(config)
+        if config.slam_obstacle_input_enabled:
+            self.zmq_slam_obstacle_socket = create_slam_pub_socket(
+                self.zmq_context,
+                config.slam_obstacle_input_endpoint,
+            )
+            logging.info(
+                "Host SLAM obstacle publisher enabled: endpoint=%s left=%s right=%s jpeg=%d publish_fps=%.2f resize=%sx%s",
+                config.slam_obstacle_input_endpoint,
+                config.slam_obstacle_stereo_left_key,
+                config.slam_obstacle_stereo_right_key,
+                config.slam_obstacle_jpeg_quality,
+                config.slam_obstacle_publish_fps,
+                config.slam_obstacle_resize_width,
+                config.slam_obstacle_resize_height,
+            )
 
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
@@ -73,6 +90,7 @@ class SourcceyHost:
 
     def disconnect(self):
         close_slam_pub_socket(self.zmq_slam_input_socket)
+        close_slam_pub_socket(self.zmq_slam_obstacle_socket)
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
@@ -90,6 +108,12 @@ class SourcceyHost:
             observation=observation,
             frames=frames,
         )
+        if self.slam_obstacle_publisher is not None:
+            self.slam_obstacle_publisher.publish(
+                socket=self.zmq_slam_obstacle_socket,
+                observation=observation,
+                frames=frames,
+            )
 
 
 def _handle_command_watchdog_timeout(robot: Sourccey, watchdog_timeout_ms: int) -> None:
@@ -136,6 +160,22 @@ def _build_host_slam_input_publisher(config: SourcceyHostConfig) -> SlamInputPub
         publish_fps=config.slam_publish_fps,
         resize_width=config.slam_resize_width,
         resize_height=config.slam_resize_height,
+    )
+
+
+def _build_host_slam_obstacle_publisher(config: SourcceyHostConfig) -> SlamInputPublisher | None:
+    if not config.slam_obstacle_input_enabled:
+        return None
+    return SlamInputPublisher(
+        source_prefix="sourccey_host_obstacle",
+        source_id="sourccey",
+        stereo_left_key=config.slam_obstacle_stereo_left_key,
+        stereo_right_key=config.slam_obstacle_stereo_right_key,
+        jpeg_quality=config.slam_obstacle_jpeg_quality,
+        eye_only_mode=config.slam_obstacle_publish_eye_only_mode,
+        publish_fps=config.slam_obstacle_publish_fps,
+        resize_width=config.slam_obstacle_resize_width,
+        resize_height=config.slam_obstacle_resize_height,
     )
 
 
@@ -289,6 +329,7 @@ def main(host_config: SourcceyHostConfig):
             front_width=host_config.slam_eye_width,
             front_height=host_config.slam_eye_height,
             front_fourcc=host_config.slam_eye_fourcc,
+            include_wrist=host_config.slam_obstacle_input_enabled,
         )
         _configure_slam_eye_camera_devices(robot_config, host_config)
         logging.info(

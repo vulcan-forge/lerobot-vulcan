@@ -20,6 +20,14 @@ ARM_JOINTS = (
 )
 
 NAV_FOLLOW_STATUS_SCHEMA = "sourccey.nav_follow_live_status.v1"
+DEFAULT_ARM_POSE_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "teleoperators"
+    / "sourccey"
+    / "sourccey"
+    / "sourccey_leader"
+    / "defaults"
+)
 
 
 @dataclass
@@ -42,6 +50,9 @@ class NavFollowBridgeConfig:
     drive_theta_mix: float = 0.0
     lock_turn_direction: bool = True
     exit_on_completed: bool = True
+    apply_default_arm_pose_on_connect: bool = True
+    default_arm_pose_repeats: int = 4
+    default_arm_pose_settle_s: float = 0.35
 
 
 @dataclass
@@ -67,6 +78,27 @@ def _build_arm_hold_action(observation: dict[str, object]) -> dict[str, float]:
             key = f"{arm}_{joint}.pos"
             action[key] = _safe_float(observation.get(key, 0.0), 0.0)
     return action
+
+
+def _load_default_arm_pose(arm: str) -> dict[str, float]:
+    pose_path = DEFAULT_ARM_POSE_DIR / f"{arm}_arm_default_action.json"
+    payload = json.loads(pose_path.read_text(encoding="utf-8"))
+    return {
+        f"{arm}_{joint_key}": float(joint_value)
+        for joint_key, joint_value in payload.items()
+    }
+
+
+def _build_default_arm_pose_action(observation: dict[str, object]) -> dict[str, float]:
+    z_hold = _safe_float(observation.get("z.pos", 0.0), 0.0)
+    return {
+        **_load_default_arm_pose("left"),
+        **_load_default_arm_pose("right"),
+        "x.vel": 0.0,
+        "y.vel": 0.0,
+        "theta.vel": 0.0,
+        "z.pos": z_hold,
+    }
 
 
 def _load_nav_follow_status(path: str | Path) -> NavFollowBridgeStatus:
@@ -219,6 +251,21 @@ def _send_stop_burst(
             precise_sleep(max(float(interval_s), 0.0))
 
 
+def _apply_default_arm_pose_on_connect(
+    robot: SourcceyClient,
+    *,
+    last_observation: dict[str, object],
+    repeats: int,
+    settle_s: float,
+) -> None:
+    action = _build_default_arm_pose_action(last_observation)
+    for attempt in range(max(int(repeats), 1)):
+        robot.send_action(action)
+        if attempt < max(int(repeats), 1) - 1:
+            precise_sleep(0.03)
+    precise_sleep(max(float(settle_s), 0.0))
+
+
 @parser.wrap()
 def nav_follow_bridge(cfg: NavFollowBridgeConfig):
     robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
@@ -238,6 +285,31 @@ def nav_follow_bridge(cfg: NavFollowBridgeConfig):
         "Nav follow bridge started "
         f"status={status_path} remote_ip={cfg.remote_ip} fps={cfg.fps}"
     )
+
+    try:
+        observation = robot.get_observation()
+        if isinstance(observation, dict) and observation:
+            last_observation = observation
+    except Exception:
+        pass
+
+    if bool(cfg.apply_default_arm_pose_on_connect):
+        try:
+            _apply_default_arm_pose_on_connect(
+                robot,
+                last_observation=last_observation,
+                repeats=cfg.default_arm_pose_repeats,
+                settle_s=cfg.default_arm_pose_settle_s,
+            )
+            try:
+                observation = robot.get_observation()
+                if isinstance(observation, dict) and observation:
+                    last_observation = observation
+            except Exception:
+                pass
+            print("Nav follow bridge: applied default arm pose on connect.")
+        except Exception as exc:
+            print(f"Nav follow bridge: failed to apply default arm pose ({exc}).")
 
     try:
         while True:

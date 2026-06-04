@@ -7,6 +7,7 @@ from lerobot.control.sourccey.sourccey.nav_follow_bridge import (
     NavFollowBridgeConfig,
     _apply_min_effective_magnitude,
     _build_base_action_from_status,
+    _build_default_arm_pose_action,
     _is_status_stale,
     _load_nav_follow_status,
     _resolve_motion_mode,
@@ -163,3 +164,14 @@ def test_is_status_stale_uses_file_mtime(tmp_path: Path):
     os.utime(path, (old_mtime, old_mtime))
     stale_status = _load_nav_follow_status(path)
     assert _is_status_stale(stale_status, stale_timeout_s=0.5) is True
+
+
+def test_build_default_arm_pose_action_uses_default_files_and_zero_base_motion():
+    action = _build_default_arm_pose_action({"z.pos": 0.42})
+
+    assert action["x.vel"] == 0.0
+    assert action["y.vel"] == 0.0
+    assert action["theta.vel"] == 0.0
+    assert action["z.pos"] == 0.42
+    assert "left_shoulder_pan.pos" in action
+    assert "right_shoulder_pan.pos" in action
