@@ -130,51 +130,59 @@ class WebsocketRelayBridge:
 
     async def _receive_commands_loop(self) -> None:
         assert self._ws is not None
-        async for raw_message in self._ws:
-            if isinstance(raw_message, bytes):
-                try:
-                    raw_message = raw_message.decode("utf-8")
-                except UnicodeDecodeError:
+        try:
+            async for raw_message in self._ws:
+                if isinstance(raw_message, bytes):
+                    try:
+                        raw_message = raw_message.decode("utf-8")
+                    except UnicodeDecodeError:
+                        continue
+
+                message = _parse_json(raw_message)
+                if not message:
                     continue
 
-            message = _parse_json(raw_message)
-            if not message:
-                continue
+                message_type = str(message.get("type", "")).strip()
+                if message_type in {"session.state", "webrtc.offer", "webrtc.answer", "webrtc.ice"}:
+                    continue
+                if message_type != "robot.command.v1":
+                    continue
 
-            message_type = str(message.get("type", "")).strip()
-            if message_type in {"session.state", "webrtc.offer", "webrtc.answer", "webrtc.ice"}:
-                continue
-            if message_type != "robot.command.v1":
-                continue
+                command = message.get("command")
+                if not isinstance(command, dict):
+                    await self._send_error("invalid_command_payload", "command field is required")
+                    continue
+                self._maybe_log_command_in(
+                    command_type=str(command.get("type", "unknown")),
+                    source=str(message.get("source", "unknown")),
+                )
 
-            command = message.get("command")
-            if not isinstance(command, dict):
-                await self._send_error("invalid_command_payload", "command field is required")
-                continue
-            self._maybe_log_command_in(
-                command_type=str(command.get("type", "unknown")),
-                source=str(message.get("source", "unknown")),
+                encoded, error_code = self._codec.encode_action(command)
+                if encoded is None:
+                    await self._send_error(error_code or "encode_failed", "failed to encode action")
+                    continue
+
+                try:
+                    await self._cmd_socket.send(encoded)
+                    self._maybe_log_command_out(bytes_sent=len(encoded))
+                except Exception as exc:
+                    await self._send_error("zmq_send_failed", str(exc))
+                    continue
+
+                ack = {
+                    "type": "robot.action_ack.v1",
+                    "session_id": self._config.websocket_relay_session_id,
+                    "robot_id": self._config.robot_id,
+                    "ack_at_utc": datetime.now(UTC).isoformat(),
+                }
+                await self._ws.send(json.dumps(ack, separators=(",", ":")))
+        except websockets.ConnectionClosed as exc:
+            print(
+                f"[{datetime.now(UTC).isoformat()}] websocket_relay.closed "
+                f"session_id={self._config.websocket_relay_session_id} "
+                f"code={exc.code} reason={exc.reason or 'none'}"
             )
-
-            encoded, error_code = self._codec.encode_action(command)
-            if encoded is None:
-                await self._send_error(error_code or "encode_failed", "failed to encode action")
-                continue
-
-            try:
-                await self._cmd_socket.send(encoded)
-                self._maybe_log_command_out(bytes_sent=len(encoded))
-            except Exception as exc:
-                await self._send_error("zmq_send_failed", str(exc))
-                continue
-
-            ack = {
-                "type": "robot.action_ack.v1",
-                "session_id": self._config.websocket_relay_session_id,
-                "robot_id": self._config.robot_id,
-                "ack_at_utc": datetime.now(UTC).isoformat(),
-            }
-            await self._ws.send(json.dumps(ack, separators=(",", ":")))
+            raise
 
     async def _send_error(self, code: str, detail: str) -> None:
         if self._ws is None:

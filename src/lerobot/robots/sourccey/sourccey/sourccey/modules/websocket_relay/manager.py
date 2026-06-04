@@ -8,7 +8,7 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 from .bridge import WebsocketRelayBridge
-from .config import WebsocketRelayConfig
+from .config import NoActiveRobotSessionError, WebsocketRelayConfig
 
 
 class HostWebsocketRelayConfig(Protocol):
@@ -89,28 +89,53 @@ class WebsocketRelayManager:
             visible = ws_url[token_start : min(token_start + 4, token_end)]
             return f"{ws_url[:token_start]}{visible}...redacted{ws_url[token_end:]}"
 
-        try:
-            cfg = WebsocketRelayConfig.from_env()
-        except Exception as exc:  # noqa: BLE001
-            logging.debug("Websocket relay start skipped: invalid websocket relay env/config (%s)", exc)
-            return
-
-        if is_localhost_ws_url(cfg.websocket_relay_ws_base_url):
-            logging.warning(
-                "[%s] websocket_relay.warn using localhost relay base URL (%s). "
-                "If relay runs on another host, set VULCAN_WEBSOCKET_RELAY_WS_BASE_URL "
-                "(or legacy VULCAN_RELAY_WS_BASE_URL) to that host/IP.",
-                _utc_now(),
-                cfg.websocket_relay_ws_base_url,
-            )
-
         async def _runner() -> None:
-            backoff_s = cfg.connect_retry_backoff_s
-            max_backoff_s = max(cfg.connect_retry_backoff_s, cfg.connect_retry_max_backoff_s)
             mode = "full_bridge" if self.config.websocket_relay_forward_observations else "commands_only"
-            redacted_ws_url = _redact_ws_url(cfg.ws_url)
+            last_status: str | None = None
 
             while not self._stop_event.is_set():
+                try:
+                    cfg = WebsocketRelayConfig.from_env()
+                except NoActiveRobotSessionError:
+                    if last_status != "idle":
+                        logging.info(
+                            "[%s] websocket_relay.session_state status=idle waiting_for_active_session",
+                            _utc_now(),
+                        )
+                        last_status = "idle"
+                    await asyncio.sleep(2.0)
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    logging.warning(
+                        "[%s] websocket_relay.config_failed error_type=%s error=%r",
+                        _utc_now(),
+                        type(exc).__name__,
+                        exc,
+                    )
+                    await asyncio.sleep(2.0)
+                    continue
+
+                if last_status != "ready":
+                    logging.info(
+                        "[%s] websocket_relay.session_state status=ready session_id=%s robot_id=%s",
+                        _utc_now(),
+                        cfg.websocket_relay_session_id,
+                        cfg.robot_id,
+                    )
+                    last_status = "ready"
+
+                if is_localhost_ws_url(cfg.websocket_relay_ws_base_url):
+                    logging.warning(
+                        "[%s] websocket_relay.warn using localhost relay base URL (%s). "
+                        "If relay runs on another host, set VULCAN_WEBSOCKET_RELAY_WS_BASE_URL "
+                        "(or legacy VULCAN_RELAY_WS_BASE_URL) to that host/IP.",
+                        _utc_now(),
+                        cfg.websocket_relay_ws_base_url,
+                    )
+
+                backoff_s = cfg.connect_retry_backoff_s
+                max_backoff_s = max(cfg.connect_retry_backoff_s, cfg.connect_retry_max_backoff_s)
+                redacted_ws_url = _redact_ws_url(cfg.ws_url)
                 bridge = WebsocketRelayBridge(
                     cfg,
                     forward_observations=self.config.websocket_relay_forward_observations,
@@ -127,7 +152,7 @@ class WebsocketRelayManager:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001
-                    logging.debug(
+                    logging.warning(
                         "[%s] websocket_relay.connect_failed retry_in_s=%.1f error_type=%s error=%r",
                         _utc_now(),
                         backoff_s,
@@ -139,6 +164,12 @@ class WebsocketRelayManager:
                     await asyncio.sleep(backoff_s)
                     backoff_s = min(max_backoff_s, backoff_s * 2.0)
                 else:
+                    logging.warning(
+                        "[%s] websocket_relay.disconnected session_id=%s robot_id=%s reconnect_in_s=1.0",
+                        _utc_now(),
+                        cfg.websocket_relay_session_id,
+                        cfg.robot_id,
+                    )
                     if self._stop_event.is_set():
                         break
                     await asyncio.sleep(1.0)
