@@ -198,6 +198,27 @@ def _recommended_turn_sign(status: NavFollowBridgeStatus) -> float:
     return 1.0
 
 
+def _send_stop_burst(
+    robot: SourcceyClient,
+    *,
+    last_observation: dict[str, object],
+    repeats: int = 3,
+    interval_s: float = 0.03,
+) -> None:
+    z_hold = _safe_float(last_observation.get("z.pos", 0.0), 0.0)
+    final_action = {
+        **_build_arm_hold_action(last_observation),
+        "x.vel": 0.0,
+        "y.vel": 0.0,
+        "theta.vel": 0.0,
+        "z.pos": z_hold,
+    }
+    for attempt in range(max(int(repeats), 1)):
+        robot.send_action(final_action)
+        if attempt < max(int(repeats), 1) - 1:
+            precise_sleep(max(float(interval_s), 0.0))
+
+
 @parser.wrap()
 def nav_follow_bridge(cfg: NavFollowBridgeConfig):
     robot_config = SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id)
@@ -292,15 +313,7 @@ def nav_follow_bridge(cfg: NavFollowBridgeConfig):
         print("Nav follow bridge interrupted, shutting down.")
     finally:
         try:
-            z_hold = _safe_float(last_observation.get("z.pos", 0.0), 0.0)
-            final_action = {
-                **_build_arm_hold_action(last_observation),
-                "x.vel": 0.0,
-                "y.vel": 0.0,
-                "theta.vel": 0.0,
-                "z.pos": z_hold,
-            }
-            robot.send_action(final_action)
+            _send_stop_burst(robot, last_observation=last_observation)
         except Exception:
             pass
         try:

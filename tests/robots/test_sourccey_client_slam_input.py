@@ -236,3 +236,21 @@ def test_enqueue_slam_input_keeps_only_latest_pending_job() -> None:
     observation, frames = pending
     assert observation["x.vel"] == 0.2
     assert np.array_equal(frames["front_left"], frames_2["front_left"])
+
+
+def test_disconnect_sends_final_relax_command_before_closing() -> None:
+    client = _make_client()
+    client._is_connected = True
+    client.zmq_cmd_socket = MagicMock()
+    client.zmq_observation_socket = MagicMock()
+    client.zmq_context = MagicMock()
+    client._stop_slam_publish_thread = MagicMock()
+    client._send_relax_command = MagicMock()
+
+    client.disconnect()
+
+    assert client._send_relax_command.call_count == 3
+    client.zmq_observation_socket.close.assert_called_once()
+    client.zmq_cmd_socket.close.assert_called_once()
+    client.zmq_context.term.assert_called_once()
+    assert client.is_connected is False

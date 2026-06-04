@@ -272,13 +272,14 @@ class SourcceyClient(Robot):
         Always stops base motion. Arm untorque is controlled by
         ``config.untorque_on_disconnect``.
         """        
+        untorque_on_disconnect = bool(getattr(self.config, "untorque_on_disconnect", True))
         relax_action = {
             "x.vel": 0.0,
             "y.vel": 0.0,
             "theta.vel": 0.0,
             "z.pos": float(self._z_pos_cmd),
-            "untorque_left": True,
-            "untorque_right": True,
+            "untorque_left": untorque_on_disconnect,
+            "untorque_right": untorque_on_disconnect,
         }
         robot_action = self.protobuf_converter.action_to_protobuf(relax_action)
         self.zmq_cmd_socket.send(robot_action.SerializeToString(), flags=zmq.NOBLOCK)
@@ -291,7 +292,11 @@ class SourcceyClient(Robot):
                 "SourcceyClient is not connected. You need to run `robot.connect()` before disconnecting."
             )
         try:
-            pass
+            # Send more than once so the host has a strong chance to receive a stop packet
+            # even if the first send races with a Ctrl+C shutdown or a congested link.
+            for _ in range(3):
+                self._send_relax_command()
+                time.sleep(0.03)
         except zmq.Again:
             logging.debug("Could not send final relax command before disconnect: socket not ready.")
         except Exception as e:
