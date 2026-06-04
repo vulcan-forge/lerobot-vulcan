@@ -17,23 +17,13 @@ import base64
 import json
 import logging
 import time
-from dataclasses import dataclass
 from typing import Any, Optional
 
 import cv2
 import numpy as np
 import zmq
 
-
-@dataclass
-class SlamInputConfig:
-    """Configuration for Sourccey -> SLAM sidecar publishing."""
-
-    input_enabled: bool = False
-    input_endpoint: str = "tcp://127.0.0.1:5560"
-    stereo_left_key: str = "front_left"
-    stereo_right_key: str = "front_right"
-    jpeg_quality: int = 80
+from .config import SlamInputConfig
 
 
 def create_slam_pub_socket(zmq_context: zmq.Context, endpoint: str) -> zmq.Socket:
