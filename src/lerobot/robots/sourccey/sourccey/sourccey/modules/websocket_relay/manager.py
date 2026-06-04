@@ -77,6 +77,10 @@ class WebsocketRelayManager:
         def _utc_now() -> str:
             return datetime.now(timezone.utc).isoformat()
 
+        def _emit(message: str) -> None:
+            print(message)
+            logging.info(message)
+
         def _redact_ws_url(ws_url: str) -> str:
             token_marker = "token="
             token_idx = ws_url.find(token_marker)
@@ -98,39 +102,35 @@ class WebsocketRelayManager:
                     cfg = WebsocketRelayConfig.from_env()
                 except NoActiveRobotSessionError:
                     if last_status != "idle":
-                        logging.info(
-                            "[%s] websocket_relay.session_state status=idle waiting_for_active_session",
-                            _utc_now(),
+                        _emit(
+                            f"[{_utc_now()}] websocket_relay.session_state "
+                            "status=idle waiting_for_active_session"
                         )
                         last_status = "idle"
                     await asyncio.sleep(2.0)
                     continue
                 except Exception as exc:  # noqa: BLE001
-                    logging.warning(
-                        "[%s] websocket_relay.config_failed error_type=%s error=%r",
-                        _utc_now(),
-                        type(exc).__name__,
-                        exc,
+                    _emit(
+                        f"[{_utc_now()}] websocket_relay.config_failed "
+                        f"error_type={type(exc).__name__} error={exc!r}"
                     )
                     await asyncio.sleep(2.0)
                     continue
 
                 if last_status != "ready":
-                    logging.info(
-                        "[%s] websocket_relay.session_state status=ready session_id=%s robot_id=%s",
-                        _utc_now(),
-                        cfg.websocket_relay_session_id,
-                        cfg.robot_id,
+                    _emit(
+                        f"[{_utc_now()}] websocket_relay.session_state "
+                        f"status=ready session_id={cfg.websocket_relay_session_id} "
+                        f"robot_id={cfg.robot_id}"
                     )
                     last_status = "ready"
 
                 if is_localhost_ws_url(cfg.websocket_relay_ws_base_url):
-                    logging.warning(
-                        "[%s] websocket_relay.warn using localhost relay base URL (%s). "
-                        "If relay runs on another host, set VULCAN_WEBSOCKET_RELAY_WS_BASE_URL "
-                        "(or legacy VULCAN_RELAY_WS_BASE_URL) to that host/IP.",
-                        _utc_now(),
-                        cfg.websocket_relay_ws_base_url,
+                    _emit(
+                        f"[{_utc_now()}] websocket_relay.warn using localhost relay base URL "
+                        f"({cfg.websocket_relay_ws_base_url}). If relay runs on another host, "
+                        "set VULCAN_WEBSOCKET_RELAY_WS_BASE_URL (or legacy "
+                        "VULCAN_RELAY_WS_BASE_URL) to that host/IP."
                     )
 
                 backoff_s = cfg.connect_retry_backoff_s
@@ -142,33 +142,28 @@ class WebsocketRelayManager:
                     forward_commands=True,
                 )
                 try:
-                    logging.info(
-                        "[%s] websocket_relay.connecting mode=%s ws_url=%s",
-                        _utc_now(),
-                        mode,
-                        redacted_ws_url,
+                    _emit(
+                        f"[{_utc_now()}] websocket_relay.connecting "
+                        f"mode={mode} ws_url={redacted_ws_url}"
                     )
                     await bridge.run_forever()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001
-                    logging.warning(
-                        "[%s] websocket_relay.connect_failed retry_in_s=%.1f error_type=%s error=%r",
-                        _utc_now(),
-                        backoff_s,
-                        type(exc).__name__,
-                        exc,
+                    _emit(
+                        f"[{_utc_now()}] websocket_relay.connect_failed "
+                        f"retry_in_s={backoff_s:.1f} error_type={type(exc).__name__} "
+                        f"error={exc!r}"
                     )
                     if self._stop_event.is_set():
                         break
                     await asyncio.sleep(backoff_s)
                     backoff_s = min(max_backoff_s, backoff_s * 2.0)
                 else:
-                    logging.warning(
-                        "[%s] websocket_relay.disconnected session_id=%s robot_id=%s reconnect_in_s=1.0",
-                        _utc_now(),
-                        cfg.websocket_relay_session_id,
-                        cfg.robot_id,
+                    _emit(
+                        f"[{_utc_now()}] websocket_relay.disconnected "
+                        f"session_id={cfg.websocket_relay_session_id} "
+                        f"robot_id={cfg.robot_id} reconnect_in_s=1.0"
                     )
                     if self._stop_event.is_set():
                         break
