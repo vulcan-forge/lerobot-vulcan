@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import traceback
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -165,16 +164,21 @@ def main() -> None:
                 mode = "commands_only" if args.commands_only else "full_bridge"
                 print(f"[{_utc_now()}] websocket_relay.connecting mode={mode} ws_url={redacted_ws_url}")
                 await bridge.run_forever()
+            except websockets.ConnectionClosed as exc:
+                print(
+                    f"[{_utc_now()}] websocket_relay.disconnected "
+                    f"session_id={cfg.websocket_relay_session_id} "
+                    f"robot_id={cfg.robot_id} "
+                    f"code={exc.code} reason={exc.reason or 'none'} reconnect_in_s=1.0"
+                )
+                await asyncio.sleep(1.0)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                error_type = type(exc).__name__
-                error_traceback = traceback.format_exc()
                 print(
                     f"[{_utc_now()}] websocket_relay.connect_failed "
-                    f"retry_in_s={backoff_s:.1f} error_type={error_type} error={exc!r}"
+                    f"retry_in_s={backoff_s:.1f} error_type={type(exc).__name__} error={exc!r}"
                 )
-                print(f"[{_utc_now()}] websocket_relay.connect_failed_traceback\n{error_traceback}")
                 await asyncio.sleep(backoff_s)
                 backoff_s = min(max_backoff_s, backoff_s * 2.0)
             else:

@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Protocol
 from urllib.parse import urlparse
 
+import websockets
+
 from .bridge import WebsocketRelayBridge
 from .config import NoActiveRobotSessionError, WebsocketRelayConfig
 
@@ -95,18 +97,11 @@ class WebsocketRelayManager:
 
         async def _runner() -> None:
             mode = "full_bridge" if self.config.websocket_relay_forward_observations else "commands_only"
-            last_status: str | None = None
 
             while not self._stop_event.is_set():
                 try:
                     cfg = WebsocketRelayConfig.from_env()
                 except NoActiveRobotSessionError:
-                    if last_status != "idle":
-                        _emit(
-                            f"[{_utc_now()}] websocket_relay.session_state "
-                            "status=idle waiting_for_active_session"
-                        )
-                        last_status = "idle"
                     await asyncio.sleep(2.0)
                     continue
                 except Exception as exc:  # noqa: BLE001
@@ -116,14 +111,6 @@ class WebsocketRelayManager:
                     )
                     await asyncio.sleep(2.0)
                     continue
-
-                if last_status != "ready":
-                    _emit(
-                        f"[{_utc_now()}] websocket_relay.session_state "
-                        f"status=ready session_id={cfg.websocket_relay_session_id} "
-                        f"robot_id={cfg.robot_id}"
-                    )
-                    last_status = "ready"
 
                 if is_localhost_ws_url(cfg.websocket_relay_ws_base_url):
                     _emit(
@@ -147,6 +134,16 @@ class WebsocketRelayManager:
                         f"mode={mode} ws_url={redacted_ws_url}"
                     )
                     await bridge.run_forever()
+                except websockets.ConnectionClosed as exc:
+                    _emit(
+                        f"[{_utc_now()}] websocket_relay.disconnected "
+                        f"session_id={cfg.websocket_relay_session_id} "
+                        f"robot_id={cfg.robot_id} "
+                        f"code={exc.code} reason={exc.reason or 'none'} reconnect_in_s=1.0"
+                    )
+                    if self._stop_event.is_set():
+                        break
+                    await asyncio.sleep(1.0)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001
@@ -159,15 +156,6 @@ class WebsocketRelayManager:
                         break
                     await asyncio.sleep(backoff_s)
                     backoff_s = min(max_backoff_s, backoff_s * 2.0)
-                else:
-                    _emit(
-                        f"[{_utc_now()}] websocket_relay.disconnected "
-                        f"session_id={cfg.websocket_relay_session_id} "
-                        f"robot_id={cfg.robot_id} reconnect_in_s=1.0"
-                    )
-                    if self._stop_event.is_set():
-                        break
-                    await asyncio.sleep(1.0)
                 finally:
                     await bridge.close()
 

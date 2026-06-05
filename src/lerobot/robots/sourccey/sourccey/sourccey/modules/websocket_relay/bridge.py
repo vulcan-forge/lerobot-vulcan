@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -33,14 +32,6 @@ class WebsocketRelayBridge:
         self._ws: Any = None
         self._tasks: list[asyncio.Task[None]] = []
         self._sequence = 0
-        now = time.monotonic()
-        self._last_action_log_in_s = now
-        self._last_action_log_out_s = now
-        self._action_in_count = 0
-        self._action_out_count = 0
-        self._last_action_type = "unknown"
-        self._last_action_source = "unknown"
-        self._last_action_out_bytes = 0
 
     async def run_forever(self) -> None:
         if self._forward_commands:
@@ -152,10 +143,6 @@ class WebsocketRelayBridge:
                 if not isinstance(command, dict):
                     await self._send_error("invalid_command_payload", "command field is required")
                     continue
-                self._maybe_log_command_in(
-                    command_type=str(command.get("type", "unknown")),
-                    source=str(message.get("source", "unknown")),
-                )
 
                 encoded, error_code = self._codec.encode_action(command)
                 if encoded is None:
@@ -164,7 +151,6 @@ class WebsocketRelayBridge:
 
                 try:
                     await self._cmd_socket.send(encoded)
-                    self._maybe_log_command_out(bytes_sent=len(encoded))
                 except Exception as exc:
                     await self._send_error("zmq_send_failed", str(exc))
                     continue
@@ -176,12 +162,7 @@ class WebsocketRelayBridge:
                     "ack_at_utc": datetime.now(UTC).isoformat(),
                 }
                 await self._ws.send(json.dumps(ack, separators=(",", ":")))
-        except websockets.ConnectionClosed as exc:
-            print(
-                f"[{datetime.now(UTC).isoformat()}] websocket_relay.closed "
-                f"session_id={self._config.websocket_relay_session_id} "
-                f"code={exc.code} reason={exc.reason or 'none'}"
-            )
+        except websockets.ConnectionClosed:
             raise
 
     async def _send_error(self, code: str, detail: str) -> None:
@@ -196,42 +177,6 @@ class WebsocketRelayBridge:
             "created_at_utc": datetime.now(UTC).isoformat(),
         }
         await self._ws.send(json.dumps(error, separators=(",", ":")))
-
-    def _maybe_log_command_in(self, *, command_type: str, source: str) -> None:
-        if not self._config.log_actions:
-            return
-        self._action_in_count += 1
-        self._last_action_type = command_type or "unknown"
-        self._last_action_source = source or "unknown"
-        now = time.monotonic()
-        interval_s = self._config.log_actions_interval_s
-        if now - self._last_action_log_in_s < interval_s:
-            return
-        print(
-            f"[{datetime.now(UTC).isoformat()}] websocket_relay.command_in_summary "
-            f"window_s={interval_s:.1f} count={self._action_in_count} "
-            f"last_type={self._last_action_type} last_source={self._last_action_source}"
-        )
-        self._last_action_log_in_s = now
-        self._action_in_count = 0
-
-    def _maybe_log_command_out(self, *, bytes_sent: int) -> None:
-        if not self._config.log_actions:
-            return
-        self._action_out_count += 1
-        self._last_action_out_bytes = bytes_sent
-        now = time.monotonic()
-        interval_s = self._config.log_actions_interval_s
-        if now - self._last_action_log_out_s < interval_s:
-            return
-        print(
-            f"[{datetime.now(UTC).isoformat()}] websocket_relay.command_out_summary "
-            f"window_s={interval_s:.1f} count={self._action_out_count} "
-            f"last_bytes={self._last_action_out_bytes}"
-        )
-        self._last_action_log_out_s = now
-        self._action_out_count = 0
-
 
 def _parse_json(raw: str) -> dict[str, Any] | None:
     try:
