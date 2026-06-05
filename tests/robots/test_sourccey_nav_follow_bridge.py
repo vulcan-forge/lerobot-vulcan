@@ -2,6 +2,9 @@ import json
 import time
 from pathlib import Path
 
+from lerobot.control.sourccey.sourccey.apply_default_arm_pose import (
+    _send_default_arm_pose_burst,
+)
 from lerobot.control.sourccey.sourccey.nav_follow_bridge import (
     NAV_FOLLOW_STATUS_SCHEMA,
     NavFollowBridgeConfig,
@@ -175,3 +178,25 @@ def test_build_default_arm_pose_action_uses_default_files_and_zero_base_motion()
     assert action["z.pos"] == 0.42
     assert "left_shoulder_pan.pos" in action
     assert "right_shoulder_pan.pos" in action
+
+
+def test_send_default_arm_pose_burst_repeats_commands():
+    class _FakeRobot:
+        def __init__(self) -> None:
+            self.actions: list[dict[str, float]] = []
+
+        def send_action(self, action: dict[str, float]) -> None:
+            self.actions.append(action)
+
+    robot = _FakeRobot()
+
+    _send_default_arm_pose_burst(
+        robot,
+        observation={"z.pos": 0.25},
+        repeats=3,
+        settle_s=0.0,
+    )
+
+    assert len(robot.actions) == 3
+    assert all(action["x.vel"] == 0.0 for action in robot.actions)
+    assert all(action["z.pos"] == 0.25 for action in robot.actions)
