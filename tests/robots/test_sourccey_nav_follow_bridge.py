@@ -195,6 +195,7 @@ def test_send_default_arm_pose_burst_repeats_commands():
         observation={"z.pos": 0.25},
         repeats=3,
         settle_s=0.0,
+        hold_s=0.0,
     )
 
     assert len(robot.actions) == 3

@@ -22,10 +22,10 @@ ARM_JOINTS = (
 NAV_FOLLOW_STATUS_SCHEMA = "sourccey.nav_follow_live_status.v1"
 DEFAULT_ARM_POSE_DIR = (
     Path(__file__).resolve().parents[3]
-    / "teleoperators"
+    / "robots"
     / "sourccey"
     / "sourccey"
-    / "sourccey_leader"
+    / "sourccey"
     / "defaults"
 )
 
@@ -81,12 +81,9 @@ def _build_arm_hold_action(observation: dict[str, object]) -> dict[str, float]:
 
 
 def _load_default_arm_pose(arm: str) -> dict[str, float]:
-    pose_path = DEFAULT_ARM_POSE_DIR / f"{arm}_arm_default_action.json"
+    pose_path = DEFAULT_ARM_POSE_DIR / f"{arm}_arm_default_active_action.json"
     payload = json.loads(pose_path.read_text(encoding="utf-8"))
-    return {
-        f"{arm}_{joint_key}": float(joint_value)
-        for joint_key, joint_value in payload.items()
-    }
+    return {joint_key: float(joint_value) for joint_key, joint_value in payload.items()}
 
 
 def _build_default_arm_pose_action(observation: dict[str, object]) -> dict[str, float]:
@@ -99,6 +96,11 @@ def _build_default_arm_pose_action(observation: dict[str, object]) -> dict[str, 
         "theta.vel": 0.0,
         "z.pos": z_hold,
     }
+
+
+def _build_default_arm_pose_hold_action(observation: dict[str, object]) -> dict[str, float]:
+    action = _build_default_arm_pose_action(observation)
+    return {key: value for key, value in action.items() if key.endswith(".pos") and key != "z.pos"}
 
 
 def _load_nav_follow_status(path: str | Path) -> NavFollowBridgeStatus:
@@ -280,6 +282,7 @@ def nav_follow_bridge(cfg: NavFollowBridgeConfig):
     last_summary: str | None = None
     motion_mode = "stop"
     locked_turn_sign: float | None = None
+    latched_arm_hold_action: dict[str, float] | None = None
 
     print(
         "Nav follow bridge started "
@@ -307,6 +310,7 @@ def nav_follow_bridge(cfg: NavFollowBridgeConfig):
                     last_observation = observation
             except Exception:
                 pass
+            latched_arm_hold_action = _build_default_arm_pose_hold_action(last_observation)
             print("Nav follow bridge: applied default arm pose on connect.")
         except Exception as exc:
             print(f"Nav follow bridge: failed to apply default arm pose ({exc}).")
@@ -322,7 +326,11 @@ def nav_follow_bridge(cfg: NavFollowBridgeConfig):
                 observation = last_observation
 
             z_hold = _safe_float(last_observation.get("z.pos", 0.0), 0.0)
-            arm_hold = _build_arm_hold_action(last_observation)
+            arm_hold = (
+                latched_arm_hold_action
+                if latched_arm_hold_action is not None
+                else _build_arm_hold_action(last_observation)
+            )
 
             status: NavFollowBridgeStatus | None = None
             reason = "tracking_unavailable"
