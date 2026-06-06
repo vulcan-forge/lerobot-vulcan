@@ -164,7 +164,14 @@ class SetupScript:
                 return None
             major, minor, micro = int(parts[0]), int(parts[1]), int(parts[2])
             return major, minor, micro
-        except (ValueError, subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+        except (
+            ValueError,
+            PermissionError,
+            OSError,
+            subprocess.TimeoutExpired,
+            FileNotFoundError,
+            subprocess.SubprocessError,
+        ):
             return None
 
     def get_existing_venv_python_version(self) -> Optional[Tuple[int, int, int]]:
