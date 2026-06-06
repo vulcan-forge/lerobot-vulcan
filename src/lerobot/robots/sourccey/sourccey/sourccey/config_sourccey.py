@@ -180,16 +180,16 @@ class SourcceyHostConfig:
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
     slam_eye_only_mode: bool = False
-    slam_eye_camera_fps: int = 60
-    slam_eye_loop_freq_hz: int = 60
+    slam_eye_camera_fps: int = 30
+    slam_eye_loop_freq_hz: int = 30
     slam_eye_width: int = 320
     slam_eye_height: int = 240
-    slam_eye_fourcc: str | None = None
+    slam_eye_fourcc: str | None = "MJPG"
     # 0=disabled, 1=50Hz, 2=60Hz. US indoor lighting usually wants 2.
     slam_eye_power_line_frequency: int = 2
     # 1=manual, 3=aperture priority for these UVC cameras.
     slam_eye_auto_exposure: int | None = 3
-    slam_eye_exposure_dynamic_framerate: bool = False
+    slam_eye_exposure_dynamic_framerate: bool = True
     slam_eye_exposure_time_absolute: int | None = None
     slam_eye_gain: int | None = None
     slam_eye_sharpness: int | None = None
