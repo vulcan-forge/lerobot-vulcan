@@ -91,10 +91,10 @@ def sourccey_cameras_config(
 
 def sourccey_slam_eye_only_cameras_config(
     *,
-    front_fps: int = 30,
+    front_fps: int = 60,
     front_width: int = 320,
     front_height: int = 240,
-    front_fourcc: str | None = "MJPG",
+    front_fourcc: str | None = None,
     include_wrist: bool = False,
 ) -> dict[str, CameraConfig]:
     return sourccey_cameras_config(
@@ -180,11 +180,11 @@ class SourcceyHostConfig:
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
     slam_eye_only_mode: bool = False
-    slam_eye_camera_fps: int = 30
-    slam_eye_loop_freq_hz: int = 30
+    slam_eye_camera_fps: int = 60
+    slam_eye_loop_freq_hz: int = 60
     slam_eye_width: int = 320
     slam_eye_height: int = 240
-    slam_eye_fourcc: str = "MJPG"
+    slam_eye_fourcc: str | None = None
     # 0=disabled, 1=50Hz, 2=60Hz. US indoor lighting usually wants 2.
     slam_eye_power_line_frequency: int = 2
     # 1=manual, 3=aperture priority for these UVC cameras.

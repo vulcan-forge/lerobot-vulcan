@@ -15,11 +15,9 @@
 
 import logging
 import signal
-import subprocess
 import threading
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 import numpy as np
 import zmq
@@ -129,24 +127,6 @@ def _handle_command_watchdog_timeout(robot: Sourccey, watchdog_timeout_ms: int) 
         update_fn()
 
 
-def _build_slam_eye_v4l2_controls(config: SourcceyHostConfig) -> dict[str, int]:
-    controls: dict[str, int] = {
-        "power_line_frequency": int(config.slam_eye_power_line_frequency),
-        "exposure_dynamic_framerate": int(bool(config.slam_eye_exposure_dynamic_framerate)),
-    }
-    if config.slam_eye_auto_exposure is not None:
-        controls["auto_exposure"] = int(config.slam_eye_auto_exposure)
-    if config.slam_eye_exposure_time_absolute is not None:
-        controls["exposure_time_absolute"] = int(config.slam_eye_exposure_time_absolute)
-    if config.slam_eye_gain is not None:
-        controls["gain"] = int(config.slam_eye_gain)
-    if config.slam_eye_sharpness is not None:
-        controls["sharpness"] = int(config.slam_eye_sharpness)
-    if config.slam_eye_backlight_compensation is not None:
-        controls["backlight_compensation"] = int(config.slam_eye_backlight_compensation)
-    return controls
-
-
 def _build_host_slam_input_publisher(config: SourcceyHostConfig) -> SlamInputPublisher | None:
     if not config.slam_input_enabled:
         return None
@@ -177,66 +157,6 @@ def _build_host_slam_obstacle_publisher(config: SourcceyHostConfig) -> SlamInput
         resize_width=config.slam_obstacle_resize_width,
         resize_height=config.slam_obstacle_resize_height,
     )
-
-
-def _configure_slam_eye_camera_devices(robot_config: SourcceyConfig, host_config: SourcceyHostConfig) -> None:
-    eye_keys = ("front_left", "front_right")
-    controls = _build_slam_eye_v4l2_controls(host_config)
-    for cam_key in eye_keys:
-        cam_cfg = robot_config.cameras.get(cam_key)
-        if cam_cfg is None:
-            continue
-        device_path = Path(str(cam_cfg.index_or_path))
-        if not str(device_path).startswith("/dev/"):
-            logging.warning("Skipping V4L2 tuning for %s: unsupported path %s", cam_key, device_path)
-            continue
-
-        commands: list[list[str]] = [
-            [
-                "v4l2-ctl",
-                "--device",
-                str(device_path),
-                f"--set-fmt-video=width={host_config.slam_eye_width},height={host_config.slam_eye_height},pixelformat={host_config.slam_eye_fourcc}",
-            ],
-            [
-                "v4l2-ctl",
-                "--device",
-                str(device_path),
-                f"--set-parm={host_config.slam_eye_camera_fps}",
-            ],
-        ]
-        if controls:
-            control_arg = ",".join(f"{key}={value}" for key, value in controls.items())
-            commands.append(
-                [
-                    "v4l2-ctl",
-                    "--device",
-                    str(device_path),
-                    f"--set-ctrl={control_arg}",
-                ]
-            )
-
-        for command in commands:
-            try:
-                subprocess.run(command, check=True, capture_output=True, text=True)
-            except FileNotFoundError:
-                logging.warning("v4l2-ctl not found; skipping V4L2 tuning for %s", cam_key)
-                return
-            except subprocess.CalledProcessError as exc:
-                stderr = exc.stderr.strip() if exc.stderr else str(exc)
-                logging.warning("Failed V4L2 tuning for %s with %s: %s", cam_key, command[-1], stderr)
-                break
-        else:
-            logging.info(
-                "Configured %s at %sx%s %s %s FPS with controls %s",
-                cam_key,
-                host_config.slam_eye_width,
-                host_config.slam_eye_height,
-                host_config.slam_eye_fourcc,
-                host_config.slam_eye_camera_fps,
-                controls,
-            )
-
 
 class _IMUReporter:
     """Background logger that prints IMU telemetry at a fixed interval."""
@@ -326,17 +246,10 @@ def main(host_config: SourcceyHostConfig):
     if host_config.slam_eye_only_mode:
         robot_config.cameras = sourccey_slam_eye_only_cameras_config(
             front_fps=host_config.slam_eye_camera_fps,
-            front_width=host_config.slam_eye_width,
-            front_height=host_config.slam_eye_height,
-            front_fourcc=host_config.slam_eye_fourcc,
             include_wrist=host_config.slam_obstacle_input_enabled,
         )
-        _configure_slam_eye_camera_devices(robot_config, host_config)
         logging.info(
-            "Sourccey Host eye-only SLAM mode enabled: front cameras only at %dx%d %s %d FPS, host loop target %d Hz",
-            host_config.slam_eye_width,
-            host_config.slam_eye_height,
-            host_config.slam_eye_fourcc,
+            "Sourccey Host eye-only SLAM mode enabled: front cameras only at %d FPS, host loop target %d Hz",
             host_config.slam_eye_camera_fps,
             max(host_config.max_loop_freq_hz, host_config.slam_eye_loop_freq_hz),
         )
