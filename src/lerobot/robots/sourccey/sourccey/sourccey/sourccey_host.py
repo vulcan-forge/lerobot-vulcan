@@ -243,7 +243,7 @@ def main(host_config: SourcceyHostConfig):
 
     logging.info("Configuring Sourccey")
     robot_config = SourcceyConfig(id="sourccey")
-    if host_config.slam_eye_only_mode:
+    if host_config.slam_eye_only_mode and not host_config.slam_obstacle_input_enabled:
         robot_config.cameras = sourccey_slam_eye_only_cameras_config(
             front_fps=host_config.slam_eye_camera_fps,
             front_width=host_config.slam_eye_width,
@@ -255,6 +255,11 @@ def main(host_config: SourcceyHostConfig):
             "Sourccey Host eye-only SLAM mode enabled: front cameras only at %d FPS, host loop target %d Hz",
             host_config.slam_eye_camera_fps,
             max(host_config.max_loop_freq_hz, host_config.slam_eye_loop_freq_hz),
+        )
+    elif host_config.slam_eye_only_mode and host_config.slam_obstacle_input_enabled:
+        logging.info(
+            "Sourccey Host eye-only SLAM mode requested with obstacle publishing enabled; "
+            "using the legacy full camera config so both front and wrist feeds stay on the known-good path."
         )
     robot = Sourccey(robot_config)
 
