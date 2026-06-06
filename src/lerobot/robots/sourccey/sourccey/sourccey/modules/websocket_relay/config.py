@@ -9,9 +9,6 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
-_CLOUD_PAIRING_STATE_FILE_NAME = "cloud_pairing_state.json"
-
-
 class NoActiveRobotSessionError(RuntimeError):
     """Raised when the paired robot has no active relay session yet."""
 
@@ -93,10 +90,6 @@ def _load_cloud_relay_defaults() -> dict[str, str]:
     if not credentials:
         return {}
 
-    pairing_state = _load_json_dict(
-        credentials_path.with_name(_CLOUD_PAIRING_STATE_FILE_NAME)
-    )
-
     relay_http_base_url = _json_str(credentials.get("relay_http_base_url"))
     device_auth_token = _json_str(credentials.get("device_auth_token"))
     try:
@@ -120,8 +113,6 @@ def _load_cloud_relay_defaults() -> dict[str, str]:
         "websocket_relay_session_id": _json_str(
             active_session.get("websocket_relay_session_id")
             or credentials.get("active_session_id")
-            or pairing_state.get("active_session_id")
-            or credentials.get("session_id")
         ),
     }
 
