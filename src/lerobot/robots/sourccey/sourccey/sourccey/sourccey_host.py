@@ -246,6 +246,9 @@ def main(host_config: SourcceyHostConfig):
     if host_config.slam_eye_only_mode:
         robot_config.cameras = sourccey_slam_eye_only_cameras_config(
             front_fps=host_config.slam_eye_camera_fps,
+            front_width=host_config.slam_eye_width,
+            front_height=host_config.slam_eye_height,
+            front_fourcc=host_config.slam_eye_fourcc,
             include_wrist=host_config.slam_obstacle_input_enabled,
         )
         logging.info(
