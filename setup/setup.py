@@ -73,6 +73,10 @@ class SetupScript:
         """Check if a command exists in the system PATH"""
         return shutil.which(command) is not None
 
+    def get_uv_command(self) -> str:
+        """Return the preferred uv command, optionally injected by parent setup."""
+        return os.environ.get("SOURCCEY_UV_BIN", "uv")
+
     def get_command_version(self, command: str) -> Optional[str]:
         """Get the version of a command if it exists"""
         try:
@@ -232,14 +236,15 @@ class SetupScript:
     def check_uv(self) -> bool:
         """Check if uv is installed."""
         self.print_status("Checking uv installation...")
+        uv_command = self.get_uv_command()
 
-        if not self.check_command_exists("uv"):
+        if not self.check_command_exists(uv_command):
             self.print_warning("uv is not installed")
             self.print_warning("uv is required to create a Python 3.12/3.13 virtual environment automatically.")
             self.print_warning("Install uv from https://docs.astral.sh/uv/getting-started/installation/")
             return False
 
-        version = self.get_command_version("uv")
+        version = self.get_command_version(uv_command)
         if version:
             self.print_success(f"uv is installed: {version}")
         else:
@@ -330,7 +335,8 @@ class SetupScript:
                         return False
 
         try:
-            if not self.check_command_exists("uv"):
+            uv_command = self.get_uv_command()
+            if not self.check_command_exists(uv_command):
                 self.print_error("uv not available")
                 self.print_error("Please install uv from https://docs.astral.sh/uv/getting-started/installation/")
                 self.print_error("Then run this script again.")
@@ -339,7 +345,7 @@ class SetupScript:
             if not self.check_venv_exists():
                 self.print_status("Creating .venv with uv and Python 3.12 (uv may download Python automatically)...")
                 subprocess.run(
-                    ["uv", "venv", "--python", self.DEFAULT_UV_PYTHON],
+                    [uv_command, "venv", "--python", self.DEFAULT_UV_PYTHON],
                     check=True,
                     cwd=self.project_root,
                 )
@@ -366,7 +372,7 @@ class SetupScript:
             # Install dependencies with sourccey extras. On macOS/Windows we gracefully
             # fall back if a stale resolver path still tries to pull vosk.
             install_result = subprocess.run(
-                ["uv", "pip", "install", "--python", str(python_path), "-e", ".[sourccey]"],
+                [uv_command, "pip", "install", "--python", str(python_path), "-e", ".[sourccey]"],
                 capture_output=True,
                 text=True,
                 cwd=self.project_root,
@@ -382,7 +388,7 @@ class SetupScript:
                         "Falling back to install without sourccey extra audio dependency."
                     )
                     subprocess.run(
-                        ["uv", "pip", "install", "--python", str(python_path), "-e", "."],
+                        [uv_command, "pip", "install", "--python", str(python_path), "-e", "."],
                         check=True,
                         cwd=self.project_root,
                     )
@@ -390,7 +396,7 @@ class SetupScript:
                 else:
                     raise subprocess.CalledProcessError(
                         install_result.returncode,
-                        ["uv", "pip", "install", "--python", str(python_path), "-e", ".[sourccey]"],
+                        [uv_command, "pip", "install", "--python", str(python_path), "-e", ".[sourccey]"],
                         output=install_result.stdout,
                         stderr=install_result.stderr,
                     )
@@ -545,8 +551,9 @@ class SetupScript:
                         capture_output=True, text=True)
 
             # Also try with uv
-            if self.check_command_exists("uv"):
-                subprocess.run(["uv", "pip", "uninstall", "evdev"],
+            uv_command = self.get_uv_command()
+            if self.check_command_exists(uv_command):
+                subprocess.run([uv_command, "pip", "uninstall", "evdev"],
                             capture_output=True, text=True)
 
             self.print_success("evdev cleanup completed")
@@ -582,9 +589,10 @@ class SetupScript:
 
         self.print_status("grpc_tools not found in venv. Installing grpcio-tools...")
         try:
-            if self.check_command_exists("uv"):
+            uv_command = self.get_uv_command()
+            if self.check_command_exists(uv_command):
                 subprocess.run(
-                    ["uv", "pip", "install", "--python", str(python_path), "grpcio-tools"],
+                    [uv_command, "pip", "install", "--python", str(python_path), "grpcio-tools"],
                     check=True,
                     cwd=self.project_root,
                 )
