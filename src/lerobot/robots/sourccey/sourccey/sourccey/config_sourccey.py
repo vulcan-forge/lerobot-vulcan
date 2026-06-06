@@ -91,10 +91,10 @@ def sourccey_cameras_config(
 
 def sourccey_slam_eye_only_cameras_config(
     *,
-    front_fps: int = 30,
+    front_fps: int = 60,
     front_width: int = 320,
     front_height: int = 240,
-    front_fourcc: str | None = "MJPG",
+    front_fourcc: str | None = None,
     include_wrist: bool = False,
 ) -> dict[str, CameraConfig]:
     return sourccey_cameras_config(
@@ -184,11 +184,14 @@ class SourcceyHostConfig:
     arm_calibrate_on_connect: bool = False
     arm_relax_on_startup: bool = True
     slam_eye_only_mode: bool = False
-    slam_eye_camera_fps: int = 30
-    slam_eye_loop_freq_hz: int = 30
+    slam_eye_camera_fps: int = 60
+    slam_eye_loop_freq_hz: int = 60
     slam_eye_width: int = 320
     slam_eye_height: int = 240
-    slam_eye_fourcc: str = "MJPG"
+    slam_eye_fourcc: str | None = None
+    # Leave camera exposure controls alone by default; some cameras become very dark
+    # when V4L2 tuning is forced at startup.
+    slam_eye_apply_v4l2_tuning: bool = False
     # 0=disabled, 1=50Hz, 2=60Hz. US indoor lighting usually wants 2.
     slam_eye_power_line_frequency: int = 2
     # 1=manual, 3=aperture priority for these UVC cameras.
