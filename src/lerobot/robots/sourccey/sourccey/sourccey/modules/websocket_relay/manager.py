@@ -97,14 +97,23 @@ class WebsocketRelayManager:
 
         async def _runner() -> None:
             mode = "full_bridge" if self.config.websocket_relay_forward_observations else "commands_only"
+            waiting_for_session_logged = False
 
             while not self._stop_event.is_set():
                 try:
                     cfg = WebsocketRelayConfig.from_env()
-                except NoActiveRobotSessionError:
+                    waiting_for_session_logged = False
+                except NoActiveRobotSessionError as exc:
+                    if not waiting_for_session_logged:
+                        _emit(
+                            f"[{_utc_now()}] websocket_relay.waiting_for_active_session "
+                            f"reason={exc}"
+                        )
+                        waiting_for_session_logged = True
                     await asyncio.sleep(2.0)
                     continue
                 except Exception as exc:  # noqa: BLE001
+                    waiting_for_session_logged = False
                     _emit(
                         f"[{_utc_now()}] websocket_relay.config_failed "
                         f"error_type={type(exc).__name__} error={exc!r}"

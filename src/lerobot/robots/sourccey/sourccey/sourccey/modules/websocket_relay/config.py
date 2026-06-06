@@ -92,27 +92,29 @@ def _load_cloud_relay_defaults() -> dict[str, str]:
 
     relay_http_base_url = _json_str(credentials.get("relay_http_base_url"))
     device_auth_token = _json_str(credentials.get("device_auth_token"))
+    saved_ws_base_url = _json_str(credentials.get("relay_ws_base_url"))
+    saved_robot_token = device_auth_token
+    saved_session_id = _json_str(credentials.get("active_session_id"))
+
     try:
         active_session = _fetch_active_robot_session(relay_http_base_url, device_auth_token)
     except NoActiveRobotSessionError:
-        # Fall back to the last persisted session info when the cloud reports no
-        # active session yet. This preserves the older behavior where the host
-        # still attempts a websocket connection from saved credentials instead
-        # of idling silently at startup.
+        # Fall back to the last persisted session info only when we have enough
+        # data to form a concrete websocket connection attempt. Otherwise let
+        # the caller know that the robot is still waiting for a relay session.
+        if not (saved_ws_base_url and saved_robot_token and saved_session_id):
+            raise
         active_session = {}
 
     return {
         "websocket_relay_ws_base_url": _json_str(
-            active_session.get("websocket_relay_ws_base_url")
-            or credentials.get("relay_ws_base_url")
+            active_session.get("websocket_relay_ws_base_url") or saved_ws_base_url
         ),
         "websocket_relay_robot_token": _json_str(
-            active_session.get("websocket_relay_robot_token")
-            or credentials.get("device_auth_token")
+            active_session.get("websocket_relay_robot_token") or saved_robot_token
         ),
         "websocket_relay_session_id": _json_str(
-            active_session.get("websocket_relay_session_id")
-            or credentials.get("active_session_id")
+            active_session.get("websocket_relay_session_id") or saved_session_id
         ),
     }
 
