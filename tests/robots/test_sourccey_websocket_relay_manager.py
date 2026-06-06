@@ -69,3 +69,61 @@ def test_websocket_relay_manager_attempts_bridge_run_when_configured(monkeypatch
 
     assert run_event.is_set()
     assert close_event.is_set()
+
+
+def test_websocket_relay_manager_logs_connecting_once_across_retries(monkeypatch) -> None:
+    manager = WebsocketRelayManager(_HostConfig())
+    emitted_messages: list[str] = []
+    attempts = {"count": 0}
+
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.WebsocketRelayConfig.from_env",
+        lambda: _RelayConfig(),
+    )
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.is_localhost_ws_url",
+        lambda _ws_url: False,
+    )
+
+    async def _sleep_stub(_delay: float) -> None:
+        return None
+
+    class _FakeBridge:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def run_forever(self) -> None:
+            attempts["count"] += 1
+            if attempts["count"] >= 3:
+                manager._stop_event.set()
+                return
+            raise TimeoutError("timed out during opening handshake")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.WebsocketRelayBridge",
+        _FakeBridge,
+    )
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.asyncio.sleep",
+        _sleep_stub,
+    )
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.print",
+        lambda message: emitted_messages.append(message),
+    )
+
+    manager._thread_main()
+
+    connecting_messages = [
+        message for message in emitted_messages if "websocket_relay.connecting" in message
+    ]
+    connect_failed_messages = [
+        message for message in emitted_messages if "websocket_relay.connect_failed" in message
+    ]
+
+    assert attempts["count"] == 3
+    assert len(connecting_messages) == 1
+    assert not connect_failed_messages
