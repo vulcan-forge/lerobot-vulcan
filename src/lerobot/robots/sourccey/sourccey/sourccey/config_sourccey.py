@@ -179,6 +179,10 @@ class SourcceyHostConfig:
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
+    # Keep host startup camera-only by default: do not calibrate or actively hold the
+    # follower arms until a remote client begins sending commands.
+    arm_calibrate_on_connect: bool = False
+    arm_relax_on_startup: bool = True
     slam_eye_only_mode: bool = False
     slam_eye_camera_fps: int = 30
     slam_eye_loop_freq_hz: int = 30
