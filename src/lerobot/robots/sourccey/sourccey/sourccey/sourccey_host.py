@@ -342,15 +342,8 @@ def main(host_config: SourcceyHostConfig):
         )
     robot = Sourccey(robot_config)
 
-    logging.info(
-        "Connecting Sourccey (arm_calibrate_on_connect=%s, arm_relax_on_startup=%s)",
-        host_config.arm_calibrate_on_connect,
-        host_config.arm_relax_on_startup,
-    )
-    robot.connect(calibrate=host_config.arm_calibrate_on_connect)
-    if host_config.arm_relax_on_startup:
-        robot.disable_arm_torque()
-        logging.info("Sourccey Host relaxed follower arms after connect; waiting for client commands.")
+    logging.info("Connecting Sourccey")
+    robot.connect()
 
     logging.info("Starting Host")
     host = SourcceyHost(host_config)
