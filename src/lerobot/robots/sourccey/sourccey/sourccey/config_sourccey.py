@@ -179,6 +179,8 @@ class SourcceyHostConfig:
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
+    arm_calibrate_on_connect: bool = False
+    arm_relax_on_startup: bool = True
     slam_eye_only_mode: bool = False
     slam_eye_camera_fps: int = 30
     slam_eye_loop_freq_hz: int = 30
