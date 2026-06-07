@@ -94,6 +94,8 @@ class Sourccey(Robot):
         # Track per-arm untorque state for edge detection
         self.untorque_left_prev = False
         self.untorque_right_prev = False
+        self._arms_connected = False
+        self._connect_arms_on_startup = True
 
     def __del__(self):
         # Destructors can run on partially initialized objects if __init__ raised.
@@ -135,19 +137,26 @@ class Sourccey(Robot):
     def is_connected(self) -> bool:
         left_arm_connected = self.left_arm is not None and self.left_arm.is_connected
         right_arm_connected = self.right_arm is not None and self.right_arm.is_connected
-        arms_connected = left_arm_connected and right_arm_connected
+        arms_connected = (
+            left_arm_connected and right_arm_connected
+            if self._connect_arms_on_startup or self._arms_connected
+            else True
+        )
 
         # Only require cameras that successfully connected (failed cameras are ignored).
         cams_connected = all(self.cameras[k].is_connected for k in self._connected_cameras)
-        return arms_connected and cams_connected
+        base_connected = bool(self.dc_motors_controller.is_connected)
+        z_connected = bool(self.z_actuator.is_connected)
+        return arms_connected and cams_connected and base_connected and z_connected
 
     ###################################################################
     # Connection Management
     ###################################################################
-    def connect(self, calibrate: bool = True) -> None:
-        self.left_arm.connect(calibrate)
-        self.right_arm.connect(calibrate)
-
+    def connect(self, calibrate: bool = True, connect_arms: bool = True) -> None:
+        self._connect_arms_on_startup = bool(connect_arms)
+        self._arms_connected = False
+        if connect_arms:
+            self._connect_arms(calibrate=calibrate)
         self.dc_motors_controller.connect()
         self.z_actuator.connect()
 
@@ -160,13 +169,23 @@ class Sourccey(Robot):
             except Exception as e:
                 logger.warning(f"Camera '{cam_key}' failed to connect: {e}. Continuing without it.")
 
+    def _connect_arms(self, *, calibrate: bool) -> None:
+        if self._arms_connected:
+            return
+        self.left_arm.connect(calibrate)
+        self.right_arm.connect(calibrate)
+        self._arms_connected = True
+
     def disconnect(self):
         if not self.is_connected:
             return
 
         logger.info(f"Disconnecting Sourccey")
-        self.left_arm.disconnect()
-        self.right_arm.disconnect()
+        if self.left_arm.is_connected:
+            self.left_arm.disconnect()
+        if self.right_arm.is_connected:
+            self.right_arm.disconnect()
+        self._arms_connected = False
 
         self.stop_base()
         self.dc_motors_controller.disconnect()
@@ -272,11 +291,17 @@ class Sourccey(Robot):
 
             obs_dict = {}
 
-            left_obs = self.left_arm.get_observation()
-            obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
+            if self._arms_connected:
+                left_obs = self.left_arm.get_observation()
+                obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
 
-            right_obs = self.right_arm.get_observation()
-            obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
+                right_obs = self.right_arm.get_observation()
+                obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
+            else:
+                for motor in self.left_arm.bus.motors:
+                    obs_dict[f"left_{motor}.pos"] = 0.0
+                for motor in self.right_arm.bus.motors:
+                    obs_dict[f"right_{motor}.pos"] = 0.0
 
             base_wheel_vel = self.dc_motors_controller.get_velocities()
             base_vel = self._wheel_normalized_to_body(base_wheel_vel)
@@ -321,6 +346,9 @@ class Sourccey(Robot):
             right_action = {key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")}
             base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
             base_goal_pos = {k: v for k, v in action.items() if k.endswith(".pos")}
+
+            if (left_action or right_action) and not self._arms_connected:
+                self._connect_arms(calibrate=False)
 
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}
@@ -375,6 +403,14 @@ class Sourccey(Robot):
         left_flag = bool(action.get("untorque_left", False))
         right_flag = bool(action.get("untorque_right", False))
 
+        if not self._arms_connected:
+            self.untorque_left_prev = left_flag
+            self.untorque_right_prev = right_flag
+            return {
+                k: v for k, v in action.items()
+                if not (left_flag and k.startswith("left_")) and not (right_flag and k.startswith("right_"))
+            }
+
         # Left arm handling
         if left_flag:
             if not self.untorque_left_prev:
@@ -412,6 +448,11 @@ class Sourccey(Robot):
         Also marks internal untorque edge state as active so the next streamed command
         with untorque flags set to `False` will cleanly re-enable torque.
         """
+        if not self._arms_connected:
+            self.untorque_left_prev = True
+            self.untorque_right_prev = True
+            return
+
         for arm_name, arm in (("left", self.left_arm), ("right", self.right_arm)):
             try:
                 arm.bus.disable_torque()

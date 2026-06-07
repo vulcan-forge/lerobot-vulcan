@@ -179,6 +179,7 @@ class SourcceyHostConfig:
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
+    arm_connect_on_startup: bool = False
     arm_calibrate_on_connect: bool = False
     arm_relax_on_startup: bool = True
     slam_eye_only_mode: bool = False
