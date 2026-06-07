@@ -31,6 +31,10 @@ class WebsocketRelayManager:
             return False
 
         mode = "full_bridge" if self.config.websocket_relay_forward_observations else "commands_only"
+        print(
+            f"[{datetime.now(timezone.utc).isoformat()}] websocket_relay.autostart_enabled "
+            f"mode={mode}"
+        )
         logging.info("Websocket relay autostart enabled (mode=%s).", mode)
         try:
             self.start()
@@ -82,6 +86,8 @@ class WebsocketRelayManager:
         def _emit(message: str) -> None:
             print(message)
             logging.info(message)
+
+        _emit(f"[{_utc_now()}] websocket_relay.thread_started")
 
         def _redact_ws_url(ws_url: str) -> str:
             token_marker = "token="
@@ -172,6 +178,10 @@ class WebsocketRelayManager:
         try:
             asyncio.run(_runner())
         except Exception as exc:  # noqa: BLE001
+            _emit(
+                f"[{_utc_now()}] websocket_relay.thread_failed "
+                f"error_type={type(exc).__name__} error={exc!r}"
+            )
             logging.warning("Websocket relay thread exited: %s", exc)
 
 
