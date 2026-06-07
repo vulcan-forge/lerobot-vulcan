@@ -354,19 +354,22 @@ def main(host_config: SourcceyHostConfig):
         _configure_front_slam_eye_camera_devices(robot_config, host_config)
     robot = Sourccey(robot_config)
 
+    if host_config.arm_connect_on_startup:
+        logging.warning(
+            "Sourccey Host ignores arm_connect_on_startup=true and always starts in passive-arm mode. "
+            "Follower arms will only connect later if a client sends arm joint commands."
+        )
     logging.info(
-        "Connecting Sourccey (arm_connect_on_startup=%s, arm_calibrate_on_connect=%s, arm_relax_on_startup=%s)",
-        host_config.arm_connect_on_startup,
+        "Connecting Sourccey in passive host mode "
+        "(connect_arms=false, arm_calibrate_on_connect=%s, arm_relax_on_startup=%s)",
         host_config.arm_calibrate_on_connect,
         host_config.arm_relax_on_startup,
     )
     robot.connect(
         calibrate=host_config.arm_calibrate_on_connect,
-        connect_arms=host_config.arm_connect_on_startup,
+        connect_arms=False,
     )
-    if host_config.arm_connect_on_startup and host_config.arm_relax_on_startup:
-        robot.disable_arm_torque()
-        logging.info("Sourccey Host relaxed follower arms after connect; waiting for client commands.")
+    logging.info("Sourccey Host started without connecting follower arms.")
 
     logging.info("Starting Host")
     host = SourcceyHost(host_config)
