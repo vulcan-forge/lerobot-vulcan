@@ -167,9 +167,14 @@ class WebsocketRelayManager:
                     await asyncio.sleep(1.0)
                 except asyncio.CancelledError:
                     raise
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
                     if self._stop_event.is_set():
                         break
+                    _emit(
+                        f"[{_utc_now()}] websocket_relay.connect_failed "
+                        f"retry_in_s={backoff_s:.1f} "
+                        f"error_type={type(exc).__name__} error={exc!r}"
+                    )
                     await asyncio.sleep(backoff_s)
                     backoff_s = min(max_backoff_s, backoff_s * 2.0)
                 finally:

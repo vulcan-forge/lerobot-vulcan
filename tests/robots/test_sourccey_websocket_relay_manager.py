@@ -71,7 +71,7 @@ def test_websocket_relay_manager_attempts_bridge_run_when_configured(monkeypatch
     assert close_event.is_set()
 
 
-def test_websocket_relay_manager_logs_connecting_once_across_retries(monkeypatch) -> None:
+def test_websocket_relay_manager_logs_connect_and_failures_across_retries(monkeypatch) -> None:
     manager = WebsocketRelayManager(_HostConfig())
     emitted_messages: list[str] = []
     attempts = {"count": 0}
@@ -126,4 +126,4 @@ def test_websocket_relay_manager_logs_connecting_once_across_retries(monkeypatch
 
     assert attempts["count"] == 3
     assert len(connecting_messages) == 1
-    assert not connect_failed_messages
+    assert len(connect_failed_messages) == 2
