@@ -79,6 +79,39 @@ def test_websocket_relay_manager_attempts_bridge_run_when_configured(monkeypatch
     assert any("websocket_relay.connected" in message for message in emitted_messages)
 
 
+def test_websocket_relay_manager_attempts_bridge_run_when_forced(monkeypatch) -> None:
+    run_event = threading.Event()
+    close_event = threading.Event()
+    manager = WebsocketRelayManager(_HostConfig(websocket_relay_autostart=False))
+    manager.set_force_autostart(True)
+
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.WebsocketRelayConfig.from_env",
+        lambda: _RelayConfig(),
+    )
+
+    class _FakeBridge:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def run_forever(self) -> None:
+            run_event.set()
+            manager._stop_event.set()
+
+        async def close(self) -> None:
+            close_event.set()
+
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.WebsocketRelayBridge",
+        _FakeBridge,
+    )
+
+    manager._thread_main()
+
+    assert run_event.is_set()
+    assert close_event.is_set()
+
+
 def test_websocket_relay_manager_logs_connect_and_failures_across_retries(monkeypatch) -> None:
     manager = WebsocketRelayManager(_HostConfig())
     emitted_messages: list[str] = []

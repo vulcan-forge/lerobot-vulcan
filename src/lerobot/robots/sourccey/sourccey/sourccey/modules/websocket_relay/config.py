@@ -56,6 +56,15 @@ def _env_path_alias(names: tuple[str, ...]) -> Path | None:
     return None
 
 
+def cloud_credentials_path_from_env() -> Path | None:
+    return _env_path_alias(("VULCAN_DEVICE_CREDENTIALS_PATH", "SOURCCEY_CLOUD_CREDENTIALS_PATH"))
+
+
+def cloud_credentials_exist() -> bool:
+    credentials_path = cloud_credentials_path_from_env()
+    return credentials_path is not None and credentials_path.exists()
+
+
 def _json_str(value: object) -> str:
     if not isinstance(value, str):
         return ""
@@ -80,9 +89,7 @@ def _load_json_dict(path: Path) -> dict[str, object]:
 
 
 def _load_cloud_relay_defaults() -> dict[str, str]:
-    credentials_path = _env_path_alias(
-        ("VULCAN_DEVICE_CREDENTIALS_PATH", "SOURCCEY_CLOUD_CREDENTIALS_PATH")
-    )
+    credentials_path = cloud_credentials_path_from_env()
     if credentials_path is None:
         return {}
 
