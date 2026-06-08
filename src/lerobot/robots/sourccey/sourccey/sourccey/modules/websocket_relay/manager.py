@@ -110,6 +110,7 @@ class WebsocketRelayManager:
             waiting_for_session_logged = False
             localhost_warning_logged = False
             logged_connect_session_id: str | None = None
+            logged_connected_session_id: str | None = None
             stale_session_wait_logged_for: str | None = None
 
             while not self._stop_event.is_set():
@@ -119,6 +120,7 @@ class WebsocketRelayManager:
                 except NoActiveRobotSessionError as exc:
                     stale_session_wait_logged_for = None
                     logged_connect_session_id = None
+                    logged_connected_session_id = None
                     if not waiting_for_session_logged:
                         _emit(
                             f"[{_utc_now()}] websocket_relay.waiting_for_active_session "
@@ -131,6 +133,7 @@ class WebsocketRelayManager:
                     waiting_for_session_logged = False
                     stale_session_wait_logged_for = None
                     logged_connect_session_id = None
+                    logged_connected_session_id = None
                     _emit(
                         f"[{_utc_now()}] websocket_relay.config_failed "
                         f"error_type={type(exc).__name__} error={exc!r}"
@@ -151,10 +154,23 @@ class WebsocketRelayManager:
                     localhost_warning_logged = True
 
                 redacted_ws_url = _redact_ws_url(cfg.ws_url)
+
+                def _on_connected(active_cfg: WebsocketRelayConfig) -> None:
+                    nonlocal logged_connected_session_id
+                    if logged_connected_session_id == active_cfg.websocket_relay_session_id:
+                        return
+                    _emit(
+                        f"[{_utc_now()}] websocket_relay.connected "
+                        f"session_id={active_cfg.websocket_relay_session_id} "
+                        f"robot_id={active_cfg.robot_id}"
+                    )
+                    logged_connected_session_id = active_cfg.websocket_relay_session_id
+
                 bridge = WebsocketRelayBridge(
                     cfg,
                     forward_observations=self.config.websocket_relay_forward_observations,
                     forward_commands=True,
+                    on_connected=_on_connected,
                 )
                 try:
                     if logged_connect_session_id != cfg.websocket_relay_session_id:

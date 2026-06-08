@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import json
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Callable
 
 import websockets
 import zmq
@@ -21,10 +21,12 @@ class WebsocketRelayBridge:
         *,
         forward_observations: bool = True,
         forward_commands: bool = True,
+        on_connected: Callable[[WebsocketRelayConfig], None] | None = None,
     ) -> None:
         self._config = config
         self._forward_observations = forward_observations
         self._forward_commands = forward_commands
+        self._on_connected = on_connected
         self._codec = RelayCodec()
         self._context = zmq.asyncio.Context.instance()
         self._cmd_socket = self._context.socket(zmq.PUSH)
@@ -57,11 +59,14 @@ class WebsocketRelayBridge:
             ping_interval=ping_interval,
             ping_timeout=ping_timeout,
         )
-        print(
-            f"[{datetime.now(UTC).isoformat()}] websocket_relay.connected "
-            f"session_id={self._config.websocket_relay_session_id} "
-            f"robot_id={self._config.robot_id}"
-        )
+        if self._on_connected is None:
+            print(
+                f"[{datetime.now(UTC).isoformat()}] websocket_relay.connected "
+                f"session_id={self._config.websocket_relay_session_id} "
+                f"robot_id={self._config.robot_id}"
+            )
+        else:
+            self._on_connected(self._config)
         self._tasks = [asyncio.create_task(self._heartbeat_loop())]
         if self._forward_observations:
             self._tasks.append(asyncio.create_task(self._forward_observations_loop()))

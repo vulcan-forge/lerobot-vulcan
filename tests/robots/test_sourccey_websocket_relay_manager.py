@@ -42,6 +42,7 @@ class _RelayConfig:
 def test_websocket_relay_manager_attempts_bridge_run_when_configured(monkeypatch) -> None:
     run_event = threading.Event()
     close_event = threading.Event()
+    emitted_messages: list[str] = []
     manager = WebsocketRelayManager(_HostConfig())
 
     monkeypatch.setattr(
@@ -50,10 +51,12 @@ def test_websocket_relay_manager_attempts_bridge_run_when_configured(monkeypatch
     )
 
     class _FakeBridge:
-        def __init__(self, *_args, **_kwargs) -> None:
-            pass
+        def __init__(self, *_args, **kwargs) -> None:
+            self._on_connected = kwargs.get("on_connected")
 
         async def run_forever(self) -> None:
+            if self._on_connected is not None:
+                self._on_connected(_RelayConfig())
             run_event.set()
             manager._stop_event.set()
 
@@ -64,11 +67,16 @@ def test_websocket_relay_manager_attempts_bridge_run_when_configured(monkeypatch
         "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.WebsocketRelayBridge",
         _FakeBridge,
     )
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.print",
+        lambda message: emitted_messages.append(message),
+    )
 
     manager._thread_main()
 
     assert run_event.is_set()
     assert close_event.is_set()
+    assert any("websocket_relay.connected" in message for message in emitted_messages)
 
 
 def test_websocket_relay_manager_logs_connect_and_failures_across_retries(monkeypatch) -> None:
@@ -91,11 +99,13 @@ def test_websocket_relay_manager_logs_connect_and_failures_across_retries(monkey
         return None
 
     class _FakeBridge:
-        def __init__(self, *_args, **_kwargs) -> None:
-            pass
+        def __init__(self, *_args, **kwargs) -> None:
+            self._on_connected = kwargs.get("on_connected")
 
         async def run_forever(self) -> None:
             attempts["count"] += 1
+            if self._on_connected is not None:
+                self._on_connected(_RelayConfig())
             if attempts["count"] >= 3:
                 manager._stop_event.set()
                 return
@@ -125,9 +135,13 @@ def test_websocket_relay_manager_logs_connect_and_failures_across_retries(monkey
     connect_failed_messages = [
         message for message in emitted_messages if "websocket_relay.connect_failed" in message
     ]
+    connected_messages = [
+        message for message in emitted_messages if "websocket_relay.connected" in message
+    ]
 
     assert attempts["count"] == 3
     assert len(connecting_messages) == 1
+    assert len(connected_messages) == 1
     assert "retry_in_s=15.0" in connecting_messages[0]
     assert "retry_logging=silent_until_connected" in connecting_messages[0]
     assert not connect_failed_messages
@@ -160,11 +174,13 @@ def test_websocket_relay_manager_throttles_stale_session_retries(monkeypatch) ->
         return None
 
     class _FakeBridge:
-        def __init__(self, *_args, **_kwargs) -> None:
-            pass
+        def __init__(self, *_args, **kwargs) -> None:
+            self._on_connected = kwargs.get("on_connected")
 
         async def run_forever(self) -> None:
             attempts["count"] += 1
+            if self._on_connected is not None:
+                self._on_connected(_RelayConfig())
             if attempts["count"] >= 3:
                 manager._stop_event.set()
                 return
@@ -201,9 +217,13 @@ def test_websocket_relay_manager_throttles_stale_session_retries(monkeypatch) ->
     disconnected_messages = [
         message for message in emitted_messages if "websocket_relay.disconnected" in message
     ]
+    connected_messages = [
+        message for message in emitted_messages if "websocket_relay.connected" in message
+    ]
 
     assert attempts["count"] == 3
     assert len(connecting_messages) == 1
+    assert len(connected_messages) == 1
     assert "retry_in_s=15.0" in connecting_messages[0]
     assert "retry_logging=silent_until_connected" in connecting_messages[0]
     assert not waiting_messages
