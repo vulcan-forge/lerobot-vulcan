@@ -115,9 +115,10 @@ class WebsocketRelayManager:
         async def _runner() -> None:
             mode = "full_bridge" if self.config.websocket_relay_forward_observations else "commands_only"
             waiting_for_session_logged = False
+            connecting_logged = False
             localhost_warning_logged = False
-            logged_connect_session_id: str | None = None
             logged_connected_session_id: str | None = None
+            connected_once = False
             stale_session_wait_logged_for: str | None = None
 
             while not self._stop_event.is_set():
@@ -126,7 +127,6 @@ class WebsocketRelayManager:
                     waiting_for_session_logged = False
                 except NoActiveRobotSessionError as exc:
                     stale_session_wait_logged_for = None
-                    logged_connect_session_id = None
                     logged_connected_session_id = None
                     if not waiting_for_session_logged:
                         _emit(
@@ -139,12 +139,15 @@ class WebsocketRelayManager:
                 except Exception as exc:  # noqa: BLE001
                     waiting_for_session_logged = False
                     stale_session_wait_logged_for = None
-                    logged_connect_session_id = None
                     logged_connected_session_id = None
-                    _emit(
-                        f"[{_utc_now()}] websocket_relay.config_failed "
-                        f"error_type={type(exc).__name__} error={exc!r}"
-                    )
+                    # Startup/session discovery can fail transiently when the host is
+                    # launched manually before the cloud relay is ready. Keep those
+                    # retries silent until we have established a real relay session.
+                    if connected_once:
+                        _emit(
+                            f"[{_utc_now()}] websocket_relay.config_failed "
+                            f"error_type={type(exc).__name__} error={exc!r}"
+                        )
                     await asyncio.sleep(2.0)
                     continue
 
@@ -163,7 +166,7 @@ class WebsocketRelayManager:
                 redacted_ws_url = _redact_ws_url(cfg.ws_url)
 
                 def _on_connected(active_cfg: WebsocketRelayConfig) -> None:
-                    nonlocal logged_connected_session_id
+                    nonlocal connected_once, logged_connected_session_id
                     if logged_connected_session_id == active_cfg.websocket_relay_session_id:
                         return
                     _emit(
@@ -171,6 +174,7 @@ class WebsocketRelayManager:
                         f"session_id={active_cfg.websocket_relay_session_id} "
                         f"robot_id={active_cfg.robot_id}"
                     )
+                    connected_once = True
                     logged_connected_session_id = active_cfg.websocket_relay_session_id
 
                 bridge = WebsocketRelayBridge(
@@ -180,14 +184,14 @@ class WebsocketRelayManager:
                     on_connected=_on_connected,
                 )
                 try:
-                    if logged_connect_session_id != cfg.websocket_relay_session_id:
+                    if not connecting_logged:
                         _emit(
                             f"[{_utc_now()}] websocket_relay.connecting "
                             f"mode={mode} ws_url={redacted_ws_url} "
                             f"retry_in_s={INITIAL_CONNECT_RETRY_DELAY_S:.1f} "
                             "retry_logging=silent_until_connected"
                         )
-                        logged_connect_session_id = cfg.websocket_relay_session_id
+                        connecting_logged = True
                     await bridge.run_forever()
                 except websockets.ConnectionClosed as exc:
                     retry_delay_s = _disconnect_retry_delay(exc)

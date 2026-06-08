@@ -181,6 +181,155 @@ def test_websocket_relay_manager_logs_connect_and_failures_across_retries(monkey
     assert sleep_delays == [15.0, 15.0]
 
 
+def test_websocket_relay_manager_silences_config_failures_before_first_connect(monkeypatch) -> None:
+    manager = WebsocketRelayManager(_HostConfig())
+    emitted_messages: list[str] = []
+    sleep_delays: list[float] = []
+    attempts = {"count": 0}
+
+    def _from_env():
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise RuntimeError("relay backend unavailable")
+        return _RelayConfig()
+
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.WebsocketRelayConfig.from_env",
+        _from_env,
+    )
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.is_localhost_ws_url",
+        lambda _ws_url: False,
+    )
+
+    async def _sleep_stub(delay: float) -> None:
+        sleep_delays.append(delay)
+        return None
+
+    class _FakeBridge:
+        def __init__(self, *_args, **kwargs) -> None:
+            self._on_connected = kwargs.get("on_connected")
+
+        async def run_forever(self) -> None:
+            if self._on_connected is not None:
+                self._on_connected(_RelayConfig())
+            manager._stop_event.set()
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.WebsocketRelayBridge",
+        _FakeBridge,
+    )
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.asyncio.sleep",
+        _sleep_stub,
+    )
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.print",
+        lambda message: emitted_messages.append(message),
+    )
+
+    manager._thread_main()
+
+    config_failed_messages = [
+        message for message in emitted_messages if "websocket_relay.config_failed" in message
+    ]
+    connecting_messages = [
+        message for message in emitted_messages if "websocket_relay.connecting" in message
+    ]
+    connected_messages = [
+        message for message in emitted_messages if "websocket_relay.connected" in message
+    ]
+
+    assert attempts["count"] == 3
+    assert not config_failed_messages
+    assert len(connecting_messages) == 1
+    assert len(connected_messages) == 1
+    assert sleep_delays == [2.0, 2.0]
+
+
+def test_websocket_relay_manager_logs_connecting_only_once_across_session_churn(monkeypatch) -> None:
+    manager = WebsocketRelayManager(_HostConfig())
+    emitted_messages: list[str] = []
+    sleep_delays: list[float] = []
+    attempts = {"count": 0}
+
+    class _FakeNoActiveRobotSessionError(RuntimeError):
+        pass
+
+    def _from_env():
+        attempts["count"] += 1
+        if attempts["count"] == 2:
+            raise _FakeNoActiveRobotSessionError("no active session")
+        if attempts["count"] >= 3:
+            return _RelayConfig(websocket_relay_session_id="session-5678")
+        return _RelayConfig()
+
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.WebsocketRelayConfig.from_env",
+        _from_env,
+    )
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.NoActiveRobotSessionError",
+        _FakeNoActiveRobotSessionError,
+    )
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.is_localhost_ws_url",
+        lambda _ws_url: False,
+    )
+
+    async def _sleep_stub(delay: float) -> None:
+        sleep_delays.append(delay)
+        return None
+
+    class _FakeBridge:
+        def __init__(self, cfg, *_args, **kwargs) -> None:
+            self._cfg = cfg
+            self._on_connected = kwargs.get("on_connected")
+
+        async def run_forever(self) -> None:
+            if self._on_connected is not None:
+                self._on_connected(self._cfg)
+            if self._cfg.websocket_relay_session_id == "session-5678":
+                manager._stop_event.set()
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.WebsocketRelayBridge",
+        _FakeBridge,
+    )
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.asyncio.sleep",
+        _sleep_stub,
+    )
+    monkeypatch.setattr(
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.print",
+        lambda message: emitted_messages.append(message),
+    )
+
+    manager._thread_main()
+
+    connecting_messages = [
+        message for message in emitted_messages if "websocket_relay.connecting" in message
+    ]
+    connected_messages = [
+        message for message in emitted_messages if "websocket_relay.connected" in message
+    ]
+    waiting_messages = [
+        message for message in emitted_messages if "websocket_relay.waiting_for_active_session" in message
+    ]
+
+    assert attempts["count"] == 3
+    assert len(connecting_messages) == 1
+    assert len(connected_messages) == 2
+    assert len(waiting_messages) == 1
+    assert sleep_delays == [2.0]
+
+
 def test_websocket_relay_manager_throttles_stale_session_retries(monkeypatch) -> None:
     manager = WebsocketRelayManager(_HostConfig())
     emitted_messages: list[str] = []
