@@ -12,6 +12,10 @@ import websockets
 from .bridge import WebsocketRelayBridge
 from .config import NoActiveRobotSessionError, WebsocketRelayConfig
 
+INITIAL_CONNECT_RETRY_DELAY_S = 15.0
+SESSION_RECOVERY_RETRY_DELAY_S = 15.0
+SESSION_RECOVERY_CLOSE_REASONS = {"session_not_found"}
+
 
 class HostWebsocketRelayConfig(Protocol):
     websocket_relay_autostart: bool
@@ -105,13 +109,16 @@ class WebsocketRelayManager:
             mode = "full_bridge" if self.config.websocket_relay_forward_observations else "commands_only"
             waiting_for_session_logged = False
             localhost_warning_logged = False
-            connecting_logged = False
+            logged_connect_session_id: str | None = None
+            stale_session_wait_logged_for: str | None = None
 
             while not self._stop_event.is_set():
                 try:
                     cfg = WebsocketRelayConfig.from_env()
                     waiting_for_session_logged = False
                 except NoActiveRobotSessionError as exc:
+                    stale_session_wait_logged_for = None
+                    logged_connect_session_id = None
                     if not waiting_for_session_logged:
                         _emit(
                             f"[{_utc_now()}] websocket_relay.waiting_for_active_session "
@@ -122,12 +129,17 @@ class WebsocketRelayManager:
                     continue
                 except Exception as exc:  # noqa: BLE001
                     waiting_for_session_logged = False
+                    stale_session_wait_logged_for = None
+                    logged_connect_session_id = None
                     _emit(
                         f"[{_utc_now()}] websocket_relay.config_failed "
                         f"error_type={type(exc).__name__} error={exc!r}"
                     )
                     await asyncio.sleep(2.0)
                     continue
+
+                if stale_session_wait_logged_for != cfg.websocket_relay_session_id:
+                    stale_session_wait_logged_for = None
 
                 if is_localhost_ws_url(cfg.websocket_relay_ws_base_url) and not localhost_warning_logged:
                     _emit(
@@ -138,8 +150,6 @@ class WebsocketRelayManager:
                     )
                     localhost_warning_logged = True
 
-                backoff_s = cfg.connect_retry_backoff_s
-                max_backoff_s = max(cfg.connect_retry_backoff_s, cfg.connect_retry_max_backoff_s)
                 redacted_ws_url = _redact_ws_url(cfg.ws_url)
                 bridge = WebsocketRelayBridge(
                     cfg,
@@ -147,36 +157,37 @@ class WebsocketRelayManager:
                     forward_commands=True,
                 )
                 try:
-                    if not connecting_logged:
+                    if logged_connect_session_id != cfg.websocket_relay_session_id:
                         _emit(
                             f"[{_utc_now()}] websocket_relay.connecting "
-                            f"mode={mode} ws_url={redacted_ws_url}"
+                            f"mode={mode} ws_url={redacted_ws_url} "
+                            f"retry_in_s={INITIAL_CONNECT_RETRY_DELAY_S:.1f} "
+                            "retry_logging=silent_until_connected"
                         )
-                        connecting_logged = True
+                        logged_connect_session_id = cfg.websocket_relay_session_id
                     await bridge.run_forever()
                 except websockets.ConnectionClosed as exc:
-                    _emit(
-                        f"[{_utc_now()}] websocket_relay.disconnected "
-                        f"session_id={cfg.websocket_relay_session_id} "
-                        f"robot_id={cfg.robot_id} "
-                        f"code={exc.code} reason={exc.reason or 'none'} reconnect_in_s=1.0"
-                    )
-                    connecting_logged = False
+                    retry_delay_s = _disconnect_retry_delay(exc)
+                    if _is_stale_session_disconnect(exc):
+                        stale_session_wait_logged_for = cfg.websocket_relay_session_id
+                    else:
+                        stale_session_wait_logged_for = None
+                        _emit(
+                            f"[{_utc_now()}] websocket_relay.disconnected "
+                            f"session_id={cfg.websocket_relay_session_id} "
+                            f"robot_id={cfg.robot_id} "
+                            f"code={exc.code} reason={exc.reason or 'none'} reconnect_in_s={retry_delay_s:.1f}"
+                        )
                     if self._stop_event.is_set():
                         break
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(retry_delay_s)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001
+                    stale_session_wait_logged_for = None
                     if self._stop_event.is_set():
                         break
-                    _emit(
-                        f"[{_utc_now()}] websocket_relay.connect_failed "
-                        f"retry_in_s={backoff_s:.1f} "
-                        f"error_type={type(exc).__name__} error={exc!r}"
-                    )
-                    await asyncio.sleep(backoff_s)
-                    backoff_s = min(max_backoff_s, backoff_s * 2.0)
+                    await asyncio.sleep(INITIAL_CONNECT_RETRY_DELAY_S)
                 finally:
                     await bridge.close()
 
@@ -196,3 +207,17 @@ def is_localhost_ws_url(ws_base_url: str) -> bool:
     except Exception:
         return False
     return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _disconnect_reason(exc: websockets.ConnectionClosed) -> str:
+    return (exc.reason or "").strip().lower()
+
+
+def _is_stale_session_disconnect(exc: websockets.ConnectionClosed) -> bool:
+    return exc.code == 1008 and _disconnect_reason(exc) in SESSION_RECOVERY_CLOSE_REASONS
+
+
+def _disconnect_retry_delay(exc: websockets.ConnectionClosed) -> float:
+    if _is_stale_session_disconnect(exc):
+        return SESSION_RECOVERY_RETRY_DELAY_S
+    return 1.0
