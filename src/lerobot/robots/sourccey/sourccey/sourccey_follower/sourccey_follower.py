@@ -32,6 +32,20 @@ from lerobot.robots.utils import ensure_safe_goal_position
 
 logger = logging.getLogger(__name__)
 
+
+WRAPAROUND_GUARDED_MOTORS = {"wrist_roll"}
+WRAPAROUND_HIGH_RAW_THRESHOLD = 4094
+WRAPAROUND_LOW_RAW_THRESHOLD = 1
+
+
+def should_hold_wraparound_goal(present_raw: int, goal_raw: int) -> bool:
+    """Block full-turn wraparound commands at the encoder boundary."""
+    return (
+        (present_raw >= WRAPAROUND_HIGH_RAW_THRESHOLD and goal_raw <= WRAPAROUND_LOW_RAW_THRESHOLD)
+        or (present_raw <= WRAPAROUND_LOW_RAW_THRESHOLD and goal_raw >= WRAPAROUND_HIGH_RAW_THRESHOLD)
+    )
+
+
 class SourcceyFollower(Robot):
     config_class = SourcceyFollowerConfig
     name = "sourccey_follower"
@@ -248,10 +262,12 @@ class SourcceyFollower(Robot):
 
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
         present_pos: dict[str, float] | None = None
+        present_pos_raw: dict[str, int] | None = None
 
         try:
             # Check for NaN values and skip sending actions if any are found
             present_pos = self.bus.sync_read("Present_Position")
+            present_pos_raw = self.bus.sync_read("Present_Position", normalize=False)
             if any(np.isnan(v) for v in goal_pos.values()) or any(np.isnan(v) for v in present_pos.values()):
                 logger.warning("NaN values detected in goal positions. Skipping action execution.")
                 return {f"{motor}.pos": val for motor, val in present_pos.items()}
@@ -264,6 +280,21 @@ class SourcceyFollower(Robot):
 
             # If a joint is already over current, avoid commanding it deeper into the obstruction.
             goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)
+
+            # Prevent full-turn joints from looping around the encoder boundary.
+            for motor in WRAPAROUND_GUARDED_MOTORS & goal_pos.keys():
+                motor_id = self.bus.motors[motor].id
+                goal_raw = self.bus._unnormalize({motor_id: goal_pos[motor]})[motor_id]
+                if present_pos_raw is not None and should_hold_wraparound_goal(present_pos_raw[motor], goal_raw):
+                    logger.warning(
+                        "Blocking wraparound command on %s %s motor '%s': raw %s -> %s",
+                        self.name,
+                        self.config.orientation,
+                        motor,
+                        present_pos_raw[motor],
+                        goal_raw,
+                    )
+                    goal_pos[motor] = present_pos[motor]
 
             # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)
