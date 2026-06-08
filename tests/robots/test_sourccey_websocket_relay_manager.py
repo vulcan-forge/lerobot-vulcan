@@ -104,9 +104,9 @@ def test_websocket_relay_manager_logs_connect_and_failures_across_retries(monkey
 
         async def run_forever(self) -> None:
             attempts["count"] += 1
-            if self._on_connected is not None:
-                self._on_connected(_RelayConfig())
             if attempts["count"] >= 3:
+                if self._on_connected is not None:
+                    self._on_connected(_RelayConfig())
                 manager._stop_event.set()
                 return
             raise TimeoutError("timed out during opening handshake")
@@ -179,8 +179,6 @@ def test_websocket_relay_manager_throttles_stale_session_retries(monkeypatch) ->
 
         async def run_forever(self) -> None:
             attempts["count"] += 1
-            if self._on_connected is not None:
-                self._on_connected(_RelayConfig())
             if attempts["count"] >= 3:
                 manager._stop_event.set()
                 return
@@ -223,7 +221,7 @@ def test_websocket_relay_manager_throttles_stale_session_retries(monkeypatch) ->
 
     assert attempts["count"] == 3
     assert len(connecting_messages) == 1
-    assert len(connected_messages) == 1
+    assert not connected_messages
     assert "retry_in_s=15.0" in connecting_messages[0]
     assert "retry_logging=silent_until_connected" in connecting_messages[0]
     assert not waiting_messages

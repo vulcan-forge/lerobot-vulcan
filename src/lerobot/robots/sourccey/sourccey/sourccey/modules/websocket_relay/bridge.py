@@ -13,6 +13,8 @@ import zmq.asyncio
 from .codec import RelayCodec
 from .config import WebsocketRelayConfig
 
+CONNECTED_STABILITY_WINDOW_S = 2.0
+
 
 class WebsocketRelayBridge:
     def __init__(
@@ -34,6 +36,7 @@ class WebsocketRelayBridge:
         self._ws: Any = None
         self._tasks: list[asyncio.Task[None]] = []
         self._sequence = 0
+        self._connected_announced = False
 
     async def run_forever(self) -> None:
         if self._forward_commands:
@@ -59,15 +62,8 @@ class WebsocketRelayBridge:
             ping_interval=ping_interval,
             ping_timeout=ping_timeout,
         )
-        if self._on_connected is None:
-            print(
-                f"[{datetime.now(UTC).isoformat()}] websocket_relay.connected "
-                f"session_id={self._config.websocket_relay_session_id} "
-                f"robot_id={self._config.robot_id}"
-            )
-        else:
-            self._on_connected(self._config)
-        self._tasks = [asyncio.create_task(self._heartbeat_loop())]
+        self._tasks = [asyncio.create_task(self._announce_connected_when_stable())]
+        self._tasks.append(asyncio.create_task(self._heartbeat_loop()))
         if self._forward_observations:
             self._tasks.append(asyncio.create_task(self._forward_observations_loop()))
         if self._forward_commands:
@@ -97,6 +93,24 @@ class WebsocketRelayBridge:
         while True:
             await asyncio.sleep(self._config.heartbeat_seconds)
             await self._ws.send('{"type":"heartbeat"}')
+
+    async def _announce_connected_when_stable(self) -> None:
+        await asyncio.sleep(CONNECTED_STABILITY_WINDOW_S)
+        if self._ws is None:
+            return
+        if getattr(self._ws, "closed", False):
+            return
+        if self._connected_announced:
+            return
+        if self._on_connected is None:
+            print(
+                f"[{datetime.now(UTC).isoformat()}] websocket_relay.connected "
+                f"session_id={self._config.websocket_relay_session_id} "
+                f"robot_id={self._config.robot_id}"
+            )
+        else:
+            self._on_connected(self._config)
+        self._connected_announced = True
 
     async def _forward_observations_loop(self) -> None:
         assert self._ws is not None
