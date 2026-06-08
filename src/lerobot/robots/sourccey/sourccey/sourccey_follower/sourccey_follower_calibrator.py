@@ -21,6 +21,7 @@ from typing import Any, Dict
 import logging
 from lerobot.motors.feetech.feetech import OperatingMode
 from lerobot.motors.motors_bus import MotorCalibration
+from lerobot.robots.sourccey.sourccey.motor_layout import get_sourccey_arm_motor_ids
 
 logger = logging.getLogger(__name__)
 
@@ -204,110 +205,109 @@ class SourcceyFollowerCalibrator:
 
     def _create_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
         """Create default calibration data for the robot."""
+        motor_ids = get_sourccey_arm_motor_ids("right" if reverse else "left")
         if not reverse:
-            # Left arm calibration (IDs 1-7)
             return {
                 "shoulder_pan": {
-                    "id": 1,
+                    "id": motor_ids["shoulder_pan"],
                     "drive_mode": 0,
-                    "homing_offset": 2035,
-                    "range_min": 970,
-                    "range_max": 3095
+                    "homing_offset": -1871,
+                    "range_min": 988,
+                    "range_max": 3103
                 },
                 "shoulder_lift": {
-                    "id": 2,
+                    "id": motor_ids["shoulder_lift"],
                     "drive_mode": 1,
-                    "homing_offset": 660,
-                    "range_min": 0,
+                    "homing_offset": 651,
+                    "range_min": 53,
                     "range_max": 3800
                 },
                 "elbow_twist": {
-                    "id": 3,
+                    "id": motor_ids["elbow_twist"],
                     "drive_mode": 0,
                     "homing_offset": 0,
                     "range_min": 0,
                     "range_max": 4095
                 },
                 "elbow_flex": {
-                    "id": 4,
+                    "id": motor_ids["elbow_flex"],
                     "drive_mode": 0,
-                    "homing_offset": -1515,
-                    "range_min": 200,
-                    "range_max": 3800
+                    "homing_offset": -1658,
+                    "range_min": 517,
+                    "range_max": 3658
                 },
                 "wrist_flex": {
-                    "id": 5,
+                    "id": motor_ids["wrist_flex"],
                     "drive_mode": 0,
-                    "homing_offset": -1100,
-                    "range_min": 850,
-                    "range_max": 3350
+                    "homing_offset": -1863,
+                    "range_min": 866,
+                    "range_max": 3233
                 },
                 "wrist_roll": {
-                    "id": 6,
+                    "id": motor_ids["wrist_roll"],
                     "drive_mode": 0,
-                    "homing_offset": 975,
-                    "range_min": 0,
-                    "range_max": 4095
+                    "homing_offset": 25,
+                    "range_min": 850,
+                    "range_max": 3229
                 },
                 "gripper": {
-                    "id": 7,
-                    "drive_mode": 0,
-                    "homing_offset": 1640,
-                    "range_min": 425,
-                    "range_max": 2150
+                    "id": motor_ids["gripper"],
+                    "drive_mode": 1,
+                    "homing_offset": 189,
+                    "range_min": 2022,
+                    "range_max": 3572
                 }
             }
         else:
-            # Right arm calibration (IDs 8-14)
             return {
                 "shoulder_pan": {
-                    "id": 8,
+                    "id": motor_ids["shoulder_pan"],
                     "drive_mode": 0,
-                    "homing_offset": 2000,
-                    "range_min": 925,
-                    "range_max": 3050
+                    "homing_offset": -1863,
+                    "range_min": 980,
+                    "range_max": 3108
                 },
                 "shoulder_lift": {
-                    "id": 9,
+                    "id": motor_ids["shoulder_lift"],
                     "drive_mode": 1,
-                    "homing_offset": 1645,
+                    "homing_offset": -2016,
                     "range_min": 296,
-                    "range_max": 4095
+                    "range_max": 4044
                 },
                 "elbow_twist": {
-                    "id": 10,
+                    "id": motor_ids["elbow_twist"],
                     "drive_mode": 0,
                     "homing_offset": 0,
                     "range_min": 0,
                     "range_max": 4095
                 },
                 "elbow_flex": {
-                    "id": 11,
+                    "id": motor_ids["elbow_flex"],
                     "drive_mode": 0,
-                    "homing_offset": 20,
-                    "range_min": 275,
-                    "range_max": 3850
+                    "homing_offset": 1107,
+                    "range_min": 476,
+                    "range_max": 3556
                 },
                 "wrist_flex": {
-                    "id": 12,
+                    "id": motor_ids["wrist_flex"],
                     "drive_mode": 0,
-                    "homing_offset": 1960,
-                    "range_min": 770,
-                    "range_max": 3350
+                    "homing_offset": 345,
+                    "range_min": 893,
+                    "range_max": 3229
                 },
                 "wrist_roll": {
-                    "id": 13,
+                    "id": motor_ids["wrist_roll"],
                     "drive_mode": 0,
-                    "homing_offset": 1025,
-                    "range_min": 75,
-                    "range_max": 4020
+                    "homing_offset": -422,
+                    "range_min": 854,
+                    "range_max": 3234
                 },
                 "gripper": {
-                    "id": 14,
+                    "id": motor_ids["gripper"],
                     "drive_mode": 1,
-                    "homing_offset": 515,
-                    "range_min": 425,
-                    "range_max": 2047
+                    "homing_offset": 864,
+                    "range_min": 533,
+                    "range_max": 2072
                 }
             }
 

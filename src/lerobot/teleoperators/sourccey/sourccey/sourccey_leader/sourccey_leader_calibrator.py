@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from lerobot.motors.motors_bus import MotorCalibration
+from lerobot.robots.sourccey.sourccey.motor_layout import get_sourccey_arm_motor_ids
 
 
 logger = logging.getLogger(__name__)
@@ -130,110 +131,109 @@ class SourcceyLeaderCalibrator:
     def _create_default_calibration(self, reverse: bool = False) -> Dict[str, Any]:
         """Create default calibration data for the robot."""
         print("Creating default calibration data for the robot... CURRENTLY NOT CORRECT WILL BE FIXING LATER")
+        motor_ids = get_sourccey_arm_motor_ids("right" if reverse else "left")
         if reverse:
-            # Right arm calibration (IDs 8-14)
             return {
                 "shoulder_pan": {
-                    "id": 8,
+                    "id": motor_ids["shoulder_pan"],
                     "drive_mode": 0,
                     "homing_offset": -1849,
                     "range_min": 1021,
                     "range_max": 3058
                 },
                 "shoulder_lift": {
-                    "id": 9,
+                    "id": motor_ids["shoulder_lift"],
                     "drive_mode": 0,
                     "homing_offset": 1520,
                     "range_min": 434,
                     "range_max": 3443
                 },
                 "elbow_twist": {
-                    "id": 10,
+                    "id": motor_ids["elbow_twist"],
                     "drive_mode": 0,
                     "homing_offset": 0,
                     "range_min": 0,
                     "range_max": 4095
                 },
                 "elbow_flex": {
-                    "id": 11,
+                    "id": motor_ids["elbow_flex"],
                     "drive_mode": 0,
                     "homing_offset": -954,
                     "range_min": 223,
                     "range_max": 3898
                 },
                 "wrist_flex": {
-                    "id": 12,
+                    "id": motor_ids["wrist_flex"],
                     "drive_mode": 0,
                     "homing_offset": -2038,
                     "range_min": 1035,
                     "range_max": 3245
                 },
                 "wrist_roll": {
-                    "id": 13,
+                    "id": motor_ids["wrist_roll"],
                     "drive_mode": 0,
                     "homing_offset": -516,
-                    "range_min": 768,
-                    "range_max": 3328
+                    "range_min": 0,
+                    "range_max": 4095
                 },
                 "gripper": {
-                    "id": 14,
+                    "id": motor_ids["gripper"],
                     "drive_mode": 0,
                     "homing_offset": -2009,
-                    "range_min": 1471,
-                    "range_max": 2986
+                    "range_min": 1470,
+                    "range_max": 2220
                 }
             }
         else:
-            # Left arm calibration (IDs 1-7)
             return {
                 "shoulder_pan": {
-                    "id": 1,
+                    "id": motor_ids["shoulder_pan"],
                     "drive_mode": 0,
-                    "homing_offset": -1253,
+                    "homing_offset": -1269,
                     "range_min": 1028,
                     "range_max": 3056
                 },
                 "shoulder_lift": {
-                    "id": 2,
+                    "id": motor_ids["shoulder_lift"],
                     "drive_mode": 0,
-                    "homing_offset": -136,
+                    "homing_offset": -14,
                     "range_min": 378,
                     "range_max": 3578
                 },
                 "elbow_twist": {
-                    "id": 3,
+                    "id": motor_ids["elbow_twist"],
                     "drive_mode": 0,
                     "homing_offset": 0,
                     "range_min": 0,
                     "range_max": 4095
                 },
                 "elbow_flex": {
-                    "id": 4,
+                    "id": motor_ids["elbow_flex"],
                     "drive_mode": 0,
-                    "homing_offset": 1964,
+                    "homing_offset": 2006,
                     "range_min": 109,
                     "range_max": 3787
                 },
                 "wrist_flex": {
-                    "id": 5,
+                    "id": motor_ids["wrist_flex"],
                     "drive_mode": 0,
-                    "homing_offset": -1080,
+                    "homing_offset": -1119,
                     "range_min": 1020,
                     "range_max": 3157
                 },
                 "wrist_roll": {
-                    "id": 6,
+                    "id": motor_ids["wrist_roll"],
                     "drive_mode": 0,
                     "homing_offset": -215,
                     "range_min": 0,
                     "range_max": 4095
                 },
                 "gripper": {
-                    "id": 7,
+                    "id": motor_ids["gripper"],
                     "drive_mode": 0,
-                    "homing_offset": -1660,
-                    "range_min": 1215,
-                    "range_max": 2730
+                    "homing_offset": -1979,
+                    "range_min": 2000,
+                    "range_max": 2600
                 }
             }
 

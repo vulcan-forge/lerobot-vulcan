@@ -24,6 +24,7 @@ from lerobot.motors.feetech import (
     FeetechMotorsBus,
     OperatingMode,
 )
+from lerobot.robots.sourccey.sourccey.motor_layout import get_sourccey_arm_motor_ids
 
 from ....teleoperator import Teleoperator
 from .config_sourccey_leader import  SourcceyLeaderConfig
@@ -44,20 +45,18 @@ class SourcceyLeader(Teleoperator):
         super().__init__(config)
         self.config = config
 
-        motor_ids = [1, 2, 3, 4, 5, 6, 7]
-        if self.config.orientation == "right":
-            motor_ids = [8, 9, 10, 11, 12, 13, 14]
+        motor_ids = get_sourccey_arm_motor_ids(self.config.orientation)
 
         self.bus = FeetechMotorsBus(
             port=self.config.port,
             motors={
-                "shoulder_pan": Motor(motor_ids[0], "sts3215", MotorNormMode.RANGE_M100_100),
-                "shoulder_lift": Motor(motor_ids[1], "sts3215", MotorNormMode.RANGE_M100_100),
-                "elbow_twist": Motor(motor_ids[2], "sts3215", MotorNormMode.RANGE_M100_100),
-                "elbow_flex": Motor(motor_ids[3], "sts3215", MotorNormMode.RANGE_M100_100),
-                "wrist_flex": Motor(motor_ids[4], "sts3215", MotorNormMode.RANGE_M100_100),
-                "wrist_roll": Motor(motor_ids[5], "sts3215", MotorNormMode.RANGE_M100_100),
-                "gripper": Motor(motor_ids[6], "sts3215", MotorNormMode.RANGE_0_100),
+                "shoulder_pan": Motor(motor_ids["shoulder_pan"], "sts3215", MotorNormMode.RANGE_M100_100),
+                "shoulder_lift": Motor(motor_ids["shoulder_lift"], "sts3215", MotorNormMode.RANGE_M100_100),
+                "elbow_twist": Motor(motor_ids["elbow_twist"], "sts3215", MotorNormMode.RANGE_M100_100),
+                "elbow_flex": Motor(motor_ids["elbow_flex"], "sts3215", MotorNormMode.RANGE_M100_100),
+                "wrist_flex": Motor(motor_ids["wrist_flex"], "sts3215", MotorNormMode.RANGE_M100_100),
+                "wrist_roll": Motor(motor_ids["wrist_roll"], "sts3215", MotorNormMode.RANGE_M100_100),
+                "gripper": Motor(motor_ids["gripper"], "sts3215", MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )

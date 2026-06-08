@@ -24,6 +24,7 @@ from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnected
 from lerobot.motors.feetech.feetech import FeetechMotorsBus, OperatingMode
 from lerobot.motors.motors_bus import Motor, MotorNormMode
 from lerobot.robots.robot import Robot
+from lerobot.robots.sourccey.sourccey.motor_layout import get_sourccey_arm_motor_ids
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import SourcceyFollowerCalibrator
 from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_safety import SourcceyFollowerSafety
@@ -40,20 +41,18 @@ class SourcceyFollower(Robot):
         self.config = config
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
 
-        motor_ids = [1, 2, 3, 4, 5, 6, 7]
-        if self.config.orientation == "right":
-            motor_ids = [8, 9, 10, 11, 12, 13, 14]
+        motor_ids = get_sourccey_arm_motor_ids(self.config.orientation)
 
         self.bus = FeetechMotorsBus(
             port=self.config.port,
             motors={
-                "shoulder_pan": Motor(motor_ids[0], config.motor_models["shoulder_pan"], norm_mode_body),
-                "shoulder_lift": Motor(motor_ids[1], config.motor_models["shoulder_lift"], norm_mode_body),
-                "elbow_twist": Motor(motor_ids[2], config.motor_models["elbow_twist"], norm_mode_body),
-                "elbow_flex": Motor(motor_ids[3], config.motor_models["elbow_flex"], norm_mode_body),
-                "wrist_flex": Motor(motor_ids[4], config.motor_models["wrist_flex"], norm_mode_body),
-                "wrist_roll": Motor(motor_ids[5], config.motor_models["wrist_roll"], norm_mode_body),
-                "gripper": Motor(motor_ids[6], config.motor_models["gripper"], MotorNormMode.RANGE_0_100),
+                "shoulder_pan": Motor(motor_ids["shoulder_pan"], config.motor_models["shoulder_pan"], norm_mode_body),
+                "shoulder_lift": Motor(motor_ids["shoulder_lift"], config.motor_models["shoulder_lift"], norm_mode_body),
+                "elbow_twist": Motor(motor_ids["elbow_twist"], config.motor_models["elbow_twist"], norm_mode_body),
+                "elbow_flex": Motor(motor_ids["elbow_flex"], config.motor_models["elbow_flex"], norm_mode_body),
+                "wrist_flex": Motor(motor_ids["wrist_flex"], config.motor_models["wrist_flex"], norm_mode_body),
+                "wrist_roll": Motor(motor_ids["wrist_roll"], config.motor_models["wrist_roll"], norm_mode_body),
+                "gripper": Motor(motor_ids["gripper"], config.motor_models["gripper"], MotorNormMode.RANGE_0_100),
             },
             calibration=self.calibration,
         )
