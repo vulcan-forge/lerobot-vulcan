@@ -28,9 +28,16 @@ class WebsocketRelayManager:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._started = False
+        self._force_autostart = False
+
+    def set_force_autostart(self, force: bool) -> None:
+        self._force_autostart = force
+
+    def _should_autostart(self) -> bool:
+        return self.config.websocket_relay_autostart or self._force_autostart
 
     def start_if_configured(self) -> bool:
-        if not self.config.websocket_relay_autostart:
+        if not self._should_autostart():
             logging.info("Websocket relay autostart disabled.")
             return False
 
@@ -61,7 +68,7 @@ class WebsocketRelayManager:
 
     def poll(self) -> None:
         try:
-            if not self.config.websocket_relay_autostart:
+            if not self._should_autostart():
                 return
             if self._thread is not None and self._thread.is_alive():
                 return
