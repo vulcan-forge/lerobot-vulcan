@@ -13,24 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .config_sourccey import SourcceyConfig
-from .sourccey import Sourccey
-
-__all__ = [
-    "Sourccey",
-    "SourcceyConfig",
-    "SourcceyClient",
-    "SourcceyClientConfig",
-]
+from dataclasses import dataclass
 
 
-def __getattr__(name: str):
-    if name == "SourcceyClient":
-        from .sourccey_client import SourcceyClient
+@dataclass
+class SlamInputConfig:
+    """Configuration for Sourccey -> SLAM sidecar publishing."""
 
-        return SourcceyClient
-    if name == "SourcceyClientConfig":
-        from .config_sourccey import SourcceyClientConfig
-
-        return SourcceyClientConfig
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    input_enabled: bool = False
+    input_endpoint: str = "tcp://127.0.0.1:5560"
+    stereo_left_key: str = "front_left"
+    stereo_right_key: str = "front_right"
+    jpeg_quality: int = 80

@@ -4,8 +4,8 @@ import base64
 import math
 from typing import Any
 
-from ...protobuf.generated import sourccey_pb2
-from ...protobuf.sourccey_protobuf import SourcceyProtobuf
+from ....protobuf.generated import sourccey_pb2
+from ....protobuf.sourccey_protobuf import SourcceyProtobuf
 
 
 class RelayCodec:

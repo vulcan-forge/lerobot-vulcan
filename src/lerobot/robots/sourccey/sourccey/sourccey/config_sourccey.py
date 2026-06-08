@@ -20,7 +20,7 @@ from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.motors.dc_motors_controller import DCMotor, MotorNormMode
 
 from lerobot.robots.config import RobotConfig
-from .modules.slam import SlamInputConfig
+from .modules.slam.config import SlamInputConfig
 
 
 def sourccey_cameras_config() -> dict[str, CameraConfig]:
