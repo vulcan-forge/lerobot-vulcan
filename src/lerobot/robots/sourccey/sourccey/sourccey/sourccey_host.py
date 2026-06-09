@@ -28,6 +28,7 @@ from lerobot.configs import parser
 from .config_sourccey import (
     SourcceyConfig,
     SourcceyHostConfig,
+    sourccey_cameras_config,
     sourccey_slam_eye_only_cameras_config,
 )
 from .modules.slam import SlamInputPublisher, close_slam_pub_socket, create_slam_pub_socket
@@ -338,6 +339,8 @@ def main(host_config: SourcceyHostConfig):
             front_height=host_config.slam_eye_height,
             front_fourcc=host_config.slam_eye_fourcc,
             include_wrist=host_config.slam_obstacle_input_enabled,
+            include_bottom=host_config.bottom_camera_enabled,
+            bottom_path=host_config.bottom_camera_path,
         )
         logging.info(
             "Sourccey Host eye-only SLAM mode enabled: front cameras only at %d FPS, host loop target %d Hz",
@@ -345,9 +348,31 @@ def main(host_config: SourcceyHostConfig):
             max(host_config.max_loop_freq_hz, host_config.slam_eye_loop_freq_hz),
         )
     elif host_config.slam_eye_only_mode and host_config.slam_obstacle_input_enabled:
+        robot_config.cameras = sourccey_cameras_config(
+            front_fps=host_config.slam_eye_camera_fps,
+            front_width=host_config.slam_eye_width,
+            front_height=host_config.slam_eye_height,
+            front_fourcc=host_config.slam_eye_fourcc,
+            wrist_fps=host_config.slam_eye_camera_fps,
+            wrist_width=host_config.slam_eye_width,
+            wrist_height=host_config.slam_eye_height,
+            wrist_fourcc=host_config.slam_eye_fourcc,
+            include_wrist=True,
+            bottom_fps=host_config.slam_eye_camera_fps,
+            bottom_width=host_config.slam_eye_width,
+            bottom_height=host_config.slam_eye_height,
+            bottom_fourcc=host_config.slam_eye_fourcc,
+            include_bottom=host_config.bottom_camera_enabled,
+            bottom_path=host_config.bottom_camera_path,
+        )
         logging.info(
             "Sourccey Host eye-only SLAM mode requested with obstacle publishing enabled; "
             "using the legacy full camera config so both front and wrist feeds stay on the known-good path."
+        )
+    elif host_config.bottom_camera_enabled:
+        robot_config.cameras = sourccey_cameras_config(
+            include_bottom=True,
+            bottom_path=host_config.bottom_camera_path,
         )
     if host_config.slam_eye_only_mode:
         _configure_front_slam_eye_camera_devices(robot_config, host_config)

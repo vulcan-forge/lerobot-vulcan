@@ -34,6 +34,12 @@ def sourccey_cameras_config(
     wrist_height: int = 240,
     wrist_fourcc: str | None = None,
     include_wrist: bool = True,
+    bottom_fps: int = 30,
+    bottom_width: int = 320,
+    bottom_height: int = 240,
+    bottom_fourcc: str | None = None,
+    include_bottom: bool = False,
+    bottom_path: str = "/dev/cameraBottom",
 ) -> dict[str, CameraConfig]:
     config = {
         "front_left": OpenCVCameraConfig(
@@ -86,6 +92,19 @@ def sourccey_cameras_config(
             fast_reconnect_window_s=2.0,
             reconnect_interval_s=0.5,
         )
+    if include_bottom:
+        config["bottom"] = OpenCVCameraConfig(
+            index_or_path=bottom_path,
+            fps=bottom_fps,
+            width=bottom_width,
+            height=bottom_height,
+            fourcc=bottom_fourcc,
+            auto_reconnect=True,
+            max_consecutive_read_failures=2,
+            fast_reconnect_interval_s=0.05,
+            fast_reconnect_window_s=2.0,
+            reconnect_interval_s=0.5,
+        )
     return config
 
 
@@ -96,6 +115,8 @@ def sourccey_slam_eye_only_cameras_config(
     front_height: int = 240,
     front_fourcc: str | None = None,
     include_wrist: bool = False,
+    include_bottom: bool = False,
+    bottom_path: str = "/dev/cameraBottom",
 ) -> dict[str, CameraConfig]:
     return sourccey_cameras_config(
         front_fps=front_fps,
@@ -107,6 +128,12 @@ def sourccey_slam_eye_only_cameras_config(
         wrist_height=front_height,
         wrist_fourcc=front_fourcc,
         include_wrist=include_wrist,
+        bottom_fps=front_fps,
+        bottom_width=front_width,
+        bottom_height=front_height,
+        bottom_fourcc=front_fourcc,
+        include_bottom=include_bottom,
+        bottom_path=bottom_path,
     )
 
 
@@ -182,6 +209,8 @@ class SourcceyHostConfig:
     arm_connect_on_startup: bool = False
     arm_calibrate_on_connect: bool = False
     arm_relax_on_startup: bool = True
+    bottom_camera_enabled: bool = False
+    bottom_camera_path: str = "/dev/cameraBottom"
     slam_eye_only_mode: bool = False
     slam_eye_camera_fps: int = 30
     slam_eye_loop_freq_hz: int = 30
@@ -272,6 +301,8 @@ class SourcceyClientConfig(RobotConfig):
         }
     )
 
+    include_bottom_camera: bool = False
+    bottom_camera_path: str = "/dev/cameraBottom"
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
 
     polling_timeout_ms: int = 15
@@ -283,6 +314,11 @@ class SourcceyClientConfig(RobotConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+
+        self.cameras = sourccey_cameras_config(
+            include_bottom=self.include_bottom_camera,
+            bottom_path=self.bottom_camera_path,
+        )
 
         # Migrate flat legacy flags into nested SLAM config when explicitly provided.
         if self.slam_input_enabled is not None:

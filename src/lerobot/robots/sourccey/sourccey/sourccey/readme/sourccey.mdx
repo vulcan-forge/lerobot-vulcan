@@ -201,6 +201,15 @@ On the Raspberry Pi, start the robot host to enable remote control
 uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
 ```
 
+If you want Sourccey to expose a dedicated 5th bottom camera as part of the
+normal observation stream, enable it explicitly:
+
+```
+uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host \
+ --bottom_camera_enabled=true \
+ --bottom_camera_path="/dev/cameraBottom"
+```
+
 For SLAM-focused runs, you can disable the wrist cameras and have the robot host
 publish the front-eye SLAM stream directly:
 
@@ -264,6 +273,28 @@ uv run lerobot-teleoperate \
  --robot.slam.input_enabled=false
 
 ```
+
+To include the dedicated 5th bottom camera in the teleop observation stream and
+Rerun display, add:
+
+```
+uv run lerobot-teleoperate \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.211" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop_keyboard.type=keyboard \
+ --teleop_keyboard.id="sourccey_keyboard" \
+ --teleop.left_arm_port="COM17" \
+ --teleop.right_arm_port="COM18" \
+ --fps=30 \
+ --display_data=true \
+ --robot.include_bottom_camera=true
+```
+
+When the bottom camera is enabled on the host, the client exposes it under the
+observation key `bottom`.
 
 For a SLAM-focused teleop run, raise the client loop to 60 FPS and publish only
 the front stereo pair into the SLAM sidecar:
