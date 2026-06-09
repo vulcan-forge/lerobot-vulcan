@@ -143,7 +143,7 @@ class SourcceyHostConfig:
     # Websocket relay controls.
     websocket_relay_autostart: bool = True
     # Start command-only by default; set True to uplink observations too.
-    websocket_relay_forward_observations: bool = False
+    websocket_relay_forward_observations: bool = True
 
     # IMU periodic logging on host (disabled by default to avoid loop spam)
     imu_print_enabled: bool = False

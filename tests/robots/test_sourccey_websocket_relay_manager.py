@@ -11,7 +11,7 @@ from lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager i
 @dataclass
 class _HostConfig:
     websocket_relay_autostart: bool = True
-    websocket_relay_forward_observations: bool = False
+    websocket_relay_forward_observations: bool = True
 
 
 @dataclass

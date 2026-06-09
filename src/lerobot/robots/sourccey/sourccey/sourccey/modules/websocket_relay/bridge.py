@@ -33,7 +33,6 @@ class WebsocketRelayBridge:
         self._obs_socket = self._context.socket(zmq.PULL)
         self._ws: Any = None
         self._tasks: list[asyncio.Task[None]] = []
-        self._sequence = 0
         self._connected_announced = False
 
     async def run_forever(self) -> None:
@@ -110,28 +109,17 @@ class WebsocketRelayBridge:
     async def _forward_observations_loop(self) -> None:
         assert self._ws is not None
         while True:
-            raw_payload = await self._obs_socket.recv()
-            self._sequence += 1
-            try:
-                payload = self._codec.decode_observation(raw_payload)
-            except Exception as exc:
-                await self._send_error("observation_decode_failed", str(exc))
-                continue
+            raw_payload = await self._recv_latest_observation()
+            await self._ws.send(raw_payload)
+            self._announce_connected()
 
-            message = {
-                "type": "robot.observation.v1",
-                "session_id": self._config.websocket_relay_session_id,
-                "robot_id": self._config.robot_id,
-                "observation_seq": self._sequence,
-                "sent_at_utc": datetime.now(UTC).isoformat(),
-                "payload": payload,
-            }
+    async def _recv_latest_observation(self) -> bytes:
+        latest_payload = await self._obs_socket.recv()
+        while True:
             try:
-                encoded_message = json.dumps(message, separators=(",", ":"), allow_nan=False)
-            except (TypeError, ValueError) as exc:
-                await self._send_error("observation_json_encode_failed", str(exc))
-                continue
-            await self._ws.send(encoded_message)
+                latest_payload = await self._obs_socket.recv(flags=zmq.NOBLOCK)
+            except zmq.Again:
+                return latest_payload
 
     async def _receive_commands_loop(self) -> None:
         assert self._ws is not None
