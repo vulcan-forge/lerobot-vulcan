@@ -96,18 +96,17 @@ class SourcceyHost:
         self.zmq_context.term()
 
     def publish_slam_input(self, observation: dict) -> None:
-        if self.slam_input_publisher is None:
-            return
         frames = {
             key: value
             for key, value in observation.items()
             if isinstance(value, np.ndarray)
         }
-        self.slam_input_publisher.publish(
-            socket=self.zmq_slam_input_socket,
-            observation=observation,
-            frames=frames,
-        )
+        if self.slam_input_publisher is not None:
+            self.slam_input_publisher.publish(
+                socket=self.zmq_slam_input_socket,
+                observation=observation,
+                frames=frames,
+            )
         if self.slam_obstacle_publisher is not None:
             self.slam_obstacle_publisher.publish(
                 socket=self.zmq_slam_obstacle_socket,
