@@ -232,6 +232,22 @@ uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host \
  --slam_resize_height=240
 ```
 
+To include the dedicated bottom camera in that same SLAM packet while keeping the
+front eyes as the stereo pair, add:
+
+```
+uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host \
+ --slam_eye_only_mode=true \
+ --slam_input_enabled=true \
+ --slam_input_endpoint="tcp://*:5560" \
+ --slam_publish_eye_only_mode=true \
+ --bottom_camera_enabled=true \
+ --bottom_camera_path="/dev/cameraBottom"
+```
+
+With `--bottom_camera_enabled=true`, the host now publishes `bottom` alongside
+`front_left` and `front_right` on the SLAM `5560` stream.
+
 Useful experiment knobs:
 
 - `--slam_eye_width=640 --slam_eye_height=480`

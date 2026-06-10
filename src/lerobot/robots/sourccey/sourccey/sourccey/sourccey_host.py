@@ -54,10 +54,11 @@ class SourcceyHost:
         if config.slam_input_enabled:
             self.zmq_slam_input_socket = create_slam_pub_socket(self.zmq_context, config.slam_input_endpoint)
             logging.info(
-                "Host SLAM publisher enabled: endpoint=%s left=%s right=%s jpeg=%d publish_fps=%.2f resize=%sx%s",
+                "Host SLAM publisher enabled: endpoint=%s left=%s right=%s extra=%s jpeg=%d publish_fps=%.2f resize=%sx%s",
                 config.slam_input_endpoint,
                 config.slam_stereo_left_key,
                 config.slam_stereo_right_key,
+                ["bottom"] if config.bottom_camera_enabled else [],
                 config.slam_jpeg_quality,
                 config.slam_publish_fps,
                 config.slam_resize_width,
@@ -219,6 +220,7 @@ def _handle_command_watchdog_timeout(robot: Sourccey, watchdog_timeout_ms: int) 
 def _build_host_slam_input_publisher(config: SourcceyHostConfig) -> SlamInputPublisher | None:
     if not config.slam_input_enabled:
         return None
+    extra_camera_keys: tuple[str, ...] = ("bottom",) if config.bottom_camera_enabled else ()
     return SlamInputPublisher(
         source_prefix="sourccey_host",
         source_id="sourccey",
@@ -229,6 +231,7 @@ def _build_host_slam_input_publisher(config: SourcceyHostConfig) -> SlamInputPub
         publish_fps=config.slam_publish_fps,
         resize_width=config.slam_resize_width,
         resize_height=config.slam_resize_height,
+        extra_camera_keys=extra_camera_keys,
     )
 
 
@@ -343,7 +346,8 @@ def main(host_config: SourcceyHostConfig):
             bottom_path=host_config.bottom_camera_path,
         )
         logging.info(
-            "Sourccey Host eye-only SLAM mode enabled: front cameras only at %d FPS, host loop target %d Hz",
+            "Sourccey Host eye-only SLAM mode enabled: front stereo%s at %d FPS, host loop target %d Hz",
+            " + bottom" if host_config.bottom_camera_enabled else "",
             host_config.slam_eye_camera_fps,
             max(host_config.max_loop_freq_hz, host_config.slam_eye_loop_freq_hz),
         )

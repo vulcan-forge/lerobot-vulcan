@@ -18,7 +18,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import cv2
 import numpy as np
@@ -38,6 +38,7 @@ class SlamInputConfig:
     publish_fps: float = 0.0
     resize_width: int | None = None
     resize_height: int | None = None
+    extra_camera_keys: tuple[str, ...] = ()
 
 
 def create_slam_pub_socket(zmq_context: zmq.Context, endpoint: str) -> zmq.Socket:
@@ -71,6 +72,7 @@ class SlamInputPublisher:
         publish_fps: float,
         resize_width: int | None,
         resize_height: int | None,
+        extra_camera_keys: Iterable[str] = (),
         warn_log_interval_s: float = 5.0,
     ) -> None:
         self._source_prefix = source_prefix
@@ -82,6 +84,9 @@ class SlamInputPublisher:
         self._publish_interval_s = 0.0 if publish_fps <= 0 else 1.0 / float(publish_fps)
         self._resize_width = None if resize_width is None else int(resize_width)
         self._resize_height = None if resize_height is None else int(resize_height)
+        self._extra_camera_keys = tuple(
+            key.strip() for key in extra_camera_keys if isinstance(key, str) and key.strip()
+        )
         self._warn_log_interval_s = warn_log_interval_s
 
         self._camera_frame_ids: dict[str, int] = {}
@@ -135,7 +140,7 @@ class SlamInputPublisher:
         cameras_payload: dict[str, dict[str, Any]] = {}
         now_ns = time.monotonic_ns()
         camera_keys = (
-            tuple(dict.fromkeys(required_keys))
+            tuple(dict.fromkeys(required_keys + self._extra_camera_keys))
             if self._eye_only_mode
             else tuple(frames.keys())
         )
