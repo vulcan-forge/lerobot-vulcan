@@ -21,8 +21,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from lerobot.configs import FeatureType, NormalizationMode, PolicyFeature, PreTrainedConfig
-from lerobot.optim import CosineDecayWithWarmupSchedulerConfig, XVLAAdamWConfig
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
+from lerobot.optim.optimizers import XVLAAdamWConfig
+from lerobot.optim.schedulers import CosineDecayWithWarmupSchedulerConfig
 from lerobot.utils.constants import OBS_IMAGES
 
 # Conditional import for type checking and lazy loading
@@ -84,12 +86,6 @@ class XVLAConfig(PreTrainedConfig):
     max_state_dim: int = 32
     max_action_dim: int = 20  # Maximum action dimension for padding (used by "auto" action mode)
     domain_feature_key: str | None = None
-    # Relative actions: converts absolute actions to relative (relative to state).
-    use_relative_actions: bool = False
-    # Joint names to exclude from relative (kept absolute). Empty list = all dims relative.
-    relative_exclude_joints: list[str] = field(default_factory=lambda: ["gripper"])
-    # Populated at runtime from dataset metadata by make_policy.
-    action_feature_names: list[str] | None = None
 
     # Vision preprocessing
     resize_imgs_with_padding: tuple[int, int] | None = None
