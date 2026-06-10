@@ -170,7 +170,7 @@ def visualize_dataset(
                 rr.log(REWARD, rr.Scalars(batch[REWARD][i].item()))
 
             if "next.success" in batch:
-                rr.log("next.success", rr.Scalars(batch["next.success"][i].item()))
+                rr.log("next.success", rr.Scalar(batch["next.success"][i].item()))
 
     if mode == "local" and save:
         # save .rrd locally

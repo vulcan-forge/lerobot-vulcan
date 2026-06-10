@@ -23,8 +23,12 @@ import torch
 
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
 
+<<<<<<< HEAD
 
 from lerobot.configs import VideoEncoderConfig
+||||||| 5286ef843
+=======
+>>>>>>> origin/vulcan-main
 from lerobot.datasets.dataset_tools import (
     add_features,
     convert_image_to_video_dataset,
@@ -32,12 +36,22 @@ from lerobot.datasets.dataset_tools import (
     merge_datasets,
     modify_features,
     modify_tasks,
+<<<<<<< HEAD
     reencode_dataset,
+||||||| 5286ef843
+=======
+>>>>>>> origin/vulcan-main
     remove_feature,
     split_dataset,
 )
+<<<<<<< HEAD
 from lerobot.datasets.io_utils import load_info
 from tests.datasets.test_video_encoding import _add_frames, require_h264, require_libsvtav1
+||||||| 5286ef843
+from lerobot.scripts.lerobot_edit_dataset import convert_dataset_to_videos
+=======
+from lerobot.scripts.lerobot_edit_dataset import convert_image_to_video_dataset
+>>>>>>> origin/vulcan-main
 
 
 @pytest.fixture

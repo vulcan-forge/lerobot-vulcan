@@ -25,6 +25,7 @@ from PIL import Image
 
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
 
+<<<<<<< HEAD
 from lerobot.configs import VideoEncoderConfig
 from lerobot.datasets.dataset_writer import _encode_video_worker
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -102,6 +103,76 @@ def test_encode_video_worker_default_camera_encoder(tmp_path):
 
     assert captured_kwargs["camera_encoder"] is None
     assert captured_kwargs["encoder_threads"] is None
+||||||| 5286ef843
+=======
+from lerobot.datasets.dataset_writer import _encode_video_worker
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.utils import DEFAULT_IMAGE_PATH
+from tests.fixtures.constants import DEFAULT_FPS, DUMMY_REPO_ID
+
+SIMPLE_FEATURES = {
+    "state": {"dtype": "float32", "shape": (6,), "names": None},
+    "action": {"dtype": "float32", "shape": (6,), "names": None},
+}
+
+
+def _make_frame(features: dict, task: str = "Dummy task") -> dict:
+    """Build a valid frame dict for the given features."""
+    frame = {"task": task}
+    for key, ft in features.items():
+        if ft["dtype"] in ("image", "video"):
+            frame[key] = np.random.randint(0, 256, size=ft["shape"], dtype=np.uint8)
+        elif ft["dtype"] in ("float32", "float64"):
+            frame[key] = torch.randn(ft["shape"])
+        elif ft["dtype"] == "int64":
+            frame[key] = torch.zeros(ft["shape"], dtype=torch.int64)
+    return frame
+
+
+# ── Existing encode_video_worker tests ───────────────────────────────
+
+
+def test_encode_video_worker_forwards_vcodec(tmp_path):
+    """_encode_video_worker correctly forwards the vcodec parameter."""
+    video_key = "observation.images.laptop"
+    fpath = DEFAULT_IMAGE_PATH.format(image_key=video_key, episode_index=0, frame_index=0)
+    img_dir = tmp_path / Path(fpath).parent
+    img_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 64), color="red").save(img_dir / "frame-000000.png")
+
+    captured_kwargs = {}
+
+    def mock_encode(imgs_dir, video_path, fps, **kwargs):
+        captured_kwargs.update(kwargs)
+        Path(video_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(video_path).touch()
+
+    with patch("lerobot.datasets.dataset_writer.encode_video_frames", side_effect=mock_encode):
+        _encode_video_worker(video_key, 0, tmp_path, fps=30, vcodec="h264")
+
+    assert captured_kwargs["vcodec"] == "h264"
+
+
+def test_encode_video_worker_default_vcodec(tmp_path):
+    """_encode_video_worker uses libsvtav1 as the default codec."""
+    video_key = "observation.images.laptop"
+    fpath = DEFAULT_IMAGE_PATH.format(image_key=video_key, episode_index=0, frame_index=0)
+    img_dir = tmp_path / Path(fpath).parent
+    img_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 64), color="red").save(img_dir / "frame-000000.png")
+
+    captured_kwargs = {}
+
+    def mock_encode(imgs_dir, video_path, fps, **kwargs):
+        captured_kwargs.update(kwargs)
+        Path(video_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(video_path).touch()
+
+    with patch("lerobot.datasets.dataset_writer.encode_video_frames", side_effect=mock_encode):
+        _encode_video_worker(video_key, 0, tmp_path, fps=30)
+
+    assert captured_kwargs["vcodec"] == "libsvtav1"
+>>>>>>> origin/vulcan-main
 
 
 # ── add_frame contracts ──────────────────────────────────────────────

@@ -50,30 +50,30 @@ This process can be repeated iteratively: deploy, collect, fine-tune, repeat. Ea
 
 ### Teleoperator Requirements
 
-The `lerobot-rollout --strategy.type=dagger` mode requires **teleoperators with active motors** that can:
+The `examples/hil` HIL scripts require **teleoperators with active motors** that can:
 
 - Enable/disable torque programmatically
 - Move to target positions (to mirror the robot state when pausing)
 
-**Compatible teleoperators:**
+**Compatible teleoperators in the current `examples/hil` scripts:**
 
 - `openarm_mini` - OpenArm Mini
 - `so_leader` - SO100 / SO101 leader arm
 
 > [!IMPORTANT]
-> The provided commands default to `bi_openarm_follower` + `openarm_mini`.
+> The provided `examples/hil` commands default to `bi_openarm_follower` + `openarm_mini`.
 > `so_follower` + `so_leader` configs are also registered and can be used via CLI flags.
 
 ---
 
 ## Script
 
-Use `lerobot-rollout` with `--strategy.type=dagger` for HIL data collection. Select the inference backend with `--inference.type=sync|rtc`:
+A single script handles both synchronous and RTC-based inference. Toggle RTC with `--rtc.enabled=true`:
 
-| Mode                     | Flag                   | Models                |
-| ------------------------ | ---------------------- | --------------------- |
-| Standard (default)       | _(no flag needed)_     | ACT, Diffusion Policy |
-| Real-Time Chunking (RTC) | `--inference.type=rtc` | Pi0, Pi0.5, SmolVLA   |
+| Mode                     | Flag                 | Models                |
+| ------------------------ | -------------------- | --------------------- |
+| Standard (default)       | _(no flag needed)_   | ACT, Diffusion Policy |
+| Real-Time Chunking (RTC) | `--rtc.enabled=true` | Pi0, Pi0.5, SmolVLA   |
 
 ---
 
@@ -97,7 +97,7 @@ python src/lerobot/scripts/lerobot_train.py \
 **Standard inference (ACT, Diffusion Policy):**
 
 ```bash
-lerobot-rollout --strategy.type=dagger \
+python examples/hil/hil_data_collection.py \
     --robot.type=bi_openarm_follower \
     --robot.left_arm_config.port=can1 \
     --robot.left_arm_config.side=left \
@@ -108,10 +108,11 @@ lerobot-rollout --strategy.type=dagger \
     --teleop.port_left=/dev/ttyACM0 \
     --teleop.port_right=/dev/ttyACM1 \
     --policy.path=outputs/pretrain/checkpoints/last/pretrained_model \
-    --dataset.repo_id=your-username/rollout_hil_dataset \
+    --dataset.repo_id=your-username/hil-dataset \
     --dataset.single_task="Fold the T-shirt properly" \
     --dataset.fps=30 \
-    --strategy.num_episodes=50 \
+    --dataset.episode_time_s=1000 \
+    --dataset.num_episodes=50 \
     --interpolation_multiplier=2
 ```
 
@@ -120,11 +121,11 @@ lerobot-rollout --strategy.type=dagger \
 For models with high inference latency, enable RTC for smooth execution:
 
 ```bash
-lerobot-rollout --strategy.type=dagger \
-    --inference.type=rtc \
-    --inference.rtc.execution_horizon=20 \
-    --inference.rtc.max_guidance_weight=5.0 \
-    --inference.rtc.prefix_attention_schedule=LINEAR \
+python examples/hil/hil_data_collection.py \
+    --rtc.enabled=true \
+    --rtc.execution_horizon=20 \
+    --rtc.max_guidance_weight=5.0 \
+    --rtc.prefix_attention_schedule=LINEAR \
     --robot.type=bi_openarm_follower \
     --robot.left_arm_config.port=can1 \
     --robot.left_arm_config.side=left \
@@ -135,10 +136,11 @@ lerobot-rollout --strategy.type=dagger \
     --teleop.port_left=/dev/ttyACM0 \
     --teleop.port_right=/dev/ttyACM1 \
     --policy.path=outputs/pretrain/checkpoints/last/pretrained_model \
-    --dataset.repo_id=your-username/rollout_hil_rtc_dataset \
+    --dataset.repo_id=your-username/hil-rtc-dataset \
     --dataset.single_task="Fold the T-shirt properly" \
     --dataset.fps=30 \
-    --strategy.num_episodes=50 \
+    --dataset.episode_time_s=1000 \
+    --dataset.num_episodes=50 \
     --interpolation_multiplier=3
 ```
 
@@ -157,17 +159,17 @@ Exact key/pedal bindings can differ across scripts and hardware integrations. Us
 
 1. Watch the policy run autonomously (teleop is idle/free)
 2. When you see imminent failure, trigger the **pause input**
-   - Policy stops
-   - Teleoperator moves to match robot position (torque enabled)
-   - No frames recorded during pause
+    - Policy stops
+    - Teleoperator moves to match robot position (torque enabled)
+    - No frames recorded during pause
 3. Trigger the **takeover input** to take control
-   - Teleoperator torque disabled, free to move
-   - **Recovery**: Teleoperate the robot back to a good state
-   - **Correction**: Correct the behavior
-   - All movements are recorded
+    - Teleoperator torque disabled, free to move
+    - **Recovery**: Teleoperate the robot back to a good state
+    - **Correction**: Correct the behavior
+    - All movements are recorded
 4. Trigger the **return-to-policy input**
-   - Policy resumes autonomous execution from the current state
-   - You can intervene again at any time (repeat steps 2–4)
+    - Policy resumes autonomous execution from the current state
+    - You can intervene again at any time (repeat steps 2–4)
 5. End and save the episode when the task is complete (or episode time limit is reached)
 6. **Reset**: Teleop moves to robot position, you can move the robot to the starting position
 7. Start the next episode
@@ -233,7 +235,7 @@ This HIL data collection approach builds on ideas from interactive imitation lea
 
 - **HG-DAgger** (Kelly et al., 2019) made this practical for robotics: a human expert monitors the robot and only intervenes when needed, rather than labeling every state. The gating between autonomous and human control is exactly the pause → takeover → return-to-policy loop used in the scripts here.
 
-- **RaC** (Hu et al., 2025) scales this loop to long-horizon tasks by explicitly decomposing interventions into **recovery** (teleoperating back to a good state) and **correction** (demonstrating the right behavior from there). This decomposition is the protocol followed by the DAgger strategy in `lerobot-rollout`.
+- **RaC** (Hu et al., 2025) scales this loop to long-horizon tasks by explicitly decomposing interventions into **recovery** (teleoperating back to a good state) and **correction** (demonstrating the right behavior from there). This decomposition is the protocol followed by the HIL scripts in `examples/hil`.
 
 - **π0.6/RECAP** (Physical Intelligence, 2025) applies the same iterative collect-and-finetune loop at scale with VLA models, showing that even large pretrained policies benefit substantially from targeted human corrections on their own failure modes. π0.6 is trained using RECAP.
 

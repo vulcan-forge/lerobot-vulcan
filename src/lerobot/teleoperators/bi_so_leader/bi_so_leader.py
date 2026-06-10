@@ -96,11 +96,9 @@ class BiSOLeader(Teleoperator):
     def get_action(self) -> dict[str, float]:
         action_dict = {}
 
-        # Add "left_" prefix
         left_action = self.left_arm.get_action()
         action_dict.update({f"left_{key}": value for key, value in left_action.items()})
 
-        # Add "right_" prefix
         right_action = self.right_arm.get_action()
         action_dict.update({f"right_{key}": value for key, value in right_action.items()})
 

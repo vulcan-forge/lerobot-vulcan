@@ -128,6 +128,9 @@ class KeyboardTeleop(Teleoperator):
     def get_action(self) -> RobotAction:
         before_read_t = time.perf_counter()
 
+        if not self.is_connected:
+            return {}
+
         self._drain_pressed_keys()
 
         # Generate action based on current key states

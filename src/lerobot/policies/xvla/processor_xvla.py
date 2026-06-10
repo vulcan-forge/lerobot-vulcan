@@ -14,14 +14,20 @@
 # limitations under the License.
 # ------------------------------------------------------------------------------
 
-from dataclasses import dataclass
+import json
+import logging
+from collections import deque
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
+from huggingface_hub import hf_hub_download
 
 from lerobot.configs import PipelineFeatureType, PolicyFeature
 from lerobot.processor import (
+    AbsoluteActionsProcessorStep,
     AddBatchDimensionProcessorStep,
     DeviceProcessorStep,
     NormalizerProcessorStep,
@@ -30,6 +36,7 @@ from lerobot.processor import (
     PolicyProcessorPipeline,
     ProcessorStep,
     ProcessorStepRegistry,
+    RelativeActionsProcessorStep,
     RenameObservationsProcessorStep,
     TokenizerProcessorStep,
     UnnormalizerProcessorStep,
@@ -60,14 +67,36 @@ def make_xvla_pre_post_processors(
     """
     Build the LeRobot processor pipelines for XVLA.
     """
+    tokenizer_max_length = config.tokenizer_max_length
+    pretrained_tokenizer_max_length = _get_pretrained_tokenizer_max_length(getattr(config, "pretrained_path", None))
+    if (
+        config.use_relative_actions
+        and pretrained_tokenizer_max_length is not None
+        and tokenizer_max_length > pretrained_tokenizer_max_length
+    ):
+        logging.warning(
+            "XVLA relative-actions preprocessor uses tokenizer_max_length=%s from pretrained processors "
+            "(requested=%s) to preserve sequence budget.",
+            pretrained_tokenizer_max_length,
+            tokenizer_max_length,
+        )
+        tokenizer_max_length = pretrained_tokenizer_max_length
 
     features = {**config.input_features, **config.output_features}
+    relative_step = XVLARelativeActionsProcessorStep(
+        enabled=config.use_relative_actions,
+        exclude_joints=getattr(config, "relative_exclude_joints", []),
+        action_names=getattr(config, "action_feature_names", None),
+    )
+
+    # OpenPI-style relative-actions flow for actions:
+    # raw -> relative -> normalize -> model -> unnormalize -> absolute
     input_steps = [
         RenameObservationsProcessorStep(rename_map={}),
         AddBatchDimensionProcessorStep(),
         TokenizerProcessorStep(
             tokenizer_name=config.tokenizer_name,
-            max_length=config.tokenizer_max_length,
+            max_length=tokenizer_max_length,
             padding=config.pad_language_to,
             padding_side=config.tokenizer_padding_side,
         ),
@@ -75,16 +104,19 @@ def make_xvla_pre_post_processors(
         XVLAImageNetNormalizeProcessorStep(),
         XVLAAddDomainIdProcessorStep(),
         DeviceProcessorStep(device=config.device),
+        relative_step,
         NormalizerProcessorStep(
             features=features, norm_map=config.normalization_mapping, stats=dataset_stats
         ),
     ]
     output_steps = [
+        # XVLA postprocessing handles action-space transforms only; images are not postprocessed here.
         UnnormalizerProcessorStep(
             features=config.output_features,
             norm_map=config.normalization_mapping,
             stats=dataset_stats,
         ),
+        XVLAAbsoluteActionsProcessorStep(enabled=config.use_relative_actions, relative_step=relative_step),
         DeviceProcessorStep(device="cpu"),
     ]
 
@@ -292,6 +324,8 @@ class XVLAImageToFloatProcessorStep(ProcessorStep):
 
     image_keys: list[str] | None = None
     validate_range: bool = True
+    soft_eps: float = 0.002
+    hard_eps: float = 0.05
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         """Convert image observations from [0, 255] to [0, 1]."""
@@ -316,20 +350,28 @@ class XVLAImageToFloatProcessorStep(ProcessorStep):
 
                 min_val = tensor.min().item()
                 max_val = tensor.max().item()
+                uses_uint8_scale = (not tensor.is_floating_point()) or (tensor.is_floating_point() and max_val > 2.0)
 
-                if max_val <= 1.0:
-                    obs[key] = tensor.float()  # ensure float dtype, but no division
-                    continue
-                # Validate that values are in [0, 255] range if requested
-                if self.validate_range and (min_val < 0.0 or max_val > 255.0):
-                    raise ValueError(
-                        f"Image '{key}' has values outside [0, 255] range: "
-                        f"min={min_val:.4f}, max={max_val:.4f}. "
-                        f"Cannot convert to [0, 1] range."
-                    )
+                if uses_uint8_scale:
+                    # Validate that values are in [0, 255] range if requested
+                    if self.validate_range and (min_val < 0.0 or max_val > 255.0):
+                        raise ValueError(
+                            f"Image '{key}' has values outside [0, 255] range: "
+                            f"min={min_val:.4f}, max={max_val:.4f}. "
+                            f"Cannot convert to [0, 1] range."
+                        )
+                    converted = tensor.float() / 255.0
+                else:
+                    # Float tensors with max<=2 are treated as already in unit range.
+                    converted = tensor.float()
 
-                # Convert to float and divide by 255
-                obs[key] = tensor.float() / 255.0
+                obs[key] = _clamp_unit_range_or_raise(
+                    tensor=converted,
+                    key=key,
+                    step_name="xvla_image_to_float",
+                    soft_eps=self.soft_eps,
+                    hard_eps=self.hard_eps,
+                )
 
         new_transition[TransitionKey.OBSERVATION] = obs
         return new_transition
@@ -343,6 +385,8 @@ class XVLAImageToFloatProcessorStep(ProcessorStep):
         return {
             "image_keys": self.image_keys,
             "validate_range": self.validate_range,
+            "soft_eps": self.soft_eps,
+            "hard_eps": self.hard_eps,
         }
 
 
@@ -365,6 +409,8 @@ class XVLAImageNetNormalizeProcessorStep(ProcessorStep):
     """
 
     image_keys: list[str] | None = None
+    soft_eps: float = 0.002
+    hard_eps: float = 0.05
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         """Normalize image observations using ImageNet statistics."""
@@ -386,16 +432,13 @@ class XVLAImageNetNormalizeProcessorStep(ProcessorStep):
         for key in keys_to_normalize:
             if key in obs and isinstance(obs[key], torch.Tensor):
                 tensor = obs[key]
-
-                # Validate that values are in [0, 1] range
-                min_val = tensor.min().item()
-                max_val = tensor.max().item()
-                if min_val < 0.0 or max_val > 1.0:
-                    raise ValueError(
-                        f"Image '{key}' has values outside [0, 1] range: "
-                        f"min={min_val:.4f}, max={max_val:.4f}. "
-                        f"ImageNet normalization requires input values in [0, 1]."
-                    )
+                tensor = _clamp_unit_range_or_raise(
+                    tensor=tensor,
+                    key=key,
+                    step_name="xvla_imagenet_normalize",
+                    soft_eps=self.soft_eps,
+                    hard_eps=self.hard_eps,
+                )
 
                 # Apply ImageNet normalization
                 mean = torch.tensor(IMAGENET_STATS["mean"], device=tensor.device, dtype=tensor.dtype)
@@ -420,6 +463,8 @@ class XVLAImageNetNormalizeProcessorStep(ProcessorStep):
         """Return serializable configuration."""
         return {
             "image_keys": self.image_keys,
+            "soft_eps": self.soft_eps,
+            "hard_eps": self.hard_eps,
         }
 
 

@@ -1,0 +1,481 @@
+# Sourccey Robot Guide
+
+This guide walks you through setting up and using the Sourccey robot, from initial calibration to teleoperation and data collection.
+
+## Table of Contents
+
+1. [Setup](#setup)
+2. [Battery Setup and Monitoring](#battery-setup-and-monitoring)
+3. [Calibration](#calibration)
+4. [Hosting the Robot](#hosting-the-robot)
+5. [Teleoperation](#teleoperation)
+6. [Recording Data](#recording-data)
+7. [Training Models](#training-models)
+8. [Evaluation](#evaluation)
+9. [Utilities](#utilities)
+
+---
+
+## Setup
+
+Before using the Sourccey robot, you need to set up the development environment. This includes installing dependencies and compiling protobuf files.
+
+### Prerequisites
+
+- Python 3.10 or higher
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) (Python package manager)
+- Git
+
+### Installing uv
+
+If you don't have `uv` installed, install it:
+
+**On Linux/Mac:**
+curl -LsSf https://astral.sh/uv/install.sh | sh**On Windows:**
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"**On Debian-based systems (like Raspberry Pi OS):**sh
+sudo apt install python3-full python3-pip pipx
+pipx install uv### Setting Up the Environment
+
+1. **Create a virtual environment:**h
+   uv venv
+2. **Install LeRobot with Sourccey dependencies:**
+   uv pip install -e ".[feetech,smolvla,sourccey]"This installs the project in editable mode with all required extras for the Sourccey robot.
+
+3. **Compile Sourccey protobuf files:**sh
+   uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.pyAlternatively, you can use the function import method:h
+   uv run python -c "from lerobot.robots.sourccey.sourccey.protobuf.compile import compile_sourccey_protobuf; compile_sourccey_protobuf()"### Activating the Virtual Environment
+
+After setup, activate the virtual environment:
+
+**On Linux/Mac:**
+source .venv/bin/activate**On Windows:**sh
+source .venv/Scripts/activate---
+
+## Battery Setup and Monitoring
+
+Battery support now uses a single script:
+`src/lerobot/scripts/sourccey/battery/battery.py`
+
+### 1) Configure the bq34z100 (one-time or when hardware changes)
+
+Run the default 4S LiFePO4 setup profile:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py setup-4s-lifepo4
+```
+
+Default setup writes a `14.3V` pack charge target, `150mA` taper current,
+and `10mA` quit current.
+If your charger terminates differently, override these values:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py setup-4s-lifepo4 \
+  --pack-charge-voltage-mv <actual_cv_mv> \
+  --taper-current-ma <tail_current_ma> \
+  --quit-current-ma <quit_current_ma>
+```
+
+If your divider values are custom, set them explicitly:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py set-divider \
+  --top-ohm 249000 \
+  --bottom-ohm 16500 \
+  --enable-voltsel
+```
+
+### 2) Read battery telemetry
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/battery.py
+```
+
+JSON output fields sent to the frontend:
+
+- `voltage`
+- `current_a`
+- `remaining_capacity_ah`
+- `max_capacity_ah`
+- `state_of_charge`
+- `max_error`
+- `error`
+
+Example:
+
+```json
+{
+    "voltage": 13.245,
+    "current_a": -0.812,
+    "remaining_capacity_ah": 6.291,
+    "max_capacity_ah": 10.0,
+    "state_of_charge": 63,
+    "max_error": 2,
+    "error": null
+}
+```
+
+## Calibration
+
+Before using the robot, you need to calibrate both the robot and the teleoperator.
+
+### Robot Calibration
+
+Calibrate the robot arms on the Raspberry Pi:
+
+```
+uv run src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
+ --robot.type=sourccey \
+ --robot.id=sourccey
+```
+
+For a hard reset (re-detects mechanical limits):
+
+```
+uv run src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
+ --robot.type=sourccey \
+ --robot.id=sourccey \
+ --full_reset=True
+```
+
+### Teleoperator Calibration
+
+Find the ports for your robot
+
+```
+python src/lerobot/scripts/lerobot_find_port.py
+```
+
+Then Calibrate the bi-manual teleoperator (leader arms):
+
+```
+python src/lerobot/scripts/sourccey/calibration/auto_calibrate.py \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id=bi_sourccey_leader \
+ --teleop.left_arm_port="/dev/ttyACM0" \
+ --teleop.right_arm_port="/dev/ttyACM1"
+```
+
+uv run lerobot-teleoperate \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.211" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop.left_arm_port="/dev/ttyACM1" \
+ --teleop.right_arm_port="/dev/ttyACM0" \
+ --fps=30 \
+ --display_data=true
+
+For single-arm teleoperator:
+
+```
+python -m lerobot.calibrate \
+ --teleop.type=sourccey_leader \
+ --teleop.port=COM28 \
+ --teleop.id=sourccey_leader
+```
+
+### Viewing/Editing Calibration Files
+
+View calibration files:
+
+```
+cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_left.json
+cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_right.json
+cat ~/.cache/huggingface/lerobot/calibration/robots/sourccey_z_actuator/sourccey_z_actuator.json
+```
+
+Edit calibration files:
+
+```
+nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_left.json
+nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_follower/sourccey_right.json
+nano ~/.cache/huggingface/lerobot/calibration/robots/sourccey_z_actuator/sourccey_z_actuator.json
+```
+
+## Hosting the Robot
+
+On the Raspberry Pi, start the robot host to enable remote control
+
+```
+uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host
+```
+
+
+Websocket relay autostarts with `sourccey_host` by default (control/data bridge only).
+
+Required websocket relay environment variables on robot host:
+
+- `VULCAN_WEBSOCKET_RELAY_WS_BASE_URL` (legacy `VULCAN_RELAY_WS_BASE_URL` still supported)
+- `VULCAN_WEBSOCKET_RELAY_SESSION_ID` (legacy `VULCAN_RELAY_SESSION_ID` still supported)
+- `VULCAN_WEBSOCKET_RELAY_ROBOT_TOKEN` (legacy `VULCAN_RELAY_ROBOT_TOKEN` still supported)
+- `VULCAN_ROBOT_ID` (optional, defaults to `sourccey`)
+
+Autostart toggle:
+
+- `VULCAN_WEBSOCKET_RELAY_AUTOSTART=true|false` (legacy `VULCAN_RELAY_AGENT_AUTOSTART` supported; default `true`)
+
+Current v1 scope: control + observation relay is active; WebRTC media publication is deferred.
+
+## Teleoperation
+
+On your computer, activate the virtual environment and start teleoperation:
+
+```
+
+# On Linux/Mac
+.venv/bin/activate
+
+
+# On Windows
+source .venv/Scripts/activate
+```
+
+# On Windows Then run:
+
+```
+uv run lerobot-teleoperate \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.212" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop_keyboard.type=keyboard \
+ --teleop_keyboard.id="sourccey_keyboard" \
+ --teleop.left_arm_port="COM17" \
+ --teleop.right_arm_port="COM18" \
+ --fps=30 \
+ --display_data=true \
+ --robot.slam.input_enabled=true
+
+```
+
+# On Linux Then run:
+
+```
+uv run lerobot-teleoperate \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.212" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop_keyboard.type=keyboard \
+ --teleop_keyboard.id="sourccey_keyboard" \
+ --teleop.left_arm_port="/dev/ttyACM1" \
+ --teleop.right_arm_port="/dev/ttyACM0" \
+ --fps=30 \
+ --display_data=true \
+ --robot.slam.input_enabled=true
+```
+
+**Parameters:**
+
+- `--remote_ip`: IP address of the Raspberry Pi running the host
+- `--left_arm_port`: Serial port for left teleoperator arm (Windows: `COM3`, Linux: `/dev/ttyUSB0`)
+- `--right_arm_port`: Serial port for right teleoperator arm
+- `--fps`: Control loop frequency (default: 30)
+
+## Recording Data
+
+Record demonstration data for training:
+
+```
+uv run lerobot-record \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.214" \
+ --teleop.type=bi_sourccey_leader \
+ --teleop.id="sourccey_leader" \
+ --teleop.left_arm_port="/dev/ttyACM1" \
+ --teleop.right_arm_port="/dev/ttyACM0" \
+ --dataset.repo_id="sourccey-012/sourccey-012__shorts-fold-c__set019__mylesr" \
+ --dataset.num_episodes=5 \
+ --dataset.episode_time_s=200 \
+ --dataset.reset_time_s=5 \
+ --dataset.single_task="Fold the shorts" \
+ --dataset.fps=30 \
+ --dataset.push_to_hub=false
+```
+
+**Key Parameters:**
+
+- `--dataset.repo_id`: Dataset identifier (use `local/` prefix for local storage)
+- `--dataset.num_episodes`: Number of episodes to record
+- `--dataset.episode_time_s`: Duration of each episode in seconds
+- `--dataset.reset_time_s`: Time between episodes for reset
+- `--dataset.single_task`: Task description for the dataset
+
+---
+
+## Training Models
+
+Train an ACT policy on your recorded dataset:
+
+### Single GPU Training
+
+```
+python src/lerobot/scripts/lerobot_train.py \
+ --dataset.repo_id=sourccey-009/sourccey-009__arm-left-a__set000__nick \
+ --policy.type=act \
+ --output_dir=outputs/train/act__sourccey-009__arm-left-a__set000__nick \
+ --job_name=act__sourccey-009__arm-left-a__set000__nick \
+ --policy.device=cuda \
+ --wandb.enable=false \
+ --steps=20000 \
+ --save_freq=20000 \
+ --policy.push_to_hub=false
+```
+
+### Multi-GPU Training
+
+```
+accelerate launch \
+  --multi_gpu \
+  --num_processes=2 \
+  $(which lerobot-train) \
+  --dataset.repo_id=sourccey-008/sourccey-008__counter-a__set000__name \
+  --policy.type=act \
+  --output_dir=outputs/train/act__sourccey-008__counter-a__set000__name \
+  --job_name=act_multi_gpu \
+  --steps=100000 \
+  --save_freq=10000 \
+  --batch_size=128 \
+  --wandb.enable=false \
+  --policy.push_to_hub=false
+```
+
+### Training on Pretrained Models
+
+XVLA single-GPU training (use `--batch_size=4` to fit in 32GB VRAM):
+
+```
+CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id=sourccey-012/sourccey-012__shorts-fold-c__cmb__000__mylesr \
+  --policy.path="lerobot/xvla-base" \
+  --output_dir=outputs/train/xvla__sourccey-012__shorts-fold-c__cmb__000__mylesr \
+  --job_name=xvla__sourccey-012__shorts-fold-c__cmb__000__mylesr \
+  --policy.device=cuda \
+  --policy.input_features=null \
+  --policy.num_image_views=4 \
+  --policy.empty_cameras=0 \
+  --wandb.enable=false \
+  --steps=100000 \
+  --save_freq=50000 \
+  --policy.push_to_hub=false \
+  --batch_size=4
+```
+
+## Inference
+
+Evaluate a trained model on the robot without saving the run's recording:
+
+```
+uv run lerobot-rollout \
+ --strategy.type=base \
+ --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-008/checkpoints/1000000/pretrained_model" \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.214" \
+ --task="Fold the shirt" \
+ --duration=60 \
+ --fps=30 \
+ --device=cuda
+```
+
+## Evaluation
+
+Evaluate a trained model on the robot:
+
+```
+uv run lerobot-rollout \
+ --strategy.type=sentry \
+ --policy.path="outputs/train/xvla__sourccey-012__shorts-fold__cmb__005__mylesr/checkpoints/100000/pretrained_model" \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.211" \
+ --dataset.repo_id="sourccey-012/eval_sourccey-009-012__shorts-fold__cmb000__mylesr" \
+ --dataset.single_task="Fold the shorts" \
+ --dataset.push_to_hub=false \
+ --duration=60 \
+ --fps=30 \
+ --device=cuda
+
+```
+
+## Utilities
+
+### Replay Recorded Data
+
+Replay previously recorded episodes:
+
+```
+uv run lerobot-replay \
+ --robot.type=sourccey_client \
+ --robot.id="sourccey" \
+ --robot.remote_ip="192.168.1.166" \
+ --dataset.repo_id="sourccey-011/sourccey-011__set_table-a__set000__name" \
+ --dataset.episode=0 \
+ --dataset.fps=30
+```
+
+### Regenerating Protobuf Files
+
+If you modify the protobuf definitions, regenerate the Python files:
+
+```
+
+rm -rf src/lerobot/robots/sourccey/sourccey/protobuf/generated
+uv run python src/lerobot/robots/sourccey/sourccey/protobuf/compile.py
+
+```
+
+### Combining Datasets
+
+uv run lerobot-edit-dataset \
+ --new_repo_id="Combination/sourccey-013**shirt-fold-dark-blue-a**set000-006**nickm" \
+ --operation.type=merge \
+ --operation.repo_ids="[
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set000**nickm',
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set001**nickm',
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set002**nickm',
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set003**nickm',
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set004**nickm',
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set005**nickm',
+'sourccey-013/sourccey-013**shirt-fold-dark-blue-a/nickm/sourccey-013**shirt-fold-dark-blue-a**set006\_\_nickm'
+]"
+
+## **⚠️ Important:** Do not include trailing commas in the `--dataset_paths` array, as this will cause errors.
+
+## Workflow Summary
+
+1. **Calibrate** robot and teleoperator arms
+2. **Host** the robot on Raspberry Pi (`sourccey_host`)
+3. **Teleoperate** from your computer to control the robot
+4. **Record** demonstration data for your task
+5. **Train** a policy on the recorded data
+6. **Evaluate** the trained model on the robot
+
+---
+
+## Troubleshooting
+
+### Port Issues
+
+- Use `python -m lerobot.find_port` to find available serial ports
+- Ensure udev rules are set up correctly on Linux
+- Check port permissions: `ls -l /dev/ttyUSB*` or `ls -l /dev/ttyACM*`
+
+### Connection Issues
+
+- Verify the Raspberry Pi IP address with `ip addr` or `ifconfig`
+- Ensure both devices are on the same network
+- Check firewall settings if connection fails
+
+### Calibration Issues
+
+- If calibration fails, try a hard reset with `--full_reset=True`
+- Manually edit calibration files if needed (see [Viewing/Editing Calibration Files](#viewingediting-calibration-files))
+
+```
+
+```

@@ -20,7 +20,13 @@ from queue import Queue
 
 import pytest
 
+<<<<<<< HEAD
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
+||||||| 5286ef843
+from lerobot.rl.queue import get_last_item_from_queue
+=======
+pytest.importorskip("grpc")
+>>>>>>> origin/vulcan-main
 
 from torch.multiprocessing import Queue as TorchMPQueue  # noqa: E402
 

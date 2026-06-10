@@ -122,11 +122,9 @@ class BiSOFollower(Robot):
     def get_observation(self) -> RobotObservation:
         obs_dict = {}
 
-        # Add "left_" prefix
         left_obs = self.left_arm.get_observation()
         obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
 
-        # Add "right_" prefix
         right_obs = self.right_arm.get_observation()
         obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
 
@@ -138,7 +136,7 @@ class BiSOFollower(Robot):
         left_action = {
             key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")
         }
-        # Remove "right_" prefix
+
         right_action = {
             key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")
         }

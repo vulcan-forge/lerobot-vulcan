@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import builtins
+import copy
 import logging
 import math
 from collections import deque

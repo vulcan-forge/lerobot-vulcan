@@ -20,6 +20,7 @@ from collections.abc import Iterable
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 # =============================================================================
 # Registry
@@ -74,12 +75,16 @@ class BaseActionSpace(nn.Module):
     # ---------------------------------------------------------------------
     # Core supervised loss
     # ---------------------------------------------------------------------
-    def compute_loss(self, pred: torch.Tensor, target: torch.Tensor) -> dict[str, torch.Tensor]:
+    def compute_loss(
+        self, pred: torch.Tensor, target: torch.Tensor, reduction: str = "mean"
+    ) -> dict[str, torch.Tensor]:
         raise NotImplementedError
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(
+        self, pred: torch.Tensor, target: torch.Tensor, reduction: str = "mean"
+    ) -> dict[str, torch.Tensor]:
         """Alias for compute_loss."""
-        return self.compute_loss(pred, target)
+        return self.compute_loss(pred, target, reduction=reduction)
 
     # ---------------------------------------------------------------------
     # Space-level hooks
@@ -130,26 +135,41 @@ class EE6DActionSpace(BaseActionSpace):
         self.mse = nn.MSELoss()
         self.bce = nn.BCEWithLogitsLoss()
 
-    def compute_loss(self, pred, target):
+    def compute_loss(self, pred, target, reduction: str = "mean"):
         assert pred.shape == target.shape, "pred/target shapes must match"
-        batch_size, seq_len, action_dim = pred.shape
+        _, _, action_dim = pred.shape
         _ensure_indices_valid(action_dim, self.gripper_idx, "gripper_idx")
 
         # Gripper BCE
-        g_losses = [self.bce(pred[:, :, gi], target[:, :, gi]) for gi in self.gripper_idx]
-        gripper_loss = sum(g_losses) / len(self.gripper_idx) * self.GRIPPER_SCALE
+        g_losses = []
+        for gi in self.gripper_idx:
+            g = F.binary_cross_entropy_with_logits(pred[:, :, gi], target[:, :, gi], reduction="none")
+            if reduction == "none":
+                g = g.mean(dim=1)
+            else:
+                g = g.mean()
+            g_losses.append(g)
+        gripper_loss = sum(g_losses) / len(g_losses) * self.GRIPPER_SCALE
 
         # XYZ position
         pos_loss = (
-            self.mse(pred[:, :, self.POS_IDX_1], target[:, :, self.POS_IDX_1])
-            + self.mse(pred[:, :, self.POS_IDX_2], target[:, :, self.POS_IDX_2])
+            F.mse_loss(pred[:, :, self.POS_IDX_1], target[:, :, self.POS_IDX_1], reduction="none")
+            + F.mse_loss(pred[:, :, self.POS_IDX_2], target[:, :, self.POS_IDX_2], reduction="none")
         ) * self.XYZ_SCALE
+        if reduction == "none":
+            pos_loss = pos_loss.mean(dim=(1, 2))
+        else:
+            pos_loss = pos_loss.mean()
 
         # Rotation 6D
         rot_loss = (
-            self.mse(pred[:, :, self.ROT_IDX_1], target[:, :, self.ROT_IDX_1])
-            + self.mse(pred[:, :, self.ROT_IDX_2], target[:, :, self.ROT_IDX_2])
+            F.mse_loss(pred[:, :, self.ROT_IDX_1], target[:, :, self.ROT_IDX_1], reduction="none")
+            + F.mse_loss(pred[:, :, self.ROT_IDX_2], target[:, :, self.ROT_IDX_2], reduction="none")
         ) * self.ROT_SCALE
+        if reduction == "none":
+            rot_loss = rot_loss.mean(dim=(1, 2))
+        else:
+            rot_loss = rot_loss.mean()
 
         return {
             "position_loss": pos_loss,
@@ -186,16 +206,29 @@ class JointActionSpace(BaseActionSpace):
         self.mse = nn.MSELoss()
         self.bce = nn.BCEWithLogitsLoss()
 
-    def compute_loss(self, pred, target):
+    def compute_loss(self, pred, target, reduction: str = "mean"):
         assert pred.shape == target.shape
-        batch_size, seq_len, action_dim = pred.shape
+        _, _, action_dim = pred.shape
         _ensure_indices_valid(action_dim, self.gripper_idx, "gripper_idx")
 
-        g_losses = [self.bce(pred[:, :, gi], target[:, :, gi]) for gi in self.gripper_idx]
-        gripper_loss = sum(g_losses) / len(self.gripper_idx) * self.GRIPPER_SCALE
+        g_losses = []
+        for gi in self.gripper_idx:
+            g = F.binary_cross_entropy_with_logits(pred[:, :, gi], target[:, :, gi], reduction="none")
+            if reduction == "none":
+                g = g.mean(dim=1)
+            else:
+                g = g.mean()
+            g_losses.append(g)
+        gripper_loss = sum(g_losses) / len(g_losses) * self.GRIPPER_SCALE
 
         joints_idx = tuple(i for i in range(action_dim) if i not in set(self.gripper_idx))
-        joints_loss = self.mse(pred[:, :, joints_idx], target[:, :, joints_idx]) * self.JOINTS_SCALE
+        joints_loss = (
+            F.mse_loss(pred[:, :, joints_idx], target[:, :, joints_idx], reduction="none") * self.JOINTS_SCALE
+        )
+        if reduction == "none":
+            joints_loss = joints_loss.mean(dim=(1, 2))
+        else:
+            joints_loss = joints_loss.mean()
 
         return {
             "joints_loss": joints_loss,
@@ -235,22 +268,35 @@ class AGIBOTEE6DActionSpace(BaseActionSpace):
         super().__init__()
         self.mse = nn.MSELoss()
 
-    def compute_loss(self, pred, target):
+    def compute_loss(self, pred, target, reduction: str = "mean"):
         assert pred.shape == target.shape
-        batch_size, seq_len, action_dim = pred.shape
+        _, _, action_dim = pred.shape
         _ensure_indices_valid(action_dim, self.gripper_idx, "gripper_idx")
 
         gripper_loss = (
-            self.mse(pred[:, :, self.gripper_idx], target[:, :, self.gripper_idx]) * self.GRIPPER_SCALE
+            F.mse_loss(pred[:, :, self.gripper_idx], target[:, :, self.gripper_idx], reduction="none")
+            * self.GRIPPER_SCALE
         )
+        if reduction == "none":
+            gripper_loss = gripper_loss.mean(dim=(1, 2))
+        else:
+            gripper_loss = gripper_loss.mean()
         pos_loss = (
-            self.mse(pred[:, :, self.POS_IDX_1], target[:, :, self.POS_IDX_1])
-            + self.mse(pred[:, :, self.POS_IDX_2], target[:, :, self.POS_IDX_2])
+            F.mse_loss(pred[:, :, self.POS_IDX_1], target[:, :, self.POS_IDX_1], reduction="none")
+            + F.mse_loss(pred[:, :, self.POS_IDX_2], target[:, :, self.POS_IDX_2], reduction="none")
         ) * self.XYZ_SCALE
+        if reduction == "none":
+            pos_loss = pos_loss.mean(dim=(1, 2))
+        else:
+            pos_loss = pos_loss.mean()
         rot_loss = (
-            self.mse(pred[:, :, self.ROT_IDX_1], target[:, :, self.ROT_IDX_1])
-            + self.mse(pred[:, :, self.ROT_IDX_2], target[:, :, self.ROT_IDX_2])
+            F.mse_loss(pred[:, :, self.ROT_IDX_1], target[:, :, self.ROT_IDX_1], reduction="none")
+            + F.mse_loss(pred[:, :, self.ROT_IDX_2], target[:, :, self.ROT_IDX_2], reduction="none")
         ) * self.ROT_SCALE
+        if reduction == "none":
+            rot_loss = rot_loss.mean(dim=(1, 2))
+        else:
+            rot_loss = rot_loss.mean()
 
         return {
             "position_loss": pos_loss,
@@ -305,7 +351,7 @@ class FrankaJoint7ActionSpace(BaseActionSpace):
         """Trim model output 20 → 7 dims."""
         return x[..., : self.REAL_DIM]
 
-    def compute_loss(self, pred, target):
+    def compute_loss(self, pred, target, reduction: str = "mean"):
         """
         pred :  [B, T, 20]
         target : [B, T, 7] or [B, T, 20]
@@ -318,12 +364,17 @@ class FrankaJoint7ActionSpace(BaseActionSpace):
         assert pred.shape == target.shape
 
         joints_loss = (
-            self.mse(
+            F.mse_loss(
                 pred[:, :, : self.REAL_DIM],  # use only the first 7 joints
                 target[:, :, : self.REAL_DIM],
+                reduction="none",
             )
             * self.JOINTS_SCALE
         )
+        if reduction == "none":
+            joints_loss = joints_loss.mean(dim=(1, 2))
+        else:
+            joints_loss = joints_loss.mean()
 
         return {"joints_loss": joints_loss}
 
@@ -388,7 +439,9 @@ class AutoActionSpace(BaseActionSpace):
         """Trim model output max_dim → real_dim."""
         return x[..., : self.real_dim]
 
-    def compute_loss(self, pred: torch.Tensor, target: torch.Tensor) -> dict[str, torch.Tensor]:
+    def compute_loss(
+        self, pred: torch.Tensor, target: torch.Tensor, reduction: str = "mean"
+    ) -> dict[str, torch.Tensor]:
         """
         Compute loss only on the first real_dim dimensions.
 
@@ -403,12 +456,17 @@ class AutoActionSpace(BaseActionSpace):
 
         # only compute loss on the real dimensions
         joints_loss = (
-            self.mse(
+            F.mse_loss(
                 pred[:, :, : self.real_dim],
                 target[:, :, : self.real_dim],
+                reduction="none",
             )
             * self.JOINTS_SCALE
         )
+        if reduction == "none":
+            joints_loss = joints_loss.mean(dim=(1, 2))
+        else:
+            joints_loss = joints_loss.mean()
 
         return {"joints_loss": joints_loss}
 
@@ -485,7 +543,7 @@ class BimanualSO101ActionSpace(BaseActionSpace):
 
     # ---------- loss ----------
 
-    def compute_loss(self, pred, target):
+    def compute_loss(self, pred, target, reduction: str = "mean"):
         """
         pred:  [B, T, 20] from the model
         target: [B, T, 12] or [B, T, 20]
@@ -500,23 +558,33 @@ class BimanualSO101ActionSpace(BaseActionSpace):
         real_dims = 12
 
         joints_loss = (
-            self.mse(
+            F.mse_loss(
                 pred[:, :, :real_dims],
                 target[:, :, :real_dims],
+                reduction="none",
             )
             * self.JOINTS_SCALE
         )
-
-        left_arm_loss = self.mse(pred[:, :, :6], target[:, :, :6])
-        right_arm_loss = self.mse(pred[:, :, 6:12], target[:, :, 6:12])
-
+        left_arm_loss = F.mse_loss(pred[:, :, :6], target[:, :, :6], reduction="none")
+        right_arm_loss = F.mse_loss(pred[:, :, 6:12], target[:, :, 6:12], reduction="none")
         gripper_loss = (
-            self.mse(
+            F.mse_loss(
                 pred[:, :, [5, 11]],
                 target[:, :, [5, 11]],
+                reduction="none",
             )
             * self.GRIPPER_SCALE
         )
+        if reduction == "none":
+            joints_loss = joints_loss.mean(dim=(1, 2))
+            left_arm_loss = left_arm_loss.mean(dim=(1, 2))
+            right_arm_loss = right_arm_loss.mean(dim=(1, 2))
+            gripper_loss = gripper_loss.mean(dim=(1, 2))
+        else:
+            joints_loss = joints_loss.mean()
+            left_arm_loss = left_arm_loss.mean()
+            right_arm_loss = right_arm_loss.mean()
+            gripper_loss = gripper_loss.mean()
 
         return {
             "joints_loss": joints_loss,

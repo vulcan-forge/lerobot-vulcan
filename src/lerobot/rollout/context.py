@@ -269,6 +269,7 @@ def build_rollout_context(
     #         )
 
     # --- 4. Features + action-key reconciliation ---------------------
+<<<<<<< HEAD
     # TODO(Steven):Only ``.pos`` joint features are routed to the policy as state and as the
     # action target; velocity and torque channels (when present) are kept in
     # the raw observation but excluded from the policy-facing tensors.
@@ -368,6 +369,110 @@ def build_rollout_context(
                 * len(robot.cameras if hasattr(robot, "cameras") else []),
                 batch_encoding_size=cfg.dataset.video_encoding_batch_size,
                 camera_encoder=cfg.dataset.camera_encoder,
+||||||| 5286ef843
+=======
+    # Route scalar position and velocity channels to the policy-facing tensors.
+    # This keeps mobile-base policies (which commonly emit x/y/theta velocities)
+    # compatible with rollout feature construction.
+    all_obs_features = robot.observation_features
+    # ``observation_features`` values are either a tuple (camera shape) or the
+    # ``float`` type itself used as a sentinel for scalar motor features —
+    # see ``dict[str, type | tuple]`` annotation on ``Robot.observation_features``.
+    observation_features_hw = {
+        k: v
+        for k, v in all_obs_features.items()
+        if isinstance(v, tuple) or (v is float and (k.endswith(".pos") or k.endswith(".vel")))
+    }
+    action_features_hw = {
+        k: v for k, v in robot.action_features.items() if k.endswith(".pos") or k.endswith(".vel")
+    }
+
+    # The action side is always needed: sync inference reads action names from
+    # ``dataset_features[ACTION]`` to map policy tensors back to robot actions.
+    action_dataset_features = aggregate_pipeline_dataset_features(
+        pipeline=teleop_action_processor,
+        initial_features=create_initial_features(action=action_features_hw),
+        use_videos=cfg.dataset.video if cfg.dataset else True,
+    )
+    # Observation-side aggregation is needed because of build_dataset_frame
+    observation_dataset_features = aggregate_pipeline_dataset_features(
+        pipeline=robot_observation_processor,
+        initial_features=create_initial_features(observation=observation_features_hw),
+        use_videos=cfg.dataset.video if cfg.dataset else True,
+    )
+    dataset_features = combine_feature_dicts(action_dataset_features, observation_dataset_features)
+    hw_features = hw_to_dataset_features(observation_features_hw, "observation")
+    raw_action_keys = list(action_features_hw.keys())
+    policy_action_names = getattr(policy_config, "action_feature_names", None)
+    ordered_action_keys = _resolve_action_key_order(
+        list(policy_action_names) if policy_action_names else None,
+        raw_action_keys,
+    )
+
+    # Validate visual features if no rename_map is active
+    rename_map = cfg.rename_map
+    if not rename_map:
+        expected_visuals = {
+            k for k, v in policy_config.input_features.items() if v.type == FeatureType.VISUAL
+        }
+        provided_visuals = {
+            f"observation.images.{k}" for k, v in robot.observation_features.items() if isinstance(v, tuple)
+        }
+        policy_subset = expected_visuals.issubset(provided_visuals)
+        hw_subset = provided_visuals.issubset(expected_visuals)
+        if not (policy_subset or hw_subset):
+            raise ValueError(
+                f"Visual feature mismatch between policy and robot hardware.\n"
+                f"Policy expects: {expected_visuals}\n"
+                f"Robot provides: {provided_visuals}"
+            )
+
+    # --- 5. Dataset -------------
+    dataset = None
+    if cfg.dataset is not None and not isinstance(cfg.strategy, BaseStrategyConfig):
+        logger.info("Setting up dataset (repo_id=%s)...", cfg.dataset.repo_id)
+        if cfg.resume:
+            dataset = LeRobotDataset.resume(
+                cfg.dataset.repo_id,
+                root=cfg.dataset.root,
+                batch_encoding_size=cfg.dataset.video_encoding_batch_size,
+                vcodec=cfg.dataset.vcodec,
+                streaming_encoding=cfg.dataset.streaming_encoding,
+                encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
+                encoder_threads=cfg.dataset.encoder_threads,
+                image_writer_processes=cfg.dataset.num_image_writer_processes,
+                image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera
+                * len(robot.cameras if hasattr(robot, "cameras") else []),
+            )
+        else:
+            if isinstance(cfg.strategy, DAggerStrategyConfig):
+                dataset_features["intervention"] = {
+                    "dtype": "bool",
+                    "shape": (1,),
+                    "names": None,
+                }
+
+            repo_name = cfg.dataset.repo_id.split("/", 1)[-1]
+            if not repo_name.startswith("rollout_"):
+                raise ValueError(
+                    "Dataset names for rollout must start with 'rollout_'. "
+                    "Use --dataset.repo_id=<user>/rollout_<name> for policy deployment datasets."
+                )
+            cfg.dataset.stamp_repo_id()
+            target_video_mb = getattr(cfg.strategy, "target_video_file_size_mb", None)
+            dataset = LeRobotDataset.create(
+                cfg.dataset.repo_id,
+                cfg.dataset.fps,
+                root=cfg.dataset.root,
+                robot_type=robot.name,
+                features=dataset_features,
+                use_videos=cfg.dataset.video,
+                image_writer_processes=cfg.dataset.num_image_writer_processes,
+                image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera
+                * len(robot.cameras if hasattr(robot, "cameras") else []),
+                batch_encoding_size=cfg.dataset.video_encoding_batch_size,
+                vcodec=cfg.dataset.vcodec,
+>>>>>>> origin/vulcan-main
                 streaming_encoding=cfg.dataset.streaming_encoding,
                 encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
                 encoder_threads=cfg.dataset.encoder_threads,

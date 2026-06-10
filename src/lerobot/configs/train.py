@@ -169,6 +169,13 @@ class TrainPipelineConfig(HubMixin):
             if self.reward_model is not None:
                 self.reward_model.pretrained_path = str(policy_dir)
             self.checkpoint_path = policy_dir.parent
+        else:
+            policy_path = parser.get_path_arg("policy")
+            if policy_path:
+                # Only load the policy config
+                cli_overrides = parser.get_cli_overrides("policy")
+                self.policy = PreTrainedConfig.from_pretrained(policy_path, cli_overrides=cli_overrides)
+                self.policy.pretrained_path = Path(policy_path)
 
         if self.policy is None and self.reward_model is None:
             raise ValueError(
@@ -183,6 +190,7 @@ class TrainPipelineConfig(HubMixin):
                 "Fresh initialization derives feature names from the current dataset, so no rename is applied."
             )
 
+        active_cfg = self.trainable_config
         if not self.job_name:
             if self.env is None:
                 self.job_name = f"{active_cfg.type}"

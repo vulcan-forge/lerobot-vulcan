@@ -19,6 +19,15 @@ from collections.abc import Callable
 
 import pytest
 
+<<<<<<< HEAD
+||||||| 5286ef843
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.rl.buffer import BatchTransition, ReplayBuffer, random_crop_vectorized
+from lerobot.utils.constants import ACTION, DONE, OBS_IMAGE, OBS_STATE, OBS_STR, REWARD
+from tests.fixtures.constants import DUMMY_REPO_ID
+=======
+pytest.importorskip("grpc")
+>>>>>>> origin/vulcan-main
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
 
 import torch  # noqa: E402

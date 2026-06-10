@@ -22,6 +22,7 @@ from lerobot.motors.feetech import (
     FeetechMotorsBus,
     OperatingMode,
 )
+from lerobot.teleoperators.so_leader.so_leader_calibrator import SOLeaderCalibrator
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..teleoperator import Teleoperator
@@ -52,6 +53,9 @@ class SOLeader(Teleoperator):
             },
             calibration=self.calibration,
         )
+
+        # Initialize calibrator
+        self.calibrator = SOLeaderCalibrator(self)
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -123,6 +127,9 @@ class SOLeader(Teleoperator):
         self.bus.write_calibration(self.calibration)
         self._save_calibration()
         print(f"Calibration saved to {self.calibration_fpath}")
+
+    def auto_calibrate(self, full_reset: bool = False) -> None:
+        self.calibration = self.calibrator.default_calibrate(reverse=self.config.reverse)
 
     def configure(self) -> None:
         self.bus.disable_torque()

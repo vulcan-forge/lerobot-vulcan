@@ -17,6 +17,7 @@ import logging
 import re
 from itertools import chain
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -24,13 +25,22 @@ import torch
 
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
 
+<<<<<<< HEAD
 import datasets
+||||||| 5286ef843
+=======
+>>>>>>> origin/vulcan-main
 from huggingface_hub import HfApi
 from PIL import Image
 from safetensors.torch import load_file
 from torchvision.transforms import v2
 
+<<<<<<< HEAD
 from lerobot.configs import VALID_VIDEO_CODECS, VideoEncoderConfig
+||||||| 5286ef843
+import lerobot
+=======
+>>>>>>> origin/vulcan-main
 from lerobot.configs.default import DatasetConfig
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.datasets import make_dataset
@@ -45,6 +55,7 @@ from lerobot.datasets.utils import (
     DEFAULT_VIDEO_FILE_SIZE_IN_MB,
     create_branch,
 )
+from lerobot.datasets.video_utils import VALID_VIDEO_CODECS
 from lerobot.envs.factory import make_env_config
 from lerobot.policies.factory import make_policy_config
 from lerobot.robots import make_robot_from_config
@@ -361,6 +372,7 @@ def test_add_frame_image_pil(image_dataset):
     assert dataset[0]["image"].shape == torch.Size(DUMMY_CHW)
 
 
+<<<<<<< HEAD
 @pytest.mark.parametrize(
     "dtype,np_dtype,values,assert_fn",
     [
@@ -396,6 +408,9 @@ def test_save_episode_shape_1_scalar_is_scalarized_before_hf_encoding(
     assert_fn(captured["state"], np.array(values, dtype=np_dtype))
 
 
+||||||| 5286ef843
+=======
+>>>>>>> origin/vulcan-main
 def test_set_image_transforms_applies_transparently(image_dataset):
     dataset = image_dataset
     dataset.add_frame({"image": np.random.rand(*DUMMY_CHW), "task": "Dummy task"})

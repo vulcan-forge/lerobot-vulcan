@@ -20,7 +20,7 @@ Example:
 ```shell
 lerobot-setup-motors \
     --teleop.type=so100_leader \
-    --teleop.port=/dev/tty.usbmodem575E0031751
+    --teleop.port=/dev/ttyUSB0
 ```
 """
 
@@ -39,6 +39,7 @@ from lerobot.robots import (  # noqa: F401
     rebot_b601_follower,
     so_follower,
 )
+from lerobot.robots.sourccey import sourccey
 from lerobot.teleoperators import (  # noqa: F401
     TeleoperatorConfig,
     bi_rebot_102_leader,
@@ -62,6 +63,7 @@ COMPATIBLE_DEVICES = [
     "so101_follower",
     "so101_leader",
     "lekiwi",
+    "sourccey",
 ]
 
 

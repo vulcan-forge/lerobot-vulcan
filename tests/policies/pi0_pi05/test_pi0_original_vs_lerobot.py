@@ -14,7 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+<<<<<<< HEAD
 """Compare LeRobot PI0 against the vendored OpenPI PyTorch reference."""
+||||||| 5286ef843
+"""Test script to verify PI0 policy integration with LeRobot vs the original implementation, only meant to be run locally!"""
+=======
+"""Test script to verify PI0 policy integration with LeRobot vs the original implementation"""
+>>>>>>> origin/vulcan-main
 
 import gc
 import os
@@ -45,6 +51,29 @@ pytestmark = pytest.mark.skipif(
     reason="OpenPI parity and torch.compile checks are too slow for CI; run manually on GPU nodes",
 )
 
+<<<<<<< HEAD
+||||||| 5286ef843
+# NOTE: Assumes PYTHONPATH is set to include OpenPI src as per instructions.
+from openpi.models_pytorch.pi0_pytorch import PI0Pytorch  # noqa: E402
+from transformers import AutoTokenizer  # noqa: E402
+
+from lerobot.policies.pi0 import PI0Config, PI0Policy  # noqa: E402
+from lerobot.policies.pi0.processor_pi0 import make_pi0_pre_post_processors  # noqa: E402
+from lerobot.processor import PolicyAction, PolicyProcessorPipeline  # noqa: E402
+
+# TODO: ADDING DEFAULT IMAGES_FEATURES TO CONFIG
+=======
+# NOTE: Assumes PYTHONPATH is set to include OpenPI src as per instructions.
+from openpi.models_pytorch.pi0_pytorch import PI0Pytorch  # noqa: E402
+from transformers import AutoTokenizer  # noqa: E402
+
+from lerobot.policies.pi0 import PI0Config, PI0Policy  # noqa: E402
+from lerobot.policies.pi0.processor_pi0 import make_pi0_pre_post_processors  # noqa: E402
+from lerobot.processor import PolicyProcessorPipeline  # noqa: E402
+from lerobot.types import PolicyAction  # noqa: E402
+
+# TODO: ADDING DEFAULT IMAGES_FEATURES TO CONFIG
+>>>>>>> origin/vulcan-main
 DUMMY_ACTION_DIM = 32
 DUMMY_STATE_DIM = 32
 DUMMY_ACTION_HORIZON = 50

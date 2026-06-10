@@ -1,0 +1,112 @@
+###
+
+This is an MD file for implement the stage aware reward model for datasets
+
+###
+
+###
+
+Training the model
+
+```
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-train-retry \
+ --max-attempts=30 \
+ --retry-delay-seconds=20 \
+ --dataset.repo_id="Combination/sourccey-shirt-fold-c-008" \
+ --output_dir=outputs/train/sarm_sourccey-shirt-fold-c-008 \
+ --reward_model.type=sarm \
+ --reward_model.annotation_mode=single_stage \
+ --reward_model.image_keys='["observation.images.front_right","observation.images.front_left"]' \
+ --batch_size=8 \
+ --steps=25000 \
+ --save_freq=5000 \
+ --wandb.enable=false \
+ --reward_model.push_to_hub=false
+```
+
+### Resume Training
+
+```
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-train \
+  --resume=true \
+  --config_path=outputs/train/sarm_sourccey-shirt-fold-c-005/checkpoints/last/pretrained_model/train_config.json
+
+```
+
+
+### Debug
+
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-train \
+  --dataset.repo_id="Combination/sourccey-shirt-aggregate-2" \
+  --reward_model.type=sarm \
+  --reward_model.annotation_mode=single_stage \
+  --reward_model.image_keys='["observation.images.front_right","observation.images.front_left"]' \
+  --dataset.video_backend=pyav \
+  --num_workers=0 \
+  --batch_size=1 \
+  --log_freq=1 \
+  --steps=4000 \
+  --output_dir=outputs/train/sarm_2cam_sourccey-shirt-aggregate-2_debug \
+  --wandb.enable=false \
+  --reward_model.push_to_hub=false
+
+
+###
+
+Compute the RABC Weights
+
+###
+
+Visualize Dryrun
+
+```
+uv run python -m lerobot.rewards.sarm.compute_rabc_weights \
+ --dataset-repo-id="Combination/sourccey-shirt-fold-c-005" \
+ --reward-model-path="outputs/train/sarm_sourccey-shirt-fold-c-005/checkpoints/025000/pretrained_model" \
+ --head-mode=sparse \
+ --device=cuda \
+ --output-dir="./outputs/sarm_viz" \
+ --stride=30 \
+ --visualize-only \
+ --visualize-episode-indices=32
+
+```
+
+Visualize Multiple Ranked
+
+```
+uv run python -m lerobot.rewards.sarm.compute_rabc_weights \
+ --dataset-repo-id="Combination/sourccey-shirt-fold-c-005" \
+ --reward-model-path="outputs/train/sarm_sourccey-shirt-fold-c-005/checkpoints/025000/pretrained_model" \
+ --head-mode=sparse \
+ --device=cuda \
+ --output-dir="./outputs/sarm_viz_ranked" \
+ --stride=30 \
+ --visualize-only \
+ --visualize-ranking-csv="outputs/sarm_episode_ranking_progress/episode_ranking_progress.csv" \
+ --visualize-top-k=25 \
+ --visualize-bottom-k=25
+```
+
+Generate RA-BC progress
+
+```
+uv run python -m lerobot.rewards.sarm.compute_rabc_weights \
+ --dataset-repo-id="Combination/sourccey-shirt-fold-c-005" \
+ --reward-model-path="outputs/train/sarm_sourccey-shirt-fold-c-005/checkpoints/025000/pretrained_model" \
+ --head-mode=sparse \
+ --device=cuda \
+ --num-visualizations=10 \
+ --output-dir="./outputs/sarm_viz_weights" \
+ --stride=30 \
+ --no-push-to-hub
+```
+
+
+View Dataset Episode
+```
+uv run lerobot-dataset-viz \
+  --repo-id "Combination/sourccey-shirt-fold-c-005" \
+  --episode-index 32 \
+  --mode local
+```

@@ -15,16 +15,16 @@ It combines three key ingredients:
 Together these elements let HIL-SERL reach near-perfect task success and faster cycle times than imitation-only baselines.
 
 <p align="center">
-  <img
-    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/hilserl-main-figure.png"
-    alt="HIL-SERL workflow"
-    title="HIL-SERL workflow"
-    width="100%"
-  ></img>
+    <img
+        src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/hilserl-main-figure.png"
+        alt="HIL-SERL workflow"
+        title="HIL-SERL workflow"
+        width="100%"
+    ></img>
 </p>
 
 <p align="center">
-  <i>HIL-SERL workflow, Luo et al. 2024</i>
+    <i>HIL-SERL workflow, Luo et al. 2024</i>
 </p>
 
 This guide provides step-by-step instructions for training a robot policy using LeRobot's HilSerl implementation to train on a real robot.
@@ -41,14 +41,14 @@ This guide provides step-by-step instructions for training a robot policy using 
 One can use HIL-SERL to train on a variety of manipulation tasks. Some recommendations:
 
 - Start with a simple task to understand how the system works.
-  - Push cube to a goal region
-  - Pick and lift cube with the gripper
+    - Push cube to a goal region
+    - Pick and lift cube with the gripper
 - Avoid extremely long horizon tasks. Focus on tasks that can be completed in 5-10 seconds.
 - Once you have a good idea of how the system works, you can try more complex tasks and longer horizons.
-  - Pick and place cube
-  - Bimanual tasks to pick objects with two arms
-  - Hand-over tasks to transfer objects from one arm to another
-  - Go crazy!
+    - Pick and place cube
+    - Bimanual tasks to pick objects with two arms
+    - Hand-over tasks to transfer objects from one arm to another
+    - Go crazy!
 
 ## Install LeRobot with HIL-SERL
 
@@ -161,11 +161,11 @@ The action processor (`action_processor`) handles outgoing actions and human int
 2. **AddTeleopEventsAsInfoStep**: Records intervention events and episode control signals
 3. **InterventionActionProcessorStep**: Handles human interventions and episode termination
 4. **Inverse Kinematics Pipeline** (when enabled):
-   - **MapDeltaActionToRobotActionStep**: Converts delta actions to robot action format
-   - **EEReferenceAndDelta**: Computes end-effector reference and delta movements
-   - **EEBoundsAndSafety**: Enforces workspace safety bounds
-   - **InverseKinematicsEEToJoints**: Converts end-effector actions to joint targets
-   - **GripperVelocityToJoint**: Handles gripper control commands
+    - **MapDeltaActionToRobotActionStep**: Converts delta actions to robot action format
+    - **EEReferenceAndDelta**: Computes end-effector reference and delta movements
+    - **EEBoundsAndSafety**: Enforces workspace safety bounds
+    - **InverseKinematicsEEToJoints**: Converts end-effector actions to joint targets
+    - **GripperVelocityToJoint**: Handles gripper control commands
 
 #### Configuration Examples
 
@@ -173,15 +173,15 @@ The action processor (`action_processor`) handles outgoing actions and human int
 
 ```json
 {
-  "env": {
-    "processor": {
-      "observation": {
-        "add_joint_velocity_to_observation": true,
-        "add_current_to_observation": false,
-        "display_cameras": false
-      }
+    "env": {
+        "processor": {
+            "observation": {
+                "add_joint_velocity_to_observation": true,
+                "add_current_to_observation": false,
+                "display_cameras": false
+            }
+        }
     }
-  }
 }
 ```
 
@@ -189,17 +189,17 @@ The action processor (`action_processor`) handles outgoing actions and human int
 
 ```json
 {
-  "env": {
-    "processor": {
-      "image_preprocessing": {
-        "crop_params_dict": {
-          "observation.images.front": [180, 250, 120, 150],
-          "observation.images.side": [180, 207, 180, 200]
-        },
-        "resize_size": [128, 128]
-      }
+    "env": {
+        "processor": {
+            "image_preprocessing": {
+                "crop_params_dict": {
+                    "observation.images.front": [180, 250, 120, 150],
+                    "observation.images.side": [180, 207, 180, 200]
+                },
+                "resize_size": [128, 128]
+            }
+        }
     }
-  }
 }
 ```
 
@@ -207,23 +207,23 @@ The action processor (`action_processor`) handles outgoing actions and human int
 
 ```json
 {
-  "env": {
-    "processor": {
-      "inverse_kinematics": {
-        "urdf_path": "path/to/robot.urdf",
-        "target_frame_name": "end_effector",
-        "end_effector_bounds": {
-          "min": [0.16, -0.08, 0.03],
-          "max": [0.24, 0.2, 0.1]
-        },
-        "end_effector_step_sizes": {
-          "x": 0.02,
-          "y": 0.02,
-          "z": 0.02
+    "env": {
+        "processor": {
+            "inverse_kinematics": {
+                "urdf_path": "path/to/robot.urdf",
+                "target_frame_name": "end_effector",
+                "end_effector_bounds": {
+                    "min": [0.16, -0.08, 0.03],
+                    "max": [0.24, 0.2, 0.1]
+                },
+                "end_effector_step_sizes": {
+                    "x": 0.02,
+                    "y": 0.02,
+                    "z": 0.02
+                }
+            }
         }
-      }
     }
-  }
 }
 ```
 
@@ -237,13 +237,13 @@ Enable joint velocity estimation to provide the policy with motion information:
 
 ```json
 {
-  "env": {
-    "processor": {
-      "observation": {
-        "add_joint_velocity_to_observation": true
-      }
+    "env": {
+        "processor": {
+            "observation": {
+                "add_joint_velocity_to_observation": true
+            }
+        }
     }
-  }
 }
 ```
 
@@ -259,13 +259,13 @@ Monitor motor currents to detect contact forces and load conditions:
 
 ```json
 {
-  "env": {
-    "processor": {
-      "observation": {
-        "add_current_to_observation": true
-      }
+    "env": {
+        "processor": {
+            "observation": {
+                "add_current_to_observation": true
+            }
+        }
     }
-  }
 }
 ```
 
@@ -282,15 +282,15 @@ You can enable multiple observation processing features simultaneously:
 
 ```json
 {
-  "env": {
-    "processor": {
-      "observation": {
-        "add_joint_velocity_to_observation": true,
-        "add_current_to_observation": true,
-        "display_cameras": false
-      }
+    "env": {
+        "processor": {
+            "observation": {
+                "add_joint_velocity_to_observation": true,
+                "add_current_to_observation": true,
+                "display_cameras": false
+            }
+        }
     }
-  }
 }
 ```
 
@@ -321,28 +321,28 @@ lerobot-find-joint-limits \
 
 1. Run the script and move the robot through the space that solves the task
 2. The script will record the minimum and maximum end-effector positions and the joint angles and prints them to the console, for example:
-   ```
-   Max ee position [0.2417 0.2012 0.1027]
-   Min ee position [0.1663 -0.0823 0.0336]
-   Max joint positions [-20.0, -20.0, -20.0, -20.0, -20.0, -20.0]
-   Min joint positions [50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
-   ```
+    ```
+    Max ee position [0.2417 0.2012 0.1027]
+    Min ee position [0.1663 -0.0823 0.0336]
+    Max joint positions [-20.0, -20.0, -20.0, -20.0, -20.0, -20.0]
+    Min joint positions [50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+    ```
 3. Use these values in your environment configuration under `env.processor.inverse_kinematics.end_effector_bounds` (see `InverseKinematicsConfig` in `lerobot/envs/configs.py`)
 
 **Example Configuration**
 
 ```json
 {
-  "env": {
-    "processor": {
-      "inverse_kinematics": {
-        "end_effector_bounds": {
-          "max": [0.24, 0.2, 0.1],
-          "min": [0.16, -0.08, 0.03]
+    "env": {
+        "processor": {
+            "inverse_kinematics": {
+                "end_effector_bounds": {
+                    "max": [0.24, 0.2, 0.1],
+                    "min": [0.16, -0.08, 0.03]
+                }
+            }
         }
-      }
     }
-  }
 }
 ```
 
@@ -364,45 +364,45 @@ Example configuration section:
 
 ```json
 {
-  "env": {
-    "type": "gym_manipulator",
-    "name": "real_robot",
-    "fps": 10,
-    "processor": {
-      "control_mode": "gamepad",
-      "observation": {
-        "display_cameras": false
-      },
-      "image_preprocessing": {
-        "crop_params_dict": {},
-        "resize_size": [128, 128]
-      },
-      "gripper": {
-        "use_gripper": true,
-        "gripper_penalty": 0.0
-      },
-      "reset": {
-        "reset_time_s": 5.0,
-        "control_time_s": 20.0
-      }
+    "env": {
+        "type": "gym_manipulator",
+        "name": "real_robot",
+        "fps": 10,
+        "processor": {
+            "control_mode": "gamepad",
+            "observation": {
+                "display_cameras": false
+            },
+            "image_preprocessing": {
+                "crop_params_dict": {},
+                "resize_size": [128, 128]
+            },
+            "gripper": {
+                "use_gripper": true,
+                "gripper_penalty": 0.0
+            },
+            "reset": {
+                "reset_time_s": 5.0,
+                "control_time_s": 20.0
+            }
+        },
+        "robot": {
+            // ... robot configuration ...
+        },
+        "teleop": {
+            // ... teleoperator configuration ...
+        }
     },
-    "robot": {
-      // ... robot configuration ...
+    "dataset": {
+        "repo_id": "username/pick_lift_cube",
+        "root": null,
+        "task": "pick_and_lift",
+        "num_episodes_to_record": 15,
+        "replay_episode": 0,
+        "push_to_hub": true
     },
-    "teleop": {
-      // ... teleoperator configuration ...
-    }
-  },
-  "dataset": {
-    "repo_id": "username/pick_lift_cube",
-    "root": null,
-    "task": "pick_and_lift",
-    "num_episodes_to_record": 15,
-    "replay_episode": 0,
-    "push_to_hub": true
-  },
-  "mode": "record",
-  "device": "cpu"
+    "mode": "record",
+    "device": "cpu"
 }
 ```
 
@@ -444,31 +444,31 @@ To setup the gamepad, you need to set the `control_mode` to `"gamepad"` and defi
 
 ```json
 {
-  "env": {
-    "teleop": {
-      "type": "gamepad",
-      "use_gripper": true
-    },
-    "processor": {
-      "control_mode": "gamepad",
-      "gripper": {
-        "use_gripper": true
-      }
+    "env": {
+        "teleop": {
+            "type": "gamepad",
+            "use_gripper": true
+        },
+        "processor": {
+            "control_mode": "gamepad",
+            "gripper": {
+                "use_gripper": true
+            }
+        }
     }
-  }
 }
 ```
 
 <p align="center">
-  <img
-    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/gamepad_guide.jpg?raw=true"
-    alt="Figure shows the control mappings on a Logitech gamepad."
-    title="Gamepad Control Mapping"
-    width="100%"
-  ></img>
+    <img
+        src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/gamepad_guide.jpg?raw=true"
+        alt="Figure shows the control mappings on a Logitech gamepad."
+        title="Gamepad Control Mapping"
+        width="100%"
+    ></img>
 </p>
 <p align="center">
-  <i>Gamepad button mapping for robot control and episode management</i>
+    <i>Gamepad button mapping for robot control and episode management</i>
 </p>
 
 **Setting up the SO101 leader**
@@ -479,19 +479,19 @@ To setup the SO101 leader, you need to set the `control_mode` to `"leader"` and 
 
 ```json
 {
-  "env": {
-    "teleop": {
-      "type": "so101_leader",
-      "port": "/dev/tty.usbmodem585A0077921",
-      "use_degrees": true
-    },
-    "processor": {
-      "control_mode": "leader",
-      "gripper": {
-        "use_gripper": true
-      }
+    "env": {
+        "teleop": {
+            "type": "so101_leader",
+            "port": "/dev/tty.usbmodem585A0077921",
+            "use_degrees": true
+        },
+        "processor": {
+            "control_mode": "leader",
+            "gripper": {
+                "use_gripper": true
+            }
+        }
     }
-  }
 }
 ```
 
@@ -502,12 +502,12 @@ During the online training, press `space` to take over the policy and `space` ag
 <summary><strong>Video: SO101 leader teleoperation</strong></summary>
 
 <div class="video-container">
-  <video controls width="600">
-    <source
-      src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/so101_leader_tutorial.mp4"
-      type="video/mp4"
-    />
-  </video>
+    <video controls width="600">
+        <source
+            src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/so101_leader_tutorial.mp4"
+            type="video/mp4"
+        />
+    </video>
 </div>
 
 <p align="center"><i>SO101 leader teleoperation example, the leader tracks the follower, press `space` to intervene</i></p>
@@ -567,14 +567,14 @@ observation.images.front: [180, 250, 120, 150]
 ```
 
 <p align="center">
-  <img
-    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/crop_dataset.gif"
-    width="600"
-  />
+    <img
+        src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/crop_dataset.gif"
+        width="600"
+    />
 </p>
 
 <p align="center">
-  <i>Interactive cropping tool for selecting regions of interest</i>
+    <i>Interactive cropping tool for selecting regions of interest</i>
 </p>
 
 **Updating Configuration**
@@ -583,17 +583,17 @@ Add these crop parameters to your training configuration:
 
 ```json
 {
-  "env": {
-    "processor": {
-      "image_preprocessing": {
-        "crop_params_dict": {
-          "observation.images.side": [180, 207, 180, 200],
-          "observation.images.front": [180, 250, 120, 150]
-        },
-        "resize_size": [128, 128]
-      }
+    "env": {
+        "processor": {
+            "image_preprocessing": {
+                "crop_params_dict": {
+                    "observation.images.side": [180, 207, 180, 200],
+                    "observation.images.front": [180, 250, 120, 150]
+                },
+                "resize_size": [128, 128]
+            }
+        }
     }
-  }
 }
 ```
 
@@ -638,37 +638,37 @@ Example configuration section for data collection:
 
 ```json
 {
-  "env": {
-    "type": "gym_manipulator",
-    "name": "real_robot",
-    "fps": 10,
-    "processor": {
-      "reset": {
-        "reset_time_s": 5.0,
-        "control_time_s": 20.0,
-        "terminate_on_success": false
-      },
-      "gripper": {
-        "use_gripper": true
-      }
+    "env": {
+        "type": "gym_manipulator",
+        "name": "real_robot",
+        "fps": 10,
+        "processor": {
+            "reset": {
+                "reset_time_s": 5.0,
+                "control_time_s": 20.0,
+                "terminate_on_success": false
+            },
+            "gripper": {
+                "use_gripper": true
+            }
+        },
+        "robot": {
+            // ... robot configuration ...
+        },
+        "teleop": {
+            // ... teleoperator configuration ...
+        }
     },
-    "robot": {
-      // ... robot configuration ...
+    "dataset": {
+        "repo_id": "hf_username/dataset_name",
+        "root": "data/your_dataset",
+        "task": "reward_classifier_task",
+        "num_episodes_to_record": 20,
+        "replay_episode": null,
+        "push_to_hub": true
     },
-    "teleop": {
-      // ... teleoperator configuration ...
-    }
-  },
-  "dataset": {
-    "repo_id": "hf_username/dataset_name",
-    "root": "data/your_dataset",
-    "task": "reward_classifier_task",
-    "num_episodes_to_record": 20,
-    "replay_episode": null,
-    "push_to_hub": true
-  },
-  "mode": "record",
-  "device": "cpu"
+    "mode": "record",
+    "device": "cpu"
 }
 ```
 
@@ -688,51 +688,51 @@ Example configuration for training the [reward classifier](https://huggingface.c
 
 ```json
 {
-  "dataset": {
-    "repo_id": "hf_username/dataset_name",
-    "root": null
-  },
-  "reward_model": {
-    "type": "reward_classifier",
-    "model_name": "helper2424/resnet10",
-    "model_type": "cnn",
-    "num_cameras": 2,
-    "num_classes": 2,
-    "hidden_dim": 256,
-    "dropout_rate": 0.1,
-    "learning_rate": 1e-4,
-    "device": "cuda",
-    "input_features": {
-      "observation.images.front": {
-        "type": "VISUAL",
-        "shape": [3, 128, 128]
-      },
-      "observation.images.side": {
-        "type": "VISUAL",
-        "shape": [3, 128, 128]
-      }
+    "dataset": {
+        "repo_id": "hf_username/dataset_name",
+        "root": null
     },
-    "push_to_hub": true,
-    "repo_id": "hf_username/model_repo"
-  },
-  "batch_size": 16,
-  "num_workers": 4,
-  "steps": 5000,
-  "log_freq": 10,
-  "eval_freq": 1000,
-  "save_freq": 1000,
-  "save_checkpoint": true,
-  "seed": 2,
-  "resume": false,
-  "optimizer": {
-    "grad_clip_norm": 10.0
-  },
-  "wandb": {
-    "enable": true,
-    "project": "reward-classifier",
-    "disable_artifact": false
-  },
-  "job_name": "reward-classifier"
+    "reward_model": {
+        "type": "reward_classifier",
+        "model_name": "helper2424/resnet10",
+        "model_type": "cnn",
+        "num_cameras": 2,
+        "num_classes": 2,
+        "hidden_dim": 256,
+        "dropout_rate": 0.1,
+        "learning_rate": 1e-4,
+        "device": "cuda",
+        "input_features": {
+            "observation.images.front": {
+                "type": "VISUAL",
+                "shape": [3, 128, 128]
+            },
+            "observation.images.side": {
+                "type": "VISUAL",
+                "shape": [3, 128, 128]
+            }
+        },
+        "push_to_hub": true,
+        "repo_id": "hf_username/model_repo"
+    },
+    "batch_size": 16,
+    "num_workers": 4,
+    "steps": 5000,
+    "log_freq": 10,
+    "eval_freq": 1000,
+    "save_freq": 1000,
+    "save_checkpoint": true,
+    "seed": 2,
+    "resume": false,
+    "optimizer": {
+        "grad_clip_norm": 10.0
+    },
+    "wandb": {
+        "enable": true,
+        "project": "reward-classifier",
+        "disable_artifact": false
+    },
+    "job_name": "reward-classifier"
 }
 ```
 
@@ -769,18 +769,18 @@ or set the argument in the json config file.
 
 ```json
 {
-  "env": {
-    "processor": {
-      "reward_classifier": {
-        "pretrained_path": "path_to_your_pretrained_model",
-        "success_threshold": 0.7,
-        "success_reward": 1.0
-      },
-      "reset": {
-        "terminate_on_success": true
-      }
+    "env": {
+        "processor": {
+            "reward_classifier": {
+                "pretrained_path": "path_to_your_pretrained_model",
+                "success_threshold": 0.7,
+                "success_reward": 1.0
+            },
+            "reset": {
+                "terminate_on_success": true
+            }
+        }
     }
-  }
 }
 ```
 
@@ -799,20 +799,20 @@ The reward classifier will automatically provide rewards based on the visual inp
 
 2. **Collect a dataset**:
 
-   ```bash
-   python -m lerobot.rl.gym_manipulator --config_path src/lerobot/configs/env_config.json
-   ```
+    ```bash
+    python -m lerobot.rl.gym_manipulator --config_path src/lerobot/configs/env_config.json
+    ```
 
 3. **Train the classifier**:
 
-   ```bash
-   lerobot-train --config_path src/lerobot/configs/reward_classifier_train_config.json
-   ```
+    ```bash
+    lerobot-train --config_path src/lerobot/configs/reward_classifier_train_config.json
+    ```
 
 4. **Test the classifier**:
-   ```bash
-   python -m lerobot.rl.gym_manipulator --config_path src/lerobot/configs/env_config.json
-   ```
+    ```bash
+    python -m lerobot.rl.gym_manipulator --config_path src/lerobot/configs/env_config.json
+    ```
 
 ### Training with Actor-Learner
 
@@ -877,18 +877,19 @@ The training proceeds automatically:
 - A successful experiment is one where the human has to intervene at the start but then reduces the amount of interventions as the policy improves. You can monitor the intervention rate in the `wandb` dashboard.
 
 <p align="center">
-  <img
-    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/hil_effect.png?raw=true"
-    alt="Figure shows the control mappings on a Logitech gamepad."
-    title="Gamepad Control Mapping"
-    width="100%"
-  ></img>
+    <img
+        src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/hil_effect.png?raw=true"
+        alt="Figure shows the control mappings on a Logitech gamepad."
+        title="Gamepad Control Mapping"
+        width="100%"
+    ></img>
 </p>
 
 <p align="center">
-  <i>
-    Example showing how human interventions help guide policy learning over time
-  </i>
+    <i>
+        Example showing how human interventions help guide policy learning over
+        time
+    </i>
 </p>
 
 - The figure shows the plot of the episodic reward over interaction step. The figure shows the effect of human interventions on the policy learning.
@@ -910,19 +911,19 @@ The learning process is very sensitive to the intervention strategy. It will tak
 The ideal behaviour is that your intervention rate should drop gradually during training as shown in the figure below.
 
 <p align="center">
-  <img
-    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/intervention_rate_tutorial_rl.png?raw=true"
-    alt="Intervention rate"
-    title="Intervention rate during training"
-    width="100%"
-  ></img>
+    <img
+        src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/intervention_rate_tutorial_rl.png?raw=true"
+        alt="Intervention rate"
+        title="Intervention rate during training"
+        width="100%"
+    ></img>
 </p>
 
 <p align="center">
-  <i>
-    Plot of the intervention rate during a training run on a pick and lift cube
-    task
-  </i>
+    <i>
+        Plot of the intervention rate during a training run on a pick and lift
+        cube task
+    </i>
 </p>
 
 ### Key hyperparameters to tune

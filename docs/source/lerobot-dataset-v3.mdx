@@ -63,16 +63,16 @@ A core v3 principle is **decoupling storage from the user API**: data is stored 
 > To scale to millions of episodes, tabular rows and video frames from multiple episodes are **concatenated** into larger files. Episode‑specific views are reconstructed **via metadata**, not file boundaries.
 
 <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">
-  <figure style="margin:0; text-align:center;">
-    <img
-      src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobotdataset-v3/asset1datasetv3.png"
-      alt="LeRobotDataset v3 diagram"
-      width="220"
-    />
-    <figcaption style="font-size:0.9em; color:#666;">
-      From episode‑based to file‑based datasets
-    </figcaption>
-  </figure>
+    <figure style="margin:0; text-align:center;">
+        <img
+            src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobotdataset-v3/asset1datasetv3.png"
+            alt="LeRobotDataset v3 diagram"
+            width="220"
+        />
+        <figcaption style="font-size:0.9em; color:#666;">
+            From episode‑based to file‑based datasets
+        </figcaption>
+    </figure>
 </div>
 
 ### Directory layout (simplified)
@@ -143,16 +143,16 @@ dataset = StreamingLeRobotDataset(repo_id)  # streams directly from the Hub
 ```
 
 <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">
-  <figure style="margin:0; text-align:center;">
-    <img
-      src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobotdataset-v3/streaming-lerobot.png"
-      alt="StreamingLeRobotDataset"
-      width="520"
-    />
-    <figcaption style="font-size:0.9em; color:#666;">
-      Stream directly from the Hub for on‑the‑fly training.
-    </figcaption>
-  </figure>
+    <figure style="margin:0; text-align:center;">
+        <img
+            src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobotdataset-v3/streaming-lerobot.png"
+            alt="StreamingLeRobotDataset"
+            width="520"
+        />
+        <figcaption style="font-size:0.9em; color:#666;">
+            Stream directly from the Hub for on‑the‑fly training.
+        </figcaption>
+    </figure>
 </div>
 
 ## Image transforms

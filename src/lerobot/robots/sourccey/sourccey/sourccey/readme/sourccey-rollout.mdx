@@ -1,0 +1,198 @@
+# Sourccey Rollout Commands
+
+These examples mirror the official `lerobot-rollout` inference patterns and adapt them to Sourccey.
+
+Assumptions:
+- Sourccey host process is already running on the robot.
+- You are using the Sourccey client (`--robot.type=sourccey_client`) from the control workstation.
+- Replace `MODEL_PATH` / `HF_MODEL` / `HF_USER` / IP / serial ports with your values.
+
+---
+
+## 1) Quick Start (Base, no recording)
+
+```bash
+uv run lerobot-rollout \
+  --strategy.type=base \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-008/checkpoints/1000000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --task="Fold the shirt" \
+  --display_data=true \
+  --duration=3600 \
+  --fps=30
+```
+
+## 1b) Performance-tuned Base Rollout (Sourccey + XVLA)
+
+If you see repeated warnings like:
+- `Record loop is running slower (...) than target FPS (...)`
+- `No new data available within timeout`
+
+use this profile first:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
+  --strategy.type=base \
+  --inference.type=rtc \
+  --inference.rtc.enabled=false \
+  --inference.rtc.execution_horizon=30 \
+  --interpolation_multiplier=2 \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --robot.polling_timeout_ms=5 \
+  --task="Fold the shirt" \
+  --display_data=false \
+  --duration=1800 \
+  --fps=20 \
+  --device=cuda
+```
+
+Notes:
+- `--inference.type=rtc` enables async inference in a background thread.
+- `--inference.rtc.enabled=false` keeps queue-append mode (useful for policies without RTC overlap kwargs, like XVLA).
+- `--interpolation_multiplier=2` smooths control by emitting interpolated actions between policy outputs.
+- `--robot.polling_timeout_ms=5` reduces blocking when no new observation packet is available.
+- `--display_data=false` removes Rerun visualization overhead from the control loop.
+
+If 20 FPS is stable, try increasing:
+- `--fps=24`, then `--fps=30`
+
+If 30 FPS is still unstable, keep `--fps` near sustained sensor rate and use interpolation for smoother actuation.
+
+---
+
+## 2) Base + RTC (for slower VLA inference)
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
+  --strategy.type=base \
+  --inference.type=rtc \
+  --inference.rtc.execution_horizon=10 \
+  --inference.rtc.max_guidance_weight=10.0 \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --task="Fold the shirt" \
+  --duration=60 \
+  --fps=30 \
+  --device=cuda
+```
+
+---
+
+## 3) Sentry Strategy (continuous recording + periodic upload)
+
+```bash
+uv run lerobot-rollout \
+  --strategy.type=sentry \
+  --strategy.upload_every_n_episodes=5 \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --dataset.repo_id="sourccey-013/rollout_sourccey_sentry/sentry-000" \
+  --dataset.single_task="Fold the shirt" \
+  --dataset.streaming_encoding=true \
+  --duration=3600 \
+  --fps=30 \
+  --dataset.push_to_hub=false
+```
+
+---
+
+## 4) Highlight Strategy (save on demand)
+
+Keyboard:
+- `s` start/stop saved segment
+- `h` push dataset to hub
+- `ESC` stop
+
+```bash
+uv run lerobot-rollout \
+  --strategy.type=highlight \
+  --strategy.ring_buffer_seconds=30 \
+  --strategy.save_key=s \
+  --strategy.push_key=h \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --dataset.repo_id="sourccey-013/rollout_sourccey_highlight/highlight-000" \
+  --dataset.single_task="Fold the shirt" \
+  --fps=30
+```
+
+---
+
+## 5) DAgger (human-in-the-loop with Sourccey leader)
+
+Corrections-only mode:
+
+```bash
+uv run lerobot-rollout \
+  --strategy.type=dagger \
+  --strategy.num_episodes=1 \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --teleop.type=bi_sourccey_leader \
+  --teleop.left_arm_port=/dev/ttyACM0 \
+  --teleop.right_arm_port=/dev/ttyACM1 \
+  --dataset.repo_id="sourccey-013/rollout__sourccey-013__shirt-fold-light-blue-c/nickm/dagger-000-nickm" \
+  --dataset.single_task="Fold the shirt" \
+  --fps=30 \
+  --display_data=true \
+  --dataset.push_to_hub=false
+```
+
+Continuous mode (`record_autonomous=true`):
+
+```bash
+uv run lerobot-rollout \
+  --strategy.type=dagger \
+  --strategy.record_autonomous=true \
+  --strategy.num_episodes=50 \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --teleop.type=bi_sourccey_leader \
+  --teleop.left_arm_port=/dev/t     tyACM0 \
+  --teleop.right_arm_port=/dev/ttyACM1 \
+  --dataset.repo_id="sourccey-013/rollout__sourccey-013__shirt-fold-light-blue-c/nickm/continuous-dagger-000-nickm" \
+  --dataset.single_task="Fold the shirt" \
+  --dataset.streaming_encoding=true \
+  --display_data=true \
+  --fps=30 \
+  --dataset.push_to_hub=false
+```
+
+---
+
+## 6) Sourccey-specific helper script (base rollout only)
+
+If you want to use the Sourccey wrapper script added in this repo:
+
+```bash
+uv run python src/lerobot/control/sourccey/sourccey/rollout.py \
+  --remote_ip=192.168.1.212 \
+  --model_path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+  --task="Fold the shirt" \
+  --duration=300 \
+  --fps=30 \
+  --inference_type=sync
+```
+
+RTC with wrapper:
+
+```bash
+uv run python src/lerobot/control/sourccey/sourccey/rollout.py \
+  --remote_ip=192.168.1.212 \
+  --model_path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+  --task="Fold the shirt" \
+  --duration=300 \
+  --fps=30 \
+  --inference_type=rtc \
+  --rtc.execution_horizon=10 \
+  --rtc.max_guidance_weight=10.0 \
+  --rtc.queue_threshold=30
+```

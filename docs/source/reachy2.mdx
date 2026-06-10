@@ -68,8 +68,8 @@ docker run --rm -it \
 ### Prerequisites
 
 - On your robot, check the **service images** meet the minimum versions:
-  - **reachy2-core >= 1.7.5.2**
-  - **webrtc >= 2.0.1.1**
+    - **reachy2-core >= 1.7.5.2**
+    - **webrtc >= 2.0.1.1**
 
 Then, if you want to use VR teleoperation:
 
@@ -161,7 +161,7 @@ lerobot-record \
     --dataset.private=true \
     --dataset.streaming_encoding=true \
     --dataset.encoder_threads=2 \
-    # --dataset.camera_encoder.vcodec=auto \
+    # --dataset.vcodec=auto \
     --display_data=true
 ```
 
@@ -203,7 +203,7 @@ lerobot-record \
     --dataset.private=true \
     --dataset.streaming_encoding=true \
     --dataset.encoder_threads=2 \
-    # --dataset.camera_encoder.vcodec=auto \
+    # --dataset.vcodec=auto \
     --display_data=true
 ```
 

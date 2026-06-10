@@ -385,6 +385,7 @@ def test_finalize_flushes_buffered_metadata(tmp_path):
     assert episodes_dir.exists()
     parquet_files = list(episodes_dir.rglob("*.parquet"))
     assert len(parquet_files) > 0
+<<<<<<< HEAD
 
 
 # ── Tools accessor ───────────────────────────────────────────────────
@@ -522,3 +523,6 @@ def test_tools_setter_clears_key_when_set_to_none(tmp_path):
     with open(root / INFO_PATH) as f:
         info_on_disk = json.load(f)
     assert "tools" not in info_on_disk
+||||||| 5286ef843
+=======
+>>>>>>> origin/vulcan-main
