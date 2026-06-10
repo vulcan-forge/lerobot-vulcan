@@ -108,8 +108,8 @@ dataset = [
     # Each platform gets its own line so the resolver picks the minimum version that has a wheel for it.
 
     # Other torch/torchcodec pairings (informational): 0.8.1 = ffmpeg>=8 support, 0.10 = system-wide ffmpeg support, 0.12 needs torch==2.12.
-    "torchcodec>=0.3.0,<0.12.0; (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64')",
-    "torchcodec>=0.7.0,<0.12.0; sys_platform == 'win32'",
+    "torchcodec>=0.9.1,<0.12.0; (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+    "torchcodec>=0.9.1,<0.12.0; sys_platform == 'win32'",
     "torchcodec>=0.11.0,<0.12.0; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64')",
     "jsonlines>=4.0.0,<5.0.0",
 ]
@@ -215,7 +215,9 @@ sourccey-desktop = [
 
     "torch==2.9.1",
     "torchvision>=0.24.1",
-    "torchcodec==0.9.1",
+    "torchcodec>=0.9.1,<0.12.0; (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+    "torchcodec>=0.9.1,<0.12.0; sys_platform == 'win32'",
+    "torchcodec>=0.11.0,<0.12.0; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64')",
 
     # Audio
     # Pin known-good CUDA/cuDNN stack for Windows GPU Whisper.
@@ -381,8 +383,12 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv.sources]
-torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
-torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+torch = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and platform_machine == 'x86_64')" }
+]
+torchvision = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and platform_machine == 'x86_64')" }
+]
 
 [tool.setuptools.package-data]
 lerobot = ["envs/*.json"]
@@ -572,15 +578,6 @@ ignore_errors = false
 # [[tool.mypy.overrides]]
 # module = "lerobot.scripts.*"
 # ignore_errors = false
-
-# Custom tools
-[tool.uv.sources]
-torch = [
-  { index = "pytorch-cu130", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and platform_machine == 'x86_64')" }
-]
-torchvision = [
-  { index = "pytorch-cu130", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and platform_machine == 'x86_64')" }
-]
 
 [[tool.uv.index]]
 name = "pytorch-cu130"

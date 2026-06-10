@@ -22,13 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
-<<<<<<< HEAD
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
-||||||| 5286ef843
-from lerobot.rl.process import ProcessSignalHandler
-=======
-pytest.importorskip("grpc")
->>>>>>> origin/vulcan-main
 
 from lerobot.utils.process import ProcessSignalHandler  # noqa: E402
 

@@ -320,7 +320,6 @@ class GymHILAdapterProcessorStep(ProcessorStep):
     This step normalizes the `transition` object by:
     1. Copying `teleop_action` from `info` to `complementary_data`.
     2. Copying `is_intervention` from `info` (using the string key) to `info` (using the enum key).
-<<<<<<< HEAD
     3. Copying `discrete_penalty` from `info` to `complementary_data`.
     """
 
@@ -333,17 +332,6 @@ class GymHILAdapterProcessorStep(ProcessorStep):
 
         if DISCRETE_PENALTY_KEY in info:
             complementary_data[DISCRETE_PENALTY_KEY] = info[DISCRETE_PENALTY_KEY]
-||||||| 5286ef843
-=======
-    """
-
-    def __call__(self, transition: EnvTransition) -> EnvTransition:
-        info = transition.get(TransitionKey.INFO, {})
-        complementary_data = transition.get(TransitionKey.COMPLEMENTARY_DATA, {})
-
-        if TELEOP_ACTION_KEY in info:
-            complementary_data[TELEOP_ACTION_KEY] = info[TELEOP_ACTION_KEY]
->>>>>>> origin/vulcan-main
 
         if "is_intervention" in info:
             info[TeleopEvents.IS_INTERVENTION] = info["is_intervention"]

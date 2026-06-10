@@ -20,7 +20,6 @@ import pytest
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
 
 from lerobot.datasets.dataset_reader import DatasetReader
-<<<<<<< HEAD
 from lerobot.utils.import_utils import get_safe_default_video_backend
 
 # ── Loading ──────────────────────────────────────────────────────────
@@ -60,48 +59,6 @@ def test_try_load_returns_false_when_no_data(tmp_path):
         episodes=None,
         tolerance_s=1e-4,
         video_backend=get_safe_default_video_backend(),
-||||||| 5286ef843
-=======
-from lerobot.utils.import_utils import get_safe_default_codec
-
-# ── Loading ──────────────────────────────────────────────────────────
-
-
-def test_try_load_returns_true_when_data_exists(tmp_path, lerobot_dataset_factory):
-    """Given a fully written dataset, try_load() returns True."""
-    dataset = lerobot_dataset_factory(
-        root=tmp_path / "ds", total_episodes=2, total_frames=20, use_videos=False
-    )
-    reader = DatasetReader(
-        meta=dataset.meta,
-        root=dataset.root,
-        episodes=None,
-        tolerance_s=1e-4,
-        video_backend=get_safe_default_codec(),
-        delta_timestamps=None,
-        image_transforms=None,
-    )
-    assert reader.try_load() is True
-    assert reader.hf_dataset is not None
-
-
-def test_try_load_returns_false_when_no_data(tmp_path):
-    """When only metadata exists (no data/ parquets), try_load() returns False."""
-    from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
-
-    root = tmp_path / "meta_only"
-    features = {"state": {"dtype": "float32", "shape": (2,), "names": None}}
-    meta = LeRobotDatasetMetadata.create(
-        repo_id="test/meta_only", fps=30, features=features, root=root, use_videos=False
-    )
-
-    reader = DatasetReader(
-        meta=meta,
-        root=meta.root,
-        episodes=None,
-        tolerance_s=1e-4,
-        video_backend=get_safe_default_codec(),
->>>>>>> origin/vulcan-main
         delta_timestamps=None,
         image_transforms=None,
     )

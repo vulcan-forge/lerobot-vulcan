@@ -22,11 +22,7 @@ import pytest
 import torch
 
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
-<<<<<<< HEAD
 pytest.importorskip("grpc")
-||||||| 5286ef843
-=======
->>>>>>> origin/vulcan-main
 
 from torch.multiprocessing import Event, Queue
 

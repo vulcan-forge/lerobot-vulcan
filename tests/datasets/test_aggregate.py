@@ -14,14 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-<<<<<<< HEAD
 import json
 import logging
-||||||| 5286ef843
-=======
-from pathlib import Path
-from tempfile import TemporaryDirectory
->>>>>>> origin/vulcan-main
 from unittest.mock import patch
 
 import pytest
