@@ -133,6 +133,7 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
+from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import SourcceyClientConfig  # noqa: F401
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
@@ -152,6 +153,12 @@ from lerobot.teleoperators import (  # noqa: F401
     unitree_g1,
 )
 from lerobot.teleoperators.keyboard import KeyboardTeleop
+from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourccey_leader import (  # noqa: F401
+    BiSourcceyLeaderConfig,
+)
+from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.config_sourccey_leader import (  # noqa: F401
+    SourcceyLeaderConfig,
+)
 from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.feature_utils import build_dataset_frame, combine_feature_dicts
 from lerobot.utils.import_utils import register_third_party_plugins
@@ -169,6 +176,9 @@ class RecordConfig:
     dataset: DatasetRecordConfig
     # Teleoperator to control the robot (required)
     teleop: TeleoperatorConfig | None = None
+    # Optional keyboard teleoperator to combine with the main teleop.
+    # Useful for robots that split arm/base control, such as sourccey_client.
+    teleop_keyboard: TeleoperatorConfig | None = None
     # Display all cameras on screen
     display_data: bool = False
     # Display data on a remote Rerun server
@@ -189,6 +199,33 @@ class RecordConfig:
                 "Use --teleop.type=... to specify one. "
                 "For policy-based deployment, use lerobot-rollout instead."
             )
+
+
+def connect_keyboard(teleop_keyboard: KeyboardTeleop) -> bool:
+    try:
+        teleop_keyboard.connect()
+        return True
+    except Exception as exc:
+        logging.warning(
+            "Keyboard teleop connect failed (%s). Continuing without keyboard base control.",
+            exc,
+        )
+        return False
+
+
+def _get_keyboard_base_action(
+    robot: Robot, obs: RobotObservation, teleop_keyboard: KeyboardTeleop | None
+) -> RobotAction:
+    if teleop_keyboard is None or not teleop_keyboard.is_connected:
+        return {}
+
+    keyboard_action = teleop_keyboard.get_action()
+    z_pos = obs.get("z.pos")
+
+    if z_pos is not None and isinstance(z_pos, int | float):
+        return robot._from_keyboard_to_base_action(keyboard_action, z_pos)
+
+    return robot._from_keyboard_to_base_action(keyboard_action)
 
 
 """ --------------- record_loop() data flow --------------------------
@@ -233,6 +270,7 @@ def record_loop(
     ],  # runs after robot
     dataset: LeRobotDataset | None = None,
     teleop: Teleoperator | list[Teleoperator] | None = None,
+    teleop_keyboard: KeyboardTeleop | None = None,
     control_time_s: int | None = None,
     single_task: str | None = None,
     display_data: bool = False,
@@ -292,6 +330,9 @@ def record_loop(
             act = teleop.get_action()
             if robot.name == "unitree_g1":
                 teleop.send_feedback(obs)
+            base_action = _get_keyboard_base_action(robot, obs, teleop_keyboard)
+            if base_action:
+                act = {**act, **base_action}
 
             # Applies a pipeline to the raw teleop action, default is IdentityProcessor
             act_processed_teleop = teleop_action_processor((act, obs))
@@ -464,6 +505,7 @@ def record(
                     robot_action_processor=robot_action_processor,
                     robot_observation_processor=robot_observation_processor,
                     teleop=teleop,
+                    teleop_keyboard=teleop_keyboard if keyboard_connected else None,
                     dataset=dataset,
                     control_time_s=cfg.dataset.episode_time_s,
                     single_task=cfg.dataset.single_task,

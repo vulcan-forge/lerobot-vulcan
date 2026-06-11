@@ -169,6 +169,7 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
+from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import SourcceyClientConfig  # noqa: F401
 from lerobot.rollout import RolloutConfig, build_rollout_context, create_strategy
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -185,6 +186,12 @@ from lerobot.teleoperators import (  # noqa: F401
     rebot_102_leader,
     so_leader,
     unitree_g1,
+)
+from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourccey_leader import (  # noqa: F401
+    BiSourcceyLeaderConfig,
+)
+from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.config_sourccey_leader import (  # noqa: F401
+    SourcceyLeaderConfig,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.process import ProcessSignalHandler

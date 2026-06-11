@@ -11,27 +11,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_PARENTS = [
-    "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-006",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-005",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-006",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-007",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-008",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-009",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-010",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set000_nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set001_nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set002_nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set003_nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set004_nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set005_nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set006_nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set007_nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set008_nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set009_nickm",
-    "/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-light-blue-c/sourccey-013__shirt-fold-light-blue-c__set010_nickm",
+    "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-008",
+    '/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-a/sourccey-013__shirt-fold-blue-a__set005__nickm',
+    '/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-a/sourccey-013__shirt-fold-blue-a__set006__nickm',
+    '/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-a/sourccey-013__shirt-fold-blue-a__set007__nickm',
+    '/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-011',
+    '/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-012'
 ]
 HF_LEROBOT_HOME = Path("/home/sourccey/.cache/huggingface/lerobot")
-DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-008"
+DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-009"
 
 
 @dataclass(frozen=True)
