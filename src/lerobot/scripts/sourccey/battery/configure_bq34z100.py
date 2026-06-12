@@ -427,6 +427,16 @@ def wait_for_update_status(
     return last_value
 
 
+def control_status_qen_enabled(control_status: int) -> bool:
+    return bool(int(control_status) & 0x0001)
+
+
+def update_status_indicates_learning_started(update_status: int) -> bool:
+    # Accept exact 0x04 as the fresh IT_ENABLE transition, and also tolerate
+    # later progress values where that bit remains set (for example 0x06).
+    return bool(int(update_status) & 0x04)
+
+
 def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
     maybe_unseal(gauge, args, writing=True)
 
@@ -540,20 +550,32 @@ def cmd_setup_4s_lifepo4(gauge: BQ34Z100R2, args: argparse.Namespace) -> int:
             )
 
     if args.enable_it and not args.dry_run:
-        print("Sending IT_ENABLE (0x0021) to start learning.")
-        gauge.send_control_subcmd(CTRL_IT_ENABLE)
-        if args.verify_update_status:
-            observed_update_status = wait_for_update_status(
-                gauge=gauge,
-                expected_value=0x04,
-                timeout_s=args.update_status_timeout_s,
+        initial_control_status = gauge.read_control_subcmd(CTRL_CONTROL_STATUS)
+        initial_update_status = gauge.read_field(FIELDS["update_status"])
+
+        if control_status_qen_enabled(initial_control_status):
+            print(
+                "Skipping IT_ENABLE because QEN is already set "
+                f"(ControlStatus=0x{initial_control_status:04X}, UpdateStatus=0x{initial_update_status:02X})."
             )
-            if observed_update_status != 0x04:
-                raise RuntimeError(
-                    "Expected UpdateStatus=0x04 after IT_ENABLE but observed "
-                    f"0x{observed_update_status:02X}. Check gauge state and learning preconditions."
+        else:
+            print("Sending IT_ENABLE (0x0021) to start learning.")
+            gauge.send_control_subcmd(CTRL_IT_ENABLE)
+            if args.verify_update_status:
+                observed_update_status = wait_for_update_status(
+                    gauge=gauge,
+                    expected_value=0x04,
+                    timeout_s=args.update_status_timeout_s,
                 )
-            print("Learning start confirmed: UpdateStatus=0x04.")
+                if not update_status_indicates_learning_started(observed_update_status):
+                    raise RuntimeError(
+                        "Expected UpdateStatus to indicate learning start after IT_ENABLE but observed "
+                        f"0x{observed_update_status:02X}. Check gauge state and learning preconditions."
+                    )
+                if observed_update_status == 0x04:
+                    print("Learning start confirmed: UpdateStatus=0x04.")
+                else:
+                    print(f"Learning state accepted: UpdateStatus=0x{observed_update_status:02X}.")
     elif args.verify_update_status and not args.dry_run:
         print("Skipping UpdateStatus verification because --enable-it is disabled.")
 
