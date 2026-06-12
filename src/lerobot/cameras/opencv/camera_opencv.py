@@ -190,6 +190,13 @@ class OpenCVCamera(Camera):
             self._release_videocapture()
             raise
 
+    def _release_videocapture(self) -> None:
+        if self.videocapture is None:
+            return
+
+        self.videocapture.release()
+        self.videocapture = None
+
     def _reconnect_videocapture(self, reason: Exception) -> bool:
         if not self.auto_reconnect:
             return False
