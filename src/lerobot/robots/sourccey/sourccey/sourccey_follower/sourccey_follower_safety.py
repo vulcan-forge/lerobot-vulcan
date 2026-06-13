@@ -27,12 +27,12 @@ class SourcceyFollowerSafety:
         "gripper": 15.0,
     }
     DEFAULT_CURRENT_LIMITS = {
-        "shoulder_pan": 150,
-        "shoulder_lift": 300,
-        "elbow_flex": 300,
-        "wrist_flex": 150,
-        "wrist_roll": 150,
-        "gripper": 50,
+        "shoulder_pan": 37.5,
+        "shoulder_lift": 75.0,
+        "elbow_flex": 75.0,
+        "wrist_flex": 37.5,
+        "wrist_roll": 37.5,
+        "gripper": 12.5,
     }
 
     def __init__(self, robot: "SourcceyFollower"):
