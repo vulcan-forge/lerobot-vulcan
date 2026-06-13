@@ -63,7 +63,7 @@ class SourcceyFollower(Robot):
             robot=self
         )
         self.safety = SourcceyFollowerSafety(
-            robot=self
+            robot = self
         )
 
         # Track last warning time for throttling
@@ -263,7 +263,7 @@ class SourcceyFollower(Robot):
                 goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
             # If a joint is already over current, avoid commanding it deeper into the obstruction.
-            goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)
+            #goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)
 
             # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)
