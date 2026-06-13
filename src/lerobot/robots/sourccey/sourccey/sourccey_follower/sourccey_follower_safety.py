@@ -27,12 +27,12 @@ class SourcceyFollowerSafety:
         "gripper": 15.0,
     }
     DEFAULT_CURRENT_LIMITS = {
-        "shoulder_pan": 900,
-        "shoulder_lift": 1800,
-        "elbow_flex": 1800,
-        "wrist_flex": 900,
-        "wrist_roll": 900,
-        "gripper": 300,
+        "shoulder_pan": 600,
+        "shoulder_lift": 1200,
+        "elbow_flex": 1200,
+        "wrist_flex": 600,
+        "wrist_roll": 600,
+        "gripper": 200,
     }
 
     def __init__(self, robot: "SourcceyFollower"):
@@ -150,7 +150,6 @@ class SourcceyFollowerSafety:
                 return float(current), False
             except Exception as e:
                 if "Overload error" in str(e):
-                    logger.warning("Detected overload for %s while reading current.", motor_name)
                     return float("inf"), True
 
                 if attempt == max_retries:
