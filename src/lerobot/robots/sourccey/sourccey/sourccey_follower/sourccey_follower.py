@@ -262,6 +262,10 @@ class SourcceyFollower(Robot):
                 goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
                 goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
+            # Observe when large jumps or startup transitions would trigger slow stepping.
+            # This is log-only for now so we can validate the trigger before changing motion behavior.
+            _ = self.safety.should_use_step_safety(goal_pos, present_pos)
+
             # If a joint is already over current, avoid commanding it deeper into the obstruction.
             #goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)
 
