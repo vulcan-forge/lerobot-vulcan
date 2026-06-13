@@ -266,6 +266,11 @@ class SourcceyFollower(Robot):
             # This is log-only for now so we can validate the trigger before changing motion behavior.
             _ = self.safety.should_use_step_safety(goal_pos, present_pos)
 
+            # Observe when a motor is over current or overloaded.
+            # This is log-only for now so we can validate the trigger before changing motion behavior.
+            overcurrent_motors = self.safety.detect_overcurrent_motors()
+            self.safety.log_overcurrent_motors(overcurrent_motors)
+
             # If a joint is already over current, avoid commanding it deeper into the obstruction.
             #goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)
 

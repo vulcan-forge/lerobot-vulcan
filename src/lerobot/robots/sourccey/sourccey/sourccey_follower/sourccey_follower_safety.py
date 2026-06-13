@@ -40,6 +40,7 @@ class SourcceyFollowerSafety:
         self._last_goal_pos: dict[str, float] = {}
         self._action_stream_start_time: float | None = None
         self._step_safety_log_active = False
+        self._overcurrent_log_active = False
 
     def remember_goal(self, goal_pos: dict[str, float]) -> None:
         """Store the most recent commanded goal so we can infer blocked direction next frame."""
@@ -114,6 +115,22 @@ class SourcceyFollowerSafety:
                 overcurrent_motors[motor_name] = current
 
         return overcurrent_motors
+
+    def log_overcurrent_motors(self, overcurrent_motors: dict[str, float]) -> None:
+        """Log overcurrent state once per active event so runtime tests do not spam."""
+        is_active = bool(overcurrent_motors)
+        if is_active and not self._overcurrent_log_active:
+            formatted = {
+                motor_name: ("overload" if current == float("inf") else round(current, 2))
+                for motor_name, current in overcurrent_motors.items()
+            }
+            logger.warning(
+                "Overcurrent trigger for %s arm: %s",
+                self.robot.config.orientation,
+                formatted,
+            )
+
+        self._overcurrent_log_active = is_active
 
     def _read_current_state(
         self,
