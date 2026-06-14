@@ -1,24 +1,13 @@
 import logging
 import time
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower import SourcceyFollower
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 class SourcceyFollowerSafety:
     STEP_SAFETY_STARTUP_WINDOW_S = 3.0
-    STEP_SAFETY_DELTA_THRESHOLDS_DEGREES = {
-        "shoulder_pan": 20.0,
-        "shoulder_lift": 20.0,
-        "elbow_flex": 20.0,
-        "wrist_flex": 15.0,
-        "wrist_roll": 20.0,
-        "gripper": 15.0,
-    }
-    STEP_SAFETY_DELTA_THRESHOLDS_NORMALIZED = {
+    STEP_SAFETY_DELTA_THRESHOLDS = {
         "shoulder_pan": 15.0,
         "shoulder_lift": 15.0,
         "elbow_flex": 15.0,
@@ -26,22 +15,31 @@ class SourcceyFollowerSafety:
         "wrist_roll": 15.0,
         "gripper": 15.0,
     }
-    DEFAULT_CURRENT_LIMITS = {
-        "shoulder_pan": 37.5,
-        "shoulder_lift": 75.0,
-        "elbow_flex": 75.0,
-        "wrist_flex": 37.5,
-        "wrist_roll": 37.5,
-        "gripper": 12.5,
+    DEFAULT_STEP_CURRENT_LIMITS = {
+        "shoulder_pan": 50.0,
+        "shoulder_lift": 90.0,
+        "elbow_flex": 90.0,
+        "wrist_flex": 50.0,
+        "wrist_roll": 50.0,
+        "gripper": 15.0,
+    }
+    DEFAULT_REVERSE_CURRENT_LIMITS = {
+        "shoulder_pan": 100.0,
+        "shoulder_lift": 180.0,
+        "elbow_flex": 180.0,
+        "wrist_flex": 100.0,
+        "wrist_roll": 100.0,
+        "gripper": 30.0,
     }
 
-    def __init__(self, robot: "SourcceyFollower"):
+    def __init__(self, robot: Any):
         self.robot = robot
         self._last_goal_pos: dict[str, float] = {}
         self._action_stream_start_time: float | None = None
         self._step_safety_log_active = False
         self._last_overcurrent_log_time = 0.0
         self._overcurrent_log_interval_s = 0.25
+        self._last_step_current_log_time = 0.0
 
     def remember_goal(self, goal_pos: dict[str, float]) -> None:
         """Store the most recent commanded goal so we can infer blocked direction next frame."""
@@ -58,18 +56,13 @@ class SourcceyFollowerSafety:
             self._action_stream_start_time = now
 
         startup_active = (now - self._action_stream_start_time) <= self.STEP_SAFETY_STARTUP_WINDOW_S
-        thresholds = (
-            self.STEP_SAFETY_DELTA_THRESHOLDS_DEGREES
-            if self.robot.config.use_degrees
-            else self.STEP_SAFETY_DELTA_THRESHOLDS_NORMALIZED
-        )
 
         large_deltas: dict[str, dict[str, float]] = {}
         for motor_name, target_pos in goal_pos.items():
             if motor_name not in present_pos:
                 continue
 
-            threshold = thresholds.get(motor_name, 15.0)
+            threshold = self.STEP_SAFETY_DELTA_THRESHOLDS.get(motor_name, 15.0)
             delta = abs(float(target_pos) - float(present_pos[motor_name]))
             if delta >= threshold:
                 large_deltas[motor_name] = {
@@ -94,8 +87,16 @@ class SourcceyFollowerSafety:
         self._step_safety_log_active = should_use
         return should_use
 
+    def detect_step_current_motors(self) -> dict[str, float]:
+        """Return motors that have crossed the lower threshold for slow-motion mode."""
+        return self._detect_current_threshold_motors(self.DEFAULT_STEP_CURRENT_LIMITS)
+
     def detect_overcurrent_motors(self) -> dict[str, float]:
-        """Return motors that are currently over their runtime current threshold."""
+        """Return motors that have crossed the higher threshold for reverse/stop behavior."""
+        return self._detect_current_threshold_motors(self.DEFAULT_REVERSE_CURRENT_LIMITS)
+
+    def _detect_current_threshold_motors(self, default_limits: dict[str, float]) -> dict[str, float]:
+        """Return motors that are currently over a supplied current threshold map."""
         overcurrent_motors: dict[str, float] = {}
 
         for motor_name in self.robot.bus.motors:
@@ -107,7 +108,7 @@ class SourcceyFollowerSafety:
             if motor_name == "gripper" and self.robot.config.gripper_current_safety_threshold is not None:
                 current_limit = self.robot.config.gripper_current_safety_threshold
             else:
-                current_limit = self.DEFAULT_CURRENT_LIMITS.get(
+                current_limit = default_limits.get(
                     motor_name,
                     self.robot.config.max_current_safety_threshold,
                 )
@@ -117,25 +118,44 @@ class SourcceyFollowerSafety:
 
         return overcurrent_motors
 
+    def log_step_current_motors(self, step_current_motors: dict[str, float]) -> None:
+        """Log the lower slow-motion current threshold periodically while active."""
+        self._log_current_threshold_motors(
+            step_current_motors,
+            label="Step-current trigger",
+            last_log_attr="_last_step_current_log_time",
+        )
+
     def log_overcurrent_motors(self, overcurrent_motors: dict[str, float]) -> None:
-        """Log overcurrent state periodically while active so current can be tested live."""
-        if not overcurrent_motors:
+        """Log the higher reverse/stop current threshold periodically while active."""
+        self._log_current_threshold_motors(
+            overcurrent_motors,
+            label="Overcurrent trigger",
+            last_log_attr="_last_overcurrent_log_time",
+        )
+
+    def _log_current_threshold_motors(
+        self,
+        motors: dict[str, float],
+        *,
+        label: str,
+        last_log_attr: str,
+    ) -> None:
+        """Shared throttled logger for current-threshold events."""
+        if not motors:
             return
 
         now = time.monotonic()
-        if now - self._last_overcurrent_log_time < self._overcurrent_log_interval_s:
+        last_log_time = float(getattr(self, last_log_attr))
+        if now - last_log_time < self._overcurrent_log_interval_s:
             return
 
         formatted = {
             motor_name: ("overload" if current == float("inf") else round(current, 2))
-            for motor_name, current in overcurrent_motors.items()
+            for motor_name, current in motors.items()
         }
-        logger.warning(
-            "Overcurrent trigger for %s arm: %s",
-            self.robot.config.orientation,
-            formatted,
-        )
-        self._last_overcurrent_log_time = now
+        logger.warning("%s for %s arm: %s", label, self.robot.config.orientation, formatted)
+        setattr(self, last_log_attr, now)
 
     def _read_current_state(
         self,

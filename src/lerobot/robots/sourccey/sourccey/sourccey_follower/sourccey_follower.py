@@ -214,8 +214,9 @@ class SourcceyFollower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        # Test for overcurrent conditions
-        # Will remove log later
+        step_current_motors = self.safety.detect_step_current_motors()
+        self.safety.log_step_current_motors(step_current_motors)
+
         overcurrent_motors = self.safety.detect_overcurrent_motors()
         self.safety.log_overcurrent_motors(overcurrent_motors)
 
@@ -273,6 +274,9 @@ class SourcceyFollower(Robot):
 
             # Observe when a motor is over current or overloaded.
             # This is log-only for now so we can validate the trigger before changing motion behavior.
+            step_current_motors = self.safety.detect_step_current_motors()
+            self.safety.log_step_current_motors(step_current_motors)
+
             overcurrent_motors = self.safety.detect_overcurrent_motors()
             self.safety.log_overcurrent_motors(overcurrent_motors)
 
