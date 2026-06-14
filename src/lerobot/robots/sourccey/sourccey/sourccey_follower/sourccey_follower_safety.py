@@ -18,18 +18,18 @@ class SourcceyFollowerSafety:
     DEFAULT_STEP_CURRENT_LIMITS = {
         "shoulder_pan": 50.0,
         "shoulder_lift": 120.0,
-        "elbow_flex": 60.0,
+        "elbow_flex": 70.0,
         "wrist_flex": 30.0,
         "wrist_roll": 30.0,
         "gripper": 20.0,
     }
     DEFAULT_REVERSE_CURRENT_LIMITS = {
         "shoulder_pan": 80.0,
-        "shoulder_lift": 200.0,
-        "elbow_flex": 100.0,
-        "wrist_flex": 50.0,
-        "wrist_roll": 50.0,
-        "gripper": 30.0,
+        "shoulder_lift": 192.0,
+        "elbow_flex": 112.0,
+        "wrist_flex": 48.0,
+        "wrist_roll": 48.0,
+        "gripper": 32.0,
     }
 
     def __init__(self, robot: Any):
