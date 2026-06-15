@@ -30,7 +30,7 @@ class SourcceyFollowerSafety:
         "elbow_flex": 70.0,
         "wrist_flex": 30.0,
         "wrist_roll": 30.0,
-        "gripper": 30.0,
+        "gripper": 35.0,
     }
     DEFAULT_REVERSE_CURRENT_LIMITS = {
         "shoulder_pan": 80.0,
@@ -38,7 +38,7 @@ class SourcceyFollowerSafety:
         "elbow_flex": 112.0,
         "wrist_flex": 48.0,
         "wrist_roll": 48.0,
-        "gripper": 48.0,
+        "gripper": 52.0,
     }
 
     def __init__(self, robot: Any):
