@@ -63,7 +63,7 @@ class SourcceyFollower(Robot):
             robot=self
         )
         self.safety = SourcceyFollowerSafety(
-            robot=self
+            robot = self
         )
 
         # Track last warning time for throttling
@@ -214,6 +214,9 @@ class SourcceyFollower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
+        overcurrent_motors = self.safety.detect_overcurrent_motors()
+        self.safety.log_overcurrent_motors(overcurrent_motors)
+
         # Read arm position
         start = time.perf_counter()
         obs_dict = self.bus.sync_read("Present_Position")
@@ -247,6 +250,7 @@ class SourcceyFollower(Robot):
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
+        requested_goal_pos = goal_pos.copy()
         present_pos: dict[str, float] | None = None
 
         try:
@@ -256,18 +260,11 @@ class SourcceyFollower(Robot):
                 logger.warning("NaN values detected in goal positions. Skipping action execution.")
                 return {f"{motor}.pos": val for motor, val in present_pos.items()}
 
-            # Cap goal position when too far away from present position.
-            # /!\ Slower fps expected due to reading from the follower.
-            if self.config.max_relative_target is not None:
-                goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
-                goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
-
-            # If a joint is already over current, avoid commanding it deeper into the obstruction.
-            goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)
+            goal_pos = self._apply_runtime_safety(goal_pos, present_pos)
 
             # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)
-            self.safety.remember_goal(goal_pos)
+            self.safety.remember_goal(requested_goal_pos)
             return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
         except ConnectionError as e:
@@ -279,4 +276,41 @@ class SourcceyFollower(Robot):
             # Return present position instead of goal position when write fails
             fallback_pos = present_pos if present_pos is not None else goal_pos
             return {f"{motor}.pos": val for motor, val in fallback_pos.items()}
+
+    ###################################################################
+    # Safety Management
+    ###################################################################
+    def _apply_runtime_safety(
+        self,
+        goal_pos: dict[str, float],
+        present_pos: dict[str, float],
+    ) -> dict[str, float]:
+        """Run the follower's runtime safety pipeline before writing goal positions."""
+        # First safety layer: if a very large target jump is configured as unsafe globally,
+        # clamp that jump before we consider any current-based slow-motion logic.
+        if self.config.max_relative_target is not None:
+            goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
+            goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
+
+        # Second safety layer: only keep the low-threshold current trigger active when a
+        # joint is both under load and still meaningfully moving toward its target.
+        # This lets the robot return to normal motion once it has settled at position.
+        step_current_motors = self.safety.detect_active_step_current_motors(goal_pos, present_pos)
+        self.safety.log_step_current_motors(step_current_motors)
+
+        # Slow-step mode is enabled for two cases:
+        # - startup / large action jumps, which are the main slam-risk transitions
+        # - low-threshold current events, which indicate the joint is already loaded
+        use_step_safety = self.safety.should_use_step_safety(goal_pos, present_pos)
+        if use_step_safety or step_current_motors:
+            goal_pos = self.safety.apply_step_safety(goal_pos, present_pos)
+
+        # Third safety layer: the higher current threshold is a stronger intervention.
+        # Once a joint crosses it, we stop accepting deeper motion for that joint and
+        # hold that joint in place until the overload clears or the command backs away.
+        overcurrent_motors = self.safety.detect_overcurrent_motors()
+        self.safety.log_overcurrent_motors(overcurrent_motors)
+        goal_pos = self.safety.apply_overcurrent_hold(goal_pos, present_pos, overcurrent_motors)
+
+        return goal_pos
 
