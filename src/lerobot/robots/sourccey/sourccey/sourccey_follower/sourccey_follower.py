@@ -307,11 +307,10 @@ class SourcceyFollower(Robot):
 
         # Third safety layer: the higher current threshold is a stronger intervention.
         # Once a joint crosses it, we stop accepting deeper motion for that joint and
-        # command a small retreat to reduce torque instead.
+        # hold that joint in place until the overload clears or the command backs away.
         overcurrent_motors = self.safety.detect_overcurrent_motors()
         self.safety.log_overcurrent_motors(overcurrent_motors)
-        goal_pos = self.safety.apply_overcurrent_retreat(goal_pos, present_pos, overcurrent_motors)
-        self.safety.remember_present(present_pos)
+        goal_pos = self.safety.apply_overcurrent_hold(goal_pos, present_pos, overcurrent_motors)
 
         return goal_pos
 
