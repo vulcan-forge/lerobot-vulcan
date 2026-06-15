@@ -6,8 +6,16 @@ logger = logging.getLogger(__name__)
 
 
 class SourcceyFollowerSafety:
+    ###################################################################
+    # Tunable Thresholds
+    #
+    # These constants define when we:
+    # - enter slow-step mode because a move is large or the joint is loaded
+    # - enter stronger overcurrent handling because torque is too high
+    ###################################################################
     STEP_SAFETY_STARTUP_WINDOW_S = 3.0
     STEP_CURRENT_TARGET_TOLERANCE = 2.0
+    OVERCURRENT_DIRECTION_TOLERANCE = 1.0
     STEP_SAFETY_DELTA_THRESHOLDS = {
         "shoulder_pan": 45.0,
         "shoulder_lift": 45.0,
@@ -41,6 +49,9 @@ class SourcceyFollowerSafety:
         "gripper": 52.0,
     }
 
+    ###################################################################
+    # Lifecycle / State
+    ###################################################################
     def __init__(self, robot: Any):
         self.robot = robot
         self._last_goal_pos: dict[str, float] = {}
@@ -50,10 +61,34 @@ class SourcceyFollowerSafety:
         self._overcurrent_log_interval_s = 5.0
         self._last_step_current_log_time = 0.0
 
+    ###################################################################
+    # Public API: Command Memory
+    #
+    # Used by:
+    # - SourcceyFollower.send_action(...)
+    #
+    # Purpose:
+    # - Remember the last commanded target so stronger safety behavior can
+    #   infer whether a joint is still trying to push deeper into an obstacle.
+    ###################################################################
     def remember_goal(self, goal_pos: dict[str, float]) -> None:
         """Store the most recent commanded goal so we can infer blocked direction next frame."""
         self._last_goal_pos = goal_pos.copy()
 
+    ###################################################################
+    # Public API: Step-Safety Triggering
+    #
+    # Used by:
+    # - SourcceyFollower._apply_runtime_safety(...)
+    #
+    # Public functions in this section:
+    # - should_use_step_safety(...)
+    # - apply_step_safety(...)
+    #
+    # Purpose:
+    # - Enter slow-step mode during startup or large target jumps
+    # - Turn one large move into a sequence of smaller safe increments
+    ###################################################################
     def should_use_step_safety(
         self,
         goal_pos: dict[str, float],
@@ -122,6 +157,27 @@ class SourcceyFollowerSafety:
 
         return slowed_goal_pos
 
+    ###################################################################
+    # Public API: Current Threshold Detection
+    #
+    # Used by:
+    # - SourcceyFollower._apply_runtime_safety(...)
+    # - SourcceyFollower.get_observation(...)
+    #
+    # Public functions in this section:
+    # - detect_step_current_motors(...)
+    # - detect_active_step_current_motors(...)
+    # - detect_overcurrent_motors(...)
+    #
+    # Private helpers used here:
+    # - _detect_current_threshold_motors(...)
+    # - _read_current_state(...)
+    #
+    # Purpose:
+    # - Split current monitoring into two levels:
+    #   1. lower threshold for slow-step mode
+    #   2. higher threshold for retreat / stop behavior
+    ###################################################################
     def detect_step_current_motors(self) -> dict[str, float]:
         """Return motors that have crossed the lower threshold for slow-motion mode."""
         return self._detect_current_threshold_motors(self.DEFAULT_STEP_CURRENT_LIMITS)
@@ -149,6 +205,69 @@ class SourcceyFollowerSafety:
         """Return motors that have crossed the higher threshold for reverse/stop behavior."""
         return self._detect_current_threshold_motors(self.DEFAULT_REVERSE_CURRENT_LIMITS)
 
+    ###################################################################
+    # Public API: Overcurrent Response
+    #
+    # Used by:
+    # - SourcceyFollower._apply_runtime_safety(...)
+    #
+    # Private helpers used here:
+    # - _get_current_safety_backoff(...)
+    # - _direction_from_delta(...)
+    #
+    # Purpose:
+    # - Once a joint crosses the higher threshold, reject deeper motion for
+    #   that joint and substitute a tiny retreat target instead.
+    ###################################################################
+    def apply_overcurrent_retreat(
+        self,
+        goal_pos: dict[str, float],
+        present_pos: dict[str, float],
+        overcurrent_motors: dict[str, float],
+    ) -> dict[str, float]:
+        """Replace unsafe overcurrent joint targets with a small retreat away from the loaded direction."""
+        if not overcurrent_motors:
+            return goal_pos
+
+        safe_goal_pos = goal_pos.copy()
+        for motor_name in overcurrent_motors:
+            if motor_name not in present_pos:
+                continue
+
+            current_pos = float(present_pos[motor_name])
+            requested_delta = float(goal_pos.get(motor_name, current_pos)) - current_pos
+            blocked_delta = float(self._last_goal_pos.get(motor_name, current_pos)) - current_pos
+
+            blocked_direction = self._direction_from_delta(blocked_delta)
+            requested_direction = self._direction_from_delta(requested_delta)
+
+            if blocked_direction == 0:
+                blocked_direction = requested_direction
+
+            if blocked_direction == 0:
+                safe_goal_pos[motor_name] = current_pos
+                continue
+
+            # If the new command is already moving away from the blocked direction, let it pass through.
+            if requested_direction != 0 and requested_direction != blocked_direction:
+                continue
+
+            retreat = self._get_current_safety_backoff(motor_name)
+            safe_goal_pos[motor_name] = current_pos - (blocked_direction * retreat)
+
+        return safe_goal_pos
+
+    ###################################################################
+    # Private Helpers: Current Detection Core
+    #
+    # Used by:
+    # - detect_step_current_motors(...)
+    # - detect_overcurrent_motors(...)
+    #
+    # Purpose:
+    # - Shared threshold comparison logic so both current levels use the same
+    #   overload-aware raw read path.
+    ###################################################################
     def _detect_current_threshold_motors(self, default_limits: dict[str, float]) -> dict[str, float]:
         """Return motors that are currently over a supplied current threshold map."""
         overcurrent_motors: dict[str, float] = {}
@@ -172,6 +291,23 @@ class SourcceyFollowerSafety:
 
         return overcurrent_motors
 
+    ###################################################################
+    # Public API: Logging
+    #
+    # Used by:
+    # - SourcceyFollower._apply_runtime_safety(...)
+    # - SourcceyFollower.get_observation(...)
+    #
+    # Public functions in this section:
+    # - log_step_current_motors(...)
+    # - log_overcurrent_motors(...)
+    #
+    # Private helpers used here:
+    # - _log_current_threshold_motors(...)
+    #
+    # Purpose:
+    # - Emit throttled logs for tuning without flooding the console.
+    ###################################################################
     def log_step_current_motors(self, step_current_motors: dict[str, float]) -> None:
         """Log the lower slow-motion current threshold periodically while active."""
         self._log_current_threshold_motors(
@@ -188,6 +324,13 @@ class SourcceyFollowerSafety:
             last_log_attr="_last_overcurrent_log_time",
         )
 
+    ###################################################################
+    # Private Helpers: Logging
+    #
+    # Used by:
+    # - log_step_current_motors(...)
+    # - log_overcurrent_motors(...)
+    ###################################################################
     def _log_current_threshold_motors(
         self,
         motors: dict[str, float],
@@ -211,6 +354,37 @@ class SourcceyFollowerSafety:
         logger.warning("%s for %s arm: %s", label, self.robot.config.orientation, formatted)
         setattr(self, last_log_attr, now)
 
+    ###################################################################
+    # Private Helpers: Retreat Direction / Magnitude
+    #
+    # Used by:
+    # - apply_overcurrent_retreat(...)
+    ###################################################################
+    def _get_current_safety_backoff(self, motor_name: str) -> float:
+        """Return the small retreat distance to use when reducing overcurrent on a joint."""
+        if motor_name == "gripper":
+            return self.robot.config.gripper_current_safety_backoff
+
+        return self.robot.config.current_safety_backoff
+
+    def _direction_from_delta(self, delta: float) -> int:
+        """Collapse a delta into -1 / 0 / 1 using a small tolerance band."""
+        if delta > self.OVERCURRENT_DIRECTION_TOLERANCE:
+            return 1
+        if delta < -self.OVERCURRENT_DIRECTION_TOLERANCE:
+            return -1
+        return 0
+
+    ###################################################################
+    # Private Helpers: Raw Motor Reads
+    #
+    # Used by:
+    # - _detect_current_threshold_motors(...)
+    #
+    # Purpose:
+    # - Read Present_Current with runtime-friendly retry behavior while still
+    #   treating overload exceptions as real safety events.
+    ###################################################################
     def _read_current_state(
         self,
         motor_name: str,
