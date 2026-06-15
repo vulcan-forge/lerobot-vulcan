@@ -9,12 +9,12 @@ class SourcceyFollowerSafety:
     STEP_SAFETY_STARTUP_WINDOW_S = 3.0
     STEP_CURRENT_TARGET_TOLERANCE = 2.0
     STEP_SAFETY_DELTA_THRESHOLDS = {
-        "shoulder_pan": 15.0,
-        "shoulder_lift": 15.0,
-        "elbow_flex": 15.0,
-        "wrist_flex": 10.0,
-        "wrist_roll": 15.0,
-        "gripper": 15.0,
+        "shoulder_pan": 45.0,
+        "shoulder_lift": 45.0,
+        "elbow_flex": 45.0,
+        "wrist_flex": 45.0,
+        "wrist_roll": 45.0,
+        "gripper": 45.0,
     }
     STEP_SAFETY_MAX_STEPS = {
         "shoulder_pan": 5.0,
@@ -30,7 +30,7 @@ class SourcceyFollowerSafety:
         "elbow_flex": 70.0,
         "wrist_flex": 30.0,
         "wrist_roll": 30.0,
-        "gripper": 20.0,
+        "gripper": 30.0,
     }
     DEFAULT_REVERSE_CURRENT_LIMITS = {
         "shoulder_pan": 80.0,
@@ -38,7 +38,7 @@ class SourcceyFollowerSafety:
         "elbow_flex": 112.0,
         "wrist_flex": 48.0,
         "wrist_roll": 48.0,
-        "gripper": 32.0,
+        "gripper": 48.0,
     }
 
     def __init__(self, robot: Any):
