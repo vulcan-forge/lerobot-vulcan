@@ -31,22 +31,22 @@ from .sourccey import Sourccey
 from ..protobuf.generated import sourccey_pb2
 
 DISCOVERY_MAGIC = "SOURCCEY_DISCOVER_V1"
+DISCOVERY_ROBOT_TYPE = "sourccey"
 DISCOVERY_READ_TIMEOUT_S = 0.25
+
+
+def build_discovery_response_payload() -> bytes:
+    payload = {
+        "discovery_magic": DISCOVERY_MAGIC,
+        "robot_type": DISCOVERY_ROBOT_TYPE,
+    }
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
 
 
 class DiscoveryResponder:
     def __init__(self, config: SourcceyHostConfig):
         self.discovery_port = config.discovery_port
-        self.payload = json.dumps(
-            {
-                "host": "",
-                "robot_name": "Sourccey",
-                "nickname": "sourccey",
-                "robot_type": "sourccey",
-                "port_zmq_cmd": config.port_zmq_cmd,
-                "port_zmq_observations": config.port_zmq_observations,
-            }
-        ).encode("utf-8")
+        self.payload = build_discovery_response_payload()
         self._shutdown = threading.Event()
         self._thread: threading.Thread | None = None
         self._socket: socket.socket | None = None
