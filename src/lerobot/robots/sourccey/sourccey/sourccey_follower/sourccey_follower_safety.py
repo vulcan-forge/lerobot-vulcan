@@ -15,6 +15,14 @@ class SourcceyFollowerSafety:
         "wrist_roll": 15.0,
         "gripper": 15.0,
     }
+    STEP_SAFETY_MAX_STEPS = {
+        "shoulder_pan": 5.0,
+        "shoulder_lift": 5.0,
+        "elbow_flex": 5.0,
+        "wrist_flex": 4.0,
+        "wrist_roll": 5.0,
+        "gripper": 5.0,
+    }
     DEFAULT_STEP_CURRENT_LIMITS = {
         "shoulder_pan": 50.0,
         "shoulder_lift": 120.0,
@@ -38,7 +46,7 @@ class SourcceyFollowerSafety:
         self._action_stream_start_time: float | None = None
         self._step_safety_log_active = False
         self._last_overcurrent_log_time = 0.0
-        self._overcurrent_log_interval_s = 0.25
+        self._overcurrent_log_interval_s = 0.5
         self._last_step_current_log_time = 0.0
 
     def remember_goal(self, goal_pos: dict[str, float]) -> None:
@@ -86,6 +94,32 @@ class SourcceyFollowerSafety:
 
         self._step_safety_log_active = should_use
         return should_use
+
+    def apply_step_safety(
+        self,
+        goal_pos: dict[str, float],
+        present_pos: dict[str, float],
+    ) -> dict[str, float]:
+        """Move toward the target in small per-joint increments instead of jumping directly."""
+        slowed_goal_pos: dict[str, float] = {}
+
+        for motor_name, target_pos in goal_pos.items():
+            if motor_name not in present_pos:
+                slowed_goal_pos[motor_name] = target_pos
+                continue
+
+            max_step = self.STEP_SAFETY_MAX_STEPS.get(motor_name, 5.0)
+            current_pos = float(present_pos[motor_name])
+            delta = float(target_pos) - current_pos
+
+            if delta > max_step:
+                slowed_goal_pos[motor_name] = current_pos + max_step
+            elif delta < -max_step:
+                slowed_goal_pos[motor_name] = current_pos - max_step
+            else:
+                slowed_goal_pos[motor_name] = float(target_pos)
+
+        return slowed_goal_pos
 
     def detect_step_current_motors(self) -> dict[str, float]:
         """Return motors that have crossed the lower threshold for slow-motion mode."""

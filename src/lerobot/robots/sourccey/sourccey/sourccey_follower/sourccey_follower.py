@@ -262,26 +262,7 @@ class SourcceyFollower(Robot):
                 logger.warning("NaN values detected in goal positions. Skipping action execution.")
                 return {f"{motor}.pos": val for motor, val in present_pos.items()}
 
-            # Cap goal position when too far away from present position.
-            # /!\ Slower fps expected due to reading from the follower.
-            if self.config.max_relative_target is not None:
-                goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
-                goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
-
-            # Observe when large jumps or startup transitions would trigger slow stepping.
-            # This is log-only for now so we can validate the trigger before changing motion behavior.
-            _ = self.safety.should_use_step_safety(goal_pos, present_pos)
-
-            # Observe when a motor is over current or overloaded.
-            # This is log-only for now so we can validate the trigger before changing motion behavior.
-            step_current_motors = self.safety.detect_step_current_motors()
-            self.safety.log_step_current_motors(step_current_motors)
-
-            overcurrent_motors = self.safety.detect_overcurrent_motors()
-            self.safety.log_overcurrent_motors(overcurrent_motors)
-
-            # If a joint is already over current, avoid commanding it deeper into the obstruction.
-            #goal_pos = self.safety.apply_current_safety(goal_pos, present_pos)
+            goal_pos = self._apply_runtime_safety(goal_pos, present_pos)
 
             # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)
@@ -297,4 +278,40 @@ class SourcceyFollower(Robot):
             # Return present position instead of goal position when write fails
             fallback_pos = present_pos if present_pos is not None else goal_pos
             return {f"{motor}.pos": val for motor, val in fallback_pos.items()}
+
+    ###################################################################
+    # Safety Management
+    ###################################################################
+    def _apply_runtime_safety(
+        self,
+        goal_pos: dict[str, float],
+        present_pos: dict[str, float],
+    ) -> dict[str, float]:
+        """Run the follower's runtime safety pipeline before writing goal positions."""
+        # First safety layer: if a very large target jump is configured as unsafe globally,
+        # clamp that jump before we consider any current-based slow-motion logic.
+        if self.config.max_relative_target is not None:
+            goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
+            goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
+
+        # Second safety layer: detect the lower current threshold.
+        # Crossing this threshold means the joint is under meaningful load, so we
+        # should approach the target in small increments instead of one full jump.
+        step_current_motors = self.safety.detect_step_current_motors()
+        self.safety.log_step_current_motors(step_current_motors)
+
+        # Slow-step mode is enabled for two cases:
+        # - startup / large action jumps, which are the main slam-risk transitions
+        # - low-threshold current events, which indicate the joint is already loaded
+        use_step_safety = self.safety.should_use_step_safety(goal_pos, present_pos)
+        if use_step_safety or step_current_motors:
+            goal_pos = self.safety.apply_step_safety(goal_pos, present_pos)
+
+        # Third safety layer: the higher current threshold is still log-only for now.
+        # We keep this separate so we can tune the future reverse / retreat behavior
+        # using real robot data before changing the motion path again.
+        overcurrent_motors = self.safety.detect_overcurrent_motors()
+        self.safety.log_overcurrent_motors(overcurrent_motors)
+
+        return goal_pos
 
