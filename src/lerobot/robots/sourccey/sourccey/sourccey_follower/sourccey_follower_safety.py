@@ -20,7 +20,7 @@ class SourcceyFollowerSafety:
         "shoulder_pan": 45.0,
         "shoulder_lift": 45.0,
         "elbow_flex": 45.0,
-        "wrist_flex": 45.0,
+        "wrist_flex": 60.0,
         "wrist_roll": 45.0,
         "gripper": 45.0,
     }
