@@ -310,6 +310,7 @@ class SourcceyFollower(Robot):
         overcurrent_motors = self.safety.detect_overcurrent_motors()
         self.safety.log_overcurrent_motors(overcurrent_motors)
         goal_pos = self.safety.apply_overcurrent_retreat(goal_pos, present_pos, overcurrent_motors)
+        self.safety.remember_present(present_pos)
 
         return goal_pos
 
