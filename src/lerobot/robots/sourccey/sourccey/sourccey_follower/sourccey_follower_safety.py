@@ -47,7 +47,7 @@ class SourcceyFollowerSafety:
         self._action_stream_start_time: float | None = None
         self._step_safety_log_active = False
         self._last_overcurrent_log_time = 0.0
-        self._overcurrent_log_interval_s = 0.5
+        self._overcurrent_log_interval_s = 5.0
         self._last_step_current_log_time = 0.0
 
     def remember_goal(self, goal_pos: dict[str, float]) -> None:
