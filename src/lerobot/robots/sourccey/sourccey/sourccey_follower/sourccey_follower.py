@@ -260,7 +260,7 @@ class SourcceyFollower(Robot):
                 logger.warning("NaN values detected in goal positions. Skipping action execution.")
                 return {f"{motor}.pos": val for motor, val in present_pos.items()}
 
-            # goal_pos = self._apply_runtime_safety(goal_pos, present_pos)
+            goal_pos = self._apply_runtime_safety(goal_pos, present_pos)
 
             # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)
