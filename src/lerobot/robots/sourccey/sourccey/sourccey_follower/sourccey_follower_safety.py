@@ -33,20 +33,20 @@ class SourcceyFollowerSafety:
         "gripper": 5.0,
     }
     DEFAULT_STEP_CURRENT_LIMITS = {
-        "shoulder_pan": 80.0,
-        "shoulder_lift": 120.0,
+        "shoulder_pan": 100.0,
+        "shoulder_lift": 144.0,
         "elbow_flex": 100.0,
         "wrist_flex": 60.0,
         "wrist_roll": 60.0,
-        "gripper": 35.0,
+        "gripper": 60.0,
     }
     DEFAULT_REVERSE_CURRENT_LIMITS = {
-        "shoulder_pan": 130.0,
-        "shoulder_lift": 208.0,
+        "shoulder_pan": 160.0,
+        "shoulder_lift": 230.4,
         "elbow_flex": 160.0,
         "wrist_flex": 96.0,
         "wrist_roll": 96.0,
-        "gripper": 52.0,
+        "gripper": 96.0,
     }
 
     ###################################################################
@@ -55,6 +55,7 @@ class SourcceyFollowerSafety:
     def __init__(self, robot: Any):
         self.robot = robot
         self._last_goal_pos: dict[str, float] = {}
+        self._last_present_pos: dict[str, float] = {}
         self._action_stream_start_time: float | None = None
         self._step_safety_log_active = False
         self._last_overcurrent_log_time = 0.0
@@ -71,9 +72,15 @@ class SourcceyFollowerSafety:
     # - Remember the last commanded target so stronger safety behavior can
     #   infer whether a joint is still trying to push deeper into an obstacle.
     ###################################################################
-    def remember_goal(self, goal_pos: dict[str, float]) -> None:
-        """Store the most recent requested goal so we can infer blocked direction next frame."""
+    def remember_goal(
+        self,
+        goal_pos: dict[str, float],
+        present_pos: dict[str, float] | None = None,
+    ) -> None:
+        """Store the latest request and position so we can infer the blocked direction next frame."""
         self._last_goal_pos = goal_pos.copy()
+        if present_pos is not None:
+            self._last_present_pos = {motor_name: float(pos) for motor_name, pos in present_pos.items()}
 
     ###################################################################
     # Public API: Step-Safety Triggering
@@ -234,14 +241,13 @@ class SourcceyFollowerSafety:
             current_pos = float(present_pos[motor_name])
             requested_delta = float(goal_pos.get(motor_name, current_pos)) - current_pos
             requested_direction = self._direction_from_delta(requested_delta)
-            blocked_direction = self._get_blocked_direction(
-                motor_name,
-                current_pos,
-                requested_direction,
-            )
+            blocked_direction = self._get_blocked_direction(motor_name)
 
             if blocked_direction == 0:
-                safe_goal_pos[motor_name] = current_pos
+                # If we have not yet identified which direction caused the overload,
+                # do not freeze a fresh retreat command on the first overcurrent frame.
+                if requested_direction == 0:
+                    safe_goal_pos[motor_name] = current_pos
                 continue
 
             # If the fresh command is already backing away from the blocked direction,
@@ -360,15 +366,13 @@ class SourcceyFollowerSafety:
     def _get_blocked_direction(
         self,
         motor_name: str,
-        current_pos: float,
-        requested_direction: int,
     ) -> int:
-        """Infer which direction is currently pushing the joint deeper into a jam."""
-        blocked_delta = float(self._last_goal_pos.get(motor_name, current_pos)) - current_pos
-        blocked_direction = self._direction_from_delta(blocked_delta)
-        if blocked_direction != 0:
-            return blocked_direction
-        return requested_direction
+        """Infer which previously requested direction was pushing the joint deeper into a jam."""
+        if motor_name not in self._last_goal_pos or motor_name not in self._last_present_pos:
+            return 0
+
+        blocked_delta = float(self._last_goal_pos[motor_name]) - float(self._last_present_pos[motor_name])
+        return self._direction_from_delta(blocked_delta)
 
     def _direction_from_delta(self, delta: float) -> int:
         """Collapse a delta into -1 / 0 / 1 using a small tolerance band."""

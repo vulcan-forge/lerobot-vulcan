@@ -264,7 +264,7 @@ class SourcceyFollower(Robot):
 
             # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)
-            self.safety.remember_goal(requested_goal_pos)
+            self.safety.remember_goal(requested_goal_pos, present_pos)
             return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
         except ConnectionError as e:
