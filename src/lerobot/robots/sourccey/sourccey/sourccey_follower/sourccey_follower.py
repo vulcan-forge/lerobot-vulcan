@@ -250,6 +250,7 @@ class SourcceyFollower(Robot):
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
+        requested_goal_pos = goal_pos.copy()
         present_pos: dict[str, float] | None = None
 
         try:
@@ -263,7 +264,7 @@ class SourcceyFollower(Robot):
 
             # Send goal position to the arm with error handling
             self.bus.sync_write("Goal_Position", goal_pos)
-            self.safety.remember_goal(goal_pos)
+            self.safety.remember_goal(requested_goal_pos)
             return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
         except ConnectionError as e:

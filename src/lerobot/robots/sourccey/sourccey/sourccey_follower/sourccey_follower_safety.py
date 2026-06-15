@@ -74,7 +74,7 @@ class SourcceyFollowerSafety:
     #   infer whether a joint is still trying to push deeper into an obstacle.
     ###################################################################
     def remember_goal(self, goal_pos: dict[str, float]) -> None:
-        """Store the most recent commanded goal so we can infer blocked direction next frame."""
+        """Store the most recent requested goal so we can infer blocked direction next frame."""
         self._last_goal_pos = goal_pos.copy()
 
     def remember_present(self, present_pos: dict[str, float]) -> None:
@@ -240,18 +240,29 @@ class SourcceyFollowerSafety:
             current_pos = float(present_pos[motor_name])
             requested_delta = float(goal_pos.get(motor_name, current_pos)) - current_pos
             requested_direction = self._direction_from_delta(requested_delta)
-            relief_direction = self._get_overcurrent_relief_direction(
+            blocked_direction = self._get_blocked_direction(
                 motor_name,
                 current_pos,
                 requested_direction,
             )
 
-            if relief_direction == 0:
+            if blocked_direction == 0:
                 safe_goal_pos[motor_name] = current_pos
                 continue
 
-            # If the new command is already moving in the pressure-relieving direction, let it pass through.
-            if requested_direction != 0 and requested_direction == relief_direction:
+            # If the fresh command is already backing away from the blocked direction,
+            # let it through immediately instead of forcing the previous retreat.
+            if requested_direction != 0 and requested_direction != blocked_direction:
+                continue
+
+            relief_direction = self._get_overcurrent_relief_direction(
+                motor_name,
+                current_pos,
+                blocked_direction,
+            )
+
+            if relief_direction == 0:
+                safe_goal_pos[motor_name] = current_pos
                 continue
 
             # Make the overcurrent retreat at least as strong as one normal slow-step
@@ -371,29 +382,36 @@ class SourcceyFollowerSafety:
         self,
         motor_name: str,
         current_pos: float,
-        requested_direction: int,
+        blocked_direction: int,
     ) -> int:
         """Choose the safest direction to unload a joint during overcurrent.
 
         Priority:
         1. If the joint was physically moved since the last frame, follow that measured motion.
            This makes the arm yield in the direction a person is actively pushing it.
-        2. Otherwise, move away from the last commanded blocked direction.
-        3. If we cannot infer a direction, fall back to the current request.
+        2. Otherwise, move away from the blocked direction.
         """
         manual_push_direction = self._get_manual_push_direction(motor_name, current_pos)
         if manual_push_direction != 0:
             return manual_push_direction
 
-        blocked_delta = float(self._last_goal_pos.get(motor_name, current_pos)) - current_pos
-        blocked_direction = self._direction_from_delta(blocked_delta)
         if blocked_direction != 0:
             return -blocked_direction
 
+        return 0
+
+    def _get_blocked_direction(
+        self,
+        motor_name: str,
+        current_pos: float,
+        requested_direction: int,
+    ) -> int:
+        """Infer which direction is currently pushing the joint deeper into a jam."""
         if requested_direction != 0:
             return requested_direction
 
-        return 0
+        blocked_delta = float(self._last_goal_pos.get(motor_name, current_pos)) - current_pos
+        return self._direction_from_delta(blocked_delta)
 
     def _get_manual_push_direction(self, motor_name: str, current_pos: float) -> int:
         """Infer external push direction from recent measured position drift."""
