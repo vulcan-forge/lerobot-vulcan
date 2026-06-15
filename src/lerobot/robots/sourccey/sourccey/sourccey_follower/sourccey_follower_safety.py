@@ -17,12 +17,12 @@ class SourcceyFollowerSafety:
     STEP_CURRENT_TARGET_TOLERANCE = 2.0
     OVERCURRENT_DIRECTION_TOLERANCE = 1.0
     STEP_SAFETY_DELTA_THRESHOLDS = {
-        "shoulder_pan": 45.0,
-        "shoulder_lift": 45.0,
-        "elbow_flex": 45.0,
+        "shoulder_pan": 60.0,
+        "shoulder_lift": 60.0,
+        "elbow_flex": 60.0,
         "wrist_flex": 60.0,
-        "wrist_roll": 45.0,
-        "gripper": 45.0,
+        "wrist_roll": 60.0,
+        "gripper": 60.0,
     }
     STEP_SAFETY_MAX_STEPS = {
         "shoulder_pan": 5.0,
@@ -33,20 +33,20 @@ class SourcceyFollowerSafety:
         "gripper": 5.0,
     }
     DEFAULT_STEP_CURRENT_LIMITS = {
-        "shoulder_pan": 100.0,
-        "shoulder_lift": 144.0,
+        "shoulder_pan": 160.0,
+        "shoulder_lift": 160.0,
         "elbow_flex": 100.0,
-        "wrist_flex": 60.0,
-        "wrist_roll": 60.0,
-        "gripper": 60.0,
+        "wrist_flex": 100.0,
+        "wrist_roll": 100.0,
+        "gripper": 100.0,
     }
     DEFAULT_REVERSE_CURRENT_LIMITS = {
-        "shoulder_pan": 160.0,
-        "shoulder_lift": 230.4,
+        "shoulder_pan": 256.0,
+        "shoulder_lift": 256.0,
         "elbow_flex": 160.0,
-        "wrist_flex": 96.0,
-        "wrist_roll": 96.0,
-        "gripper": 96.0,
+        "wrist_flex": 160.0,
+        "wrist_roll": 160.0,
+        "gripper": 160.0,
     }
 
     ###################################################################
