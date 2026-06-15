@@ -392,7 +392,9 @@ class SourcceyFollowerSafety:
         2. Otherwise, move away from the blocked direction.
         """
         manual_push_direction = self._get_manual_push_direction(motor_name, current_pos)
-        if manual_push_direction != 0:
+        if manual_push_direction != 0 and (
+            blocked_direction == 0 or manual_push_direction != blocked_direction
+        ):
             return manual_push_direction
 
         if blocked_direction != 0:
