@@ -214,9 +214,6 @@ class SourcceyFollower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        step_current_motors = self.safety.detect_step_current_motors()
-        self.safety.log_step_current_motors(step_current_motors)
-
         overcurrent_motors = self.safety.detect_overcurrent_motors()
         self.safety.log_overcurrent_motors(overcurrent_motors)
 
@@ -294,10 +291,10 @@ class SourcceyFollower(Robot):
             goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
-        # Second safety layer: detect the lower current threshold.
-        # Crossing this threshold means the joint is under meaningful load, so we
-        # should approach the target in small increments instead of one full jump.
-        step_current_motors = self.safety.detect_step_current_motors()
+        # Second safety layer: only keep the low-threshold current trigger active when a
+        # joint is both under load and still meaningfully moving toward its target.
+        # This lets the robot return to normal motion once it has settled at position.
+        step_current_motors = self.safety.detect_active_step_current_motors(goal_pos, present_pos)
         self.safety.log_step_current_motors(step_current_motors)
 
         # Slow-step mode is enabled for two cases:

@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 class SourcceyFollowerSafety:
     STEP_SAFETY_STARTUP_WINDOW_S = 3.0
+    STEP_CURRENT_TARGET_TOLERANCE = 2.0
     STEP_SAFETY_DELTA_THRESHOLDS = {
         "shoulder_pan": 15.0,
         "shoulder_lift": 15.0,
@@ -124,6 +125,25 @@ class SourcceyFollowerSafety:
     def detect_step_current_motors(self) -> dict[str, float]:
         """Return motors that have crossed the lower threshold for slow-motion mode."""
         return self._detect_current_threshold_motors(self.DEFAULT_STEP_CURRENT_LIMITS)
+
+    def detect_active_step_current_motors(
+        self,
+        goal_pos: dict[str, float],
+        present_pos: dict[str, float],
+    ) -> dict[str, float]:
+        """Return low-threshold current events only for joints that are still meaningfully moving."""
+        step_current_motors = self.detect_step_current_motors()
+        active_step_current_motors: dict[str, float] = {}
+
+        for motor_name, current in step_current_motors.items():
+            if motor_name not in goal_pos or motor_name not in present_pos:
+                continue
+
+            remaining_delta = abs(float(goal_pos[motor_name]) - float(present_pos[motor_name]))
+            if remaining_delta >= self.STEP_CURRENT_TARGET_TOLERANCE:
+                active_step_current_motors[motor_name] = current
+
+        return active_step_current_motors
 
     def detect_overcurrent_motors(self) -> dict[str, float]:
         """Return motors that have crossed the higher threshold for reverse/stop behavior."""
