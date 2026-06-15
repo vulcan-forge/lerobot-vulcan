@@ -34,19 +34,19 @@ class SourcceyFollowerSafety:
         "gripper": 5.0,
     }
     DEFAULT_STEP_CURRENT_LIMITS = {
-        "shoulder_pan": 50.0,
+        "shoulder_pan": 60.0,
         "shoulder_lift": 120.0,
         "elbow_flex": 100.0,
-        "wrist_flex": 50.0,
-        "wrist_roll": 50.0,
+        "wrist_flex": 60.0,
+        "wrist_roll": 60.0,
         "gripper": 35.0,
     }
     DEFAULT_REVERSE_CURRENT_LIMITS = {
-        "shoulder_pan": 80.0,
+        "shoulder_pan": 96.0,
         "shoulder_lift": 192.0,
         "elbow_flex": 160.0,
-        "wrist_flex": 80.0,
-        "wrist_roll": 80.0,
+        "wrist_flex": 96.0,
+        "wrist_roll": 96.0,
         "gripper": 52.0,
     }
 
