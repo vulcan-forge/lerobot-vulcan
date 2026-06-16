@@ -14,10 +14,7 @@
 # limitations under the License.
 
 import logging
-import json
-import socket
 import signal
-import threading
 import time
 
 import zmq
@@ -29,70 +26,6 @@ from .modules.relay import poll_relay, start_relay, stop_relay
 from .sourccey import Sourccey
 
 from ..protobuf.generated import sourccey_pb2
-
-DISCOVERY_MAGIC = "SOURCCEY_DISCOVER_V1"
-DISCOVERY_READ_TIMEOUT_S = 0.25
-
-
-class DiscoveryResponder:
-    def __init__(self, config: SourcceyHostConfig):
-        self.discovery_port = config.discovery_port
-        self.payload = json.dumps(
-            {
-                "host": "",
-                "robot_name": "Sourccey",
-                "nickname": "sourccey",
-                "robot_type": "sourccey",
-                "port_zmq_cmd": config.port_zmq_cmd,
-                "port_zmq_observations": config.port_zmq_observations,
-            }
-        ).encode("utf-8")
-        self._shutdown = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._socket: socket.socket | None = None
-
-    def start(self) -> None:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("", self.discovery_port))
-        sock.settimeout(DISCOVERY_READ_TIMEOUT_S)
-        self._socket = sock
-        self._thread = threading.Thread(target=self._serve, name="sourccey-discovery", daemon=True)
-        self._thread.start()
-        logging.info("Discovery responder listening on UDP %s", self.discovery_port)
-
-    def stop(self) -> None:
-        self._shutdown.set()
-        if self._socket is not None:
-            try:
-                self._socket.close()
-            except OSError:
-                pass
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
-
-    def _serve(self) -> None:
-        if self._socket is None:
-            return
-
-        while not self._shutdown.is_set():
-            try:
-                payload, address = self._socket.recvfrom(1024)
-            except socket.timeout:
-                continue
-            except OSError:
-                if not self._shutdown.is_set():
-                    logging.exception("Discovery responder socket error")
-                break
-
-            if payload.decode("utf-8", errors="ignore").strip() != DISCOVERY_MAGIC:
-                continue
-
-            try:
-                self._socket.sendto(self.payload, address)
-            except OSError:
-                if not self._shutdown.is_set():
-                    logging.exception("Failed to reply to discovery request")
 
 
 class SourcceyHost:
@@ -109,11 +42,8 @@ class SourcceyHost:
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
         self.max_loop_freq_hz = config.max_loop_freq_hz
-        self.discovery_responder = DiscoveryResponder(config)
-        self.discovery_responder.start()
 
     def disconnect(self):
-        self.discovery_responder.stop()
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
