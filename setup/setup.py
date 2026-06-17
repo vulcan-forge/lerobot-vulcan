@@ -21,6 +21,7 @@ import stat
 from pathlib import Path
 from typing import Tuple, Optional
 
+from setup_modules.setup_battery import BatterySetupOptions, setup_bq34z100
 from setup_modules.setup_desktop import install_sourccey_desktop_extras
 
 class Colors:
@@ -434,44 +435,29 @@ class SetupScript:
 
         return True
 
-    def configure_bq34z100(self) -> bool:
-        """Apply default bq34z100 battery gauge settings."""
+    def configure_bq34z100(
+        self,
+        *,
+        skip_flash: bool = False,
+        flash_profile: str = "df",
+        skip_verify: bool = False,
+    ) -> bool:
+        """Apply Sourccey battery gauge setup and golden-image flash flow."""
         python_path = self.get_venv_python_path()
-        configure_script = (
-            self.project_root / "src" / "lerobot" / "scripts" / "sourccey" / "battery" / "configure_bq34z100.py"
+        options = BatterySetupOptions(
+            flash_golden=not skip_flash,
+            flash_profile=flash_profile,
+            verify_after_setup=not skip_verify,
         )
-
-        if not configure_script.exists():
-            self.print_warning(f"bq34z100 setup skipped: script not found at {configure_script}")
-            return True
-        if not python_path.exists():
-            self.print_error(f"bq34z100 setup failed: venv Python not found at {python_path}")
-            return False
-        if platform.system() == "Linux" and not Path("/dev/i2c-1").exists():
-            self.print_warning("bq34z100 setup skipped: /dev/i2c-1 not found")
-            return True
-
-        self.print_status("Applying bq34z100 default configuration...")
-        result = subprocess.run(
-            [str(python_path), str(configure_script)],
-            capture_output=True,
-            text=True,
-            cwd=self.project_root,
+        return setup_bq34z100(
+            project_root=self.project_root,
+            python_path=python_path,
+            print_status=self.print_status,
+            print_success=self.print_success,
+            print_warning=self.print_warning,
+            print_error=self.print_error,
+            options=options,
         )
-
-        if result.returncode != 0:
-            self.print_error("bq34z100 setup command failed.")
-            if result.stderr and result.stderr.strip():
-                self.print_error(result.stderr.strip())
-            elif result.stdout and result.stdout.strip():
-                self.print_error(result.stdout.strip())
-            return False
-
-        stdout = (result.stdout or "").strip()
-        if stdout:
-            self.print_status(f"bq34z100: {stdout}")
-        self.print_success("bq34z100 setup completed.")
-        return True
 
     def fix_final_ownership(self) -> bool:
         """Restore project directory ownership to the normal user after setup."""
@@ -703,6 +689,9 @@ class SetupScript:
         desktop: bool = False,
         force_bq34z100_setup: bool = False,
         skip_bq34z100_setup: bool = False,
+        skip_bq34z100_flash: bool = False,
+        bq34z100_flash_profile: str = "df",
+        skip_bq34z100_verify: bool = False,
     ) -> bool:
         """Run the complete setup process"""
         self.print_header("LEROBOT VULCAN SETUP")
@@ -740,7 +729,13 @@ class SetupScript:
             setup_steps.append(self.setup_desktop_extras())
         setup_steps.append(self.compile_profobufs())
         if self.should_configure_bq34z100(force=force_bq34z100_setup, skip=skip_bq34z100_setup):
-            setup_steps.append(self.configure_bq34z100())
+            setup_steps.append(
+                self.configure_bq34z100(
+                    skip_flash=skip_bq34z100_flash,
+                    flash_profile=bq34z100_flash_profile,
+                    skip_verify=skip_bq34z100_verify,
+                )
+            )
 
         if not all(setup_steps):
             self.print_error("Project setup failed.")
@@ -761,6 +756,9 @@ def setup(
     desktop: bool = False,
     force_bq34z100_setup: bool = False,
     skip_bq34z100_setup: bool = False,
+    skip_bq34z100_flash: bool = False,
+    bq34z100_flash_profile: str = "df",
+    skip_bq34z100_verify: bool = False,
 ):
     """Setup the project"""
     setup = SetupScript()
@@ -768,6 +766,9 @@ def setup(
         desktop=desktop,
         force_bq34z100_setup=force_bq34z100_setup,
         skip_bq34z100_setup=skip_bq34z100_setup,
+        skip_bq34z100_flash=skip_bq34z100_flash,
+        bq34z100_flash_profile=bq34z100_flash_profile,
+        skip_bq34z100_verify=skip_bq34z100_verify,
     )
     return success
 
@@ -792,12 +793,33 @@ def main():
         default=False,
         help="Skip bq34z100 battery setup.",
     )
+    parser.add_argument(
+        "--skip-bq34z100-flash",
+        action="store_true",
+        default=False,
+        help="Skip flashing the built-in bq34z100 golden profile and use starter config only.",
+    )
+    parser.add_argument(
+        "--bq34z100-flash-profile",
+        choices=["df", "bq"],
+        default=os.getenv("SOURCCEY_BQ34Z100_FLASH_PROFILE", "df"),
+        help="Built-in bq34z100 golden flash profile to apply during setup (default: df).",
+    )
+    parser.add_argument(
+        "--skip-bq34z100-verify",
+        action="store_true",
+        default=False,
+        help="Skip post-setup bq34z100 diagnostics and telemetry verification.",
+    )
     args = parser.parse_args()
 
     success = setup(
         desktop=args.desktop,
         force_bq34z100_setup=args.force_bq34z100_setup,
         skip_bq34z100_setup=args.skip_bq34z100_setup,
+        skip_bq34z100_flash=args.skip_bq34z100_flash,
+        bq34z100_flash_profile=args.bq34z100_flash_profile,
+        skip_bq34z100_verify=args.skip_bq34z100_verify,
     )
 
     if not success:
