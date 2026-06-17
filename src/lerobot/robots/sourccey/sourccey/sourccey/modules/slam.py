@@ -24,6 +24,8 @@ import cv2
 import numpy as np
 import zmq
 
+from lerobot.sensors.imu.types import IMUSample
+
 
 @dataclass
 class SlamInputConfig:
@@ -100,12 +102,17 @@ class SlamInputPublisher:
         socket: Optional[zmq.Socket],
         observation: dict[str, Any],
         frames: dict[str, np.ndarray],
+        imu_samples: Iterable[IMUSample] | None = None,
     ) -> None:
         now = time.monotonic()
         if self._publish_interval_s > 0 and (now - self._last_publish_ts) < self._publish_interval_s:
             return
 
-        payload = self.build_packet(observation=observation, frames=frames)
+        payload = self.build_packet(
+            observation=observation,
+            frames=frames,
+            imu_samples=imu_samples,
+        )
         if payload is None or socket is None:
             return
         try:
@@ -120,7 +127,11 @@ class SlamInputPublisher:
             )
 
     def build_packet(
-        self, *, observation: dict[str, Any], frames: dict[str, np.ndarray]
+        self,
+        *,
+        observation: dict[str, Any],
+        frames: dict[str, np.ndarray],
+        imu_samples: Iterable[IMUSample] | None = None,
     ) -> Optional[bytes]:
         left_key = self._stereo_left_key
         right_key = self._stereo_right_key
@@ -201,7 +212,7 @@ class SlamInputPublisher:
             },
             "stereo_left": left_key,
             "stereo_right": right_key,
-            "imu_samples": [],
+            "imu_samples": _serialize_imu_samples(imu_samples),
             "cameras": cameras_payload,
         }
         return json.dumps(packet, separators=(",", ":")).encode("utf-8")
@@ -220,3 +231,30 @@ class SlamInputPublisher:
             self._warn_suppressed[key] = 0
         else:
             self._warn_suppressed[key] = self._warn_suppressed.get(key, 0) + 1
+
+
+def _serialize_imu_samples(imu_samples: Iterable[IMUSample] | None) -> list[dict[str, float | int | None]]:
+    if imu_samples is None:
+        return []
+    payload: list[dict[str, float | int | None]] = []
+    for sample in imu_samples:
+        if not isinstance(sample, IMUSample) or not sample.valid:
+            continue
+        payload.append(
+            {
+                "capture_monotonic_ns": int(sample.timestamp_ns),
+                "ax": float(sample.accel_m_s2[0]),
+                "ay": float(sample.accel_m_s2[1]),
+                "az": float(sample.accel_m_s2[2]),
+                "gx": float(sample.gyro_rad_s[0]),
+                "gy": float(sample.gyro_rad_s[1]),
+                "gz": float(sample.gyro_rad_s[2]),
+                "mx": float(sample.mag_uT[0]),
+                "my": float(sample.mag_uT[1]),
+                "mz": float(sample.mag_uT[2]),
+                "temperature_c": (
+                    None if sample.temperature_c is None else float(sample.temperature_c)
+                ),
+            }
+        )
+    return payload

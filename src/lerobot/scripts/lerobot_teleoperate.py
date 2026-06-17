@@ -107,6 +107,22 @@ from lerobot.utils.utils import init_logging, move_cursor_up
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data, shutdown_rerun
 
 
+SOURCCEY_ARM_LOG_KEYS = (
+    "left_shoulder_pan.pos",
+    "left_shoulder_lift.pos",
+    "left_elbow_flex.pos",
+    "left_wrist_flex.pos",
+    "left_wrist_roll.pos",
+    "left_gripper.pos",
+    "right_shoulder_pan.pos",
+    "right_shoulder_lift.pos",
+    "right_elbow_flex.pos",
+    "right_wrist_flex.pos",
+    "right_wrist_roll.pos",
+    "right_gripper.pos",
+)
+
+
 @dataclass
 class TeleoperateConfig:
     # TODO: pepijn, steven: if more robots require multiple teleoperators (like lekiwi) its good to make this possibele in teleop.py and record.py with List[Teleoperator]
@@ -129,6 +145,9 @@ class TeleoperateConfig:
     # If teleop connection fails (e.g. leader arm ports unplugged), continue only if
     # the teleoperator can still provide a safe default action while disconnected.
     allow_default_action_fallback_on_teleop_connect_error: bool = True
+    # Print current arm joint positions to the console on an interval.
+    log_arm_positions: bool = False
+    log_arm_positions_interval_s: float = 1.0
 
 
 """
@@ -189,6 +208,17 @@ def _get_keyboard_base_action(
         return robot._from_keyboard_to_base_action(keyboard_action)
 
 
+def _build_arm_position_log(obs: RobotObservation) -> str | None:
+    values: list[str] = []
+    for key in SOURCCEY_ARM_LOG_KEYS:
+        value = obs.get(key)
+        if isinstance(value, (int, float)):
+            values.append(f"{key}={value:.3f}")
+    if not values:
+        return None
+    return "Arm positions: " + ", ".join(values)
+
+
 
 def teleop_loop(
     teleop: Teleoperator,
@@ -201,6 +231,8 @@ def teleop_loop(
     display_data: bool = False,
     duration: float | None = None,
     display_compressed_images: bool = False,
+    log_arm_positions: bool = False,
+    log_arm_positions_interval_s: float = 1.0,
 ):
     """
     This function continuously reads actions from a teleoperation device, processes them through optional
@@ -222,6 +254,7 @@ def teleop_loop(
 
     display_len = max(len(key) for key in robot.action_features)
     start = time.perf_counter()
+    last_arm_log_s = start - max(log_arm_positions_interval_s, 0.0)
     while True:
         loop_start = time.perf_counter()
 
@@ -268,6 +301,13 @@ def teleop_loop(
             for motor, value in robot_action_to_send.items():
                 print(f"{motor:<{display_len}} | {value:>7.2f}")
             move_cursor_up(len(robot_action_to_send) + 3)
+
+        now = time.perf_counter()
+        if log_arm_positions and now - last_arm_log_s >= max(log_arm_positions_interval_s, 0.0):
+            arm_log = _build_arm_position_log(obs)
+            if arm_log is not None:
+                logging.info(arm_log)
+            last_arm_log_s = now
 
         dt_s = time.perf_counter() - loop_start
         precise_sleep(max(1 / fps - dt_s, 0.0))
@@ -318,6 +358,8 @@ def teleoperate(cfg: TeleoperateConfig):
             robot_action_processor=robot_action_processor,
             robot_observation_processor=robot_observation_processor,
             display_compressed_images=display_compressed_images,
+            log_arm_positions=cfg.log_arm_positions,
+            log_arm_positions_interval_s=cfg.log_arm_positions_interval_s,
         )
     except KeyboardInterrupt:
         pass

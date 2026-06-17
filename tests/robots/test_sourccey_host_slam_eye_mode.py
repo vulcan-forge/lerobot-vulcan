@@ -12,6 +12,7 @@ from lerobot.robots.sourccey.sourccey.sourccey.sourccey_host import (
     _build_slam_eye_v4l2_controls,
     _handle_command_watchdog_timeout,
 )
+from lerobot.sensors.imu.types import IMUSample
 
 
 def test_slam_eye_only_cameras_config_uses_requested_mode() -> None:
@@ -145,6 +146,52 @@ def test_build_host_slam_obstacle_publisher_uses_wrist_pair() -> None:
     assert packet["stereo_left"] == "wrist_left"
     assert packet["stereo_right"] == "wrist_right"
     assert set(packet["cameras"]) == {"wrist_left", "wrist_right"}
+
+
+def test_build_host_slam_input_publisher_serializes_imu_samples() -> None:
+    config = SourcceyHostConfig(
+        slam_input_enabled=True,
+        slam_imu_enabled=True,
+    )
+
+    publisher = _build_host_slam_input_publisher(config)
+
+    assert publisher is not None
+    payload = publisher.build_packet(
+        observation={"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0},
+        frames={
+            "front_left": np.full((24, 24, 3), 32, dtype=np.uint8),
+            "front_right": np.full((24, 24, 3), 64, dtype=np.uint8),
+        },
+        imu_samples=[
+            IMUSample(
+                timestamp_ns=555,
+                accel_m_s2=(1.0, 0.0, -1.0),
+                gyro_rad_s=(0.1, 0.2, 0.3),
+                mag_uT=(4.0, 5.0, 6.0),
+                temperature_c=26.0,
+                valid=True,
+            )
+        ],
+    )
+
+    assert payload is not None
+    packet = json.loads(payload.decode("utf-8"))
+    assert packet["imu_samples"] == [
+        {
+            "capture_monotonic_ns": 555,
+            "ax": 1.0,
+            "ay": 0.0,
+            "az": -1.0,
+            "gx": 0.1,
+            "gy": 0.2,
+            "gz": 0.3,
+            "mx": 4.0,
+            "my": 5.0,
+            "mz": 6.0,
+            "temperature_c": 26.0,
+        }
+    ]
 
 
 def test_handle_command_watchdog_timeout_stops_motion() -> None:

@@ -9,6 +9,7 @@ import numpy as np
 
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
 from lerobot.robots.sourccey.sourccey.sourccey.modules.slam import SlamInputConfig
+from lerobot.sensors.imu.types import IMUSample
 
 
 def _make_client(*, eye_only_mode: bool = False) -> SourcceyClient:
@@ -82,6 +83,46 @@ def test_build_slam_input_packet_contains_required_fields() -> None:
         decoded = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_COLOR)
         assert decoded is not None
         assert decoded.shape == (24, 24, 3)
+
+
+def test_build_slam_input_packet_serializes_valid_imu_samples() -> None:
+    client = _make_client()
+    frames = _make_frames()
+    observation = {"x.vel": 0.2, "y.vel": -0.1, "theta.vel": 0.3}
+    imu_samples = [
+        IMUSample(
+            timestamp_ns=123456789,
+            accel_m_s2=(1.0, 2.0, 3.0),
+            gyro_rad_s=(0.1, 0.2, 0.3),
+            mag_uT=(4.0, 5.0, 6.0),
+            temperature_c=22.5,
+            valid=True,
+        )
+    ]
+
+    payload = client._slam_input_publisher.build_packet(
+        observation=observation,
+        frames=frames,
+        imu_samples=imu_samples,
+    )
+
+    assert payload is not None
+    data = json.loads(payload.decode("utf-8"))
+    assert data["imu_samples"] == [
+        {
+            "capture_monotonic_ns": 123456789,
+            "ax": 1.0,
+            "ay": 2.0,
+            "az": 3.0,
+            "gx": 0.1,
+            "gy": 0.2,
+            "gz": 0.3,
+            "mx": 4.0,
+            "my": 5.0,
+            "mz": 6.0,
+            "temperature_c": 22.5,
+        }
+    ]
 
 
 def test_build_slam_input_packet_resizes_frames_when_requested() -> None:

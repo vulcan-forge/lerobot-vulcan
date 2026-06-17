@@ -238,6 +238,9 @@ class SourcceyHostConfig:
     slam_publish_fps: float = 0.0
     slam_resize_width: int | None = None
     slam_resize_height: int | None = None
+    slam_imu_enabled: bool = False
+    slam_imu_sample_rate_hz: float = 52.0
+    slam_imu_max_samples_per_packet: int = 6
     # Secondary wrist-camera stereo stream for near-field obstacle detection.
     slam_obstacle_input_enabled: bool = False
     slam_obstacle_input_endpoint: str = "tcp://*:5562"

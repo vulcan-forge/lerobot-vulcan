@@ -18,12 +18,14 @@ import signal
 import subprocess
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import zmq
 from lerobot.configs import parser
+from lerobot.sensors.imu.types import IMUSample as HostIMUSample
 
 from .config_sourccey import (
     SourcceyConfig,
@@ -38,8 +40,9 @@ from .sourccey import Sourccey
 from ..protobuf.generated import sourccey_pb2
 
 class SourcceyHost:
-    def __init__(self, config: SourcceyHostConfig):
+    def __init__(self, config: SourcceyHostConfig, *, imu_provider=None):
         self.config = config
+        self.imu_provider = imu_provider
         self.zmq_context = zmq.Context()
         self.zmq_cmd_socket = self.zmq_context.socket(zmq.PULL)
         self.zmq_cmd_socket.setsockopt(zmq.CONFLATE, 1)
@@ -103,17 +106,20 @@ class SourcceyHost:
             for key, value in observation.items()
             if isinstance(value, np.ndarray)
         }
+        imu_samples = None if self.imu_provider is None else self.imu_provider.recent_samples()
         if self.slam_input_publisher is not None:
             self.slam_input_publisher.publish(
                 socket=self.zmq_slam_input_socket,
                 observation=observation,
                 frames=frames,
+                imu_samples=imu_samples,
             )
         if self.slam_obstacle_publisher is not None:
             self.slam_obstacle_publisher.publish(
                 socket=self.zmq_slam_obstacle_socket,
                 observation=observation,
                 frames=frames,
+                imu_samples=imu_samples,
             )
 
 
@@ -251,18 +257,22 @@ def _build_host_slam_obstacle_publisher(config: SourcceyHostConfig) -> SlamInput
     )
 
 class _IMUReporter:
-    """Background logger that prints IMU telemetry at a fixed interval."""
+    """Background IMU collector with optional periodic console logging."""
 
     def __init__(self, config: SourcceyHostConfig):
         self.config = config
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._imu = None
+        self._lock = threading.Lock()
+        self._samples: deque[HostIMUSample] = deque(
+            maxlen=max(int(config.slam_imu_max_samples_per_packet), 1) * 4
+        )
 
     def start(self) -> None:
-        if not self.config.imu_print_enabled:
+        if not self.config.imu_print_enabled and not self.config.slam_imu_enabled:
             return
-        if self.config.imu_print_interval_s <= 0:
+        if self.config.imu_print_enabled and self.config.imu_print_interval_s <= 0:
             logging.warning("IMU reporter disabled: imu_print_interval_s must be > 0")
             return
         try:
@@ -275,6 +285,7 @@ class _IMUReporter:
             bus_num=self.config.imu_bus_num,
             lsm6dsox_address=self.config.imu_lsm6dsox_address,
             lis3mdl_address=self.config.imu_lis3mdl_address,
+            sample_rate_hz=max(float(self.config.slam_imu_sample_rate_hz), 1.0),
         )
         self._imu = AdafruitLSM6DSOXLIS3MDLIMU(config=imu_config)
         try:
@@ -287,7 +298,12 @@ class _IMUReporter:
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, daemon=True, name="sourccey_imu_reporter")
         self._thread.start()
-        print(f"IMU reporter started (interval={self.config.imu_print_interval_s:.2f}s)")
+        print(
+            "IMU reporter started "
+            f"(slam_imu_enabled={self.config.slam_imu_enabled} "
+            f"sample_rate_hz={float(self.config.slam_imu_sample_rate_hz):.2f} "
+            f"print_interval_s={float(self.config.imu_print_interval_s):.2f})"
+        )
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -301,20 +317,36 @@ class _IMUReporter:
                 pass
         self._imu = None
 
+    def recent_samples(self) -> list[HostIMUSample]:
+        if not self.config.slam_imu_enabled:
+            return []
+        with self._lock:
+            if not self._samples:
+                return []
+            max_samples = max(int(self.config.slam_imu_max_samples_per_packet), 1)
+            return list(self._samples)[-max_samples:]
+
     def _run(self) -> None:
         assert self._imu is not None
-        interval_s = float(self.config.imu_print_interval_s)
+        interval_s = 1.0 / max(float(self.config.slam_imu_sample_rate_hz), 1.0)
+        next_print_ts = time.monotonic()
         while not self._stop_event.is_set():
             try:
                 sample = self._imu.read()
                 if sample.valid:
-                    stamp = datetime.now(timezone.utc).isoformat()
-                    print(
-                        f"[{stamp}] IMU accel={tuple(round(v, 4) for v in sample.accel_m_s2)} "
-                        f"gyro={tuple(round(v, 4) for v in sample.gyro_rad_s)} "
-                        f"mag={tuple(round(v, 2) for v in sample.mag_uT)} "
-                        f"temp_c={None if sample.temperature_c is None else round(sample.temperature_c, 2)}"
-                    )
+                    with self._lock:
+                        self._samples.append(sample)
+                    if self.config.imu_print_enabled and time.monotonic() >= next_print_ts:
+                        stamp = datetime.now(timezone.utc).isoformat()
+                        print(
+                            f"[{stamp}] IMU accel={tuple(round(v, 4) for v in sample.accel_m_s2)} "
+                            f"gyro={tuple(round(v, 4) for v in sample.gyro_rad_s)} "
+                            f"mag={tuple(round(v, 2) for v in sample.mag_uT)} "
+                            f"temp_c={None if sample.temperature_c is None else round(sample.temperature_c, 2)}"
+                        )
+                        next_print_ts = (
+                            time.monotonic() + max(float(self.config.imu_print_interval_s), 0.001)
+                        )
                 else:
                     logging.warning("IMU read invalid: %s", sample.error)
             except Exception as exc:  # noqa: BLE001
@@ -400,9 +432,9 @@ def main(host_config: SourcceyHostConfig):
     logging.info("Sourccey Host started without connecting follower arms.")
 
     logging.info("Starting Host")
-    host = SourcceyHost(host_config)
     imu_reporter = _IMUReporter(host_config)
     imu_reporter.start()
+    host = SourcceyHost(host_config, imu_provider=imu_reporter)
 
     print("Waiting for commands...")
 

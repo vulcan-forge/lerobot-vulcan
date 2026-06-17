@@ -28,6 +28,8 @@ DEFAULT_ARM_POSE_DIR = (
     / "sourccey"
     / "defaults"
 )
+DEFAULT_ARM_POSE_NAME = "default_slam_position"
+FALLBACK_ARM_POSE_NAME = "default_active_action"
 
 
 @dataclass
@@ -81,7 +83,9 @@ def _build_arm_hold_action(observation: dict[str, object]) -> dict[str, float]:
 
 
 def _load_default_arm_pose(arm: str) -> dict[str, float]:
-    pose_path = DEFAULT_ARM_POSE_DIR / f"{arm}_arm_default_active_action.json"
+    pose_path = DEFAULT_ARM_POSE_DIR / f"{arm}_arm_{DEFAULT_ARM_POSE_NAME}.json"
+    if not pose_path.exists():
+        pose_path = DEFAULT_ARM_POSE_DIR / f"{arm}_arm_{FALLBACK_ARM_POSE_NAME}.json"
     payload = json.loads(pose_path.read_text(encoding="utf-8"))
     return {joint_key: float(joint_value) for joint_key, joint_value in payload.items()}
 
