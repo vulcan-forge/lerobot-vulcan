@@ -104,11 +104,15 @@ class SourcceyClient(Robot):
         # Base movement smoothing
         self._slew_time_s_levels = [0.25, 0.25, 1.0]
         self._x_deadbane = 0.02
+        self._y_deadbane = 0.02
 
         # max change in x.vel per second (tune this)
         self._x_accel_levels = [7.0, 5.0, 3.0]   # units: (x.vel units) / s
         self._x_decel_levels = [7.0, 5.0, 3.0]   # allow faster slowing down than speeding up (optional)
         self._x_cmd_smoothed = 0.0
+        self._y_accel_levels = [7.0, 5.0, 3.0]   # units: (y.vel units) / s
+        self._y_decel_levels = [7.0, 5.0, 3.0]   # allow faster slowing down than speeding up (optional)
+        self._y_cmd_smoothed = 0.0
 
         # Z Position Control
         # You measured ~5s for z to go from +100 to -100 units (200-unit travel).
@@ -534,15 +538,16 @@ class SourcceyClient(Robot):
         y_cmd = 0.0
         theta_cmd = 0.0
         x_cmd_target = 0.0
+        y_cmd_target = 0.0
 
         if self.teleop_keys["forward"] in pressed:
             x_cmd_target += base_sign * x_speed
         if self.teleop_keys["backward"] in pressed:
             x_cmd_target -= base_sign * x_speed
         if self.teleop_keys["left"] in pressed:
-            y_cmd += base_sign * y_speed
+            y_cmd_target += base_sign * y_speed
         if self.teleop_keys["right"] in pressed:
-            y_cmd -= base_sign * y_speed
+            y_cmd_target -= base_sign * y_speed
         # Z: integrate held keys into a stored position command (z.pos)
         z_dir = 0.0
         if self.teleop_keys["up"] in pressed:
@@ -557,6 +562,8 @@ class SourcceyClient(Robot):
         slew_time_s = self._slew_time_s_levels[self.speed_index]
         x_accel = self._x_accel_levels[self.speed_index]
         x_decel = self._x_decel_levels[self.speed_index]
+        y_accel = self._y_accel_levels[self.speed_index]
+        y_decel = self._y_decel_levels[self.speed_index]
 
         now = time.monotonic()
         dt = now - self._last_cmd_t
@@ -586,7 +593,21 @@ class SourcceyClient(Robot):
             # basically stopped -> jump immediately
             self._x_cmd_smoothed = x_cmd_target
 
+        if abs(self._y_cmd_smoothed) >= self._y_deadbane:
+            # already moving -> smooth changes
+            self._y_cmd_smoothed = self._slew(
+                current=self._y_cmd_smoothed,
+                target=y_cmd_target,
+                dt=dt,
+                up_rate=y_accel,
+                down_rate=y_decel,
+            )
+        else:
+            # basically stopped -> jump immediately
+            self._y_cmd_smoothed = y_cmd_target
+
         x_cmd = float(self._x_cmd_smoothed)
+        y_cmd = float(self._y_cmd_smoothed)
         action = {
             "x.vel": x_cmd,
             "y.vel": y_cmd,
