@@ -217,6 +217,13 @@ class SourcceyHostConfig:
     slam_eye_width: int = 320
     slam_eye_height: int = 240
     slam_eye_fourcc: str | None = "MJPG"
+    # Front-priority 3-camera mode: keep front stereo at slam_eye_* settings,
+    # disable wrist cameras, and run the bottom camera with its own lighter budget.
+    slam_three_camera_front_priority_mode: bool = False
+    slam_bottom_camera_fps: int = 15
+    slam_bottom_width: int = 320
+    slam_bottom_height: int = 240
+    slam_bottom_fourcc: str | None = "MJPG"
     # 0=disabled, 1=50Hz, 2=60Hz. US indoor lighting usually wants 2.
     slam_eye_power_line_frequency: int = 2
     # 1=manual, 3=aperture priority for these UVC cameras.

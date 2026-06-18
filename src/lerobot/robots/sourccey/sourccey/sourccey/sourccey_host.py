@@ -367,7 +367,40 @@ def main(host_config: SourcceyHostConfig):
 
     logging.info("Configuring Sourccey")
     robot_config = SourcceyConfig(id="sourccey")
-    if host_config.slam_eye_only_mode and not host_config.slam_obstacle_input_enabled:
+    if host_config.slam_three_camera_front_priority_mode:
+        if not host_config.slam_eye_only_mode:
+            raise ValueError("slam_three_camera_front_priority_mode requires --slam_eye_only_mode=true.")
+        if not host_config.bottom_camera_enabled:
+            raise ValueError("slam_three_camera_front_priority_mode requires --bottom_camera_enabled=true.")
+        if host_config.slam_obstacle_input_enabled:
+            raise ValueError(
+                "slam_three_camera_front_priority_mode is incompatible with --slam_obstacle_input_enabled=true "
+                "because it disables the wrist cameras."
+            )
+        robot_config.cameras = sourccey_cameras_config(
+            front_fps=host_config.slam_eye_camera_fps,
+            front_width=host_config.slam_eye_width,
+            front_height=host_config.slam_eye_height,
+            front_fourcc=host_config.slam_eye_fourcc,
+            include_wrist=False,
+            bottom_fps=host_config.slam_bottom_camera_fps,
+            bottom_width=host_config.slam_bottom_width,
+            bottom_height=host_config.slam_bottom_height,
+            bottom_fourcc=host_config.slam_bottom_fourcc,
+            include_bottom=True,
+            bottom_path=host_config.bottom_camera_path,
+        )
+        logging.info(
+            "Sourccey Host front-priority 3-camera SLAM mode enabled: front=%dx%d@%d bottom=%dx%d@%d host_loop=%dHz",
+            host_config.slam_eye_width,
+            host_config.slam_eye_height,
+            host_config.slam_eye_camera_fps,
+            host_config.slam_bottom_width,
+            host_config.slam_bottom_height,
+            host_config.slam_bottom_camera_fps,
+            max(host_config.max_loop_freq_hz, host_config.slam_eye_loop_freq_hz),
+)
+    elif host_config.slam_eye_only_mode and not host_config.slam_obstacle_input_enabled:
         robot_config.cameras = sourccey_slam_eye_only_cameras_config(
             front_fps=host_config.slam_eye_camera_fps,
             front_width=host_config.slam_eye_width,
