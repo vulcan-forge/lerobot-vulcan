@@ -61,6 +61,8 @@ class SourcceyClient(Robot):
         self.teleop_keys = config.teleop_keys
 
         self.polling_timeout_ms = config.polling_timeout_ms
+        self.wait_for_fresh_observation = config.wait_for_fresh_observation
+        self.fresh_observation_timeout_ms = config.fresh_observation_timeout_ms
         self.log_no_data_timeouts = config.log_no_data_timeouts
         self.no_data_log_interval_s = max(0.0, float(config.no_data_log_interval_s))
         self.connect_timeout_s = config.connect_timeout_s
@@ -377,9 +379,18 @@ class SourcceyClient(Robot):
 
         # 1. Get the latest message bytes from the socket
         latest_message_bytes = self._poll_and_get_latest_message()
+        if latest_message_bytes is None and self.wait_for_fresh_observation:
+            deadline = time.monotonic() + max(0.0, self.fresh_observation_timeout_ms) / 1000.0
+            while latest_message_bytes is None and time.monotonic() < deadline:
+                latest_message_bytes = self._poll_and_get_latest_message()
 
         # 2. If no message, return cached data
         if latest_message_bytes is None:
+            if self.wait_for_fresh_observation:
+                raise TimeoutError(
+                    "Timed out waiting for a fresh Sourccey observation packet; "
+                    "refusing to serve stale camera frames."
+                )
             return self.last_frames, self.last_remote_state, False
 
         # 3. Parse the protobuf message
