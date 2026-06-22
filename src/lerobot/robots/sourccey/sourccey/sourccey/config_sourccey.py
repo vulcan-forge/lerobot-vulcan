@@ -200,9 +200,10 @@ class SourcceyClientConfig(RobotConfig):
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
 
     polling_timeout_ms: int = 15
-    # Wait for a fresh remote observation packet instead of immediately reusing the
-    # last cached one on timeout. This avoids feeding stale camera frames to policies.
-    wait_for_fresh_observation: bool = True
+    # By default, fall back to the last received remote observation when no fresh
+    # packet is available yet. Enable this only when you explicitly want strict
+    # freshness enforcement during debugging.
+    wait_for_fresh_observation: bool = False
     # Upper bound on how long get_observation() will wait for a fresh packet before
     # raising an error rather than serving stale images.
     fresh_observation_timeout_ms: int = 30
