@@ -21,6 +21,7 @@ import threading
 import time
 
 from lerobot.cameras.utils import make_cameras_from_configs
+from lerobot.cameras.opencv.camera_opencv import OpenCVCamera
 from lerobot.motors.dc_pwm.dc_pwm import PWMDCMotorsController
 
 from lerobot.robots.robot import Robot
@@ -160,14 +161,63 @@ class Sourccey(Robot):
         self.dc_motors_controller.connect()
         self.z_actuator.connect()
 
-        # Connect only target cameras
+        # Connect cameras in a stable order and avoid strict per-camera warmup deadlocks.
         self._connected_cameras.clear()
-        for cam_key in self.cameras.keys():
+        connect_order = self._camera_connect_order()
+        for index, cam_key in enumerate(connect_order):
+            camera = self.cameras[cam_key]
             try:
-                self.cameras[cam_key].connect()
+                self._connect_camera(camera, cam_key)
                 self._connected_cameras.add(cam_key)
+                if index < len(connect_order) - 1:
+                    time.sleep(0.35)
             except Exception as e:
                 logger.warning(f"Camera '{cam_key}' failed to connect: {e}. Continuing without it.")
+                try:
+                    if getattr(camera, "is_connected", False):
+                        camera.disconnect()
+                except Exception:
+                    pass
+
+    def _camera_connect_order(self) -> list[str]:
+        preferred = ["front_left", "front_right", "bottom"]
+        ordered = [key for key in preferred if key in self.cameras]
+        ordered.extend(key for key in self.cameras.keys() if key not in ordered)
+        return ordered
+
+    def _connect_camera(self, camera: Any, cam_key: str) -> None:
+        if isinstance(camera, OpenCVCamera):
+            camera.connect(warmup=False)
+            self._wait_for_camera_ready(camera, cam_key)
+            return
+        camera.connect()
+
+    def _wait_for_camera_ready(self, camera: OpenCVCamera, cam_key: str) -> None:
+        startup_deadline_s = 6.0 if cam_key.startswith("front_") else 4.0
+        stale_threshold_ms = 1200 if cam_key.startswith("front_") else 1800
+        poll_timeout_ms = 700 if cam_key.startswith("front_") else 900
+        deadline = time.perf_counter() + startup_deadline_s
+        last_error: Exception | None = None
+
+        while time.perf_counter() < deadline:
+            try:
+                camera.read_latest(max_age_ms=stale_threshold_ms)
+                logger.info("Camera '%s' connected and delivering frames.", cam_key)
+                return
+            except Exception as read_latest_error:
+                last_error = read_latest_error
+                try:
+                    camera.async_read(timeout_ms=poll_timeout_ms)
+                    logger.info("Camera '%s' connected and delivered first async frame.", cam_key)
+                    return
+                except Exception as async_error:
+                    last_error = async_error
+                    time.sleep(0.08)
+
+        raise ConnectionError(
+            f"{camera} failed to deliver a fresh frame within {startup_deadline_s:.1f}s"
+            + (f" (last error: {last_error})" if last_error is not None else "")
+        )
 
     def _connect_arms(self, *, calibrate: bool) -> None:
         if self._arms_connected:
