@@ -206,8 +206,10 @@ class SourcceyClientConfig(RobotConfig):
     # last cached one on timeout. This avoids feeding stale camera frames to policies.
     wait_for_fresh_observation: bool = True
     # Upper bound on how long get_observation() will wait for a fresh packet before
-    # raising an error rather than serving stale images.
-    fresh_observation_timeout_ms: int = 30
+    # raising an error rather than serving stale images. This must be comfortably
+    # above a single 30 FPS frame period because freshness checks can require all
+    # cameras to advance before a packet is accepted.
+    fresh_observation_timeout_ms: int = 100
     # Reject packets that arrive out-of-order or without the new packet-sequence metadata.
     enforce_monotonic_packet_seq: bool = True
     # Cameras that must advance for an observation packet to be considered fresh.

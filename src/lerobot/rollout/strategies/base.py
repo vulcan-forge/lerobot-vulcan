@@ -39,6 +39,9 @@ class BaseStrategy(RolloutStrategy):
         self._init_engine(ctx)
         self._sync_action_plan_started_at: float | None = None
         self._sync_action_plan_horizon_s = self._get_sync_action_plan_horizon_s(ctx)
+        self._last_stale_reset_reason: str | None = None
+        self._last_stale_reset_log_time: float = 0.0
+        self._suppressed_stale_reset_logs: int = 0
         if self._sync_action_plan_horizon_s is not None:
             logger.info(
                 "Sync stale-action guard enabled (max plan age %.3fs)",
@@ -63,7 +66,24 @@ class BaseStrategy(RolloutStrategy):
 
     def _reset_stale_rollout_state(self, reason: str) -> None:
         """Flush queued policy/interpolator state so the next tick replans fresh."""
-        logger.warning("Flushing stale rollout state: %s", reason)
+        now = time.monotonic()
+        should_log = (
+            reason != self._last_stale_reset_reason or (now - self._last_stale_reset_log_time) >= 5.0
+        )
+        if should_log:
+            if self._suppressed_stale_reset_logs > 0 and reason == self._last_stale_reset_reason:
+                logger.warning(
+                    "Flushing stale rollout state: %s (suppressed %d similar messages)",
+                    reason,
+                    self._suppressed_stale_reset_logs,
+                )
+            else:
+                logger.warning("Flushing stale rollout state: %s", reason)
+            self._last_stale_reset_reason = reason
+            self._last_stale_reset_log_time = now
+            self._suppressed_stale_reset_logs = 0
+        else:
+            self._suppressed_stale_reset_logs += 1
         self._engine.reset()
         self._engine.resume()
         self._interpolator.reset()
