@@ -28,6 +28,12 @@ from .sourccey import Sourccey
 from ..protobuf.generated import sourccey_pb2
 
 
+def _camera_timestamp_to_ns(timestamp_s: float | None) -> int:
+    if timestamp_s is None:
+        return 0
+    return max(0, int(timestamp_s * 1_000_000_000))
+
+
 class SourcceyHost:
     def __init__(self, config: SourcceyHostConfig):
         self.zmq_context = zmq.Context()
@@ -42,6 +48,7 @@ class SourcceyHost:
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
         self.max_loop_freq_hz = config.max_loop_freq_hz
+        self.wait_for_all_cameras_before_send = config.wait_for_all_cameras_before_send
 
     def disconnect(self):
         self.zmq_observation_socket.close()
@@ -82,7 +89,8 @@ def main():
         duration = 0
 
         observation = None
-        last_sent_camera_timestamps: dict[str, float | None] = {}
+        last_sent_camera_timestamps_ns: dict[str, int] = {}
+        packet_seq = 0
         while duration < host.connection_time_s:
             loop_start_time = time.time()
             poll_relay(relay)
@@ -123,31 +131,42 @@ def main():
             # Send the observation to the remote agent
             try:
                 if observation is not None and observation != {}:
-                    current_camera_timestamps = {
-                        cam_key: getattr(robot.cameras[cam_key], "latest_timestamp", None)
+                    current_camera_timestamps_ns = {
+                        cam_key: _camera_timestamp_to_ns(getattr(robot.cameras[cam_key], "latest_timestamp", None))
                         for cam_key in robot.cameras.keys()
                     }
-                    has_new_camera_frame = (
-                        len(current_camera_timestamps) == 0
-                        or any(
-                            timestamp is not None
-                            and timestamp != last_sent_camera_timestamps.get(cam_key)
-                            for cam_key, timestamp in current_camera_timestamps.items()
+                    if len(current_camera_timestamps_ns) == 0:
+                        has_fresh_camera_set = True
+                    elif host.wait_for_all_cameras_before_send:
+                        has_fresh_camera_set = all(
+                            timestamp_ns > last_sent_camera_timestamps_ns.get(cam_key, 0)
+                            for cam_key, timestamp_ns in current_camera_timestamps_ns.items()
                         )
-                    )
-                    if not has_new_camera_frame:
-                        logging.debug("Skipping observation send: no new camera frame timestamps.")
+                    else:
+                        has_fresh_camera_set = any(
+                            timestamp_ns > last_sent_camera_timestamps_ns.get(cam_key, 0)
+                            for cam_key, timestamp_ns in current_camera_timestamps_ns.items()
+                        )
+
+                    if not has_fresh_camera_set:
+                        logging.debug("Skipping observation send: waiting for a fully fresh camera set.")
                         elapsed = time.time() - loop_start_time
                         time.sleep(max(1 / host.max_loop_freq_hz - elapsed, 0))
                         duration = time.perf_counter() - start
                         continue
 
                     # Convert observation to protobuf using existing method
-                    robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
+                    packet_seq += 1
+                    robot_state = robot.protobuf_converter.observation_to_protobuf(
+                        observation,
+                        packet_seq=packet_seq,
+                        packet_time_ns=time.perf_counter_ns(),
+                        camera_timestamps_ns=current_camera_timestamps_ns,
+                    )
 
                     # Send protobuf message instead of JSON
                     host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
-                    last_sent_camera_timestamps = current_camera_timestamps
+                    last_sent_camera_timestamps_ns = current_camera_timestamps_ns
             except zmq.Again:
                 logging.info("Dropping observation, no client connected")
             except Exception as e:

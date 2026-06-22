@@ -7,12 +7,14 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class CameraImage(_message.Message):
-    __slots__ = ("name", "image_data")
+    __slots__ = ("name", "image_data", "capture_time_ns")
     NAME_FIELD_NUMBER: _ClassVar[int]
     IMAGE_DATA_FIELD_NUMBER: _ClassVar[int]
+    CAPTURE_TIME_NS_FIELD_NUMBER: _ClassVar[int]
     name: str
     image_data: bytes
-    def __init__(self, name: _Optional[str] = ..., image_data: _Optional[bytes] = ...) -> None: ...
+    capture_time_ns: int
+    def __init__(self, name: _Optional[str] = ..., image_data: _Optional[bytes] = ..., capture_time_ns: _Optional[int] = ...) -> None: ...
 
 class MotorJoint(_message.Message):
     __slots__ = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
@@ -47,18 +49,22 @@ class BasePosition(_message.Message):
     def __init__(self, z_pos: _Optional[float] = ...) -> None: ...
 
 class SourcceyRobotState(_message.Message):
-    __slots__ = ("left_arm_joints", "right_arm_joints", "base_position", "base_velocity", "cameras")
+    __slots__ = ("left_arm_joints", "right_arm_joints", "base_position", "base_velocity", "cameras", "packet_seq", "packet_time_ns")
     LEFT_ARM_JOINTS_FIELD_NUMBER: _ClassVar[int]
     RIGHT_ARM_JOINTS_FIELD_NUMBER: _ClassVar[int]
     BASE_POSITION_FIELD_NUMBER: _ClassVar[int]
     BASE_VELOCITY_FIELD_NUMBER: _ClassVar[int]
     CAMERAS_FIELD_NUMBER: _ClassVar[int]
+    PACKET_SEQ_FIELD_NUMBER: _ClassVar[int]
+    PACKET_TIME_NS_FIELD_NUMBER: _ClassVar[int]
     left_arm_joints: MotorJoint
     right_arm_joints: MotorJoint
     base_position: BasePosition
     base_velocity: BaseVelocity
     cameras: _containers.RepeatedCompositeFieldContainer[CameraImage]
-    def __init__(self, left_arm_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., right_arm_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., base_position: _Optional[_Union[BasePosition, _Mapping]] = ..., base_velocity: _Optional[_Union[BaseVelocity, _Mapping]] = ..., cameras: _Optional[_Iterable[_Union[CameraImage, _Mapping]]] = ...) -> None: ...
+    packet_seq: int
+    packet_time_ns: int
+    def __init__(self, left_arm_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., right_arm_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., base_position: _Optional[_Union[BasePosition, _Mapping]] = ..., base_velocity: _Optional[_Union[BaseVelocity, _Mapping]] = ..., cameras: _Optional[_Iterable[_Union[CameraImage, _Mapping]]] = ..., packet_seq: _Optional[int] = ..., packet_time_ns: _Optional[int] = ...) -> None: ...
 
 class SourcceyRobotAction(_message.Message):
     __slots__ = ("left_arm_target_joints", "right_arm_target_joints", "base_target_position", "base_target_velocity", "untorque_left", "untorque_right")

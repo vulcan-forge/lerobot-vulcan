@@ -74,7 +74,14 @@ class SourcceyProtobuf:
             logger.error(f"Failed to convert action to protobuf: {e}")
             raise
 
-    def observation_to_protobuf(self, observation: dict[str, Any]) -> sourccey_pb2.SourcceyRobotState:
+    def observation_to_protobuf(
+        self,
+        observation: dict[str, Any],
+        *,
+        packet_seq: int | None = None,
+        packet_time_ns: int | None = None,
+        camera_timestamps_ns: dict[str, int] | None = None,
+    ) -> sourccey_pb2.SourcceyRobotState:
         """Convert observation dictionary to protobuf SourcceyRobotState message."""
         try:
             msg = sourccey_pb2.SourcceyRobotState()
@@ -107,14 +114,21 @@ class SourcceyProtobuf:
             base_pos = msg.base_position
             base_pos.z_pos = observation.get("z.pos", 0.0)
 
+            if packet_seq is not None:
+                msg.packet_seq = int(packet_seq)
+            if packet_time_ns is not None:
+                msg.packet_time_ns = int(packet_time_ns)
+
             # Process cameras - convert numpy arrays to CameraImage messages
             for cam_key, cam_data in observation.items():
                 if isinstance(cam_data, np.ndarray):
                     camera = sourccey_pb2.CameraImage()
                     camera.name = cam_key
                     # Encode as JPEG and store raw bytes
-                    _, encoded_img = cv2.imencode('.jpg', cam_data)
+                    _, encoded_img = cv2.imencode(".jpg", cam_data)
                     camera.image_data = encoded_img.tobytes()
+                    if camera_timestamps_ns is not None:
+                        camera.capture_time_ns = int(camera_timestamps_ns.get(cam_key, 0))
                     msg.cameras.append(camera)
 
             return msg
@@ -231,3 +245,13 @@ class SourcceyProtobuf:
         except Exception as e:
             logger.error(f"Failed to convert protobuf to observation: {e}")
             raise
+
+    def protobuf_to_observation_metadata(self, robot_state: sourccey_pb2.SourcceyRobotState) -> dict[str, Any]:
+        """Extract freshness metadata from a protobuf observation packet."""
+        return {
+            "packet_seq": int(getattr(robot_state, "packet_seq", 0)),
+            "packet_time_ns": int(getattr(robot_state, "packet_time_ns", 0)),
+            "camera_capture_time_ns": {
+                camera.name: int(getattr(camera, "capture_time_ns", 0)) for camera in robot_state.cameras
+            },
+        }

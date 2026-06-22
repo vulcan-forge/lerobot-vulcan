@@ -143,6 +143,8 @@ class SourcceyHostConfig:
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
+    # Only publish an observation packet once every configured camera has advanced.
+    wait_for_all_cameras_before_send: bool = True
 
     # Websocket relay controls.
     websocket_relay_autostart: bool = True
@@ -206,6 +208,11 @@ class SourcceyClientConfig(RobotConfig):
     # Upper bound on how long get_observation() will wait for a fresh packet before
     # raising an error rather than serving stale images.
     fresh_observation_timeout_ms: int = 30
+    # Reject packets that arrive out-of-order or without the new packet-sequence metadata.
+    enforce_monotonic_packet_seq: bool = True
+    # Cameras that must advance for an observation packet to be considered fresh.
+    # Defaults to every configured camera.
+    required_fresh_camera_keys: list[str] | None = None
     # Toggle periodic timeout logs when no observation packet arrives.
     log_no_data_timeouts: bool = True
     # Minimum interval between timeout log lines (seconds) when logging is enabled.
@@ -226,3 +233,13 @@ class SourcceyClientConfig(RobotConfig):
             self.slam.stereo_right_key = self.slam_stereo_right_key
         if self.slam_jpeg_quality is not None:
             self.slam.jpeg_quality = self.slam_jpeg_quality
+
+        if self.required_fresh_camera_keys is None:
+            self.required_fresh_camera_keys = list(self.cameras.keys())
+
+        unknown_camera_keys = sorted(set(self.required_fresh_camera_keys) - set(self.cameras.keys()))
+        if unknown_camera_keys:
+            raise ValueError(
+                "required_fresh_camera_keys contains unknown cameras: "
+                + ", ".join(unknown_camera_keys)
+            )

@@ -199,20 +199,23 @@ def test_protobuf_functionality():
         base_position.z_pos = 1.0
         print("  ✓ BasePosition can be created and populated")
 
-        # Test CameraImage with simplified structure
+        # Test CameraImage with freshness metadata
         camera_image = sourccey_pb2.CameraImage()
         camera_image.name = "test_camera"
         camera_image.image_data = b"fake_jpeg_data"
-        print("  ✓ CameraImage can be created and populated with simplified structure")
+        camera_image.capture_time_ns = 123456789
+        print("  ✓ CameraImage can be created and populated with freshness metadata")
 
-        # Test SourcceyRobotState with single cameras field
+        # Test SourcceyRobotState with packet freshness metadata
         robot_state = sourccey_pb2.SourcceyRobotState()
         robot_state.left_arm_joints.CopyFrom(motor_joint)
         robot_state.right_arm_joints.CopyFrom(motor_joint)
         robot_state.base_position.CopyFrom(base_position)
         robot_state.base_velocity.CopyFrom(base_velocity)
         robot_state.cameras.append(camera_image)
-        print("  ✓ SourcceyRobotState can be created and populated with single cameras field")
+        robot_state.packet_seq = 1
+        robot_state.packet_time_ns = 987654321
+        print("  ✓ SourcceyRobotState can be created and populated with packet freshness metadata")
 
         # Test SourcceyRobotAction
         robot_action = sourccey_pb2.SourcceyRobotAction()
@@ -231,12 +234,18 @@ def test_protobuf_functionality():
         # Verify the cameras field structure
         if len(deserialized_state.cameras) == 1:
             print("  ✓ Cameras field correctly uses repeated CameraImage structure")
-            # Verify the simplified CameraImage structure
+            # Verify the CameraImage freshness structure
             test_camera = deserialized_state.cameras[0]
-            if test_camera.name == "test_camera" and test_camera.image_data == b"fake_jpeg_data":
-                print("  ✓ Simplified CameraImage structure works correctly")
+            if (
+                test_camera.name == "test_camera"
+                and test_camera.image_data == b"fake_jpeg_data"
+                and test_camera.capture_time_ns == 123456789
+                and deserialized_state.packet_seq == 1
+                and deserialized_state.packet_time_ns == 987654321
+            ):
+                print("  ✓ CameraImage and packet freshness metadata work correctly")
             else:
-                print("  ✗ CameraImage structure mismatch")
+                print("  ✗ CameraImage or packet freshness metadata mismatch")
                 return False
         else:
             print("  ✗ Cameras field structure mismatch")
@@ -280,11 +289,16 @@ def validate_proto_structure():
             print("  ✗ Proto file missing SourcceyRobotState message")
             return False
 
-        # Check for simplified CameraImage structure
-        if "bytes image_data = 2;" in content:
-            print("  ✓ Proto file has simplified CameraImage structure")
+        # Check for freshness metadata structure
+        if (
+            "bytes image_data = 2;" in content
+            and "uint64 capture_time_ns = 3;" in content
+            and "uint64 packet_seq = 6;" in content
+            and "uint64 packet_time_ns = 7;" in content
+        ):
+            print("  ✓ Proto file has freshness metadata structure")
         else:
-            print("  ✗ Proto file missing simplified CameraImage structure")
+            print("  ✗ Proto file missing freshness metadata structure")
             return False
 
         return True
@@ -341,8 +355,8 @@ def compile_sourccey_protobuf():
         print("\n✅ All protobuf files compiled successfully!")
         print(f"Generated {len(generated_files)} Python modules in 'generated/' directory.")
         print("\nYou can now use the protobuf methods in Sourccey classes.")
-        print("\nNote: The cameras field now uses a single repeated CameraImage structure")
-        print("with simplified fields (name and image_data only) as defined in the proto file.")
+        print("\nNote: Observation packets now include packet freshness metadata.")
+        print("Each CameraImage also carries capture_time_ns for stale-frame rejection.")
     else:
         print("\n⚠️  Compilation completed but some tests failed.")
         if not verify_success:

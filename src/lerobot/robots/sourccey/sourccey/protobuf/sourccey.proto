@@ -6,6 +6,7 @@ package sourccey;
 message CameraImage {
     string name = 1;           // Camera name/key (e.g., "wrist_left", "wrist_right", "front", "rear")
     bytes image_data = 2;       // Raw image bytes (JPEG encoded)
+    uint64 capture_time_ns = 3; // Host monotonic capture timestamp for freshness checks
 }
 
 // Motor joint information for a single arm
@@ -42,6 +43,10 @@ message SourcceyRobotState {
 
     // Camera State - simplified to just name and bytes
     repeated CameraImage cameras = 5;
+
+    // Observation freshness metadata
+    uint64 packet_seq = 6;      // Strictly increasing host-side packet sequence
+    uint64 packet_time_ns = 7;  // Host monotonic send timestamp
 }
 
 // Complete sourccey robot action

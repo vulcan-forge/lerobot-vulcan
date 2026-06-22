@@ -16,8 +16,8 @@
 import base64
 import json
 import logging
-from functools import cached_property
 import time
+from functools import cached_property
 from typing import Any, Dict, Optional, Tuple
 
 import cv2
@@ -63,6 +63,8 @@ class SourcceyClient(Robot):
         self.polling_timeout_ms = config.polling_timeout_ms
         self.wait_for_fresh_observation = config.wait_for_fresh_observation
         self.fresh_observation_timeout_ms = config.fresh_observation_timeout_ms
+        self.enforce_monotonic_packet_seq = config.enforce_monotonic_packet_seq
+        self.required_fresh_camera_keys = tuple(config.required_fresh_camera_keys or ())
         self.log_no_data_timeouts = config.log_no_data_timeouts
         self.no_data_log_interval_s = max(0.0, float(config.no_data_log_interval_s))
         self.connect_timeout_s = config.connect_timeout_s
@@ -130,6 +132,9 @@ class SourcceyClient(Robot):
         self._no_data_log_interval_s = self.no_data_log_interval_s
         self._last_no_data_log_ts = 0.0
         self._suppressed_no_data_logs = 0
+        self._last_observation_packet_seq = 0
+        self._last_observation_packet_time_ns = 0
+        self._last_camera_capture_time_ns: dict[str, int] = {}
 
     ###################################################################
     # Properties and Attributes
@@ -400,7 +405,12 @@ class SourcceyClient(Robot):
         try:
             robot_state = sourccey_pb2.SourcceyRobotState()
             robot_state.ParseFromString(latest_message_bytes)
+            packet_seq, packet_time_ns, camera_capture_time_ns = self._validate_observation_packet_freshness(
+                robot_state
+            )
             observation = self.protobuf_converter.protobuf_to_observation(robot_state)
+        except TimeoutError:
+            raise
         except Exception as e:
             logging.error(f"Error parsing protobuf observation: {e}")
             if self.wait_for_fresh_observation:
@@ -432,8 +442,68 @@ class SourcceyClient(Robot):
 
         self.last_frames = new_frames
         self.last_remote_state = new_state
+        self._last_observation_packet_seq = packet_seq
+        self._last_observation_packet_time_ns = packet_time_ns
+        self._last_camera_capture_time_ns = camera_capture_time_ns
 
         return new_frames, new_state, True
+
+    def _validate_observation_packet_freshness(
+        self, robot_state: sourccey_pb2.SourcceyRobotState
+    ) -> tuple[int, int, dict[str, int]]:
+        """Validate monotonic packet and camera freshness metadata."""
+        metadata = self.protobuf_converter.protobuf_to_observation_metadata(robot_state)
+        packet_seq = metadata["packet_seq"]
+        packet_time_ns = metadata["packet_time_ns"]
+        camera_capture_time_ns = metadata["camera_capture_time_ns"]
+
+        if self.enforce_monotonic_packet_seq:
+            if packet_seq <= 0:
+                raise TimeoutError(
+                    "Observation packet is missing freshness metadata (packet_seq <= 0). "
+                    "Make sure the Sourccey host and client are running the same build."
+                )
+            if packet_seq <= self._last_observation_packet_seq:
+                raise TimeoutError(
+                    f"Received stale or out-of-order Sourccey observation packet "
+                    f"(packet_seq={packet_seq}, last={self._last_observation_packet_seq})."
+                )
+
+        if self.required_fresh_camera_keys:
+            missing_cameras = [
+                camera_key for camera_key in self.required_fresh_camera_keys if camera_key not in camera_capture_time_ns
+            ]
+            if missing_cameras:
+                raise TimeoutError(
+                    "Observation packet is missing required camera frames: "
+                    + ", ".join(sorted(missing_cameras))
+                )
+
+            missing_capture_timestamps = [
+                camera_key
+                for camera_key in self.required_fresh_camera_keys
+                if camera_capture_time_ns.get(camera_key, 0) <= 0
+            ]
+            if missing_capture_timestamps:
+                raise TimeoutError(
+                    "Observation packet is missing required camera freshness timestamps: "
+                    + ", ".join(sorted(missing_capture_timestamps))
+                )
+
+            if self._last_camera_capture_time_ns:
+                stale_cameras = [
+                    camera_key
+                    for camera_key in self.required_fresh_camera_keys
+                    if camera_capture_time_ns[camera_key]
+                    <= self._last_camera_capture_time_ns.get(camera_key, 0)
+                ]
+                if stale_cameras:
+                    raise TimeoutError(
+                        "Observation packet reused stale camera frames for: "
+                        + ", ".join(sorted(stale_cameras))
+                    )
+
+        return packet_seq, packet_time_ns, camera_capture_time_ns
 
     ###################################################################
     # Private Message and Parsing Functions
