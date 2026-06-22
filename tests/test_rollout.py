@@ -251,6 +251,39 @@ def test_create_inference_engine_sync():
     assert isinstance(engine, SyncInferenceEngine)
 
 
+def test_base_strategy_timeout_flushes_stale_state(monkeypatch):
+    from lerobot.rollout import BaseStrategy, BaseStrategyConfig
+
+    strategy = BaseStrategy(BaseStrategyConfig())
+    strategy._engine = MagicMock()
+    strategy._interpolator = MagicMock()
+    strategy._interpolator.get_control_interval.return_value = 1.0
+    strategy._sync_action_plan_started_at = None
+    strategy._sync_action_plan_horizon_s = 1.0
+    strategy._cached_obs_processed = {"obs": "stale"}
+
+    robot = MagicMock()
+    robot.get_observation.side_effect = TimeoutError("fresh observation missing")
+
+    shutdown_event = MagicMock()
+    shutdown_event.is_set.side_effect = [False, True]
+
+    cfg = MagicMock(duration=0.0, fps=30.0, use_torch_compile=False)
+    runtime = MagicMock(cfg=cfg, shutdown_event=shutdown_event)
+    hardware = MagicMock(robot_wrapper=robot)
+    ctx = MagicMock(runtime=runtime, hardware=hardware)
+
+    monkeypatch.setattr("lerobot.rollout.strategies.base.precise_sleep", lambda *_args, **_kwargs: None)
+
+    strategy.run(ctx)
+
+    assert strategy._engine.reset.call_count == 1
+    assert strategy._engine.resume.call_count == 2
+    strategy._interpolator.reset.assert_called_once()
+    assert strategy._cached_obs_processed is None
+    assert strategy._sync_action_plan_started_at is None
+
+
 # ---------------------------------------------------------------------------
 # Pure functions
 # ---------------------------------------------------------------------------

@@ -37,7 +37,38 @@ class BaseStrategy(RolloutStrategy):
     def setup(self, ctx: RolloutContext) -> None:
         """Initialise the inference engine."""
         self._init_engine(ctx)
+        self._sync_action_plan_started_at: float | None = None
+        self._sync_action_plan_horizon_s = self._get_sync_action_plan_horizon_s(ctx)
+        if self._sync_action_plan_horizon_s is not None:
+            logger.info(
+                "Sync stale-action guard enabled (max plan age %.3fs)",
+                self._sync_action_plan_horizon_s,
+            )
         logger.info("Base strategy ready")
+
+    def _get_sync_action_plan_horizon_s(self, ctx: RolloutContext) -> float | None:
+        """Return the intended wall-clock lifetime of one sync action chunk."""
+        if ctx.runtime.cfg.inference.type != "sync":
+            return None
+
+        n_action_steps = getattr(ctx.policy.policy.config, "n_action_steps", 1)
+        if not isinstance(n_action_steps, int) or n_action_steps <= 1:
+            return None
+
+        fps = float(ctx.runtime.cfg.fps)
+        if fps <= 0:
+            return None
+
+        return n_action_steps / fps
+
+    def _reset_stale_rollout_state(self, reason: str) -> None:
+        """Flush queued policy/interpolator state so the next tick replans fresh."""
+        logger.warning("Flushing stale rollout state: %s", reason)
+        self._engine.reset()
+        self._engine.resume()
+        self._interpolator.reset()
+        self._cached_obs_processed = None
+        self._sync_action_plan_started_at = None
 
     def run(self, ctx: RolloutContext) -> None:
         """Run the autonomous control loop until shutdown or duration expires."""
@@ -59,13 +90,31 @@ class BaseStrategy(RolloutStrategy):
                 logger.info("Duration limit reached (%.0fs)", cfg.duration)
                 break
 
-            obs = robot.get_observation()
+            if (
+                self._sync_action_plan_horizon_s is not None
+                and self._sync_action_plan_started_at is not None
+                and (loop_start - self._sync_action_plan_started_at) >= self._sync_action_plan_horizon_s
+            ):
+                self._reset_stale_rollout_state(
+                    "sync action chunk exceeded its wall-clock horizon; forcing replanning from fresh observation"
+                )
+
+            try:
+                obs = robot.get_observation()
+            except TimeoutError as exc:
+                self._reset_stale_rollout_state(str(exc))
+                dt = time.perf_counter() - loop_start
+                if (sleep_t := control_interval - dt) > 0:
+                    precise_sleep(sleep_t)
+                continue
             obs_processed = self._process_observation_and_notify(ctx.processors, obs)
 
             if self._handle_warmup(cfg.use_torch_compile, loop_start, control_interval):
                 continue
 
             action_dict = send_next_action(obs_processed, obs, ctx, interpolator)
+            if action_dict is not None and self._sync_action_plan_started_at is None:
+                self._sync_action_plan_started_at = time.perf_counter()
             self._log_telemetry(obs_processed, action_dict, ctx.runtime)
 
             dt = time.perf_counter() - loop_start
@@ -75,6 +124,10 @@ class BaseStrategy(RolloutStrategy):
                 logger.warning(
                     f"Record loop is running slower ({1 / dt:.1f} Hz) than the target FPS ({cfg.fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
                 )
+                if self._sync_action_plan_horizon_s is not None and dt >= self._sync_action_plan_horizon_s:
+                    self._reset_stale_rollout_state(
+                        f"control loop iteration took {dt:.3f}s, exceeding the sync action horizon of {self._sync_action_plan_horizon_s:.3f}s"
+                    )
 
     def teardown(self, ctx: RolloutContext) -> None:
         """Disconnect hardware and stop inference."""

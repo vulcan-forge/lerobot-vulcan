@@ -374,7 +374,8 @@ class SourcceyClient(Robot):
 
         Attempts to retrieve and decode the latest message within a short timeout.
         If successful, updates and returns the new frames, speed, and arm state.
-        If no new data arrives or decoding fails, returns the last known values.
+        If freshness gating is disabled, decode failures fall back to the last known
+        values; otherwise stale observations are rejected with ``TimeoutError``.
         """
 
         # 1. Get the latest message bytes from the socket
@@ -402,10 +403,19 @@ class SourcceyClient(Robot):
             observation = self.protobuf_converter.protobuf_to_observation(robot_state)
         except Exception as e:
             logging.error(f"Error parsing protobuf observation: {e}")
+            if self.wait_for_fresh_observation:
+                raise TimeoutError(
+                    "Fresh Sourccey observation packet could not be decoded; "
+                    "refusing to serve stale camera frames."
+                ) from e
             return self.last_frames, self.last_remote_state, False
 
         # 4. If protobuf parsing failed, return cached data
         if observation is None:
+            if self.wait_for_fresh_observation:
+                raise TimeoutError(
+                    "Fresh Sourccey observation packet was empty; refusing to serve stale camera frames."
+                )
             return self.last_frames, self.last_remote_state, False
 
         # 5. Process the valid observation data
@@ -413,6 +423,11 @@ class SourcceyClient(Robot):
             new_frames, new_state = self._remote_state_from_obs(observation)
         except Exception as e:
             logging.error(f"Error processing observation data, serving last observation: {e}")
+            if self.wait_for_fresh_observation:
+                raise TimeoutError(
+                    "Fresh Sourccey observation packet could not be processed; "
+                    "refusing to serve stale camera frames."
+                ) from e
             return self.last_frames, self.last_remote_state, False
 
         self.last_frames = new_frames
