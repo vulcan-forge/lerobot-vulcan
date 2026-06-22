@@ -59,13 +59,7 @@ class BaseStrategy(RolloutStrategy):
                 logger.info("Duration limit reached (%.0fs)", cfg.duration)
                 break
 
-            try:
-                obs = robot.get_observation()
-            except TimeoutError:
-                dt = time.perf_counter() - loop_start
-                if (sleep_t := control_interval - dt) > 0:
-                    precise_sleep(sleep_t)
-                continue
+            obs = robot.get_observation()
             obs_processed = self._process_observation_and_notify(ctx.processors, obs)
 
             if self._handle_warmup(cfg.use_torch_compile, loop_start, control_interval):
