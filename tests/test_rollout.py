@@ -251,6 +251,43 @@ def test_create_inference_engine_sync():
     assert isinstance(engine, SyncInferenceEngine)
 
 
+def test_sync_inference_engine_uses_time_aware_xvla_chunk_playback(monkeypatch):
+    from lerobot.rollout import SyncInferenceEngine
+
+    policy = MagicMock()
+    policy.name = "xvla"
+    policy.config.n_action_steps = 4
+    policy.config.use_amp = False
+    policy.predict_action_chunk.return_value = torch.tensor([[[0.0], [1.0], [2.0], [3.0]]], dtype=torch.float32)
+
+    engine = SyncInferenceEngine(
+        policy=policy,
+        preprocessor=lambda observation: observation,
+        postprocessor=lambda action: action,
+        dataset_features={"action": {"names": ["joint"]}},
+        ordered_action_keys=["joint"],
+        task="test",
+        fps=30.0,
+        device="cpu",
+        robot_type="mock",
+    )
+
+    monkeypatch.setattr(
+        "lerobot.rollout.inference.sync.prepare_observation_for_inference",
+        lambda observation, *_args, **_kwargs: observation,
+    )
+    times = iter([100.00, 100.00, 100.08])
+    monkeypatch.setattr("lerobot.rollout.inference.sync.time.monotonic", lambda: next(times))
+
+    obs_frame = {"observation.state": torch.zeros(1)}
+    first = engine.get_action(obs_frame)
+    second = engine.get_action(obs_frame)
+
+    assert first.tolist() == [0.0]
+    assert second.tolist() == [2.0]
+    policy.predict_action_chunk.assert_called_once()
+
+
 def test_base_strategy_timeout_flushes_stale_state(monkeypatch):
     from lerobot.rollout import BaseStrategy, BaseStrategyConfig
 

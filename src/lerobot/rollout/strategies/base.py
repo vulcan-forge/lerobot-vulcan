@@ -42,6 +42,8 @@ class BaseStrategy(RolloutStrategy):
         self._last_stale_reset_reason: str | None = None
         self._last_stale_reset_log_time: float = 0.0
         self._suppressed_stale_reset_logs: int = 0
+        self._last_slow_loop_warning_time: float = 0.0
+        self._suppressed_slow_loop_warnings: int = 0
         if self._sync_action_plan_horizon_s is not None:
             logger.info(
                 "Sync stale-action guard enabled (max plan age %.3fs)",
@@ -51,6 +53,8 @@ class BaseStrategy(RolloutStrategy):
 
     def _get_sync_action_plan_horizon_s(self, ctx: RolloutContext) -> float | None:
         """Return the intended wall-clock lifetime of one sync action chunk."""
+        if getattr(ctx.policy.inference, "time_aware_chunking_enabled", False):
+            return None
         if ctx.runtime.cfg.inference.type != "sync":
             return None
 
@@ -141,9 +145,25 @@ class BaseStrategy(RolloutStrategy):
             if (sleep_t := control_interval - dt) > 0:
                 precise_sleep(sleep_t)
             else:
-                logger.warning(
-                    f"Record loop is running slower ({1 / dt:.1f} Hz) than the target FPS ({cfg.fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
-                )
+                now = time.monotonic()
+                if (now - self._last_slow_loop_warning_time) >= 5.0:
+                    if self._suppressed_slow_loop_warnings > 0:
+                        logger.warning(
+                            "Record loop is running slower (%.1f Hz) than the target FPS (%.1f Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation (suppressed %d similar messages)",
+                            1 / dt,
+                            cfg.fps,
+                            self._suppressed_slow_loop_warnings,
+                        )
+                    else:
+                        logger.warning(
+                            "Record loop is running slower (%.1f Hz) than the target FPS (%.1f Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation",
+                            1 / dt,
+                            cfg.fps,
+                        )
+                    self._last_slow_loop_warning_time = now
+                    self._suppressed_slow_loop_warnings = 0
+                else:
+                    self._suppressed_slow_loop_warnings += 1
                 if self._sync_action_plan_horizon_s is not None and dt >= self._sync_action_plan_horizon_s:
                     self._reset_stale_rollout_state(
                         f"control loop iteration took {dt:.3f}s, exceeding the sync action horizon of {self._sync_action_plan_horizon_s:.3f}s"

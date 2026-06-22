@@ -106,6 +106,7 @@ def create_inference_engine(
             dataset_features=dataset_features,
             ordered_action_keys=ordered_action_keys,
             task=task,
+            fps=fps,
             device=device,
             robot_type=robot_wrapper.robot_type,
         )
