@@ -383,6 +383,8 @@ class SourcceyClient(Robot):
             deadline = time.monotonic() + max(0.0, self.fresh_observation_timeout_ms) / 1000.0
             while latest_message_bytes is None and time.monotonic() < deadline:
                 latest_message_bytes = self._poll_and_get_latest_message()
+                if latest_message_bytes is None:
+                    time.sleep(0.001)
 
         # 2. If no message, return cached data
         if latest_message_bytes is None:

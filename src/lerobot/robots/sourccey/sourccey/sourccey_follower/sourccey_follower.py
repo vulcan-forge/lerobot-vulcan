@@ -214,8 +214,8 @@ class SourcceyFollower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        overcurrent_motors = self.safety.detect_overcurrent_motors()
-        self.safety.log_overcurrent_motors(overcurrent_motors)
+        # overcurrent_motors = self.safety.detect_overcurrent_motors()
+        # self.safety.log_overcurrent_motors(overcurrent_motors)
 
         # Read arm position
         start = time.perf_counter()

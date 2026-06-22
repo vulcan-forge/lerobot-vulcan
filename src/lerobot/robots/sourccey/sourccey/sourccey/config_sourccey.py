@@ -205,7 +205,7 @@ class SourcceyClientConfig(RobotConfig):
     wait_for_fresh_observation: bool = True
     # Upper bound on how long get_observation() will wait for a fresh packet before
     # raising an error rather than serving stale images.
-    fresh_observation_timeout_ms: int = 1000
+    fresh_observation_timeout_ms: int = 30
     # Toggle periodic timeout logs when no observation packet arrives.
     log_no_data_timeouts: bool = True
     # Minimum interval between timeout log lines (seconds) when logging is enabled.
