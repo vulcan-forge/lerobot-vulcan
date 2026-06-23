@@ -455,48 +455,36 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             f"Start offline training on a fixed dataset, with effective batch size: {effective_batch_size}"
         )
 
-    for _ in range(step, cfg.steps):
-        start_time = time.perf_counter()
-        batch = next(dl_iter)
-        for cam_key in dataset.meta.camera_keys:
-            if cam_key in batch and batch[cam_key].dtype == torch.uint8:
-                batch[cam_key] = batch[cam_key].to(dtype=torch.float32) / 255.0
-        batch = preprocessor(batch)
-        train_tracker.dataloading_s = time.perf_counter() - start_time
+    def save_emergency_checkpoint(reason: str) -> None:
+        if not cfg.save_checkpoint or not is_main_process:
+            return
+        if step <= 0:
+            logging.warning("Skipping emergency checkpoint save: no completed training steps yet.")
+            return
 
-        train_tracker, output_dict = update_policy(
-            train_tracker,
-            policy,
-            batch,
-            optimizer,
-            cfg.optimizer.grad_clip_norm,
-            accelerator=accelerator,
-            lr_scheduler=lr_scheduler,
-            sample_weighter=sample_weighter,
-        )
-
-        # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
-        # increment `step` here.
-        step += 1
-        if is_main_process:
-            progbar.update(1)
-        train_tracker.step()
-        is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0 and is_main_process
-        is_saving_step = step % cfg.save_freq == 0 or step == cfg.steps
-        is_eval_step = cfg.eval_freq > 0 and step % cfg.eval_freq == 0
-
-        if is_log_step:
-            logging.info(train_tracker)
+        try:
+            checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
+            logging.warning(
+                "Attempting emergency checkpoint save at step %d due to %s",
+                step,
+                reason,
+            )
+            save_checkpoint(
+                checkpoint_dir=checkpoint_dir,
+                step=step,
+                cfg=cfg,
+                policy=accelerator.unwrap_model(policy),
+                optimizer=optimizer,
+                scheduler=lr_scheduler,
+                preprocessor=preprocessor,
+                postprocessor=postprocessor,
+            )
+            update_last_checkpoint(checkpoint_dir)
             if wandb_logger:
-                wandb_log_dict = train_tracker.to_dict()
-                if output_dict:
-                    wandb_log_dict.update(output_dict)
-                # Log sample weighting statistics if enabled
-                if sample_weighter is not None:
-                    weighter_stats = sample_weighter.get_stats()
-                    wandb_log_dict.update({f"sample_weighting/{k}": v for k, v in weighter_stats.items()})
-                wandb_logger.log_dict(wandb_log_dict, step)
-            train_tracker.reset_averages()
+                wandb_logger.log_policy(checkpoint_dir)
+            logging.warning("Emergency checkpoint saved to %s", checkpoint_dir)
+        except Exception:
+            logging.exception("Emergency checkpoint save failed.")
 
     try:
         for _ in range(step, cfg.steps):
@@ -610,16 +598,12 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                         wandb_logger.log_video(eval_info["overall"]["video_paths"][0], step, mode="eval")
 
                 accelerator.wait_for_everyone()
-
     except KeyboardInterrupt:
         save_emergency_checkpoint("KeyboardInterrupt")
         raise
     except Exception:
         save_emergency_checkpoint("an uncaught exception")
         raise
-
-    if is_main_process:
-        progbar.close()
 
     if is_main_process:
         progbar.close()
