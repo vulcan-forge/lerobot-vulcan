@@ -23,6 +23,7 @@ from typing import Tuple, Optional
 
 from setup_modules.setup_battery import BatterySetupOptions, setup_bq34z100
 from setup_modules.setup_desktop import install_sourccey_desktop_extras
+from setup_modules.setup_udev import configure_sourccey_extra_udev
 
 class Colors:
     """ANSI color codes for terminal output"""
@@ -459,6 +460,16 @@ class SetupScript:
             options=options,
         )
 
+    def configure_sourccey_extra_udev(self) -> bool:
+        """Install optional Sourccey hardware aliases on Raspberry Pi."""
+        return configure_sourccey_extra_udev(
+            project_root=self.project_root,
+            print_status=self.print_status,
+            print_success=self.print_success,
+            print_warning=self.print_warning,
+            print_error=self.print_error,
+        )
+
     def fix_final_ownership(self) -> bool:
         """Restore project directory ownership to the normal user after setup."""
         if platform.system() == "Windows":
@@ -728,6 +739,8 @@ class SetupScript:
         if desktop:
             setup_steps.append(self.setup_desktop_extras())
         setup_steps.append(self.compile_profobufs())
+        if self.is_raspberry_pi():
+            setup_steps.append(self.configure_sourccey_extra_udev())
         if self.should_configure_bq34z100(force=force_bq34z100_setup, skip=skip_bq34z100_setup):
             setup_steps.append(
                 self.configure_bq34z100(
