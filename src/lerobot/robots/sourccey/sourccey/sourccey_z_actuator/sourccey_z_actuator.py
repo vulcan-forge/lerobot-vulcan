@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 from pathlib import Path
 import threading
 import time
@@ -17,6 +18,9 @@ try:
     from gpiozero import MCP3008  # type: ignore
 except Exception:  # pragma: no cover
     MCP3008 = None  # type: ignore
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -444,12 +448,21 @@ class SourcceyZActuator:
         if not fpath.is_file():
             return False
 
-        with open(fpath, "r") as f:
-            data = json.load(f)
+        try:
+            with open(fpath, "r") as f:
+                data = json.load(f)
 
-        raw_min = int(data["z_actuator"]["raw_min"])
-        raw_max = int(data["z_actuator"]["raw_max"])
-        invert = bool(data["z_actuator"]["invert"])
+            raw_min = int(data["z_actuator"]["raw_min"])
+            raw_max = int(data["z_actuator"]["raw_max"])
+            invert = bool(data["z_actuator"]["invert"])
+        except Exception as exc:
+            logger.warning(
+                "Failed to load Z actuator calibration from %s: %s. "
+                "Starting with defaults and allowing recalibration.",
+                fpath,
+                exc,
+            )
+            return False
 
         self.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
 

@@ -1,9 +1,16 @@
 #!/usr/bin/env python
 
+import json
+
 import pytest
 
 import lerobot.robots.sourccey.sourccey.sourccey.sourccey as sourccey_module
+import lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator as z_actuator_module
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey import Sourccey
+from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import (
+    SourcceyZActuator,
+    ZSensor,
+)
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import (
     BiSourcceyLeader,
 )
@@ -57,3 +64,50 @@ def test_bi_sourccey_leader_auto_calibrate_raises_when_arm_thread_fails() -> Non
         teleop.auto_calibrate()
 
     assert teleop.left_arm.calls == [{"reverse": False}]
+
+
+def test_sourccey_z_actuator_ignores_invalid_calibration_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    calibration_dir = tmp_path / "robots" / "sourccey_z_actuator"
+    calibration_dir.mkdir(parents=True)
+    calibration_path = calibration_dir / "sourccey_z_actuator.json"
+    calibration_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(z_actuator_module, "HF_LEROBOT_CALIBRATION", tmp_path)
+
+    actuator = SourcceyZActuator(sensor=ZSensor())
+
+    assert actuator.calibration_fpath == calibration_path
+    assert actuator.sensor.calibration_min == 0
+    assert actuator.sensor.calibration_max == 1023
+    assert actuator.sensor.invert is True
+
+
+def test_sourccey_z_actuator_loads_valid_calibration_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    calibration_dir = tmp_path / "robots" / "sourccey_z_actuator"
+    calibration_dir.mkdir(parents=True)
+    calibration_path = calibration_dir / "sourccey_z_actuator.json"
+    calibration_path.write_text(
+        json.dumps(
+            {
+                "z_actuator": {
+                    "raw_min": 111,
+                    "raw_max": 876,
+                    "invert": False,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(z_actuator_module, "HF_LEROBOT_CALIBRATION", tmp_path)
+
+    actuator = SourcceyZActuator(sensor=ZSensor())
+
+    assert actuator.calibration_fpath == calibration_path
+    assert actuator.sensor.calibration_min == 111
+    assert actuator.sensor.calibration_max == 876
+    assert actuator.sensor.invert is False
