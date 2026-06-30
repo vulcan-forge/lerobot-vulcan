@@ -94,6 +94,7 @@ class Sourccey(Robot):
         # Track per-arm untorque state for edge detection
         self.untorque_left_prev = False
         self.untorque_right_prev = False
+        self._z_hardware_available = True
 
     def __del__(self):
         # Destructors can run on partially initialized objects if __init__ raised.
@@ -148,8 +149,17 @@ class Sourccey(Robot):
         self.left_arm.connect(calibrate)
         self.right_arm.connect(calibrate)
 
-        self.dc_motors_controller.connect()
-        self.z_actuator.connect()
+        self._z_hardware_available = True
+        try:
+            self.dc_motors_controller.connect()
+            self.z_actuator.connect()
+        except RuntimeError as exc:
+            self._z_hardware_available = False
+            self.z_actuator.use_z_actuator = False
+            logger.warning(
+                "Skipping base/Z hardware during connect: %s. Continuing without Z calibration/control.",
+                exc,
+            )
 
         # Connect only target cameras
         self._connected_cameras.clear()
@@ -206,7 +216,12 @@ class Sourccey(Robot):
 
             # Soft robot calibration should not physically move the Z actuator.
             # Only a full reset re-detects Z limits by movement.
-            self.z_actuator.calibrator.auto_calibrate(full_reset=full_reset)
+            if self._z_hardware_available:
+                self.z_actuator.calibrator.auto_calibrate(full_reset=full_reset)
+            else:
+                logger.warning(
+                    "Skipping Z auto-calibration because GPIO/Z hardware is unavailable on this machine."
+                )
 
             calibration_errors: list[tuple[str, BaseException]] = []
 
