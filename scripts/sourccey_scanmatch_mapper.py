@@ -38,30 +38,14 @@ def _normalize_angle_deg(angle_deg: float) -> float:
     return math.degrees(_normalize_angle_rad(math.radians(angle_deg)))
 
 
-def _dedupe_points(*, points_local_m: np.ndarray, voxel_size_m: float, max_points: int) -> np.ndarray:
-    if len(points_local_m) == 0:
-        return np.zeros((0, 2), dtype=np.float32)
-
-    points = np.asarray(points_local_m, dtype=np.float32)
-    if voxel_size_m > 0.0 and len(points) > 1:
-        quantized = np.rint(points / float(voxel_size_m)).astype(np.int32)
-        _, unique_indices = np.unique(quantized, axis=0, return_index=True)
-        points = points[np.sort(unique_indices)]
-
-    if len(points) > max_points:
-        stride = max(len(points) // max_points, 1)
-        points = points[::stride][:max_points]
-    return np.ascontiguousarray(points, dtype=np.float32)
-
-
-@dataclass(slots=True)
+@dataclass
 class Pose2D:
     x_m: float
     y_m: float
     yaw_rad: float
 
 
-@dataclass(slots=True)
+@dataclass
 class MotionDelta:
     dx_local_m: float
     dy_local_m: float
@@ -72,89 +56,12 @@ class MotionDelta:
     wz_rad_s: float
 
 
-@dataclass(slots=True)
+@dataclass
 class ScanFrame:
     ts_wall_s: float
     rpm: float
     points_local_m: np.ndarray
     valid_points: int
-    source_scans: int = 1
-
-
-class StableScanAccumulator:
-    def __init__(
-        self,
-        *,
-        required_scans: int,
-        min_stable_time_s: float,
-        min_points: int,
-        max_linear_speed_m_s: float,
-        max_angular_speed_rad_s: float,
-        voxel_size_m: float,
-        max_points: int,
-    ) -> None:
-        self.required_scans = max(int(required_scans), 1)
-        self.min_stable_time_s = max(float(min_stable_time_s), 0.0)
-        self.min_points = max(int(min_points), 1)
-        self.max_linear_speed_m_s = max(float(max_linear_speed_m_s), 0.0)
-        self.max_angular_speed_rad_s = max(float(max_angular_speed_rad_s), 0.0)
-        self.voxel_size_m = max(float(voxel_size_m), 0.0)
-        self.max_points = max(int(max_points), 1)
-        self._frames: list[ScanFrame] = []
-        self._stable_started_ts: float | None = None
-        self._snapshot_emitted = False
-
-    def update(self, *, frame: ScanFrame, motion: MotionDelta) -> ScanFrame | None:
-        if frame.valid_points < self.min_points or self._is_moving(motion):
-            self._reset()
-            return None
-
-        if self._stable_started_ts is None:
-            self._stable_started_ts = float(frame.ts_wall_s)
-            self._frames.clear()
-            self._snapshot_emitted = False
-
-        self._frames.append(frame)
-        if len(self._frames) > self.required_scans:
-            self._frames = self._frames[-self.required_scans :]
-
-        stable_time_s = float(frame.ts_wall_s) - float(self._stable_started_ts)
-        if self._snapshot_emitted:
-            return None
-        if len(self._frames) < self.required_scans:
-            return None
-        if stable_time_s < self.min_stable_time_s:
-            return None
-
-        snapshot = self._build_snapshot(self._frames)
-        self._snapshot_emitted = True
-        return snapshot
-
-    def _is_moving(self, motion: MotionDelta) -> bool:
-        if abs(float(motion.vx_m_s)) > self.max_linear_speed_m_s:
-            return True
-        if abs(float(motion.vy_m_s)) > self.max_linear_speed_m_s:
-            return True
-        if abs(float(motion.wz_rad_s)) > self.max_angular_speed_rad_s:
-            return True
-        return False
-
-    def _build_snapshot(self, frames: list[ScanFrame]) -> ScanFrame:
-        all_points = np.concatenate([frame.points_local_m for frame in frames], axis=0)
-        points = _dedupe_points(points_local_m=all_points, voxel_size_m=self.voxel_size_m, max_points=self.max_points)
-        last_frame = frames[-1]
-        return ScanFrame(
-            ts_wall_s=float(last_frame.ts_wall_s),
-            rpm=float(last_frame.rpm),
-            points_local_m=points,
-            valid_points=int(len(points)),
-            source_scans=len(frames),
-        )
-
-    def _reset(self) -> None:
-        self._frames.clear()
-        self._stable_started_ts = None
-        self._snapshot_emitted = False
 
 
 class MotionAccumulator:
@@ -175,13 +82,9 @@ class MotionAccumulator:
 
     def start(self) -> None:
         if self.endpoint is None:
-            logging.info("Column-carving mapper running without slam_input motion prior.")
+            logging.info("Scanmatch mapper running without slam_input motion prior.")
             return
-        self._thread = threading.Thread(
-            target=self._run,
-            name="column_carving_motion_accumulator",
-            daemon=True,
-        )
+        self._thread = threading.Thread(target=self._run, name="scanmatch_motion_accumulator", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -343,7 +246,6 @@ class LidarScanReader:
             x_local = distance_m * math.cos(theta)
             y_local = distance_m * math.sin(theta)
             local_points.append((x_local, y_local))
-
         if not local_points:
             return None
 
@@ -360,15 +262,17 @@ class LidarScanReader:
         )
 
 
-class ColumnCarvingOccupancyMap:
+class OccupancyGridMap:
     def __init__(
         self,
         *,
         resolution_m: float,
         map_size_m: float,
-        robot_clear_radius_m: float,
-        occupied_dilation_px: int,
-        max_range_m: float,
+        occ_threshold_logodds: float,
+        free_update: float,
+        occ_update: float,
+        logodds_min: float,
+        logodds_max: float,
     ) -> None:
         self.resolution_m = float(resolution_m)
         self.map_size_m = float(map_size_m)
@@ -376,10 +280,12 @@ class ColumnCarvingOccupancyMap:
         self.size_px = max(self.size_px, 64)
         self.center_col = self.size_px // 2
         self.center_row = self.size_px // 2
-        self.state = np.full((self.size_px, self.size_px), -1, dtype=np.int16)
-        self.robot_clear_radius_m = max(float(robot_clear_radius_m), 0.0)
-        self.occupied_dilation_px = max(int(occupied_dilation_px), 0)
-        self.max_range_m = float(max_range_m)
+        self.logodds = np.zeros((self.size_px, self.size_px), dtype=np.float32)
+        self.occ_threshold_logodds = float(occ_threshold_logodds)
+        self.free_update = float(free_update)
+        self.occ_update = float(occ_update)
+        self.logodds_min = float(logodds_min)
+        self.logodds_max = float(logodds_max)
         self._distance_map_px: np.ndarray | None = None
         self._occupied_count = 0
 
@@ -456,9 +362,9 @@ class ColumnCarvingOccupancyMap:
             for dy_m in y_offsets:
                 for dyaw_rad in yaw_offsets:
                     candidate = Pose2D(
-                        x_m=base_pose.x_m + float(dx_m),
-                        y_m=base_pose.y_m + float(dy_m),
-                        yaw_rad=_normalize_angle_rad(base_pose.yaw_rad + float(dyaw_rad)),
+                        x_m=base_pose.x_m + dx_m,
+                        y_m=base_pose.y_m + dy_m,
+                        yaw_rad=_normalize_angle_rad(base_pose.yaw_rad + dyaw_rad),
                     )
                     score = self._candidate_score(points_local_m=points_local_m, pose=candidate)
                     if score < best_score:
@@ -486,110 +392,43 @@ class ColumnCarvingOccupancyMap:
         oob_ratio = 1.0 - (float(np.count_nonzero(mask)) / float(len(points_world)))
         return mean_dist_px + oob_ratio * 8.0
 
-    def integrate_scan(self, *, points_local_m: np.ndarray, pose: Pose2D) -> bool:
+    def update_with_scan(self, *, points_local_m: np.ndarray, pose: Pose2D) -> None:
         origin_row, origin_col = self.world_to_grid(pose.x_m, pose.y_m)
         if not self.in_bounds(origin_row, origin_col):
-            return False
-
-        if len(points_local_m) == 0:
-            return False
-
-        points_world = self.transform_points(points_local_m, pose)
-        endpoint_cells: list[tuple[int, int]] = []
-
-        for x_world, y_world in points_world:
-            row, col = self.world_to_grid(float(x_world), float(y_world))
-            if not self.in_bounds(row, col):
-                continue
-            ray = _bresenham_line(origin_row, origin_col, row, col)
-            if len(ray) <= 1:
-                endpoint_cells.append((row, col))
-                continue
-            free_rows = ray[:-1, 0]
-            free_cols = ray[:-1, 1]
-            self.state[free_rows, free_cols] = 0
-            endpoint_cells.append((row, col))
-
-        if not endpoint_cells:
-            return False
-
-        if self.robot_clear_radius_m > 0.0:
-            self._clear_robot_disc(origin_row=origin_row, origin_col=origin_col)
-
-        occ_mask = np.zeros_like(self.state, dtype=np.uint8)
-        for row, col in endpoint_cells:
-            occ_mask[row, col] = 1
-
-        if self.occupied_dilation_px > 0:
-            kernel_size = self.occupied_dilation_px * 2 + 1
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-            occ_mask = cv2.dilate(occ_mask, kernel, iterations=1)
-
-        self.state[occ_mask > 0] = 100
-        if self.robot_clear_radius_m > 0.0:
-            self._clear_robot_disc(origin_row=origin_row, origin_col=origin_col)
-        self._refresh_distance_map()
-        return True
-
-    def _clear_robot_disc(self, *, origin_row: int, origin_col: int) -> None:
-        radius_px = int(math.ceil(self.robot_clear_radius_m / self.resolution_m))
-        if radius_px <= 0:
             return
-        row_start = max(origin_row - radius_px, 0)
-        row_end = min(origin_row + radius_px + 1, self.size_px)
-        col_start = max(origin_col - radius_px, 0)
-        col_end = min(origin_col + radius_px + 1, self.size_px)
-        rows, cols = np.ogrid[row_start:row_end, col_start:col_end]
-        mask = (rows - origin_row) ** 2 + (cols - origin_col) ** 2 <= radius_px**2
-        patch = self.state[row_start:row_end, col_start:col_end]
-        patch[mask] = 0
-
-    def render_image(self) -> np.ndarray:
-        image = np.full((self.size_px, self.size_px), 205, dtype=np.uint8)
-        image[self.state == 0] = 255
-        image[self.state == 100] = 0
-        return image
-
-    def render_debug_image(self, *, pose: Pose2D, points_local_m: np.ndarray) -> np.ndarray:
-        image = self.render_image()
-        rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-
         points_world = self.transform_points(points_local_m, pose)
-        for x_world, y_world in points_world:
-            row, col = self.world_to_grid(float(x_world), float(y_world))
-            if self.in_bounds(row, col):
-                rgb[row, col] = (0, 200, 255)
+        cols = np.rint(points_world[:, 0] / self.resolution_m + self.center_col).astype(np.int32)
+        rows = np.rint(self.center_row - points_world[:, 1] / self.resolution_m).astype(np.int32)
 
-        origin_row, origin_col = self.world_to_grid(pose.x_m, pose.y_m)
-        if self.in_bounds(origin_row, origin_col):
-            cv2.circle(rgb, (origin_col, origin_row), 4, (0, 0, 255), thickness=-1)
-            arrow_len_px = max(int(round(0.35 / self.resolution_m)), 6)
-            tip_col = int(round(origin_col + math.cos(pose.yaw_rad) * arrow_len_px))
-            tip_row = int(round(origin_row - math.sin(pose.yaw_rad) * arrow_len_px))
-            cv2.arrowedLine(
-                rgb,
-                (origin_col, origin_row),
-                (tip_col, tip_row),
-                (0, 0, 255),
-                thickness=2,
-                tipLength=0.25,
-            )
-        return rgb
+        for row, col in zip(rows, cols, strict=False):
+            if not self.in_bounds(int(row), int(col)):
+                continue
+            ray = _bresenham_line(origin_row, origin_col, int(row), int(col))
+            if len(ray) < 1:
+                continue
+            if len(ray) > 1:
+                free_rows = ray[:-1, 0]
+                free_cols = ray[:-1, 1]
+                self.logodds[free_rows, free_cols] += self.free_update
+            self.logodds[int(row), int(col)] += self.occ_update
 
-    def counts(self) -> dict[str, int]:
-        occupied = int(np.count_nonzero(self.state == 100))
-        free = int(np.count_nonzero(self.state == 0))
-        unknown = int(self.state.size - occupied - free)
-        return {"occupied": occupied, "free": free, "unknown": unknown}
+        np.clip(self.logodds, self.logodds_min, self.logodds_max, out=self.logodds)
+        self._refresh_distance_map()
 
     def _refresh_distance_map(self) -> None:
-        occupied_mask = (self.state == 100).astype(np.uint8)
+        occupied_mask = (self.logodds >= self.occ_threshold_logodds).astype(np.uint8)
         self._occupied_count = int(np.count_nonzero(occupied_mask))
         if self._occupied_count == 0:
             self._distance_map_px = None
             return
         inverted = (1 - occupied_mask).astype(np.uint8)
         self._distance_map_px = cv2.distanceTransform(inverted, cv2.DIST_L2, 3)
+
+    def render_image(self) -> np.ndarray:
+        image = np.full((self.size_px, self.size_px), 205, dtype=np.uint8)
+        image[self.logodds <= -0.4] = 255
+        image[self.logodds >= self.occ_threshold_logodds] = 0
+        return image
 
 
 def _bresenham_line(row0: int, col0: int, row1: int, col1: int) -> np.ndarray:
@@ -622,62 +461,48 @@ class MapArtifactWriter:
     def write(
         self,
         *,
-        occupancy_map: ColumnCarvingOccupancyMap,
+        occupancy_map: OccupancyGridMap,
         pose: Pose2D,
         scan_index: int,
         frame: ScanFrame,
-        integrated: bool,
-        motion_delta: MotionDelta,
         match_score_px: float,
+        integrated: bool,
     ) -> None:
-        gray_image = occupancy_map.render_image()
-        debug_image = occupancy_map.render_debug_image(pose=pose, points_local_m=frame.points_local_m)
+        image = occupancy_map.render_image()
         png_path = self.output_dir / "latest_map.png"
-        debug_png_path = self.output_dir / "latest_map_debug.png"
-        Image.fromarray(gray_image, mode="L").save(png_path)
-        Image.fromarray(cv2.cvtColor(debug_image, cv2.COLOR_BGR2RGB), mode="RGB").save(debug_png_path)
+        Image.fromarray(image, mode="L").save(png_path)
 
+        free_count = int(np.count_nonzero(occupancy_map.logodds <= -0.4))
+        occupied_count = int(np.count_nonzero(occupancy_map.logodds >= occupancy_map.occ_threshold_logodds))
+        unknown_count = int(image.size - free_count - occupied_count)
         metadata = {
-            "schema": "sourccey.column_carving_map.v1",
+            "schema": "sourccey.scanmatch_map.v1",
             "scan_index": int(scan_index),
             "ts": float(frame.ts_wall_s),
             "rpm": float(frame.rpm),
             "valid_points": int(frame.valid_points),
-            "resolution_m": float(occupancy_map.resolution_m),
             "map_size_m": float(occupancy_map.map_size_m),
+            "resolution_m": float(occupancy_map.resolution_m),
             "size_px": int(occupancy_map.size_px),
             "pose": {
                 "x_m": float(pose.x_m),
                 "y_m": float(pose.y_m),
                 "yaw_deg": float(_normalize_angle_deg(math.degrees(pose.yaw_rad))),
             },
-            "integrated": bool(integrated),
             "match_score_px": float(match_score_px),
-            "source_scans": int(frame.source_scans),
-            "motion": {
-                "dt_s": float(motion_delta.dt_s),
-                "vx_m_s": float(motion_delta.vx_m_s),
-                "vy_m_s": float(motion_delta.vy_m_s),
-                "wz_rad_s": float(motion_delta.wz_rad_s),
-                "dx_local_m": float(motion_delta.dx_local_m),
-                "dy_local_m": float(motion_delta.dy_local_m),
-                "dyaw_deg": float(math.degrees(motion_delta.dyaw_rad)),
+            "integrated": bool(integrated),
+            "counts": {
+                "occupied": occupied_count,
+                "free": free_count,
+                "unknown": unknown_count,
             },
-            "counts": occupancy_map.counts(),
             "png_path": str(png_path),
-            "debug_png_path": str(debug_png_path),
         }
         json_path = self.output_dir / "latest_map.json"
         json_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
-def _apply_motion_prior(
-    pose: Pose2D,
-    motion: MotionDelta,
-    *,
-    translation_scale: float,
-    heading_scale: float,
-) -> Pose2D:
+def _apply_motion_prior(pose: Pose2D, motion: MotionDelta, *, translation_scale: float, heading_scale: float) -> Pose2D:
     dx_local_m = motion.dx_local_m * float(translation_scale)
     dy_local_m = motion.dy_local_m * float(translation_scale)
     dyaw_rad = motion.dyaw_rad * float(heading_scale)
@@ -717,47 +542,47 @@ def _should_integrate_scan(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Dimos-style column-carving 2D LiDAR mapper for Sourccey."
-    )
+    parser = argparse.ArgumentParser(description="Lightweight scan-to-map 2D LiDAR mapper for Sourccey.")
     parser.add_argument("--lidar-host", default="127.0.0.1", help="Host running scripts/ldlidar_stream_host.py.")
     parser.add_argument("--lidar-port", type=int, default=8765, help="TCP port exposed by the LiDAR host streamer.")
     parser.add_argument(
         "--slam-input-endpoint",
         default="tcp://127.0.0.1:5560",
-        help="Optional ZMQ slam_input.v1 endpoint for motion/IMU prior. Set to '' to disable.",
+        help="Optional ZMQ slam_input.v1 endpoint for IMU/base velocity prior. Set to '' to disable.",
     )
-    parser.add_argument("--use-imu-heading", action="store_true", help="Prefer IMU gz over theta.vel for yaw integration.")
+    parser.add_argument("--use-imu-heading", action="store_true", help="Prefer IMU gz over theta.vel for yaw prior.")
     parser.add_argument("--forward-angle-deg", type=float, default=DEFAULT_LIDAR_FORWARD_ANGLE_DEG, help="Raw LiDAR angle that points forward on the robot.")
     parser.add_argument("--resolution-m", type=float, default=0.05, help="Occupancy grid resolution.")
-    parser.add_argument("--map-size-m", type=float, default=12.0, help="Square map width/height in meters.")
+    parser.add_argument("--map-size-m", type=float, default=10.0, help="Square map width/height in meters.")
     parser.add_argument("--min-range-m", type=float, default=0.05, help="Minimum usable LiDAR range.")
     parser.add_argument("--max-range-m", type=float, default=8.0, help="Maximum usable LiDAR range.")
     parser.add_argument("--min-confidence", type=int, default=5, help="Minimum LiDAR confidence to keep a point.")
-    parser.add_argument("--max-points", type=int, default=480, help="Maximum scan points retained after downsampling.")
-    parser.add_argument("--translation-scale", type=float, default=1.0, help="Scale applied to x/y velocity prior.")
+    parser.add_argument("--max-points", type=int, default=240, help="Maximum scan points retained after downsampling.")
+    parser.add_argument("--save-every-scans", type=int, default=5, help="Write latest_map every N scans.")
+    parser.add_argument("--output-dir", default="artifacts/scanmatch_maps", help="Directory for latest_map.png/json.")
+
+    parser.add_argument("--translation-scale", type=float, default=0.35, help="Scale applied to x/y velocity prior.")
     parser.add_argument("--heading-scale", type=float, default=1.0, help="Scale applied to yaw prior.")
-    parser.add_argument("--min-points-for-integration", type=int, default=120, help="Minimum valid scan points before a frame enters the map.")
-    parser.add_argument("--max-linear-speed-m-s", type=float, default=0.12, help="Only integrate scans below this |vx| and |vy|.")
-    parser.add_argument("--max-angular-speed-rad-s", type=float, default=0.35, help="Only integrate scans below this |wz|.")
-    parser.add_argument("--snapshot-required-scans", type=int, default=4, help="Number of stationary scans to merge into one careful snapshot.")
-    parser.add_argument("--snapshot-min-stable-time-s", type=float, default=0.35, help="How long the robot must stay settled before a snapshot is committed.")
-    parser.add_argument("--snapshot-voxel-size-m", type=float, default=0.03, help="Local dedupe voxel for the merged stationary snapshot.")
-    parser.add_argument("--snapshot-max-points", type=int, default=720, help="Maximum points kept in the merged stationary snapshot.")
-    parser.add_argument("--coarse-xy-window-m", type=float, default=0.35, help="Coarse snapshot-to-map x/y search half-window.")
-    parser.add_argument("--coarse-xy-step-m", type=float, default=0.03, help="Coarse snapshot-to-map x/y search step.")
-    parser.add_argument("--coarse-yaw-window-deg", type=float, default=24.0, help="Coarse snapshot-to-map yaw search half-window.")
-    parser.add_argument("--coarse-yaw-step-deg", type=float, default=1.5, help="Coarse snapshot-to-map yaw search step.")
-    parser.add_argument("--fine-xy-window-m", type=float, default=0.08, help="Fine snapshot-to-map x/y search half-window.")
-    parser.add_argument("--fine-xy-step-m", type=float, default=0.01, help="Fine snapshot-to-map x/y search step.")
-    parser.add_argument("--fine-yaw-window-deg", type=float, default=4.0, help="Fine snapshot-to-map yaw search half-window.")
-    parser.add_argument("--fine-yaw-step-deg", type=float, default=0.35, help="Fine snapshot-to-map yaw search step.")
-    parser.add_argument("--max-match-score-px", type=float, default=4.0, help="Maximum distance-transform match score to accept a settled snapshot.")
-    parser.add_argument("--robot-clear-radius-m", type=float, default=0.18, help="Always keep this disc around the robot free.")
-    parser.add_argument("--occupied-dilation-px", type=int, default=1, help="Endpoint dilation in pixels to make walls more continuous.")
-    parser.add_argument("--save-every-scans", type=int, default=3, help="Write latest_map every N scans.")
-    parser.add_argument("--log-every-scans", type=int, default=3, help="Print status every N scans.")
-    parser.add_argument("--output-dir", default="artifacts/column_carving_maps", help="Directory for latest_map outputs.")
+    parser.add_argument("--coarse-xy-window-m", type=float, default=0.20, help="Coarse scan-match x/y search half-window.")
+    parser.add_argument("--coarse-xy-step-m", type=float, default=0.05, help="Coarse scan-match x/y search step.")
+    parser.add_argument("--coarse-yaw-window-deg", type=float, default=4.0, help="Coarse scan-match yaw search half-window.")
+    parser.add_argument("--coarse-yaw-step-deg", type=float, default=2.0, help="Coarse scan-match yaw search step.")
+    parser.add_argument("--fine-xy-window-m", type=float, default=0.05, help="Fine scan-match x/y search half-window.")
+    parser.add_argument("--fine-xy-step-m", type=float, default=0.01, help="Fine scan-match x/y search step.")
+    parser.add_argument("--fine-yaw-window-deg", type=float, default=1.2, help="Fine scan-match yaw search half-window.")
+    parser.add_argument("--fine-yaw-step-deg", type=float, default=0.4, help="Fine scan-match yaw search step.")
+
+    parser.add_argument("--min-points-for-integration", type=int, default=180, help="Minimum valid points before a scan can enter the map.")
+    parser.add_argument("--max-linear-speed-m-s", type=float, default=0.03, help="Only integrate a scan if |vx| and |vy| are below this.")
+    parser.add_argument("--max-angular-speed-rad-s", type=float, default=0.10, help="Only integrate a scan if |wz| is below this.")
+    parser.add_argument("--max-match-score-px", type=float, default=3.0, help="Maximum mean distance-transform score to accept a scan.")
+
+    parser.add_argument("--occ-threshold-logodds", type=float, default=0.8, help="Cell log-odds threshold for occupied state.")
+    parser.add_argument("--free-update", type=float, default=-0.30, help="Free-space log-odds update per traversed cell.")
+    parser.add_argument("--occ-update", type=float, default=0.90, help="Occupied-cell log-odds update per endpoint.")
+    parser.add_argument("--logodds-min", type=float, default=-4.0, help="Lower clamp for occupancy log-odds.")
+    parser.add_argument("--logodds-max", type=float, default=4.0, help="Upper clamp for occupancy log-odds.")
+    parser.add_argument("--log-every-scans", type=int, default=5, help="Print status every N scans.")
     return parser
 
 
@@ -779,113 +604,72 @@ def main() -> int:
         max_points=int(args.max_points),
     )
 
-    occupancy_map = ColumnCarvingOccupancyMap(
+    occupancy_map = OccupancyGridMap(
         resolution_m=float(args.resolution_m),
         map_size_m=float(args.map_size_m),
-        robot_clear_radius_m=float(args.robot_clear_radius_m),
-        occupied_dilation_px=int(args.occupied_dilation_px),
-        max_range_m=float(args.max_range_m),
+        occ_threshold_logodds=float(args.occ_threshold_logodds),
+        free_update=float(args.free_update),
+        occ_update=float(args.occ_update),
+        logodds_min=float(args.logodds_min),
+        logodds_max=float(args.logodds_max),
     )
     writer = MapArtifactWriter(Path(args.output_dir))
-    snapshot_accumulator = StableScanAccumulator(
-        required_scans=int(args.snapshot_required_scans),
-        min_stable_time_s=float(args.snapshot_min_stable_time_s),
-        min_points=int(args.min_points_for_integration),
-        max_linear_speed_m_s=float(args.max_linear_speed_m_s),
-        max_angular_speed_rad_s=float(args.max_angular_speed_rad_s),
-        voxel_size_m=float(args.snapshot_voxel_size_m),
-        max_points=int(args.snapshot_max_points),
-    )
 
     pose = Pose2D(0.0, 0.0, 0.0)
     scan_index = 0
-    last_frame = ScanFrame(
-        ts_wall_s=time.time(),
-        rpm=0.0,
-        points_local_m=np.zeros((0, 2), dtype=np.float32),
-        valid_points=0,
-        source_scans=1,
-    )
-    last_artifact_frame = last_frame
-    last_motion = MotionDelta(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-    last_match_score_px = 0.0
 
     try:
         for frame in scan_reader.scans():
-            last_frame = frame
             motion_delta = motion.consume()
-            last_motion = motion_delta
-            pose = _apply_motion_prior(
+            prior_pose = _apply_motion_prior(
                 pose,
                 motion_delta,
                 translation_scale=float(args.translation_scale),
                 heading_scale=float(args.heading_scale),
             )
+            matched_pose, match_score_px = occupancy_map.match_scan(
+                points_local_m=frame.points_local_m,
+                prior_pose=prior_pose,
+                coarse_xy_window_m=float(args.coarse_xy_window_m),
+                coarse_xy_step_m=float(args.coarse_xy_step_m),
+                coarse_yaw_window_deg=float(args.coarse_yaw_window_deg),
+                coarse_yaw_step_deg=float(args.coarse_yaw_step_deg),
+                fine_xy_window_m=float(args.fine_xy_window_m),
+                fine_xy_step_m=float(args.fine_xy_step_m),
+                fine_yaw_window_deg=float(args.fine_yaw_window_deg),
+                fine_yaw_step_deg=float(args.fine_yaw_step_deg),
+            )
+            pose = matched_pose
             scan_index += 1
-            snapshot = snapshot_accumulator.update(frame=frame, motion=motion_delta)
-            integrated = False
-            match_score_px = 0.0
 
-            if snapshot is not None:
-                last_frame = snapshot
-                last_artifact_frame = snapshot
-                matched_pose, match_score_px = occupancy_map.match_scan(
-                    points_local_m=snapshot.points_local_m,
-                    prior_pose=pose,
-                    coarse_xy_window_m=float(args.coarse_xy_window_m),
-                    coarse_xy_step_m=float(args.coarse_xy_step_m),
-                    coarse_yaw_window_deg=float(args.coarse_yaw_window_deg),
-                    coarse_yaw_step_deg=float(args.coarse_yaw_step_deg),
-                    fine_xy_window_m=float(args.fine_xy_window_m),
-                    fine_xy_step_m=float(args.fine_xy_step_m),
-                    fine_yaw_window_deg=float(args.fine_yaw_window_deg),
-                    fine_yaw_step_deg=float(args.fine_yaw_step_deg),
-                )
-                pose = matched_pose
-                integrated = _should_integrate_scan(
-                    frame=snapshot,
-                    motion=motion_delta,
-                    match_score_px=match_score_px,
-                    occupied_count=occupancy_map.occupied_count(),
-                    min_points=int(args.min_points_for_integration),
-                    max_linear_speed_m_s=float(args.max_linear_speed_m_s),
-                    max_angular_speed_rad_s=float(args.max_angular_speed_rad_s),
-                    max_match_score_px=float(args.max_match_score_px),
-                )
-                if integrated:
-                    integrated = occupancy_map.integrate_scan(points_local_m=snapshot.points_local_m, pose=pose)
-                last_match_score_px = match_score_px
-                logging.info(
-                    "snapshot_commit scans=%d points=%d score=%.2f pose=(%.2fm, %.2fm, %.1fdeg) integrated=%s",
-                    snapshot.source_scans,
-                    snapshot.valid_points,
-                    match_score_px,
-                    pose.x_m,
-                    pose.y_m,
-                    _normalize_angle_deg(math.degrees(pose.yaw_rad)),
-                    integrated,
-                )
+            integrated = _should_integrate_scan(
+                frame=frame,
+                motion=motion_delta,
+                match_score_px=match_score_px,
+                occupied_count=occupancy_map.occupied_count(),
+                min_points=int(args.min_points_for_integration),
+                max_linear_speed_m_s=float(args.max_linear_speed_m_s),
+                max_angular_speed_rad_s=float(args.max_angular_speed_rad_s),
+                max_match_score_px=float(args.max_match_score_px),
+            )
+            if integrated:
+                occupancy_map.update_with_scan(points_local_m=frame.points_local_m, pose=pose)
 
             if scan_index % max(int(args.log_every_scans), 1) == 0:
-                counts = occupancy_map.counts()
                 logging.info(
-                    "scan=%d raw_points=%d snap_points=%d snap_scans=%d rpm=%.1f pose=(%.2fm, %.2fm, %.1fdeg) score=%.2f integrated=%s vx=%.3f vy=%.3f wz=%.3f occ=%d free=%d unk=%d",
+                    "scan=%d points=%d rpm=%.1f pose=(%.2fm, %.2fm, %.1fdeg) score=%.2f integrated=%s vx=%.3f vy=%.3f wz=%.3f occ=%d",
                     scan_index,
                     frame.valid_points,
-                    last_frame.valid_points if snapshot is not None else 0,
-                    last_frame.source_scans if snapshot is not None else 0,
                     frame.rpm,
                     pose.x_m,
                     pose.y_m,
                     _normalize_angle_deg(math.degrees(pose.yaw_rad)),
-                    match_score_px if snapshot is not None else last_match_score_px,
+                    match_score_px,
                     integrated,
                     motion_delta.vx_m_s,
                     motion_delta.vy_m_s,
                     motion_delta.wz_rad_s,
-                    counts["occupied"],
-                    counts["free"],
-                    counts["unknown"],
+                    occupancy_map.occupied_count(),
                 )
 
             if scan_index % max(int(args.save_every_scans), 1) == 0:
@@ -893,23 +677,26 @@ def main() -> int:
                     occupancy_map=occupancy_map,
                     pose=pose,
                     scan_index=scan_index,
-                    frame=last_artifact_frame,
+                    frame=frame,
+                    match_score_px=match_score_px,
                     integrated=integrated,
-                    motion_delta=motion_delta,
-                    match_score_px=match_score_px if snapshot is not None else last_match_score_px,
                 )
     except KeyboardInterrupt:
-        logging.info("Stopping column-carving mapper...")
+        logging.info("Stopping scanmatch mapper...")
     finally:
         try:
             writer.write(
                 occupancy_map=occupancy_map,
                 pose=pose,
                 scan_index=scan_index,
-                frame=last_artifact_frame,
+                frame=ScanFrame(
+                    ts_wall_s=time.time(),
+                    rpm=0.0,
+                    points_local_m=np.zeros((0, 2), dtype=np.float32),
+                    valid_points=0,
+                ),
+                match_score_px=0.0,
                 integrated=False,
-                motion_delta=last_motion,
-                match_score_px=last_match_score_px,
             )
         except Exception:
             pass

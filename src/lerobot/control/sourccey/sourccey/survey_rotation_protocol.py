@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -19,7 +19,7 @@ class SurveyRotationProtocolConfig:
     fps: int = 15
     startup_hold_s: float = 1.0
     total_sweep_deg: float = 360.0
-    turn_step_deg: float = 12.0
+    turn_step_deg: float = 10.0
     turn_speed_rad_s: float = 0.35
     min_effective_turn_speed_rad_s: float = 0.65
     slam_input_endpoint: str = "tcp://192.168.1.237:5560"
@@ -31,23 +31,23 @@ class SurveyRotationProtocolConfig:
     settle_gyro_threshold_rad_s: float = 0.08
     settle_stable_time_s: float = 0.50
     settle_timeout_s: float = 4.0
-    settle_hold_s: float = 1.0
-    capture_hold_s: float = 1.5
+    settle_hold_s: float = 1.4
+    capture_hold_s: float = 2.25
     direction: str = "left"
     segment_sequence: str | None = None
     step_forward_drive_distance_m: float = 0.0
     step_forward_drive_speed_m_s: float = 0.10
     min_effective_step_forward_speed_m_s: float = 0.18
-    step_forward_min_duration_s: float = 0.45
-    step_forward_settle_hold_s: float = 0.75
-    step_forward_capture_hold_s: float = 0.60
+    step_forward_min_duration_s: float = 0.60
+    step_forward_settle_hold_s: float = 1.4
+    step_forward_capture_hold_s: float = 1.0
     step_return_after_capture: bool = False
-    step_return_settle_hold_s: float = 0.60
+    step_return_settle_hold_s: float = 0.85
     forward_drive_distance_m: float = 0.0
     forward_drive_speed_m_s: float = 0.10
     min_effective_forward_speed_m_s: float = 0.18
     forward_drive_min_duration_s: float = 0.45
-    forward_settle_hold_s: float = 0.75
+    forward_settle_hold_s: float = 1.4
     z_hold_pos: float | None = None
 
 
@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps", type=int, default=15, help="Command update rate while the protocol runs.")
     parser.add_argument("--startup_hold_s", type=float, default=1.0, help="Initial stationary hold before the first turn.")
     parser.add_argument("--total_sweep_deg", type=float, default=360.0, help="Total degrees to sweep across the survey.")
-    parser.add_argument("--turn_step_deg", type=float, default=12.0, help="Degrees to rotate during each survey step.")
+    parser.add_argument("--turn_step_deg", type=float, default=10.0, help="Degrees to rotate during each survey step.")
     parser.add_argument("--turn_speed_rad_s", type=float, default=0.35, help="Turn rate command applied during each step.")
     parser.add_argument(
         "--min_effective_turn_speed_rad_s",
@@ -122,8 +122,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=4.0,
         help="Maximum time to wait for IMU-based settle detection before falling back to the fixed settle hold.",
     )
-    parser.add_argument("--settle_hold_s", type=float, default=1.0, help="Stationary settle time after each turn step.")
-    parser.add_argument("--capture_hold_s", type=float, default=1.5, help="Extra stationary dwell time for mapping after settling.")
+    parser.add_argument("--settle_hold_s", type=float, default=1.4, help="Stationary settle time after each turn step.")
+    parser.add_argument("--capture_hold_s", type=float, default=2.25, help="Extra stationary dwell time for mapping after settling.")
     parser.add_argument("--direction", type=str, choices=("left", "right"), default="left", help="Survey sweep turn direction.")
     parser.add_argument(
         "--segment_sequence",
@@ -152,19 +152,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--step-forward-min-duration-s",
         type=float,
-        default=0.45,
+        default=1.0,
         help="Minimum time to hold each per-step forward micro-parallax move even if distance/speed math suggests less.",
     )
     parser.add_argument(
         "--step-forward-settle-hold-s",
         type=float,
-        default=0.75,
+        default=1.0,
         help="Stationary settle hold applied after each per-step forward micro-parallax move.",
     )
     parser.add_argument(
         "--step-forward-capture-hold-s",
         type=float,
-        default=0.60,
+        default=1.0,
         help="Extra stationary mapping dwell applied after each per-step forward micro-parallax move.",
     )
     parser.add_argument(
@@ -175,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--step-return-settle-hold-s",
         type=float,
-        default=0.60,
+        default=1.0,
         help="Stationary settle hold applied after each per-step return move.",
     )
     parser.add_argument(
@@ -199,13 +199,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--forward-drive-min-duration-s",
         type=float,
-        default=0.45,
+        default=1.0,
         help="Minimum time to hold each inter-segment forward move even if distance/speed math suggests less.",
     )
     parser.add_argument(
         "--forward-settle-hold-s",
         type=float,
-        default=0.75,
+        default=1.0,
         help="Extra stationary settle hold applied after each inter-segment forward move.",
     )
     parser.add_argument("--z_hold_pos", type=float, default=None, help="Optional fixed z-axis hold position during the sweep.")
@@ -852,3 +852,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

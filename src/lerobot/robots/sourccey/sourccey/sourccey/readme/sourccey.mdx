@@ -248,9 +248,13 @@ uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host \
 With `--bottom_camera_enabled=true`, the host now publishes `bottom` alongside
 `front_left` and `front_right` on the SLAM `5560` stream.
 
+Baseline recommendation:
+
+- Keep the front-eye SLAM path at `320x240` unless you are explicitly running a resolution experiment.
+- Treat `640x480` as experimental on Sourccey; it changes bandwidth, exposure behavior, and camera negotiation after reboot.
+
 Useful experiment knobs:
 
-- `--slam_eye_width=640 --slam_eye_height=480`
 - `--slam_eye_exposure_time_absolute=180` with `--slam_eye_auto_exposure=1`
 - `--slam_eye_gain=12`
 - `--slam_eye_sharpness=4`

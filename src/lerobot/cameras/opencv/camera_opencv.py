@@ -276,11 +276,25 @@ class OpenCVCamera(Camera):
         if self.fps is None:
             raise ValueError(f"{self} FPS is not set")
 
-        success = self.videocapture.set(cv2.CAP_PROP_FPS, float(self.fps))
-        actual_fps = self.videocapture.get(cv2.CAP_PROP_FPS)
-        # Use math.isclose for robust float comparison
-        if not success or not math.isclose(self.fps, actual_fps, rel_tol=1e-3):
-            raise RuntimeError(f"{self} failed to set fps={self.fps} ({actual_fps=}).")
+        requested_fps = float(self.fps)
+        success = self.videocapture.set(cv2.CAP_PROP_FPS, requested_fps)
+        actual_fps = float(self.videocapture.get(cv2.CAP_PROP_FPS))
+
+        if not success:
+            raise RuntimeError(f"{self} failed to request fps={requested_fps}.")
+
+        # Some UVC cameras and V4L2 drivers round or clamp FPS to the nearest
+        # supported mode after reboot. Treat that as a warning instead of a fatal
+        # connection error so a healthy camera is not discarded just because it
+        # negotiated 30 FPS instead of the requested 20 FPS.
+        if actual_fps > 0.0 and not math.isclose(requested_fps, actual_fps, rel_tol=1e-3):
+            logger.warning(
+                "%s requested fps=%s but camera reported actual_fps=%.3f. Continuing with the negotiated FPS.",
+                self,
+                requested_fps,
+                actual_fps,
+            )
+            self.fps = actual_fps
 
     def _validate_fourcc(self) -> None:
         """Validates and sets the camera's FOURCC code."""

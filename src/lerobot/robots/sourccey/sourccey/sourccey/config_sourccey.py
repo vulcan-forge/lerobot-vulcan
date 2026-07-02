@@ -236,16 +236,16 @@ class SourcceyHostConfig:
     # Keep camera fallback warnings visible in SLAM mode so black-frame issues aren't silent.
     slam_eye_log_camera_warnings: bool = True
     # Direct SLAM sidecar publishing from the robot host.
-    slam_input_enabled: bool = False
+    slam_input_enabled: bool = True
     slam_input_endpoint: str = "tcp://*:5560"
     slam_stereo_left_key: str = "front_left"
     slam_stereo_right_key: str = "front_right"
     slam_jpeg_quality: int = 80
     slam_publish_eye_only_mode: bool = True
-    slam_publish_fps: float = 0.0
+    slam_publish_fps: float = 15.0
     slam_resize_width: int | None = None
     slam_resize_height: int | None = None
-    slam_imu_enabled: bool = False
+    slam_imu_enabled: bool = True
     slam_imu_sample_rate_hz: float = 52.0
     slam_imu_max_samples_per_packet: int = 6
     # Secondary wrist-camera stereo stream for near-field obstacle detection.
