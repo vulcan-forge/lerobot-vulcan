@@ -213,6 +213,18 @@ def connect_keyboard(teleop_keyboard: KeyboardTeleop) -> bool:
         return False
 
 
+def connect_teleop(teleop: Teleoperator) -> bool:
+    try:
+        teleop.connect()
+        return True
+    except Exception as exc:
+        logging.warning(
+            "Teleop connect failed (%s). Continuing with disconnected default actions.",
+            exc,
+        )
+        return False
+
+
 def _get_keyboard_base_action(
     robot: Robot, obs: RobotObservation, teleop_keyboard: KeyboardTeleop | None
 ) -> RobotAction:
@@ -483,7 +495,7 @@ def record(
 
         robot.connect()
         if teleop is not None:
-            teleop.connect()
+            connect_teleop(teleop)
         keyboard_connected = connect_keyboard(teleop_keyboard) if teleop_keyboard is not None else False
 
         listener, events = init_keyboard_listener()
