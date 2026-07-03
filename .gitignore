@@ -166,6 +166,7 @@ wandb/
 # Data folders
 data/
 outputs/
+artifacts/
 
 # Translations
 *.mo
