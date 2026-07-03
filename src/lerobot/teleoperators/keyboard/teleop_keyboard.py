@@ -63,6 +63,7 @@ class KeyboardTeleop(Teleoperator):
 
         self.event_queue = Queue()
         self.current_pressed = {}
+        self.key_down_edges = []
         self.listener = None
         self.logs = {}
 
@@ -119,7 +120,16 @@ class KeyboardTeleop(Teleoperator):
     def _drain_pressed_keys(self):
         while not self.event_queue.empty():
             key_char, is_pressed = self.event_queue.get_nowait()
+            was_pressed = bool(self.current_pressed.get(key_char, False))
             self.current_pressed[key_char] = is_pressed
+            if is_pressed and not was_pressed:
+                self.key_down_edges.append(key_char)
+
+    def pop_key_down_edges(self) -> list:
+        self._drain_pressed_keys()
+        key_down_edges = list(self.key_down_edges)
+        self.key_down_edges.clear()
+        return key_down_edges
 
     def configure(self):
         pass

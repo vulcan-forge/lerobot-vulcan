@@ -189,6 +189,10 @@ def _get_keyboard_base_action(
     if teleop_keyboard is None or not teleop_keyboard.is_connected:
         return {}
 
+    if hasattr(robot, "on_key_down"):
+        for key_char in teleop_keyboard.pop_key_down_edges():
+            robot.on_key_down(key_char)
+
     keyboard_action = teleop_keyboard.get_action()
     z_pos = obs.get("z.pos")
 
