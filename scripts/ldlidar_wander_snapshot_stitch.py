@@ -991,7 +991,12 @@ def main() -> int:
     parser.add_argument("--lidar-host", default="192.168.1.237", help="Pi LiDAR stream host.")
     parser.add_argument("--lidar-port", type=int, default=8765)
     parser.add_argument("--output-dir", default="artifacts/wander_snapshot_stitch")
-    parser.add_argument("--max-captures", type=int, default=20, help="Maximum snapshots to collect including the initial one.")
+    parser.add_argument(
+        "--max-captures",
+        type=int,
+        default=0,
+        help="Maximum snapshots to collect including the initial one. Use 0 for no limit.",
+    )
     parser.add_argument("--forward-angle-deg", type=float, default=DEFAULT_LIDAR_FORWARD_ANGLE_DEG)
     parser.add_argument("--valid-angle-half-width-deg", type=float, default=180.0)
     parser.add_argument("--invert-lateral-axis", action="store_true", default=True)
@@ -1214,6 +1219,8 @@ def main() -> int:
     active_explore_target: ExploreTarget | None = None
     active_explore_target_stall_count = 0
     active_explore_target_last_distance_m: float | None = None
+    active_explore_target_blocked_count = 0
+    force_live_frontier_cycles = 0
 
     try:
         last_frame_id, latest_frame = _wait_for_initial_frame(feed, timeout_s=5.0)
@@ -1269,7 +1276,10 @@ def main() -> int:
         )
         print(f"[wander] initial stitched map ready: {stitch_state['html_path']}")
 
-        for capture_index in range(2, int(args.max_captures) + 1):
+        capture_index = 2
+        while True:
+            if int(args.max_captures) > 0 and capture_index > int(args.max_captures):
+                break
             live_frame_id, live_frame = feed.latest()
             if live_frame is None:
                 raise RuntimeError("LiDAR feed disappeared during wander loop.")
@@ -1430,6 +1440,8 @@ def main() -> int:
                     active_explore_target = None
                     active_explore_target_stall_count = 0
                     active_explore_target_last_distance_m = None
+                    active_explore_target_blocked_count = 0
+                    force_live_frontier_cycles = 0
                 else:
                     target_frontier_choice = _target_choice_from_world_point(
                         target_x_m=float(active_explore_target.world_x_m),
@@ -1460,6 +1472,8 @@ def main() -> int:
                 )
                 active_explore_target_stall_count = 0
                 active_explore_target_last_distance_m = None
+                active_explore_target_blocked_count = 0
+                force_live_frontier_cycles = 0
                 target_frontier_choice = _target_choice_from_world_point(
                     target_x_m=float(active_explore_target.world_x_m),
                     target_y_m=float(active_explore_target.world_y_m),
@@ -1473,10 +1487,25 @@ def main() -> int:
                     f"{float(active_explore_target.world_x_m):.3f}, {float(active_explore_target.world_y_m):.3f}))"
                 )
 
-            planning_frontier_choice = target_frontier_choice or map_frontier_choice or live_frontier_choice
-            planning_frontier_source = (
-                planning_frontier_choice.source if planning_frontier_choice is not None else "none"
+            escape_frontier_active = (
+                wander_mode == "smart"
+                and force_live_frontier_cycles > 0
+                and live_frontier_choice is not None
             )
+            if escape_frontier_active:
+                planning_frontier_choice = live_frontier_choice or map_frontier_choice or target_frontier_choice
+                planning_frontier_source = "live_escape"
+                print(
+                    "[wander] escape frontier override active "
+                    f"(cycles_left={force_live_frontier_cycles}, "
+                    f"live_delta={live_frontier_choice.delta_deg:.1f}deg, "
+                    f"live_distance={live_frontier_choice.mean_distance_m:.2f}m)"
+                )
+            else:
+                planning_frontier_choice = target_frontier_choice or map_frontier_choice or live_frontier_choice
+                planning_frontier_source = (
+                    planning_frontier_choice.source if planning_frontier_choice is not None else "none"
+                )
             if planning_frontier_choice is not None:
                 print(
                     "[wander] planning frontier "
@@ -1638,14 +1667,24 @@ def main() -> int:
                 elif drive_meta.stopped_by_block:
                     should_turn = False
                     if active_explore_target is not None:
+                        active_explore_target_blocked_count += 1
                         print(
-                            "[wander] abandoning stitched-map target after blocked drive "
+                            "[wander] stitched-map target blocked during drive "
                             f"(source={active_explore_target.source}, "
-                            f"seed_capture={active_explore_target.seeded_capture_index})"
+                            f"seed_capture={active_explore_target.seeded_capture_index}, "
+                            f"blocked_count={active_explore_target_blocked_count})"
                         )
-                    active_explore_target = None
-                    active_explore_target_stall_count = 0
-                    active_explore_target_last_distance_m = None
+                        force_live_frontier_cycles = max(force_live_frontier_cycles, 2)
+                        if active_explore_target_blocked_count >= 3:
+                            print(
+                                "[wander] abandoning stitched-map target after repeated blocked drives "
+                                f"(source={active_explore_target.source}, "
+                                f"seed_capture={active_explore_target.seeded_capture_index})"
+                            )
+                            active_explore_target = None
+                            active_explore_target_stall_count = 0
+                            active_explore_target_last_distance_m = None
+                            active_explore_target_blocked_count = 0
                     recovery_frontier = live_frontier_choice or planning_frontier_choice
                     if recovery_frontier is not None:
                         pending_turn_direction_sign = 1.0 if recovery_frontier.delta_deg >= 0.0 else -1.0
@@ -1677,6 +1716,8 @@ def main() -> int:
                 else:
                     should_turn = False
                     turn_reason = "drive_only"
+                    if force_live_frontier_cycles > 0:
+                        force_live_frontier_cycles -= 1
                 motion_hint = MotionHint(
                     kind="drive",
                     expected_dx_local_m=float(drive_hint_distance_m),
@@ -1861,6 +1902,7 @@ def main() -> int:
                 solve_log=stitch_state["solve_log"],
                 cone_half_width_deg=float(args.valid_angle_half_width_deg),
             )
+            capture_index += 1
             _log_live_pose_state(
                 rr,
                 capture_index=capture_index,
@@ -1914,6 +1956,8 @@ def main() -> int:
                         )
                     else:
                         active_explore_target_stall_count = 0
+                        active_explore_target_blocked_count = 0
+                        force_live_frontier_cycles = 0
                         print(
                             "[wander] stitched-map target progress improved "
                             f"(capture={capture_index}, progress={target_progress_m:.3f}m, "
@@ -1930,6 +1974,8 @@ def main() -> int:
                     active_explore_target = None
                     active_explore_target_stall_count = 0
                     active_explore_target_last_distance_m = None
+                    active_explore_target_blocked_count = 0
+                    force_live_frontier_cycles = max(force_live_frontier_cycles, 2)
             if motion_hint.kind == "turn":
                 consecutive_turn_captures += 1
                 solved_heading_bin = _heading_bin_index(
@@ -1955,7 +2001,8 @@ def main() -> int:
             else:
                 consecutive_turn_captures = 0
 
-        print(f"[wander] complete. captures={int(args.max_captures)} viewer={viewer_url or 'local rerun'}")
+        completed_captures = capture_index - 1 if "capture_index" in locals() else 1
+        print(f"[wander] complete. captures={completed_captures} viewer={viewer_url or 'local rerun'}")
         print(f"[wander] stitched html: {stitch_state['html_path']}")
         print(f"[wander] stitched report: {stitch_state['report_path']}")
         return 0
