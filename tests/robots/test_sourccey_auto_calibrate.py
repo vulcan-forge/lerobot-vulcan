@@ -142,6 +142,25 @@ def test_sourccey_auto_calibrate_raises_when_arm_thread_fails(monkeypatch: pytes
     assert robot.right_arm.calls == [{"reverse": True, "full_reset": True}]
 
 
+def test_sourccey_auto_calibrate_aborts_before_arms_when_z_calibration_fails() -> None:
+    robot = Sourccey.__new__(Sourccey)
+    robot.left_arm = _DummyArm()
+    robot.right_arm = _DummyArm()
+    robot._z_hardware_available = True
+
+    class _FailingCalibrator:
+        def auto_calibrate(self, *, full_reset: bool = False) -> None:
+            raise RuntimeError("z failed to return to top")
+
+    robot.z_actuator = type("Z", (), {"calibrator": _FailingCalibrator()})()
+
+    with pytest.raises(RuntimeError, match="z failed to return to top"):
+        robot.auto_calibrate(full_reset=True)
+
+    assert robot.left_arm.calls == []
+    assert robot.right_arm.calls == []
+
+
 def test_bi_sourccey_leader_auto_calibrate_raises_when_arm_thread_fails() -> None:
     teleop = BiSourcceyLeader.__new__(BiSourcceyLeader)
     teleop.left_arm = _DummyArm()
@@ -255,7 +274,7 @@ def test_sourccey_z_full_calibration_guarantees_bottom_and_top_mapping(
 
     actuator = _CalibrationTestActuator(invert=not expected_invert)
     calibrator = SourcceyZCalibrator(actuator)
-    measured_raws = iter([raw_top, raw_bottom])
+    measured_raws = iter([raw_top, raw_bottom, raw_top])
 
     monkeypatch.setattr(calibrator, "_drive", lambda _cmd: None)
     monkeypatch.setattr(calibrator, "_wait_until_stable", lambda _cmd: next(measured_raws))
@@ -265,11 +284,36 @@ def test_sourccey_z_full_calibration_guarantees_bottom_and_top_mapping(
     assert result is not None
     assert result.invert is expected_invert
     assert actuator.saved is True
-    assert actuator.move_targets == [100.0]
+    assert actuator.move_targets == []
     assert actuator.sensor.invert is expected_invert
     assert actuator.invert is expected_invert
     assert actuator.sensor.raw_to_pos_m100_100(raw_bottom) == pytest.approx(-100.0)
     assert actuator.sensor.raw_to_pos_m100_100(raw_top) == pytest.approx(100.0)
+
+
+def test_sourccey_z_full_calibration_raises_if_return_to_top_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
+
+    actuator = _CalibrationTestActuator(invert=True)
+    calibrator = SourcceyZCalibrator(actuator)
+    measured_raws = iter([120, 900])
+
+    monkeypatch.setattr(calibrator, "_drive", lambda _cmd: None)
+
+    def _wait(_cmd: float) -> int:
+        try:
+            return next(measured_raws)
+        except StopIteration as exc:
+            raise TimeoutError("top return timed out") from exc
+
+    monkeypatch.setattr(calibrator, "_wait_until_stable", _wait)
+
+    with pytest.raises(RuntimeError, match="failed to return the actuator to the top endpoint"):
+        calibrator.auto_calibrate(full_reset=True)
+
+    assert actuator.saved is True
 
 
 def test_sourccey_get_observation_reuses_last_good_z_on_read_failure() -> None:

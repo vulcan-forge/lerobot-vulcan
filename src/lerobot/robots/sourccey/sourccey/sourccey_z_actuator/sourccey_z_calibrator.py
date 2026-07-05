@@ -102,6 +102,14 @@ class SourcceyZCalibrator:
 
             time.sleep(period)
 
+    def _move_to_endpoint(self, cmd: float) -> int:
+        """Drive to a hard endpoint and stop once the raw reading is stable."""
+        self._drive(cmd)
+        raw = self._wait_until_stable(cmd)
+        self.actuator.stop()
+        time.sleep(0.25)
+        return int(raw)
+
     def _wait_for_seconds(self, cmd: float, seconds: float) -> int:
         """
         Drive at `cmd` for a fixed time (no end-stop detection).
@@ -188,19 +196,13 @@ class SourcceyZCalibrator:
             pass
 
         # Phase 1: UP -> top
-        self._drive(self.up_cmd)
-        raw_top = self._wait_until_stable(self.up_cmd)
-        self.actuator.stop()
-        time.sleep(0.25)
+        raw_top = self._move_to_endpoint(self.up_cmd)
 
         # Phase 2: DOWN -> bottom
         # The linear actuator can get stuck at the bottom without a hardware block,
         # So we wait for 5 seconds until we have a hardware stop
-        self._drive(self.down_cmd)
         # raw_bottom = self._wait_for_seconds(self.down_cmd, 5.0)
-        raw_bottom = self._wait_until_stable(self.down_cmd)
-        self.actuator.stop()
-        time.sleep(0.25)
+        raw_bottom = self._move_to_endpoint(self.down_cmd)
 
         print(f"raw_bottom: {raw_bottom}")
         print(f"raw_top: {raw_top}")
@@ -216,15 +218,12 @@ class SourcceyZCalibrator:
         self.actuator.invert = bool(self.actuator.sensor.invert)
         self.actuator._save_calibration()
 
-        # Repositioning after calibration is best-effort only. A failure here
-        # should not invalidate the newly detected calibration bounds.
         try:
-            self.actuator.move_to_position_blocking(100.0)
-        except TimeoutError as exc:
-            logger.warning(
-                "Z calibration saved, but reposition to 100.0 timed out: %s",
-                exc,
-            )
+            self._move_to_endpoint(self.up_cmd)
+        except Exception as exc:
+            raise RuntimeError(
+                "Z calibration detected limits but failed to return the actuator to the top endpoint."
+            ) from exc
 
         return ZCalibrationResult(
             raw_bottom=int(raw_bottom),
