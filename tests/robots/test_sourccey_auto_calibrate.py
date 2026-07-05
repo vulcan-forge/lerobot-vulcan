@@ -116,11 +116,15 @@ class _FollowerCalibrationBus:
         self._current_reads: dict[str, list[object]] = {"shoulder_pan": []}
         self._position_reads: dict[str, list[object]] = {"shoulder_pan": []}
         self._write_failures: dict[str, list[object]] = {"shoulder_pan": []}
+        self.disable_torque_calls = 0
+        self.enable_torque_calls = 0
 
     def disable_torque(self) -> None:
+        self.disable_torque_calls += 1
         return None
 
     def enable_torque(self) -> None:
+        self.enable_torque_calls += 1
         return None
 
     def write_calibration(self, _calibration) -> None:
@@ -545,6 +549,49 @@ def test_sourccey_follower_calibration_slow_move_recovers_from_transient_write_f
 
     assert moved is True
     assert bus._positions["shoulder_pan"] == 1010
+
+
+def test_sourccey_follower_reset_recovery_retries_after_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
+
+    bus = _FollowerCalibrationBus()
+    robot = _FollowerCalibrationRobot(bus)
+    calibrator = SourcceyFollowerCalibrator(robot)
+    move_attempts: list[float] = []
+
+    position_reads = iter([1100, 1100, 1100, 1000])
+
+    monkeypatch.setattr(calibrator, "_read_motor_position", lambda _motor_name, **_kwargs: next(position_reads))
+
+    def _move(_motor_name: str, _target_position: float, duration: float = 3.0, **_kwargs) -> bool:
+        move_attempts.append(duration)
+        return len(move_attempts) >= 2
+
+    monkeypatch.setattr(calibrator, "_move_calibration_slow", _move)
+
+    moved = calibrator._recover_and_move_to_reset_position("shoulder_pan", 1000, duration=3.0)
+
+    assert moved is True
+    assert move_attempts == [3.0, 4.0]
+    assert bus.disable_torque_calls == 2
+    assert bus.enable_torque_calls == 2
+
+
+def test_sourccey_follower_reset_recovery_fails_after_all_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
+
+    bus = _FollowerCalibrationBus()
+    robot = _FollowerCalibrationRobot(bus)
+    calibrator = SourcceyFollowerCalibrator(robot)
+
+    monkeypatch.setattr(calibrator, "_read_motor_position", lambda _motor_name, **_kwargs: 1100)
+    monkeypatch.setattr(calibrator, "_move_calibration_slow", lambda *_args, **_kwargs: False)
+
+    moved = calibrator._recover_and_move_to_reset_position("shoulder_pan", 1000, duration=3.0)
+
+    assert moved is False
+    assert bus.disable_torque_calls == calibrator.RESET_MOVE_MAX_ATTEMPTS
+    assert bus.enable_torque_calls == calibrator.RESET_MOVE_MAX_ATTEMPTS
 
 
 def test_sourccey_get_observation_reuses_last_good_z_on_read_failure() -> None:

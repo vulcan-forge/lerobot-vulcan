@@ -31,6 +31,9 @@ class SourcceyFollowerCalibrator:
     DEFAULT_CALIBRATION_GRIPPER_RANGE_EXTENSION = 5
     MAX_TRANSIENT_CALIBRATION_FAILURES = 5
     MIN_POSITION_PROGRESS = 5
+    RESET_MOVE_TOLERANCE = 15
+    RESET_MOVE_MAX_ATTEMPTS = 3
+    RESET_MOVE_RECOVERY_SETTLE_S = 0.15
 
     def __init__(self, robot):
         self.robot = robot
@@ -525,8 +528,10 @@ class SourcceyFollowerCalibrator:
                     else:
                         min_pos = actual_pos
 
-                # Reset to middle position after each direction test
-                if not self._move_calibration_slow(motor_name, reset_pos, duration=3.0):
+                # Reset to middle position after each direction test.
+                # A just-hit mechanical limit can leave the servo in overload/protection state,
+                # so we explicitly recover before deciding the reset move failed.
+                if not self._recover_and_move_to_reset_position(motor_name, reset_pos, duration=3.0):
                     raise RuntimeError(
                         f"Calibration failed for {motor_name}: could not return to the reset position after probing {direction}."
                     )
@@ -715,6 +720,67 @@ class SourcceyFollowerCalibrator:
         except Exception as e:
             logger.error(f"Error during slow movement of {motor_name}: {e}")
             return False
+
+    def _recover_and_move_to_reset_position(
+        self,
+        motor_name: str,
+        target_position: float,
+        *,
+        duration: float = 3.0,
+    ) -> bool:
+        """Recover from a just-hit limit and return the motor to its reset position."""
+        target_position_int = int(round(target_position))
+
+        for attempt in range(1, self.RESET_MOVE_MAX_ATTEMPTS + 1):
+            current_position = self._read_motor_position(motor_name)
+            if current_position is not None and abs(int(current_position) - target_position_int) <= self.RESET_MOVE_TOLERANCE:
+                logger.info(
+                    "%s is already at reset position %s on attempt %s.",
+                    motor_name,
+                    target_position_int,
+                    attempt,
+                )
+                return True
+
+            try:
+                self.robot.bus.disable_torque()
+            except Exception as exc:
+                logger.warning("Failed to disable torque while recovering %s: %s", motor_name, exc)
+            time.sleep(self.RESET_MOVE_RECOVERY_SETTLE_S)
+
+            try:
+                self.robot.bus.enable_torque()
+            except Exception as exc:
+                logger.warning("Failed to enable torque while recovering %s: %s", motor_name, exc)
+            time.sleep(self.RESET_MOVE_RECOVERY_SETTLE_S)
+
+            move_duration = duration + float(attempt - 1)
+            moved = self._move_calibration_slow(
+                motor_name,
+                target_position,
+                duration=move_duration,
+            )
+            final_position = self._read_motor_position(motor_name)
+            if moved and final_position is not None and abs(int(final_position) - target_position_int) <= self.RESET_MOVE_TOLERANCE:
+                logger.info(
+                    "Recovered %s to reset position %s on attempt %s.",
+                    motor_name,
+                    target_position_int,
+                    attempt,
+                )
+                return True
+
+            logger.warning(
+                "Reset recovery attempt %s/%s failed for %s (target=%s, final=%s, duration=%.1fs).",
+                attempt,
+                self.RESET_MOVE_MAX_ATTEMPTS,
+                motor_name,
+                target_position_int,
+                final_position,
+                move_duration,
+            )
+
+        return False
 
     def _save_calibration(self) -> None:
         """Save calibration to file."""
