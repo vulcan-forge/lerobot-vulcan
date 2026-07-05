@@ -6,6 +6,9 @@ import pytest
 
 import lerobot.robots.sourccey.sourccey.sourccey.sourccey as sourccey_module
 import lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator as z_actuator_module
+from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import (
+    SourcceyFollowerCalibrator,
+)
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator import (
     SourcceyZCalibrator,
 )
@@ -99,6 +102,77 @@ class _DummyDriver:
         return None
 
 
+class _FollowerCalibrationBus:
+    def __init__(self) -> None:
+        self.motors = {"shoulder_pan": type("Motor", (), {"id": 1})()}
+        self._positions = {"shoulder_pan": 1000}
+        self._current_reads: dict[str, list[object]] = {"shoulder_pan": []}
+        self._position_reads: dict[str, list[object]] = {"shoulder_pan": []}
+        self._write_failures: dict[str, list[object]] = {"shoulder_pan": []}
+
+    def disable_torque(self) -> None:
+        return None
+
+    def enable_torque(self) -> None:
+        return None
+
+    def write_calibration(self, _calibration) -> None:
+        return None
+
+    def read(self, register: str, motor_name: str, normalize: bool = False):
+        if register == "Present_Current":
+            if self._current_reads[motor_name]:
+                value = self._current_reads[motor_name].pop(0)
+                if isinstance(value, BaseException):
+                    raise value
+                return value
+            return 0
+
+        if register == "Present_Position":
+            if self._position_reads[motor_name]:
+                value = self._position_reads[motor_name].pop(0)
+                if isinstance(value, BaseException):
+                    raise value
+                return value
+            return self._positions[motor_name]
+
+        raise KeyError(register)
+
+    def write(self, register: str, motor_name: str, value, normalize: bool = False) -> None:
+        if register != "Goal_Position":
+            raise KeyError(register)
+
+        if self._write_failures[motor_name]:
+            failure = self._write_failures[motor_name].pop(0)
+            if isinstance(failure, BaseException):
+                raise failure
+
+        self._positions[motor_name] = int(value)
+
+
+class _FollowerCalibrationRobot:
+    def __init__(self, bus: _FollowerCalibrationBus) -> None:
+        self.bus = bus
+        self.config = type(
+            "Config",
+            (),
+            {
+                "orientation": "left",
+                "max_current_calibration_threshold": 75,
+            },
+        )()
+        self.calibration = {}
+        self.id = "left_arm"
+        self.calibration_fpath = "left_arm.json"
+
+    @property
+    def is_calibrated(self) -> bool:
+        return True
+
+    def _save_calibration(self) -> None:
+        return None
+
+
 class _CalibrationTestActuator:
     def __init__(self, *, invert: bool = True) -> None:
         self.sensor = ZSensor(invert=invert)
@@ -139,7 +213,7 @@ def test_sourccey_auto_calibrate_raises_when_arm_thread_fails(monkeypatch: pytes
         robot.auto_calibrate(full_reset=True)
 
     assert robot.z_actuator.calibrator.calls == [True]
-    assert robot.right_arm.calls == [{"reverse": True, "full_reset": True}]
+    assert robot.right_arm.calls == []
 
 
 def test_sourccey_auto_calibrate_aborts_before_arms_when_z_calibration_fails() -> None:
@@ -314,6 +388,54 @@ def test_sourccey_z_full_calibration_raises_if_return_to_top_fails(
         calibrator.auto_calibrate(full_reset=True)
 
     assert actuator.saved is True
+
+
+def test_sourccey_follower_calibration_current_read_recovers_after_transient_failures() -> None:
+    bus = _FollowerCalibrationBus()
+    bus._current_reads["shoulder_pan"] = [
+        RuntimeError("temporary read failure"),
+        RuntimeError("temporary read failure"),
+        42,
+    ]
+    calibrator = SourcceyFollowerCalibrator(_FollowerCalibrationRobot(bus))
+
+    current, limit_reached = calibrator._read_calibration_current("shoulder_pan", max_retries=3, base_delay=0.0)
+
+    assert current == 42
+    assert limit_reached is False
+
+
+def test_sourccey_follower_calibration_current_read_returns_none_when_recovery_fails() -> None:
+    bus = _FollowerCalibrationBus()
+    bus._current_reads["shoulder_pan"] = [
+        RuntimeError("temporary read failure"),
+        RuntimeError("temporary read failure"),
+        RuntimeError("temporary read failure"),
+        RuntimeError("temporary read failure"),
+    ]
+    calibrator = SourcceyFollowerCalibrator(_FollowerCalibrationRobot(bus))
+
+    current, limit_reached = calibrator._read_calibration_current("shoulder_pan", max_retries=3, base_delay=0.0)
+
+    assert current is None
+    assert limit_reached is False
+
+
+def test_sourccey_follower_calibration_slow_move_recovers_from_transient_write_failure() -> None:
+    bus = _FollowerCalibrationBus()
+    bus._write_failures["shoulder_pan"] = [RuntimeError("temporary write failure")]
+    calibrator = SourcceyFollowerCalibrator(_FollowerCalibrationRobot(bus))
+
+    moved = calibrator._move_calibration_slow(
+        "shoulder_pan",
+        1010,
+        duration=0.2,
+        steps_per_second=5.0,
+        max_retries=1,
+    )
+
+    assert moved is True
+    assert bus._positions["shoulder_pan"] == 1010
 
 
 def test_sourccey_get_observation_reuses_last_good_z_on_read_failure() -> None:
