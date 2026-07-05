@@ -41,7 +41,7 @@ def _action_from_command(command: dict[str, object]) -> dict[str, float | bool] 
             "x.vel": float(axes.get("x", 0.0)),
             "y.vel": float(axes.get("y", 0.0)),
             "theta.vel": float(axes.get("theta", 0.0)),
-            "z.pos": float(axes.get("z", 0.0)),
+            "z.pos": float(axes.get("z", 100.0)),
             "untorque_left": False,
             "untorque_right": False,
         }
@@ -55,7 +55,7 @@ def _action_from_command(command: dict[str, object]) -> dict[str, float | bool] 
                 "x.vel": float(values[0]) if len(values) > 0 else 0.0,
                 "y.vel": float(values[1]) if len(values) > 1 else 0.0,
                 "theta.vel": float(values[2]) if len(values) > 2 else 0.0,
-                "z.pos": float(values[3]) if len(values) > 3 else 0.0,
+                "z.pos": float(values[3]) if len(values) > 3 else 100.0,
                 "untorque_left": False,
                 "untorque_right": False,
             }
