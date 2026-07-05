@@ -148,6 +148,7 @@ class SourcceyZCalibrator:
         invert = bool(self.actuator.sensor.invert)
 
         self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
+        self.actuator.invert = bool(self.actuator.sensor.invert)
         self.actuator._save_calibration()
         logger.info(
             "Z default calibration completed without movement: raw_min=%s raw_max=%s invert=%s",
@@ -186,9 +187,6 @@ class SourcceyZCalibrator:
         except Exception:
             pass
 
-        # If bottom reads higher than top, invert so that bottom maps to -100 and top maps to +100.
-        invert = self.actuator.invert
-
         # Phase 1: UP -> top
         self._drive(self.up_cmd)
         raw_top = self._wait_until_stable(self.up_cmd)
@@ -207,11 +205,15 @@ class SourcceyZCalibrator:
         print(f"raw_bottom: {raw_bottom}")
         print(f"raw_top: {raw_top}")
 
-        # Decide mapping
+        # Guarantee the measured bottom maps to -100 and the measured top maps to +100.
+        # If the raw signal increases as we move downward, we need inversion to preserve
+        # the public position convention.
+        invert = bool(raw_bottom > raw_top)
         raw_min = int(min(raw_bottom, raw_top))
         raw_max = int(max(raw_bottom, raw_top))
 
         self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
+        self.actuator.invert = bool(self.actuator.sensor.invert)
         self.actuator._save_calibration()
 
         # Repositioning after calibration is best-effort only. A failure here

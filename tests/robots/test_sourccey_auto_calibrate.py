@@ -6,6 +6,9 @@ import pytest
 
 import lerobot.robots.sourccey.sourccey.sourccey.sourccey as sourccey_module
 import lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator as z_actuator_module
+from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator import (
+    SourcceyZCalibrator,
+)
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey import Sourccey
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import (
     SourcceyZActuator,
@@ -71,6 +74,38 @@ class _DummyCamera:
 
     def disconnect(self) -> None:
         self.is_connected = False
+
+
+class _DummyDriver:
+    def set_velocity(self, motor, velocity, normalize=True, instant=True) -> None:
+        return None
+
+
+class _CalibrationTestActuator:
+    def __init__(self, *, invert: bool = True) -> None:
+        self.sensor = ZSensor(invert=invert)
+        self.invert = invert
+        self.driver = _DummyDriver()
+        self.motor = "linear_actuator"
+        self.saved = False
+        self.move_targets: list[float] = []
+
+    @property
+    def is_connected(self) -> bool:
+        return True
+
+    def stop_position_controller(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+    def _save_calibration(self) -> None:
+        self.saved = True
+
+    def move_to_position_blocking(self, target_pos_m100_100: float) -> float:
+        self.move_targets.append(target_pos_m100_100)
+        return target_pos_m100_100
 
 
 def test_sourccey_auto_calibrate_raises_when_arm_thread_fails(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -182,3 +217,38 @@ def test_sourccey_z_actuator_loads_valid_calibration_file(
     assert actuator.sensor.calibration_min == 111
     assert actuator.sensor.calibration_max == 876
     assert actuator.sensor.invert is False
+    assert actuator.invert is False
+
+
+@pytest.mark.parametrize(
+    ("raw_top", "raw_bottom", "expected_invert"),
+    [
+        (120, 900, True),
+        (900, 120, False),
+    ],
+)
+def test_sourccey_z_full_calibration_guarantees_bottom_and_top_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    raw_top: int,
+    raw_bottom: int,
+    expected_invert: bool,
+) -> None:
+    monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
+
+    actuator = _CalibrationTestActuator(invert=not expected_invert)
+    calibrator = SourcceyZCalibrator(actuator)
+    measured_raws = iter([raw_top, raw_bottom])
+
+    monkeypatch.setattr(calibrator, "_drive", lambda _cmd: None)
+    monkeypatch.setattr(calibrator, "_wait_until_stable", lambda _cmd: next(measured_raws))
+
+    result = calibrator.auto_calibrate(full_reset=True)
+
+    assert result is not None
+    assert result.invert is expected_invert
+    assert actuator.saved is True
+    assert actuator.move_targets == [100.0]
+    assert actuator.sensor.invert is expected_invert
+    assert actuator.invert is expected_invert
+    assert actuator.sensor.raw_to_pos_m100_100(raw_bottom) == pytest.approx(-100.0)
+    assert actuator.sensor.raw_to_pos_m100_100(raw_top) == pytest.approx(100.0)
