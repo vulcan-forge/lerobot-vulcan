@@ -208,7 +208,9 @@ class Sourccey(Robot):
 
     def auto_calibrate(self, full_reset: bool = False, arm: str | None = None) -> None:
         """
-        Auto-calibrate robot joints. If arm is None, calibrate Z first, then both arms in parallel.
+        Auto-calibrate robot joints.
+
+        If arm is None, full reset runs sequentially as Z -> left -> right.
         arm can be "left" or "right" to calibrate only that side.
         """
         if arm is None:

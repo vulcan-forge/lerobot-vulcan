@@ -176,7 +176,8 @@ class SourcceyZActuator:
         *,
         sensor: ZSensor,
         driver: ZMotorDriver | None = None,
-        motor: str | int = "linear_actuator"
+        motor: str | int = "linear_actuator",
+        motor_invert: bool = True,
     ) -> None:
 
         self.name = "sourccey_z_actuator"
@@ -188,6 +189,8 @@ class SourcceyZActuator:
 
         # Position target (public API is position-only; motor command is internal).
         self._target_pos_m100_100: float = 0.0
+        self.motor_invert = bool(motor_invert)
+        # Published position convention (derived from sensor calibration).
         self.invert = sensor.invert
 
         # Tunables (safe defaults; tune on hardware).
@@ -299,7 +302,7 @@ class SourcceyZActuator:
 
                 # Reset controller state to avoid a D "kick" when we hand back to PD.
                 self._prev_err_valid = False
-                if self.invert:
+                if self.motor_invert:
                     cmd = -cmd
                 self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
                 return
@@ -318,7 +321,7 @@ class SourcceyZActuator:
         cmd = (self.kp * err) + (self.kd * derr)
         cmd = max(-self.max_cmd, min(self.max_cmd, cmd))
 
-        if self.invert:
+        if self.motor_invert:
             cmd = -cmd
 
         self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
@@ -466,7 +469,7 @@ class SourcceyZActuator:
 
         self.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
 
-        # Keep actuator inversion consistent with sensor inversion (since update() uses self.invert).
+        # Keep the published position convention consistent with sensor inversion.
         self.invert = bool(self.sensor.invert)
         return True
 

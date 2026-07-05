@@ -4,12 +4,15 @@ import json
 
 import pytest
 
+import lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator as z_calibrator_module
 import lerobot.robots.sourccey.sourccey.sourccey.sourccey as sourccey_module
 import lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator as z_actuator_module
+import lerobot.scripts.sourccey.calibration.auto_calibrate as auto_calibrate_script
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import (
     SourcceyFollowerCalibrator,
 )
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator import (
+    CalibrationPhaseError,
     SourcceyZCalibrator,
 )
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey import Sourccey
@@ -98,7 +101,11 @@ class _ObservationBase:
 
 
 class _DummyDriver:
+    def __init__(self) -> None:
+        self.velocity_calls: list[tuple[object, float, bool, bool]] = []
+
     def set_velocity(self, motor, velocity, normalize=True, instant=True) -> None:
+        self.velocity_calls.append((motor, float(velocity), bool(normalize), bool(instant)))
         return None
 
 
@@ -174,9 +181,10 @@ class _FollowerCalibrationRobot:
 
 
 class _CalibrationTestActuator:
-    def __init__(self, *, invert: bool = True) -> None:
+    def __init__(self, *, invert: bool = True, motor_invert: bool = True) -> None:
         self.sensor = ZSensor(invert=invert)
         self.invert = invert
+        self.motor_invert = motor_invert
         self.driver = _DummyDriver()
         self.motor = "linear_actuator"
         self.saved = False
@@ -346,11 +354,10 @@ def test_sourccey_z_full_calibration_guarantees_bottom_and_top_mapping(
 ) -> None:
     monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
 
-    actuator = _CalibrationTestActuator(invert=not expected_invert)
+    actuator = _CalibrationTestActuator(invert=not expected_invert, motor_invert=True)
     calibrator = SourcceyZCalibrator(actuator)
     measured_raws = iter([raw_top, raw_bottom, raw_top])
 
-    monkeypatch.setattr(calibrator, "_drive", lambda _cmd: None)
     monkeypatch.setattr(calibrator, "_wait_until_stable", lambda _cmd: next(measured_raws))
 
     result = calibrator.auto_calibrate(full_reset=True)
@@ -363,31 +370,93 @@ def test_sourccey_z_full_calibration_guarantees_bottom_and_top_mapping(
     assert actuator.invert is expected_invert
     assert actuator.sensor.raw_to_pos_m100_100(raw_bottom) == pytest.approx(-100.0)
     assert actuator.sensor.raw_to_pos_m100_100(raw_top) == pytest.approx(100.0)
+    assert [call[1] for call in actuator.driver.velocity_calls] == [-1.0, 1.0, -1.0]
 
 
-def test_sourccey_z_full_calibration_raises_if_return_to_top_fails(
+def test_sourccey_z_drive_uses_motor_invert_not_sensor_mapping() -> None:
+    actuator = _CalibrationTestActuator(invert=False, motor_invert=True)
+    calibrator = SourcceyZCalibrator(actuator)
+
+    calibrator._drive(0.5)
+    actuator.sensor.invert = True
+    actuator.invert = True
+    calibrator._drive(0.5)
+
+    assert [call[1] for call in actuator.driver.velocity_calls] == [-0.5, -0.5]
+
+
+def test_sourccey_z_full_calibration_raises_if_return_to_top_verification_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
 
     actuator = _CalibrationTestActuator(invert=True)
     calibrator = SourcceyZCalibrator(actuator)
-    measured_raws = iter([120, 900])
+    measured_raws = iter([120, 900, 150])
 
-    monkeypatch.setattr(calibrator, "_drive", lambda _cmd: None)
+    monkeypatch.setattr(calibrator, "_wait_until_stable", lambda _cmd: next(measured_raws))
 
-    def _wait(_cmd: float) -> int:
-        try:
-            return next(measured_raws)
-        except StopIteration as exc:
-            raise TimeoutError("top return timed out") from exc
-
-    monkeypatch.setattr(calibrator, "_wait_until_stable", _wait)
-
-    with pytest.raises(RuntimeError, match="failed to return the actuator to the top endpoint"):
+    with pytest.raises(CalibrationPhaseError, match="z:return_top verification failed"):
         calibrator.auto_calibrate(full_reset=True)
 
     assert actuator.saved is True
+
+
+def test_sourccey_z_full_calibration_logs_all_phases_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
+
+    actuator = _CalibrationTestActuator(invert=True)
+    calibrator = SourcceyZCalibrator(actuator)
+    measured_raws = iter([120, 900, 120])
+
+    monkeypatch.setattr(calibrator, "_wait_until_stable", lambda _cmd: next(measured_raws))
+    caplog.set_level("INFO", logger=z_calibrator_module.__name__)
+
+    calibrator.auto_calibrate(full_reset=True)
+
+    seen_phases: list[str] = []
+    for record in caplog.records:
+        message = record.getMessage()
+        for phase in ("seek_top", "seek_bottom", "return_top", "verify_top"):
+            if f"z_phase={phase}" in message and (not seen_phases or seen_phases[-1] != phase):
+                seen_phases.append(phase)
+
+    assert seen_phases == ["seek_top", "seek_bottom", "return_top", "verify_top"]
+
+
+def test_auto_calibrate_script_forwards_arm_to_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeRobotConfig:
+        def __init__(self) -> None:
+            self.id = "sourccey"
+
+    class _DummyDevice:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def connect(self, calibrate: bool = True) -> None:
+            return None
+
+        def auto_calibrate(self, *, full_reset: bool = False, arm: str | None = None) -> None:
+            self.calls.append({"full_reset": full_reset, "arm": arm})
+
+        def disconnect(self) -> None:
+            return None
+
+    device = _DummyDevice()
+
+    monkeypatch.setattr(auto_calibrate_script, "RobotConfig", _FakeRobotConfig)
+    monkeypatch.setattr(auto_calibrate_script, "make_robot_from_config", lambda _cfg: device)
+    monkeypatch.setattr(auto_calibrate_script, "init_logging", lambda: None)
+
+    cfg = auto_calibrate_script.AutoCalibrateConfig(robot=_FakeRobotConfig(), full_reset=True, arm="right")
+    auto_calibrate_fn = getattr(auto_calibrate_script.auto_calibrate, "__wrapped__", auto_calibrate_script.auto_calibrate)
+
+    auto_calibrate_fn(cfg)
+
+    assert device.calls == [{"full_reset": True, "arm": "right"}]
 
 
 def test_sourccey_follower_calibration_current_read_recovers_after_transient_failures() -> None:
@@ -440,6 +509,7 @@ def test_sourccey_follower_calibration_slow_move_recovers_from_transient_write_f
 
 def test_sourccey_get_observation_reuses_last_good_z_on_read_failure() -> None:
     robot = Sourccey.__new__(Sourccey)
+    robot.id = "sourccey"
     robot.left_arm = _ObservationArm({"shoulder_pan.pos": 1.0})
     robot.right_arm = _ObservationArm({"shoulder_pan.pos": -1.0})
     robot.dc_motors_controller = _ObservationBase()
@@ -461,6 +531,7 @@ def test_sourccey_get_observation_reuses_last_good_z_on_read_failure() -> None:
 
 def test_sourccey_get_observation_updates_last_good_z_on_success() -> None:
     robot = Sourccey.__new__(Sourccey)
+    robot.id = "sourccey"
     robot.left_arm = _ObservationArm({"shoulder_pan.pos": 1.0})
     robot.right_arm = _ObservationArm({"shoulder_pan.pos": -1.0})
     robot.dc_motors_controller = _ObservationBase()

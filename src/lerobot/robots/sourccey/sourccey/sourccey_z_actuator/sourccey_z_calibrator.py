@@ -1,9 +1,13 @@
-import time
 from dataclasses import dataclass
 import logging
+import time
 
 
 logger = logging.getLogger(__name__)
+
+
+class CalibrationPhaseError(RuntimeError):
+    """Raised when a calibration phase cannot complete safely or verifiably."""
 
 
 @dataclass(frozen=True)
@@ -29,6 +33,8 @@ class SourcceyZCalibrator:
     - 'Stable' is defined as abs(raw - last_raw) <= stable_eps_raw continuously for stable_s.
     """
 
+    TOP_VERIFY_TOLERANCE_RAW = 12
+
     def __init__(
         self,
         actuator,  # SourcceyZActuator
@@ -52,8 +58,20 @@ class SourcceyZCalibrator:
         self.down_cmd = float(down_cmd)
         self.up_cmd = float(up_cmd)
 
+    def _log_phase(self, phase: str, *, event: str, started_at: float, **fields: object) -> None:
+        elapsed_s = time.monotonic() - started_at
+        suffix = " ".join(f"{key}={value}" for key, value in fields.items())
+        logger.info(
+            "z_phase=%s event=%s elapsed_s=%.2f%s%s",
+            phase,
+            event,
+            elapsed_s,
+            " " if suffix else "",
+            suffix,
+        )
+
     def _drive(self, cmd: float) -> None:
-        cmd = -cmd if self.actuator.invert else cmd
+        cmd = -cmd if self.actuator.motor_invert else cmd
         if self.actuator.driver is None:
             raise RuntimeError("SourcceyZActuator has no driver; cannot drive motor.")
         # Important: cmd sign here is MOTOR sign. If this moves opposite of expected, swap down_cmd/up_cmd.
@@ -102,13 +120,41 @@ class SourcceyZCalibrator:
 
             time.sleep(period)
 
-    def _move_to_endpoint(self, cmd: float) -> int:
+    def _move_to_endpoint(self, cmd: float, *, phase: str) -> int:
         """Drive to a hard endpoint and stop once the raw reading is stable."""
+        started_at = time.monotonic()
+        self._log_phase(phase, event="start", started_at=started_at, cmd=round(float(cmd), 3))
         self._drive(cmd)
         raw = self._wait_until_stable(cmd)
         self.actuator.stop()
         time.sleep(0.25)
+        self._log_phase(phase, event="stop", started_at=started_at, raw=int(raw))
         return int(raw)
+
+    def _return_to_top_and_verify(self, *, expected_raw_top: int) -> int:
+        try:
+            raw_top = self._move_to_endpoint(self.up_cmd, phase="return_top")
+        except Exception as exc:
+            raise CalibrationPhaseError("z:return_top drive failed") from exc
+
+        started_at = time.monotonic()
+        delta = abs(int(raw_top) - int(expected_raw_top))
+        self._log_phase(
+            "verify_top",
+            event="check",
+            started_at=started_at,
+            observed_raw=int(raw_top),
+            expected_raw=int(expected_raw_top),
+            delta_raw=int(delta),
+            tolerance_raw=self.TOP_VERIFY_TOLERANCE_RAW,
+        )
+        if delta > self.TOP_VERIFY_TOLERANCE_RAW:
+            raise CalibrationPhaseError(
+                "z:return_top verification failed "
+                f"(observed_raw={raw_top}, expected_raw={expected_raw_top}, tolerance_raw={self.TOP_VERIFY_TOLERANCE_RAW})"
+            )
+        self._log_phase("verify_top", event="pass", started_at=started_at, observed_raw=int(raw_top))
+        return int(raw_top)
 
     def _wait_for_seconds(self, cmd: float, seconds: float) -> int:
         """
@@ -195,17 +241,16 @@ class SourcceyZCalibrator:
         except Exception:
             pass
 
+        full_reset_started_at = time.monotonic()
+
         # Phase 1: UP -> top
-        raw_top = self._move_to_endpoint(self.up_cmd)
+        raw_top = self._move_to_endpoint(self.up_cmd, phase="seek_top")
 
         # Phase 2: DOWN -> bottom
         # The linear actuator can get stuck at the bottom without a hardware block,
         # So we wait for 5 seconds until we have a hardware stop
         # raw_bottom = self._wait_for_seconds(self.down_cmd, 5.0)
-        raw_bottom = self._move_to_endpoint(self.down_cmd)
-
-        print(f"raw_bottom: {raw_bottom}")
-        print(f"raw_top: {raw_top}")
+        raw_bottom = self._move_to_endpoint(self.down_cmd, phase="seek_bottom")
 
         # Guarantee the measured bottom maps to -100 and the measured top maps to +100.
         # If the raw signal increases as we move downward, we need inversion to preserve
@@ -217,13 +262,16 @@ class SourcceyZCalibrator:
         self.actuator.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
         self.actuator.invert = bool(self.actuator.sensor.invert)
         self.actuator._save_calibration()
+        self._log_phase(
+            "save_calibration",
+            event="done",
+            started_at=full_reset_started_at,
+            raw_min=raw_min,
+            raw_max=raw_max,
+            invert=invert,
+        )
 
-        try:
-            self._move_to_endpoint(self.up_cmd)
-        except Exception as exc:
-            raise RuntimeError(
-                "Z calibration detected limits but failed to return the actuator to the top endpoint."
-            ) from exc
+        self._return_to_top_and_verify(expected_raw_top=raw_top)
 
         return ZCalibrationResult(
             raw_bottom=int(raw_bottom),
