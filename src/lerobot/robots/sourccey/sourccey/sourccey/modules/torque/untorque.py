@@ -85,6 +85,9 @@ def main() -> None:
     if not succeeded:
         raise SystemExit("Failed to reach any requested motors.")
 
+    if failures:
+        raise SystemExit("Untorque incomplete. Check logs for unreachable motors.")
+
 
 if __name__ == "__main__":
     main()
