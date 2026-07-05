@@ -225,7 +225,7 @@ def test_sourccey_auto_calibrate_raises_when_arm_thread_fails(monkeypatch: pytes
         robot.auto_calibrate(full_reset=True)
 
     assert robot.z_actuator.calibrator.calls == [True]
-    assert robot.right_arm.calls == []
+    assert robot.right_arm.calls == [{"reverse": True, "full_reset": True}]
 
 
 def test_sourccey_auto_calibrate_aborts_before_arms_when_z_calibration_fails() -> None:
