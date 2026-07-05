@@ -24,7 +24,7 @@ class SourcceyZCalibrator:
     Autocalibration by stall detection:
 
     - Drive DOWN at constant command until sensor raw ADC counts stop changing for `stable_s`
-    - Drive UP at constant command until sensor raw ADC counts stop changing for `stable_s`
+    - Drive back UP at constant command until sensor raw ADC counts stop changing for `stable_s`
 
     Then write calibration to the ZSensor.
 
@@ -34,6 +34,8 @@ class SourcceyZCalibrator:
     """
 
     TOP_VERIFY_TOLERANCE_RAW = 12
+    RETURN_TOP_MIN_DRIVE_S = 1.0
+    RETURN_TOP_MIN_TRAVEL_RAW = 20
 
     def __init__(
         self,
@@ -57,6 +59,7 @@ class SourcceyZCalibrator:
         self.max_phase_s = float(max_phase_s)
         self.down_cmd = float(down_cmd)
         self.up_cmd = float(up_cmd)
+        self._last_move_travel_raw = 0
 
     def _log_phase(self, phase: str, *, event: str, started_at: float, **fields: object) -> None:
         elapsed_s = time.monotonic() - started_at
@@ -84,18 +87,31 @@ class SourcceyZCalibrator:
         """Read native MCP3008 units (0..1023)."""
         return int(self.actuator.sensor.read_raw().raw)
 
-    def _wait_until_stable(self, cmd: float) -> int:
+    def _wait_until_stable(
+        self,
+        cmd: float,
+        *,
+        phase: str,
+        min_elapsed_s: float = 0.0,
+        min_travel_raw: int = 0,
+    ) -> int:
         period = 1.0 / max(1.0, self.sample_hz)
-        t_deadline = time.monotonic() + self.max_phase_s
+        started_at = time.monotonic()
+        t_deadline = started_at + self.max_phase_s
 
         # Detect stall in raw ADC counts so calibration sensitivity is independent
         # of any prior saved mapping.
+        start_raw = None
         last_raw = None
         stable_start = None
+        max_travel_raw = 0
+        min_elapsed_s = float(min_elapsed_s)
+        min_travel_raw = int(min_travel_raw)
 
         while True:
             now = time.monotonic()
             if now >= t_deadline:
+                self._last_move_travel_raw = int(max_travel_raw)
                 raise TimeoutError("Z calibrator timed out waiting for stability (end stop not detected).")
 
             # KEEP MOTOR ALIVE (important for watchdog-style drivers)
@@ -103,47 +119,77 @@ class SourcceyZCalibrator:
 
             raw = self._read_raw()
 
+            if start_raw is None:
+                start_raw = raw
+            else:
+                max_travel_raw = max(max_travel_raw, abs(int(raw) - int(start_raw)))
+
             if last_raw is None:
                 last_raw = raw
                 stable_start = None
             else:
                 if abs(raw - last_raw) <= self.stable_eps_raw:
-                    if stable_start is None:
+                    elapsed_s = now - started_at
+                    if elapsed_s < min_elapsed_s or max_travel_raw < min_travel_raw:
+                        stable_start = None
+                    elif stable_start is None:
                         stable_start = now
                     elif (now - stable_start) >= self.stable_s:
+                        self._last_move_travel_raw = int(max_travel_raw)
                         return raw
 
                 else:
                     stable_start = None
-                
+
                 last_raw = raw
 
             time.sleep(period)
 
-    def _move_to_endpoint(self, cmd: float, *, phase: str) -> int:
+    def _move_to_endpoint(
+        self,
+        cmd: float,
+        *,
+        phase: str,
+        min_elapsed_s: float = 0.0,
+        min_travel_raw: int = 0,
+    ) -> int:
         """Drive to a hard endpoint and stop once the raw reading is stable."""
         started_at = time.monotonic()
-        self._log_phase(phase, event="start", started_at=started_at, cmd=round(float(cmd), 3))
+        self._log_phase(
+            phase,
+            event="start",
+            started_at=started_at,
+            cmd=round(float(cmd), 3),
+            min_elapsed_s=round(float(min_elapsed_s), 3),
+            min_travel_raw=int(min_travel_raw),
+        )
         self._drive(cmd)
-        raw = self._wait_until_stable(cmd)
+        raw = self._wait_until_stable(
+            cmd,
+            phase=phase,
+            min_elapsed_s=min_elapsed_s,
+            min_travel_raw=min_travel_raw,
+        )
         self.actuator.stop()
         time.sleep(0.25)
-        self._log_phase(phase, event="stop", started_at=started_at, raw=int(raw))
+        self._log_phase(
+            phase,
+            event="stop",
+            started_at=started_at,
+            raw=int(raw),
+            travel_raw=int(self._last_move_travel_raw),
+        )
         return int(raw)
 
-    def _return_to_top_and_verify(self, *, expected_raw_top: int) -> int:
-        try:
-            raw_top = self._move_to_endpoint(self.up_cmd, phase="return_top")
-        except Exception as exc:
-            raise CalibrationPhaseError("z:return_top drive failed") from exc
-
+    def _verify_top(self, *, expected_raw_top: int) -> int:
         started_at = time.monotonic()
-        delta = abs(int(raw_top) - int(expected_raw_top))
+        observed_raw = self._read_raw()
+        delta = abs(int(observed_raw) - int(expected_raw_top))
         self._log_phase(
             "verify_top",
             event="check",
             started_at=started_at,
-            observed_raw=int(raw_top),
+            observed_raw=int(observed_raw),
             expected_raw=int(expected_raw_top),
             delta_raw=int(delta),
             tolerance_raw=self.TOP_VERIFY_TOLERANCE_RAW,
@@ -151,10 +197,23 @@ class SourcceyZCalibrator:
         if delta > self.TOP_VERIFY_TOLERANCE_RAW:
             raise CalibrationPhaseError(
                 "z:return_top verification failed "
-                f"(observed_raw={raw_top}, expected_raw={expected_raw_top}, tolerance_raw={self.TOP_VERIFY_TOLERANCE_RAW})"
+                f"(observed_raw={observed_raw}, expected_raw={expected_raw_top}, tolerance_raw={self.TOP_VERIFY_TOLERANCE_RAW})"
             )
-        self._log_phase("verify_top", event="pass", started_at=started_at, observed_raw=int(raw_top))
-        return int(raw_top)
+        self._log_phase("verify_top", event="pass", started_at=started_at, observed_raw=int(observed_raw))
+        return int(observed_raw)
+
+    def _return_to_top_and_verify(self) -> int:
+        try:
+            raw_top = self._move_to_endpoint(
+                self.up_cmd,
+                phase="return_top",
+                min_elapsed_s=self.RETURN_TOP_MIN_DRIVE_S,
+                min_travel_raw=self.RETURN_TOP_MIN_TRAVEL_RAW,
+            )
+        except Exception as exc:
+            raise CalibrationPhaseError("z:return_top drive failed") from exc
+
+        return self._verify_top(expected_raw_top=raw_top)
 
     def _wait_for_seconds(self, cmd: float, seconds: float) -> int:
         """
@@ -243,14 +302,11 @@ class SourcceyZCalibrator:
 
         full_reset_started_at = time.monotonic()
 
-        # Phase 1: UP -> top
-        raw_top = self._move_to_endpoint(self.up_cmd, phase="seek_top")
-
-        # Phase 2: DOWN -> bottom
-        # The linear actuator can get stuck at the bottom without a hardware block,
-        # So we wait for 5 seconds until we have a hardware stop
-        # raw_bottom = self._wait_for_seconds(self.down_cmd, 5.0)
+        # Phase 1: drive to bottom first so the full reset naturally finishes at the top.
         raw_bottom = self._move_to_endpoint(self.down_cmd, phase="seek_bottom")
+
+        # Phase 2: return from bottom to top and verify the final top reading.
+        raw_top = self._return_to_top_and_verify()
 
         # Guarantee the measured bottom maps to -100 and the measured top maps to +100.
         # If the raw signal increases as we move downward, we need inversion to preserve
@@ -270,8 +326,6 @@ class SourcceyZCalibrator:
             raw_max=raw_max,
             invert=invert,
         )
-
-        self._return_to_top_and_verify(expected_raw_top=raw_top)
 
         return ZCalibrationResult(
             raw_bottom=int(raw_bottom),

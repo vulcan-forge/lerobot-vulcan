@@ -340,25 +340,30 @@ def test_sourccey_z_actuator_loads_valid_calibration_file(
 
 
 @pytest.mark.parametrize(
-    ("raw_top", "raw_bottom", "expected_invert"),
+    ("raw_bottom", "raw_top", "expected_invert"),
     [
-        (120, 900, True),
-        (900, 120, False),
+        (900, 120, True),
+        (120, 900, False),
     ],
 )
 def test_sourccey_z_full_calibration_guarantees_bottom_and_top_mapping(
     monkeypatch: pytest.MonkeyPatch,
-    raw_top: int,
     raw_bottom: int,
+    raw_top: int,
     expected_invert: bool,
 ) -> None:
     monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
 
     actuator = _CalibrationTestActuator(invert=not expected_invert, motor_invert=True)
     calibrator = SourcceyZCalibrator(actuator)
-    measured_raws = iter([raw_top, raw_bottom, raw_top])
+    measured_raws = iter([raw_bottom, raw_top])
 
-    monkeypatch.setattr(calibrator, "_wait_until_stable", lambda _cmd: next(measured_raws))
+    monkeypatch.setattr(
+        calibrator,
+        "_wait_until_stable",
+        lambda _cmd, **_kwargs: next(measured_raws),
+    )
+    monkeypatch.setattr(calibrator, "_read_raw", lambda: raw_top)
 
     result = calibrator.auto_calibrate(full_reset=True)
 
@@ -370,7 +375,7 @@ def test_sourccey_z_full_calibration_guarantees_bottom_and_top_mapping(
     assert actuator.invert is expected_invert
     assert actuator.sensor.raw_to_pos_m100_100(raw_bottom) == pytest.approx(-100.0)
     assert actuator.sensor.raw_to_pos_m100_100(raw_top) == pytest.approx(100.0)
-    assert [call[1] for call in actuator.driver.velocity_calls] == [-1.0, 1.0, -1.0]
+    assert [call[1] for call in actuator.driver.velocity_calls] == [1.0, -1.0]
 
 
 def test_sourccey_z_drive_uses_motor_invert_not_sensor_mapping() -> None:
@@ -392,14 +397,19 @@ def test_sourccey_z_full_calibration_raises_if_return_to_top_verification_fails(
 
     actuator = _CalibrationTestActuator(invert=True)
     calibrator = SourcceyZCalibrator(actuator)
-    measured_raws = iter([120, 900, 150])
+    measured_raws = iter([900, 120])
 
-    monkeypatch.setattr(calibrator, "_wait_until_stable", lambda _cmd: next(measured_raws))
+    monkeypatch.setattr(
+        calibrator,
+        "_wait_until_stable",
+        lambda _cmd, **_kwargs: next(measured_raws),
+    )
+    monkeypatch.setattr(calibrator, "_read_raw", lambda: 150)
 
     with pytest.raises(CalibrationPhaseError, match="z:return_top verification failed"):
         calibrator.auto_calibrate(full_reset=True)
 
-    assert actuator.saved is True
+    assert actuator.saved is False
 
 
 def test_sourccey_z_full_calibration_logs_all_phases_in_order(
@@ -410,9 +420,14 @@ def test_sourccey_z_full_calibration_logs_all_phases_in_order(
 
     actuator = _CalibrationTestActuator(invert=True)
     calibrator = SourcceyZCalibrator(actuator)
-    measured_raws = iter([120, 900, 120])
+    measured_raws = iter([900, 120])
 
-    monkeypatch.setattr(calibrator, "_wait_until_stable", lambda _cmd: next(measured_raws))
+    monkeypatch.setattr(
+        calibrator,
+        "_wait_until_stable",
+        lambda _cmd, **_kwargs: next(measured_raws),
+    )
+    monkeypatch.setattr(calibrator, "_read_raw", lambda: 120)
     caplog.set_level("INFO", logger=z_calibrator_module.__name__)
 
     calibrator.auto_calibrate(full_reset=True)
@@ -420,11 +435,36 @@ def test_sourccey_z_full_calibration_logs_all_phases_in_order(
     seen_phases: list[str] = []
     for record in caplog.records:
         message = record.getMessage()
-        for phase in ("seek_top", "seek_bottom", "return_top", "verify_top"):
+        for phase in ("seek_bottom", "return_top", "verify_top"):
             if f"z_phase={phase}" in message and (not seen_phases or seen_phases[-1] != phase):
                 seen_phases.append(phase)
 
-    assert seen_phases == ["seek_top", "seek_bottom", "return_top", "verify_top"]
+    assert seen_phases == ["seek_bottom", "return_top", "verify_top"]
+
+
+def test_sourccey_z_return_to_top_requires_min_drive_and_travel(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
+
+    actuator = _CalibrationTestActuator(invert=True)
+    calibrator = SourcceyZCalibrator(actuator)
+    wait_calls: list[dict[str, object]] = []
+
+    def _wait(_cmd: float, **kwargs) -> int:
+        wait_calls.append(kwargs)
+        return 120
+
+    monkeypatch.setattr(calibrator, "_wait_until_stable", _wait)
+    monkeypatch.setattr(calibrator, "_read_raw", lambda: 120)
+
+    calibrator._return_to_top_and_verify()
+
+    assert wait_calls == [
+        {
+            "phase": "return_top",
+            "min_elapsed_s": calibrator.RETURN_TOP_MIN_DRIVE_S,
+            "min_travel_raw": calibrator.RETURN_TOP_MIN_TRAVEL_RAW,
+        }
+    ]
 
 
 def test_auto_calibrate_script_forwards_arm_to_device(monkeypatch: pytest.MonkeyPatch) -> None:
