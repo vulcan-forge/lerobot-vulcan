@@ -95,6 +95,7 @@ class Sourccey(Robot):
         self.untorque_left_prev = False
         self.untorque_right_prev = False
         self._z_hardware_available = True
+        self._last_known_z_pos = 100.0
 
     def __del__(self):
         # Destructors can run on partially initialized objects if __init__ raised.
@@ -297,14 +298,15 @@ class Sourccey(Robot):
             base_vel = self._wheel_normalized_to_body(base_wheel_vel)
             obs_dict.update(base_vel)
 
-            # Z actuator position (best-effort; keep schema stable)
-            try:
-                if self.z_actuator is not None and self.z_actuator.is_connected and self.z_actuator.use_z_actuator:
-                    obs_dict["z.pos"] = float(self.z_actuator.read_position())
-                else:
-                    obs_dict["z.pos"] = 100.0
-            except Exception:
-                obs_dict["z.pos"] = 100.0
+            # Z actuator position (best-effort; keep schema stable).
+            # Reuse the last good reading on transient ADC/SPI failures instead of
+            # snapping back to +100, which can look like live recalibration drift.
+            if self.z_actuator is not None and self.z_actuator.is_connected and self.z_actuator.use_z_actuator:
+                try:
+                    self._last_known_z_pos = float(self.z_actuator.read_position())
+                except Exception as exc:
+                    logger.warning("Failed to read z actuator position; reusing last good value: %s", exc)
+            obs_dict["z.pos"] = float(self._last_known_z_pos)
 
             for cam_key in self.cameras.keys():
                 try:

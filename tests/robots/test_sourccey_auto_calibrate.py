@@ -76,6 +76,24 @@ class _DummyCamera:
         self.is_connected = False
 
 
+class _ObservationArm:
+    def __init__(self, observation: dict[str, float]) -> None:
+        self._observation = observation
+
+    def get_observation(self) -> dict[str, float]:
+        return dict(self._observation)
+
+
+class _ObservationBase:
+    def get_velocities(self) -> dict[str, float]:
+        return {
+            "front_left": 0.0,
+            "front_right": 0.0,
+            "rear_left": 0.0,
+            "rear_right": 0.0,
+        }
+
+
 class _DummyDriver:
     def set_velocity(self, motor, velocity, normalize=True, instant=True) -> None:
         return None
@@ -252,3 +270,42 @@ def test_sourccey_z_full_calibration_guarantees_bottom_and_top_mapping(
     assert actuator.invert is expected_invert
     assert actuator.sensor.raw_to_pos_m100_100(raw_bottom) == pytest.approx(-100.0)
     assert actuator.sensor.raw_to_pos_m100_100(raw_top) == pytest.approx(100.0)
+
+
+def test_sourccey_get_observation_reuses_last_good_z_on_read_failure() -> None:
+    robot = Sourccey.__new__(Sourccey)
+    robot.left_arm = _ObservationArm({"shoulder_pan.pos": 1.0})
+    robot.right_arm = _ObservationArm({"shoulder_pan.pos": -1.0})
+    robot.dc_motors_controller = _ObservationBase()
+    robot._wheel_normalized_to_body = lambda _wheel_vel: {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+    robot.cameras = {}
+    robot.config = type("Config", (), {"cameras": {}})()
+    robot.z_actuator = type("Z", (), {"is_connected": True, "use_z_actuator": True})()
+    robot._last_known_z_pos = -37.5
+
+    def _raise() -> float:
+        raise RuntimeError("spi glitch")
+
+    robot.z_actuator.read_position = _raise
+
+    observation = robot.get_observation()
+
+    assert observation["z.pos"] == pytest.approx(-37.5)
+
+
+def test_sourccey_get_observation_updates_last_good_z_on_success() -> None:
+    robot = Sourccey.__new__(Sourccey)
+    robot.left_arm = _ObservationArm({"shoulder_pan.pos": 1.0})
+    robot.right_arm = _ObservationArm({"shoulder_pan.pos": -1.0})
+    robot.dc_motors_controller = _ObservationBase()
+    robot._wheel_normalized_to_body = lambda _wheel_vel: {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+    robot.cameras = {}
+    robot.config = type("Config", (), {"cameras": {}})()
+    robot.z_actuator = type("Z", (), {"is_connected": True, "use_z_actuator": True})()
+    robot._last_known_z_pos = 100.0
+    robot.z_actuator.read_position = lambda: -12.25
+
+    observation = robot.get_observation()
+
+    assert observation["z.pos"] == pytest.approx(-12.25)
+    assert robot._last_known_z_pos == pytest.approx(-12.25)
