@@ -14,6 +14,7 @@ from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibr
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator import (
     CalibrationPhaseError,
     SourcceyZCalibrator,
+    ZCalibrationResult,
 )
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey import Sourccey
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import (
@@ -44,11 +45,19 @@ class _DummyArm:
 
 
 class _DummyZCalibrator:
-    def __init__(self):
+    def __init__(self, result: ZCalibrationResult | None = None):
         self.calls: list[bool] = []
+        self.result = result or ZCalibrationResult(
+            raw_bottom=900,
+            raw_top=120,
+            raw_min=120,
+            raw_max=900,
+            invert=True,
+        )
 
-    def auto_calibrate(self, *, full_reset: bool = False) -> None:
+    def auto_calibrate(self, *, full_reset: bool = False) -> ZCalibrationResult | None:
         self.calls.append(full_reset)
+        return self.result
 
 
 class _DummyZActuator:
@@ -212,8 +221,12 @@ class _CalibrationTestActuator:
         return target_pos_m100_100
 
 
-def test_sourccey_auto_calibrate_raises_when_arm_thread_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sourccey_auto_calibrate_raises_when_arm_thread_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
+    caplog.set_level("INFO", logger=sourccey_module.__name__)
 
     robot = Sourccey.__new__(Sourccey)
     robot.left_arm = _DummyArm(RuntimeError("left arm failed"))
@@ -221,11 +234,24 @@ def test_sourccey_auto_calibrate_raises_when_arm_thread_fails(monkeypatch: pytes
     robot.z_actuator = _DummyZActuator()
     robot._z_hardware_available = True
 
-    with pytest.raises(RuntimeError, match="left arm"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"left arm.*Z calibration was saved successfully",
+    ):
         robot.auto_calibrate(full_reset=True)
 
     assert robot.z_actuator.calibrator.calls == [True]
     assert robot.right_arm.calls == [{"reverse": True, "full_reset": True}]
+    log_messages = [record.getMessage() for record in caplog.records]
+    z_saved_index = next(
+        index for index, message in enumerate(log_messages)
+        if "Z auto-calibration saved successfully" in message
+    )
+    arm_failure_index = next(
+        index for index, message in enumerate(log_messages)
+        if "Auto-calibration failed for left arm" in message
+    )
+    assert z_saved_index < arm_failure_index
 
 
 def test_sourccey_auto_calibrate_aborts_before_arms_when_z_calibration_fails() -> None:
@@ -469,6 +495,52 @@ def test_sourccey_z_return_to_top_requires_min_drive_and_travel(monkeypatch: pyt
             "min_travel_raw": calibrator.RETURN_TOP_MIN_TRAVEL_RAW,
         }
     ]
+
+
+def test_sourccey_z_seek_bottom_requires_min_drive_and_travel(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
+
+    actuator = _CalibrationTestActuator(invert=True)
+    calibrator = SourcceyZCalibrator(actuator)
+    wait_calls: list[dict[str, object]] = []
+
+    def _wait(_cmd: float, **kwargs) -> int:
+        wait_calls.append(kwargs)
+        return 900
+
+    monkeypatch.setattr(calibrator, "_wait_until_stable", _wait)
+    monkeypatch.setattr(calibrator, "_return_to_top_and_verify", lambda: 120)
+
+    calibrator.auto_calibrate(full_reset=True)
+
+    assert wait_calls == [
+        {
+            "phase": "seek_bottom",
+            "min_elapsed_s": calibrator.SEEK_BOTTOM_MIN_DRIVE_S,
+            "min_travel_raw": calibrator.SEEK_BOTTOM_MIN_TRAVEL_RAW,
+        }
+    ]
+
+
+def test_sourccey_z_full_calibration_rejects_immediate_stable_bottom(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
+
+    actuator = _CalibrationTestActuator(invert=True)
+    calibrator = SourcceyZCalibrator(actuator, stable_s=0.0, sample_hz=30.0, max_phase_s=0.35)
+    calibrator.SEEK_BOTTOM_MIN_DRIVE_S = 0.3
+    calibrator.SEEK_BOTTOM_MIN_TRAVEL_RAW = 20
+
+    monotonic_time = {"value": 0.0}
+
+    def _monotonic() -> float:
+        monotonic_time["value"] += 0.11
+        return monotonic_time["value"]
+
+    monkeypatch.setattr(z_calibrator_module.time, "monotonic", _monotonic)
+    monkeypatch.setattr(calibrator, "_read_raw", lambda: 500)
+
+    with pytest.raises(TimeoutError, match="timed out waiting for stability"):
+        calibrator.auto_calibrate(full_reset=True)
 
 
 def test_auto_calibrate_script_forwards_arm_to_device(monkeypatch: pytest.MonkeyPatch) -> None:

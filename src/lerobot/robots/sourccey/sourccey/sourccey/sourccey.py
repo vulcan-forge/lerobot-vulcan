@@ -220,8 +220,16 @@ class Sourccey(Robot):
 
             # Soft robot calibration should not physically move the Z actuator.
             # Only a full reset re-detects Z limits by movement.
+            z_calibration_result = None
             if self._z_hardware_available:
-                self.z_actuator.calibrator.auto_calibrate(full_reset=full_reset)
+                z_calibration_result = self.z_actuator.calibrator.auto_calibrate(full_reset=full_reset)
+                if z_calibration_result is not None:
+                    logger.info(
+                        "Z auto-calibration saved successfully: raw_min=%s raw_max=%s invert=%s",
+                        z_calibration_result.raw_min,
+                        z_calibration_result.raw_max,
+                        z_calibration_result.invert,
+                    )
             else:
                 logger.warning(
                     "Skipping Z auto-calibration because GPIO/Z hardware is unavailable on this machine."
@@ -261,7 +269,10 @@ class Sourccey(Robot):
 
             if calibration_errors:
                 error_messages = ", ".join(f"{arm_name}: {exc}" for arm_name, exc in calibration_errors)
-                raise RuntimeError(f"Arm auto-calibration failed ({error_messages})") from calibration_errors[0][1]
+                message = f"Arm auto-calibration failed ({error_messages})"
+                if z_calibration_result is not None:
+                    message += ". Z calibration was saved successfully."
+                raise RuntimeError(message) from calibration_errors[0][1]
 
         elif arm == "left":
             self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)

@@ -34,6 +34,8 @@ class SourcceyZCalibrator:
     """
 
     TOP_VERIFY_TOLERANCE_RAW = 12
+    SEEK_BOTTOM_MIN_DRIVE_S = 1.0
+    SEEK_BOTTOM_MIN_TRAVEL_RAW = 20
     RETURN_TOP_MIN_DRIVE_S = 1.0
     RETURN_TOP_MIN_TRAVEL_RAW = 20
 
@@ -41,7 +43,7 @@ class SourcceyZCalibrator:
         self,
         actuator,  # SourcceyZActuator
         *,
-        stable_s: float = 2.0,
+        stable_s: float = 2.5,
         sample_hz: float = 30.0,
         stable_eps_pos: float = 1.0,
         stable_eps_raw: int = 2,
@@ -303,7 +305,12 @@ class SourcceyZCalibrator:
         full_reset_started_at = time.monotonic()
 
         # Phase 1: drive to bottom first so the full reset naturally finishes at the top.
-        raw_bottom = self._move_to_endpoint(self.down_cmd, phase="seek_bottom")
+        raw_bottom = self._move_to_endpoint(
+            self.down_cmd,
+            phase="seek_bottom",
+            min_elapsed_s=self.SEEK_BOTTOM_MIN_DRIVE_S,
+            min_travel_raw=self.SEEK_BOTTOM_MIN_TRAVEL_RAW,
+        )
 
         # Phase 2: return from bottom to top and verify the final top reading.
         raw_top = self._return_to_top_and_verify()
