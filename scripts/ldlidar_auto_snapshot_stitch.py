@@ -24,7 +24,9 @@ from ldlidar_direct_snapshot_stitch import (
 from ldlidar_two_pose_snapshot import (
     _build_rotation_signature,
     _estimate_signature_rotation_deg,
+    _normalize_angle_deg,
     _rotation_progress_deg,
+    _turned_to_raw_deg,
 )
 from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import SourcceyClientConfig
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey_client import SourcceyClient
@@ -172,6 +174,13 @@ def _turn_to_progress(
     stop_tolerance_deg: float,
     min_overlap_ratio: float,
     max_bursts: int,
+    allow_partial_progress: bool = False,
+    progress_window_half_deg: float = 45.0,
+    progress_window_lead_deg: float = 15.0,
+    stall_bursts_before_boost: int = 3,
+    stall_speed_boost: float = 1.3,
+    max_speed_scale: float = 2.5,
+    min_delta_overlap_ratio: float = 0.40,
 ) -> dict[str, float]:
     reference_signature = _build_rotation_signature(
         [reference_frame],
@@ -183,10 +192,17 @@ def _turn_to_progress(
     if not np.isfinite(reference_signature).any():
         raise RuntimeError("Reference turn signature is empty; cannot track automatic sweep turn.")
 
+    # Cumulative progress is tracked monotonically inside a search window anchored
+    # to the previous estimate. An unwindowed 360deg match is multi-modal in
+    # square/symmetric rooms (the range profile repeats every ~90deg), which
+    # previously let a single wrong mode (e.g. 234deg during a 90deg turn) poison
+    # the whole turn measurement.
+    cumulative_progress_deg = 0.0
+    cumulative_overlap_ratio = 0.0
+    cumulative_score = float("inf")
+    speed_scale = 1.0
+    bursts_since_progress = 0
     last_frame_id = -1
-    last_progress_deg = 0.0
-    last_overlap_ratio = 0.0
-    last_score = float("inf")
     confirmations = 0
     consecutive_frame_timeouts = 0
     frame_wait_timeout_s = max(2.0, float(turn_burst_s) + float(turn_settle_s) + 1.5)
@@ -195,7 +211,7 @@ def _turn_to_progress(
         _execute_turn_burst(
             robot=robot,
             direction_sign=float(direction_sign),
-            turn_speed=float(turn_speed),
+            turn_speed=float(turn_speed) * float(speed_scale),
             turn_burst_s=float(turn_burst_s),
             turn_settle_s=float(turn_settle_s),
         )
@@ -219,6 +235,7 @@ def _turn_to_progress(
             continue
 
         consecutive_frame_timeouts = 0
+        last_frame_id = int(frame_id)
         current_signature = _build_rotation_signature(
             [latest_frame],
             min_distance_m=float(rotation_signature_min_distance_m),
@@ -226,38 +243,90 @@ def _turn_to_progress(
             min_confidence=int(min_confidence),
             bin_size_deg=float(rotation_signature_bin_deg),
         )
+        window_center_raw_deg = _turned_to_raw_deg(
+            cumulative_progress_deg + float(progress_window_lead_deg),
+            direction_sign=float(direction_sign),
+        )
         raw_rotation_deg, score, overlap_ratio = _estimate_signature_rotation_deg(
             reference_signature,
             current_signature,
             bin_size_deg=float(rotation_signature_bin_deg),
+            center_deg=float(window_center_raw_deg),
+            search_half_window_deg=float(progress_window_half_deg),
         )
-        progress_deg = _rotation_progress_deg(raw_rotation_deg, direction_sign=float(direction_sign))
-        last_progress_deg = float(progress_deg)
-        last_overlap_ratio = float(overlap_ratio)
-        last_score = float(score)
-        last_frame_id = int(frame_id)
-        print(
-            f"[turn] burst={burst_index:02d} progress={progress_deg:6.1f}deg "
-            f"target={float(target_turn_deg):5.1f}deg overlap={overlap_ratio:0.2f} score={score:0.4f}"
-        )
-        if overlap_ratio >= float(min_overlap_ratio) and progress_deg >= (
-            float(target_turn_deg) - float(stop_tolerance_deg)
-        ):
-            confirmations += 1
-            if confirmations >= 2:
+        if not math.isfinite(score):
+            bursts_since_progress += 1
+            print(
+                f"[turn] burst={burst_index:02d} no valid match inside window "
+                f"(cumulative={cumulative_progress_deg:6.1f}deg target={float(target_turn_deg):5.1f}deg)"
+            )
+        else:
+            measured_progress_deg = _rotation_progress_deg(raw_rotation_deg, direction_sign=float(direction_sign))
+            progress_delta_deg = _normalize_angle_deg(measured_progress_deg - cumulative_progress_deg)
+            delta_status = "hold"
+            if progress_delta_deg > 0.5 and float(overlap_ratio) >= float(min_delta_overlap_ratio):
+                cumulative_progress_deg += float(progress_delta_deg)
+                cumulative_overlap_ratio = float(overlap_ratio)
+                cumulative_score = float(score)
+                bursts_since_progress = 0
+                delta_status = "accepted"
+            elif progress_delta_deg > 0.5:
+                # A big shift whose signature overlap collapsed is a wrong
+                # room-symmetry mode (legit matches at <=90deg keep overlap
+                # around 0.5+ with a ~180deg FOV). Ignore it.
+                bursts_since_progress += 1
+                delta_status = "low_overlap_rejected"
+            else:
+                # Small negative deltas are matcher noise; the robot only turns
+                # one way, so hold the previous monotone estimate.
+                bursts_since_progress += 1
+            print(
+                f"[turn] burst={burst_index:02d} progress={cumulative_progress_deg:6.1f}deg "
+                f"(delta={progress_delta_deg:+5.1f}deg {delta_status}) target={float(target_turn_deg):5.1f}deg "
+                f"overlap={overlap_ratio:0.2f} score={score:0.4f}"
+            )
+
+        if bursts_since_progress >= max(1, int(stall_bursts_before_boost)) and speed_scale < float(max_speed_scale):
+            speed_scale = min(float(max_speed_scale), speed_scale * float(stall_speed_boost))
+            bursts_since_progress = 0
+            print(
+                f"[turn] burst={burst_index:02d} no rotation progress; boosting turn speed "
+                f"(scale={speed_scale:.2f})"
+            )
+
+        if cumulative_progress_deg >= (float(target_turn_deg) - float(stop_tolerance_deg)):
+            if cumulative_overlap_ratio >= float(min_overlap_ratio):
+                confirmations += 1
+            if confirmations >= 2 or cumulative_progress_deg >= (float(target_turn_deg) + 2.0 * float(stop_tolerance_deg)):
                 _send_stop(robot)
                 return {
-                    "progress_deg": last_progress_deg,
-                    "overlap_ratio": last_overlap_ratio,
-                    "score": last_score,
+                    "progress_deg": float(cumulative_progress_deg),
+                    "overlap_ratio": float(cumulative_overlap_ratio),
+                    "score": float(cumulative_score),
                     "frame_id": float(last_frame_id),
+                    "completed": 1.0,
                 }
         else:
             confirmations = 0
 
+    _send_stop(robot)
+    if allow_partial_progress and last_frame_id >= 0 and cumulative_progress_deg > 0.0:
+        print(
+            "[turn] warning: automatic turn did not fully confirm target; "
+            f"using tracked progress={cumulative_progress_deg:.1f}deg "
+            f"overlap={cumulative_overlap_ratio:0.2f} score={cumulative_score:0.4f}"
+        )
+        return {
+            "progress_deg": float(cumulative_progress_deg),
+            "overlap_ratio": float(cumulative_overlap_ratio),
+            "score": float(cumulative_score),
+            "frame_id": float(last_frame_id),
+            "completed": 0.0,
+        }
+
     raise RuntimeError(
         "Automatic sweep turn failed to reach its target. "
-        f"Last measured progress={last_progress_deg:.1f}deg overlap={last_overlap_ratio:0.2f} score={last_score:0.4f}"
+        f"Tracked progress={cumulative_progress_deg:.1f}deg overlap={cumulative_overlap_ratio:0.2f} score={cumulative_score:0.4f}"
     )
 
 

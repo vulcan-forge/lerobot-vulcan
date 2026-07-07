@@ -11,10 +11,10 @@ import numpy as np
 
 from ldlidar_auto_snapshot_stitch import (
     _ensure_clean_directory,
+    _execute_turn_burst,
     _init_rerun,
     _log_rerun_state,
     _send_stop,
-    _turn_to_progress,
     _wait_for_initial_frame,
 )
 from ldlidar_defaults import (
@@ -33,8 +33,13 @@ from ldlidar_direct_snapshot_stitch import (
     _advance_pose,
     _append_stitch_snapshot,
     _load_snapshots,
+    _build_score_grids,
     _pose_dict,
+    _prior_weights_for_hint,
+    _score_candidate,
     _search_pose,
+    _solve_arc_pose_on_grids,
+    _solve_turn_arc_pose,
     _stitch_snapshots,
     _transform_points,
 )
@@ -50,6 +55,14 @@ class StopZoneConfig:
     tripwire_half_width_m: float
     tripwire_thickness_m: float
     min_points_to_trigger: int
+    # Points the lidar permanently sees inside the box (robot's own shell /
+    # fixtures), measured at startup. Blocking triggers only on points ABOVE
+    # this baseline — otherwise a self-seeing lidar reports "blocked" at every
+    # heading and the robot never drives.
+    baseline_points: int = 0
+
+    def blocked_trigger_count(self) -> int:
+        return int(self.baseline_points) + int(self.min_points_to_trigger)
 
 
 @dataclass(slots=True)
@@ -102,6 +115,43 @@ class DriveBurstMeta:
 
 def _normalize_angle_deg(angle_deg: float) -> float:
     return ((float(angle_deg) + 180.0) % 360.0) - 180.0
+
+
+def _turn_lever_arm_local_delta(
+    dtheta_deg: float,
+    *,
+    lidar_offset_forward_m: float,
+) -> tuple[float, float]:
+    """Expected LiDAR translation (in the pre-turn sensor frame) for an in-place
+    robot turn of `dtheta_deg`, given the sensor is mounted `lidar_offset_forward_m`
+    forward of the robot's rotation center. The sensor traces an arc around the
+    center, so pure robot rotation still translates the sensor by
+    2*r*sin(|dtheta|/2) — ~0.32 m for a 90deg turn at r=0.23 m."""
+    r = float(lidar_offset_forward_m)
+    dtheta_rad = math.radians(float(dtheta_deg))
+    return r * (math.cos(dtheta_rad) - 1.0), r * math.sin(dtheta_rad)
+
+
+def _compose_motion_hints(first: MotionHint, second: MotionHint) -> MotionHint:
+    """SE(2)-compose two consecutive expected motions into one hint (used when a
+    capture is discarded and its motion must carry into the next capture)."""
+    theta_rad = math.radians(float(first.expected_dtheta_deg))
+    c = math.cos(theta_rad)
+    s = math.sin(theta_rad)
+    dx = float(first.expected_dx_local_m) + c * float(second.expected_dx_local_m) - s * float(second.expected_dy_local_m)
+    dy = float(first.expected_dy_local_m) + s * float(second.expected_dx_local_m) + c * float(second.expected_dy_local_m)
+    # Two chained turns are still a pure in-place turn (same rotation center);
+    # any other mix loses that guarantee and must use the generic solver.
+    composed_kind = str(second.kind) if str(first.kind) == str(second.kind) else "mixed"
+    return MotionHint(
+        kind=composed_kind,
+        expected_dx_local_m=float(dx),
+        expected_dy_local_m=float(dy),
+        expected_dtheta_deg=float(first.expected_dtheta_deg) + float(second.expected_dtheta_deg),
+        search_xy_m=max(float(first.search_xy_m), float(second.search_xy_m)) + 0.10,
+        search_theta_window_deg=max(float(first.search_theta_window_deg), float(second.search_theta_window_deg)) + 10.0,
+        label=f"{first.label}+{second.label}",
+    )
 
 
 def _apply_min_effective_magnitude(value: float, *, minimum_abs: float) -> float:
@@ -860,10 +910,10 @@ def _drive_forward_burst(
         frame_id, frame = feed.latest()
         if frame is not None:
             blocked_points = _blocked_points_for_frame(frame, zone_cfg)
-            if blocked_points >= int(zone_cfg.min_points_to_trigger):
+            if blocked_points >= zone_cfg.blocked_trigger_count():
                 print(
                     "[drive] stop box became occupied during forward burst "
-                    f"(frame_id={frame_id}, blocked_points={blocked_points})"
+                    f"(frame_id={frame_id}, blocked_points={blocked_points}, baseline={zone_cfg.baseline_points})"
                 )
                 break
         robot.send_action(
@@ -959,7 +1009,7 @@ def _run_drive_sequence(
                 f"host_theta_peak={burst_meta.host_theta_vel_peak:.3f}, host_x_last={burst_meta.host_x_vel_last:.3f}, "
                 f"host_theta_last={burst_meta.host_theta_vel_last:.3f})"
             )
-            if last_blocked_points >= int(zone_cfg.min_points_to_trigger):
+            if last_blocked_points >= zone_cfg.blocked_trigger_count():
                 stopped_by_block = True
                 break
         if burst_index < int(burst_count) - 1 and float(inter_burst_pause_s) > 0.0:
@@ -980,6 +1030,352 @@ def _run_drive_sequence(
         host_x_vel_last=float(host_x_vel_last),
         host_theta_vel_last=float(host_theta_vel_last),
     )
+
+
+def _turn_with_arc_tracking(
+    *,
+    robot: SourcceyClient,
+    feed: DirectLidarFeed,
+    transformed_sets: list[np.ndarray],
+    start_pose: Pose2D,
+    lidar_offset_forward_m: float,
+    resolution_m: float,
+    target_turn_deg: float,
+    direction_sign: float,
+    turn_speed: float,
+    turn_burst_s: float,
+    turn_settle_s: float,
+    forward_angle_deg: float,
+    valid_angle_half_width_deg: float,
+    invert_lateral_axis: bool,
+    max_distance_m: float,
+    min_range_m: float,
+    min_confidence: int,
+    stop_tolerance_deg: float,
+    max_bursts: int,
+    min_track_score: float = 5.0,
+    track_theta_half_window_deg: float = 32.0,
+    max_burst_delta_deg: float = 50.0,
+    stall_bursts_before_boost: int = 3,
+    stall_speed_boost: float = 1.3,
+    max_speed_scale: float = 2.0,
+    max_consecutive_held: int = 3,
+) -> dict[str, float]:
+    """Rotate in place while tracking the pose CONTINUOUSLY with the lidar.
+
+    After every burst (robot momentarily at rest) the fresh revolution is
+    arc-solved against the stitched map inside a small theta window around the
+    last known heading. Between bursts the robot turns at most a few tens of
+    degrees, so the solve is unambiguous — the ~90deg symmetry modes of a
+    square room are simply outside the window. The turn stops when the
+    lidar-tracked rotation reaches the target, so the amount turned is
+    measured geometry, not commanded wheel motion."""
+    non_empty_sets = [points for points in transformed_sets if len(points)]
+    global_points_xy = np.concatenate(non_empty_sets, axis=0) if non_empty_sets else np.zeros((0, 2), np.float32)
+    grids = _build_score_grids(global_points_xy, resolution_m=float(resolution_m), padding_m=0.9)
+    r = float(lidar_offset_forward_m)
+    start_theta_rad = math.radians(float(start_pose.theta_deg))
+    arc_center_xy = (
+        float(start_pose.x) - r * math.cos(start_theta_rad),
+        float(start_pose.y) - r * math.sin(start_theta_rad),
+    )
+
+    current_theta_deg = float(start_pose.theta_deg)
+    turned_deg = 0.0
+    missed_updates = 0
+    consecutive_held = 0
+    lock_lost = False
+    consecutive_timeouts = 0
+    stall_count = 0
+    speed_scale = 1.0
+    last_frame_id = -1
+    frame_wait_timeout_s = max(2.0, float(turn_burst_s) + float(turn_settle_s) + 1.5)
+
+    for burst_index in range(1, int(max_bursts) + 1):
+        _execute_turn_burst(
+            robot=robot,
+            direction_sign=float(direction_sign),
+            turn_speed=float(turn_speed) * float(speed_scale),
+            turn_burst_s=float(turn_burst_s),
+            turn_settle_s=float(turn_settle_s),
+        )
+        frame_id, frame = feed.wait_for_frame_after(
+            after_frame_id=int(last_frame_id),
+            timeout_s=float(frame_wait_timeout_s),
+            min_frame_advances=1,
+        )
+        if frame is None or int(frame_id) == int(last_frame_id):
+            consecutive_timeouts += 1
+            print(f"[turn] burst={burst_index:02d} timed out waiting for a fresh revolution")
+            if consecutive_timeouts >= 3:
+                raise RuntimeError("LiDAR feed stalled while tracking an arc turn.")
+            continue
+        consecutive_timeouts = 0
+        last_frame_id = int(frame_id)
+
+        points_xy = _scan_to_local_points(
+            points=frame.points,
+            forward_angle_deg=float(forward_angle_deg),
+            valid_angle_half_width_deg=float(valid_angle_half_width_deg),
+            invert_lateral_axis=bool(invert_lateral_axis),
+            max_distance_m=float(max_distance_m),
+            min_confidence=int(min_confidence),
+            min_range_m=float(min_range_m),
+        )
+        if len(points_xy) < 12:
+            missed_updates += 1
+            consecutive_held += 1
+            print(f"[turn] burst={burst_index:02d} too few valid points to track; holding")
+            if consecutive_held >= max(1, int(max_consecutive_held)):
+                lock_lost = True
+                print(
+                    f"[turn] burst={burst_index:02d} tracking lock lost; "
+                    "stopping the turn instead of rotating blind"
+                )
+                break
+        else:
+            # Window slightly leads in the commanded direction; per-burst
+            # rotation cannot reach the next symmetry mode from here.
+            expected_theta_deg = current_theta_deg + float(direction_sign) * 8.0
+            solved_pose, solved_score = _solve_arc_pose_on_grids(
+                snapshot_points_xy=points_xy,
+                grids=grids,
+                arc_center_xy=arc_center_xy,
+                lidar_offset_forward_m=r,
+                expected_theta_deg=float(expected_theta_deg),
+                theta_half_window_deg=float(track_theta_half_window_deg),
+                theta_step_deg=1.5,
+                center_slack_m=0.08,
+                slack_step_m=0.04,
+                theta_prior_weight_per_deg=0.01,
+                refine=False,
+            )
+            delta_deg = _normalize_angle_deg(float(solved_pose.theta_deg) - current_theta_deg)
+            delta_along_deg = float(delta_deg) * float(direction_sign)
+            if (
+                float(solved_score) >= float(min_track_score)
+                and -8.0 <= delta_along_deg <= float(max_burst_delta_deg)
+            ):
+                current_theta_deg = float(solved_pose.theta_deg)
+                turned_deg += float(delta_deg)
+                consecutive_held = 0
+                if abs(delta_deg) >= 1.5:
+                    stall_count = 0
+                    speed_scale = 1.0
+                else:
+                    # Locked but not moving: genuine wheel stall, safe to boost.
+                    stall_count += 1
+                print(
+                    f"[turn] burst={burst_index:02d} tracked={abs(turned_deg):6.1f}deg "
+                    f"(delta={delta_along_deg:+5.1f}deg) target={float(target_turn_deg):5.1f}deg "
+                    f"score={float(solved_score):0.3f}"
+                )
+            else:
+                # Low-confidence solve: the robot may still be rotating but we
+                # cannot see how far. NEVER boost here, and stop the turn after
+                # a few held bursts — continuing means rotating blind, which is
+                # how the map got corrupted before.
+                missed_updates += 1
+                consecutive_held += 1
+                print(
+                    f"[turn] burst={burst_index:02d} tracked={abs(turned_deg):6.1f}deg "
+                    f"(solve held: delta={delta_along_deg:+5.1f}deg score={float(solved_score):0.3f}) "
+                    f"target={float(target_turn_deg):5.1f}deg"
+                )
+                if consecutive_held >= max(1, int(max_consecutive_held)):
+                    lock_lost = True
+                    print(
+                        f"[turn] burst={burst_index:02d} tracking lock lost; "
+                        "stopping the turn instead of rotating blind"
+                    )
+                    break
+
+        if stall_count >= max(1, int(stall_bursts_before_boost)) and speed_scale < float(max_speed_scale):
+            speed_scale = min(float(max_speed_scale), speed_scale * float(stall_speed_boost))
+            stall_count = 0
+            print(f"[turn] burst={burst_index:02d} no rotation progress; boosting turn speed (scale={speed_scale:.2f})")
+
+        if abs(turned_deg) >= (float(target_turn_deg) - float(stop_tolerance_deg)):
+            break
+
+    _send_stop(robot)
+    reached = abs(turned_deg) >= (float(target_turn_deg) - float(stop_tolerance_deg))
+    if not reached:
+        print(
+            "[turn] warning: arc-tracked turn ended before reaching its target "
+            f"(tracked={abs(turned_deg):.1f}deg of {float(target_turn_deg):.1f}deg, "
+            f"missed_updates={missed_updates}, lock_lost={lock_lost})"
+        )
+    return {
+        "turned_deg": float(turned_deg),
+        "final_theta_deg": float(current_theta_deg),
+        "missed_updates": float(missed_updates),
+        "lock_lost": 1.0 if lock_lost else 0.0,
+        "completed": 1.0 if reached else 0.0,
+    }
+
+
+def _solve_drive_step_pose(
+    *,
+    points_xy: np.ndarray,
+    grids: dict[str, object],
+    current_pose: Pose2D,
+    max_step_m: float = 0.60,
+    lateral_slack_m: float = 0.15,
+    theta_half_window_deg: float = 12.0,
+) -> tuple[Pose2D, float]:
+    """Solve one drive-burst pose update: the robot moved at most one burst
+    forward from `current_pose`, so search a short strip ahead (with a little
+    lateral slack and a small heading window). Small windows keep the solve
+    unambiguous, the same principle as the arc-tracked turn."""
+    heading_rad = math.radians(float(current_pose.theta_deg))
+    c = math.cos(heading_rad)
+    s = math.sin(heading_rad)
+    best_pose = current_pose
+    best_score = -1e9
+    for dtheta_deg in np.arange(-theta_half_window_deg, theta_half_window_deg + 1e-6, 2.0, dtype=np.float32):
+        for forward_m in np.arange(-0.05, max_step_m + 1e-6, 0.05, dtype=np.float32):
+            for lateral_m in np.arange(-lateral_slack_m, lateral_slack_m + 1e-6, 0.05, dtype=np.float32):
+                pose = Pose2D(
+                    x=float(current_pose.x) + c * float(forward_m) - s * float(lateral_m),
+                    y=float(current_pose.y) + s * float(forward_m) + c * float(lateral_m),
+                    theta_deg=float(current_pose.theta_deg) + float(dtheta_deg),
+                )
+                score = _score_candidate(
+                    _transform_points(points_xy, pose),
+                    use_nearest_penalty=False,
+                    **grids,
+                )
+                if score > best_score:
+                    best_score = float(score)
+                    best_pose = pose
+    return best_pose, float(best_score)
+
+
+def _drive_with_tracking(
+    *,
+    robot: SourcceyClient,
+    feed: DirectLidarFeed,
+    zone_cfg: StopZoneConfig,
+    transformed_sets: list[np.ndarray],
+    start_pose: Pose2D,
+    resolution_m: float,
+    forward_speed: float,
+    min_effective_move_speed: float,
+    burst_s: float,
+    burst_count: int,
+    inter_burst_pause_s: float,
+    steer_theta_vel: float,
+    forward_angle_deg: float,
+    valid_angle_half_width_deg: float,
+    invert_lateral_axis: bool,
+    max_distance_m: float,
+    min_range_m: float,
+    min_confidence: int,
+    min_track_score: float = 5.0,
+    max_consecutive_held: int = 2,
+) -> tuple[Pose2D, dict[str, object]]:
+    """Drive forward burst-by-burst while tracking the pose with the lidar
+    after every burst. The drive stops when blocked, when the plan completes,
+    or when tracking loses lock — the robot never travels more than one burst
+    beyond its last confirmed pose, so there is no big-jump solve afterwards."""
+    non_empty_sets = [points for points in transformed_sets if len(points)]
+    global_points_xy = np.concatenate(non_empty_sets, axis=0) if non_empty_sets else np.zeros((0, 2), np.float32)
+    grids = _build_score_grids(global_points_xy, resolution_m=float(resolution_m), padding_m=1.4)
+
+    current_pose = start_pose
+    bursts_completed = 0
+    stopped_by_block = False
+    lock_lost = False
+    consecutive_held = 0
+    missed_updates = 0
+    last_blocked_points = 0
+    last_frame_id = -1
+    elapsed_total_s = 0.0
+    frame_wait_timeout_s = max(2.0, float(burst_s) + 1.5)
+
+    for burst_index in range(max(1, int(burst_count))):
+        burst_meta = _drive_forward_burst(
+            robot=robot,
+            feed=feed,
+            zone_cfg=zone_cfg,
+            forward_speed=float(forward_speed),
+            burst_s=float(burst_s),
+            steer_theta_vel=float(steer_theta_vel),
+            min_effective_move_speed=float(min_effective_move_speed),
+        )
+        bursts_completed += 1
+        elapsed_total_s += float(burst_meta.elapsed_s)
+
+        frame_id, frame = feed.wait_for_frame_after(
+            after_frame_id=int(last_frame_id),
+            timeout_s=float(frame_wait_timeout_s),
+            min_frame_advances=1,
+        )
+        if frame is None:
+            missed_updates += 1
+            consecutive_held += 1
+            print(f"[drive] burst={burst_index + 1:02d} no fresh revolution to track against")
+        else:
+            last_frame_id = int(frame_id)
+            points_xy = _scan_to_local_points(
+                points=frame.points,
+                forward_angle_deg=float(forward_angle_deg),
+                valid_angle_half_width_deg=float(valid_angle_half_width_deg),
+                invert_lateral_axis=bool(invert_lateral_axis),
+                max_distance_m=float(max_distance_m),
+                min_confidence=int(min_confidence),
+                min_range_m=float(min_range_m),
+            )
+            solved_pose, solved_score = _solve_drive_step_pose(
+                points_xy=points_xy,
+                grids=grids,
+                current_pose=current_pose,
+            )
+            step_m = math.hypot(solved_pose.x - current_pose.x, solved_pose.y - current_pose.y)
+            if solved_score >= float(min_track_score):
+                current_pose = solved_pose
+                consecutive_held = 0
+                print(
+                    f"[drive] burst={burst_index + 1:02d} tracked pose=({current_pose.x:.3f}, "
+                    f"{current_pose.y:.3f}, {current_pose.theta_deg:.1f}deg) step={step_m:.3f}m "
+                    f"score={solved_score:.3f}"
+                )
+            else:
+                missed_updates += 1
+                consecutive_held += 1
+                print(
+                    f"[drive] burst={burst_index + 1:02d} solve held "
+                    f"(score={solved_score:.3f}); not updating pose"
+                )
+            last_blocked_points = _blocked_points_for_frame(frame, zone_cfg)
+            if last_blocked_points >= zone_cfg.blocked_trigger_count():
+                stopped_by_block = True
+                print(
+                    f"[drive] burst={burst_index + 1:02d} stop box occupied "
+                    f"(blocked_points={last_blocked_points}, baseline={zone_cfg.baseline_points})"
+                )
+                break
+
+        if consecutive_held >= max(1, int(max_consecutive_held)):
+            lock_lost = True
+            print(
+                f"[drive] burst={burst_index + 1:02d} tracking lock lost; "
+                "stopping the drive instead of moving blind"
+            )
+            break
+        if burst_index < int(burst_count) - 1 and float(inter_burst_pause_s) > 0.0:
+            time.sleep(float(inter_burst_pause_s))
+
+    _send_stop(robot)
+    return current_pose, {
+        "bursts_completed": int(bursts_completed),
+        "elapsed_s": float(elapsed_total_s),
+        "stopped_by_block": bool(stopped_by_block),
+        "blocked_points": int(last_blocked_points),
+        "lock_lost": bool(lock_lost),
+        "missed_updates": int(missed_updates),
+    }
 
 
 def main() -> int:
@@ -1128,6 +1524,27 @@ def main() -> int:
         help="In smart mode, spend the first N captures rotating in place to build an initial stitched room outline before driving.",
     )
     parser.add_argument("--stitch-resolution-m", type=float, default=0.03)
+    parser.add_argument(
+        "--lidar-offset-forward-m",
+        type=float,
+        default=0.2286,
+        help="How far the LiDAR sits forward of the robot's rotation center (9in default). "
+        "Used to predict the sensor translation caused by in-place turns.",
+    )
+    parser.add_argument(
+        "--min-append-score",
+        type=float,
+        default=5.5,
+        help="Minimum stitch-solver score required to append a capture to the map. "
+        "Captures scoring below this are discarded and retried instead of corrupting the map.",
+    )
+    parser.add_argument(
+        "--max-consecutive-append-discards",
+        type=int,
+        default=2,
+        help="After this many consecutive discarded captures, the best available pose is "
+        "accepted anyway (with a warning) so the run cannot stall forever.",
+    )
     parser.add_argument("--rerun-mode", choices=("web", "local"), default="web")
     parser.add_argument("--rerun-grpc-port", type=int, default=9877)
     parser.add_argument("--rerun-web-port", type=int, default=9878)
@@ -1184,6 +1601,8 @@ def main() -> int:
         f"turn_direction={args.turn_direction} "
         f"bootstrap_turn_captures={int(args.bootstrap_turn_captures)} "
         f"scan_turn_interval={int(args.scan_turn_interval)} "
+        f"lidar_offset_forward={float(args.lidar_offset_forward_m):.3f}m "
+        f"min_append_score={float(args.min_append_score):.2f} "
         f"frontier=(min_distance={float(args.frontier_min_distance_m):.2f}m, "
         f"bin={float(args.frontier_bin_deg):.1f}deg, "
         f"align_threshold={float(args.frontier_align_threshold_deg):.1f}deg, "
@@ -1221,6 +1640,8 @@ def main() -> int:
     active_explore_target_last_distance_m: float | None = None
     active_explore_target_blocked_count = 0
     force_live_frontier_cycles = 0
+    pending_motion_hint: MotionHint | None = None
+    consecutive_append_discards = 0
 
     try:
         last_frame_id, latest_frame = _wait_for_initial_frame(feed, timeout_s=5.0)
@@ -1228,6 +1649,36 @@ def main() -> int:
             "[wander] LiDAR feed ready "
             f"(frame_id={last_frame_id}, host_rev={latest_frame.revolution_index}, viewer={viewer_url or 'local'})"
         )
+
+        # Measure how many points the stationary lidar ALWAYS reports inside the
+        # stop box (robot shell / mounts). Blocking then triggers only on points
+        # above this baseline; otherwise the robot believes it is permanently
+        # blocked and spends the whole run rotating in place.
+        baseline_samples: list[int] = []
+        baseline_frame_id = int(last_frame_id)
+        for _sample_index in range(10):
+            sample_frame_id, sample_frame = feed.wait_for_frame_after(
+                after_frame_id=baseline_frame_id,
+                timeout_s=1.0,
+                min_frame_advances=1,
+            )
+            if sample_frame is None:
+                break
+            baseline_samples.append(_blocked_points_for_frame(sample_frame, zone_cfg))
+            baseline_frame_id = int(sample_frame_id)
+        if baseline_samples:
+            zone_cfg.baseline_points = int(np.median(np.asarray(baseline_samples, dtype=np.int32)))
+            last_frame_id = baseline_frame_id
+        print(
+            "[wander] stop box self-hit baseline "
+            f"(samples={baseline_samples}, baseline={zone_cfg.baseline_points}, "
+            f"trigger_at={zone_cfg.blocked_trigger_count()} points)"
+        )
+        if zone_cfg.baseline_points > 0:
+            print(
+                "[wander] note: the lidar permanently sees part of the robot inside the stop box; "
+                "consider recalibrating the stop box geometry"
+            )
 
         frame_id, captured_frame, _, initial_snapshot = _capture_snapshot(
             feed=feed,
@@ -1304,6 +1755,7 @@ def main() -> int:
                 prior_translation_weight=0.20,
                 prior_theta_weight=0.08,
             )
+            live_pose_accepted = False
             if live_pose_result is not None:
                 candidate_live_pose, live_pose_meta = live_pose_result
                 if _accept_relocalized_pose(
@@ -1317,6 +1769,7 @@ def main() -> int:
                     min_score=7.0,
                 ):
                     current_live_pose = candidate_live_pose
+                    live_pose_accepted = True
                 else:
                     current_live_pose = current_solved_pose
                     live_pose_meta = {
@@ -1344,7 +1797,7 @@ def main() -> int:
             )
 
             blocked_points = _blocked_points_for_frame(live_frame, zone_cfg)
-            blocked = blocked_points >= int(zone_cfg.min_points_to_trigger)
+            blocked = blocked_points >= zone_cfg.blocked_trigger_count()
             drive_hint_m = 0.0
             should_turn = False
             turn_reason = "none"
@@ -1352,10 +1805,11 @@ def main() -> int:
             chosen_turn_deg = float(args.turn_deg)
             motion_hint: MotionHint | None = None
             settle_s = float(args.move_settle_s)
+            turn_capture_theta_window_deg = 80.0
             bootstrap_scan_active = (
                 wander_mode == "smart"
                 and not rotation_coverage_complete
-                and int(capture_index) <= max(1, int(args.bootstrap_turn_captures))
+                and int(capture_index) <= max(1, int(args.bootstrap_turn_captures)) + 4
             )
             forced_drive_due_to_turn_streak = (
                 wander_mode == "smart"
@@ -1516,10 +1970,34 @@ def main() -> int:
             if should_turn:
                 pass
             elif bootstrap_scan_active:
-                print(
-                    "[wander] bootstrap scan capture "
-                    f"(capture={capture_index}, target={float(args.turn_deg):.1f}deg {args.turn_direction})"
-                )
+                # Aim each bootstrap turn at the CLOSEST heading bin the map has
+                # not covered yet, instead of blindly stepping 90deg the same
+                # way — stiction makes actual turn sizes erratic, so blind steps
+                # revisit the same headings while leaving one bin unseen.
+                unseen_bins = [
+                    b for b in range(rotation_coverage_bin_count) if b not in rotation_coverage_bins_seen
+                ]
+                if unseen_bins:
+                    bin_width_deg = 360.0 / float(rotation_coverage_bin_count)
+                    current_heading_deg = float(current_live_pose.theta_deg)
+                    bin_deltas = [
+                        (_normalize_angle_deg((b + 0.5) * bin_width_deg - current_heading_deg), b)
+                        for b in unseen_bins
+                    ]
+                    target_delta_deg, target_bin = min(bin_deltas, key=lambda item: abs(item[0]))
+                    chosen_direction_sign = 1.0 if target_delta_deg >= 0.0 else -1.0
+                    chosen_turn_deg = max(25.0, min(55.0, abs(float(target_delta_deg))))
+                    print(
+                        "[wander] bootstrap scan capture targeting unseen heading bin "
+                        f"(capture={capture_index}, bin={target_bin}, heading={current_heading_deg:.1f}deg, "
+                        f"turn={chosen_turn_deg:.1f}deg {'ccw' if chosen_direction_sign >= 0.0 else 'cw'}, "
+                        f"unseen={sorted(unseen_bins)})"
+                    )
+                else:
+                    print(
+                        "[wander] bootstrap scan capture "
+                        f"(capture={capture_index}, target={float(args.turn_deg):.1f}deg {args.turn_direction})"
+                    )
                 should_turn = True
                 turn_reason = "bootstrap_scan"
             elif wander_mode == "turn_only":
@@ -1554,7 +2032,7 @@ def main() -> int:
                 and abs(float(planning_frontier_choice.delta_deg)) >= 115.0
             ):
                 chosen_direction_sign = 1.0 if planning_frontier_choice.delta_deg >= 0.0 else -1.0
-                chosen_turn_deg = max(22.0, min(70.0, abs(float(planning_frontier_choice.delta_deg)) - 32.0))
+                chosen_turn_deg = max(22.0, min(55.0, abs(float(planning_frontier_choice.delta_deg)) - 32.0))
                 should_turn = True
                 turn_reason = "frontier_seek"
                 print(
@@ -1609,52 +2087,57 @@ def main() -> int:
                     f"drive_mode={'frontier_follow' if planning_frontier_choice is not None else 'straight_burst'}, "
                     f"steer_theta_vel={steer_theta_vel:.3f})"
                 )
-                drive_meta = _run_drive_sequence(
+                drive_start_pose = current_live_pose
+                drive_tracked_pose, drive_track_meta = _drive_with_tracking(
                     robot=robot,
                     feed=feed,
                     zone_cfg=zone_cfg,
+                    transformed_sets=stitch_state["transformed_sets"],
+                    start_pose=drive_start_pose,
+                    resolution_m=float(args.stitch_resolution_m),
                     forward_speed=float(args.move_speed),
                     min_effective_move_speed=float(args.min_effective_move_speed),
                     burst_s=float(args.move_burst_s),
                     burst_count=int(planned_bursts),
                     inter_burst_pause_s=float(args.inter_burst_pause_s),
                     steer_theta_vel=float(steer_theta_vel),
+                    forward_angle_deg=float(args.forward_angle_deg),
+                    valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+                    invert_lateral_axis=bool(args.invert_lateral_axis),
+                    max_distance_m=float(args.max_distance_m),
+                    min_range_m=float(args.min_range_m),
+                    min_confidence=int(args.min_confidence),
                 )
-                commanded_drive_hint_m = max(
-                    0.18,
-                    float(args.drive_hint_mps) * float(drive_meta.elapsed_s),
+                drive_stopped_by_block = bool(drive_track_meta["stopped_by_block"]) or bool(
+                    drive_track_meta["lock_lost"]
                 )
-                if planning_frontier_choice is not None:
-                    commanded_drive_hint_m = min(
-                        float(planning_frontier_choice.mean_distance_m),
-                        commanded_drive_hint_m,
-                    )
-                host_drive_hint_m = abs(float(drive_meta.host_forward_distance_estimate_m))
-                if (
-                    drive_meta.host_feedback_updates > 0
-                    and drive_meta.host_x_vel_peak >= 0.12
-                    and host_drive_hint_m > 0.02
-                ):
-                    drive_hint_distance_m = min(
-                        max(commanded_drive_hint_m, host_drive_hint_m * 0.45),
-                        max(commanded_drive_hint_m, 0.55),
-                    )
+                # Motion hint straight from the tracked poses — no commanded-
+                # speed or wheel-feedback guessing.
+                drive_ddx_world = float(drive_tracked_pose.x) - float(drive_start_pose.x)
+                drive_ddy_world = float(drive_tracked_pose.y) - float(drive_start_pose.y)
+                drive_theta0_rad = math.radians(float(drive_start_pose.theta_deg))
+                drive_cos = math.cos(drive_theta0_rad)
+                drive_sin = math.sin(drive_theta0_rad)
+                drive_hint_dx_local_m = drive_cos * drive_ddx_world + drive_sin * drive_ddy_world
+                drive_hint_dy_local_m = -drive_sin * drive_ddx_world + drive_cos * drive_ddy_world
+                drive_hint_dtheta_deg = _normalize_angle_deg(
+                    float(drive_tracked_pose.theta_deg) - float(drive_start_pose.theta_deg)
+                )
+                if drive_track_meta["lock_lost"] or int(drive_track_meta["missed_updates"]) > 0:
+                    drive_search_xy_m = 0.80
+                    drive_theta_window_deg = 30.0
                 else:
-                    drive_hint_distance_m = commanded_drive_hint_m
-                drive_search_xy_m = max(
-                    float(args.drive_search_xy_m),
-                    min(1.10, abs(float(drive_hint_distance_m)) * 0.75 + 0.35),
-                )
+                    drive_search_xy_m = 0.40
+                    drive_theta_window_deg = 16.0
                 print(
                     "[wander] forward sequence complete "
-                    f"(elapsed={drive_meta.elapsed_s:.2f}s bursts={drive_meta.bursts_completed} "
-                    f"loops={drive_meta.iterations} cmd_x={drive_meta.commanded_forward_speed:.3f} "
-                    f"stopped_by_block={drive_meta.stopped_by_block} blocked_points={drive_meta.blocked_points} "
-                    f"steer_theta_vel={drive_meta.steer_theta_vel:.3f} "
-                    f"host_dx_est={drive_meta.host_forward_distance_estimate_m:.3f} "
-                    f"host_updates={drive_meta.host_feedback_updates} "
-                    f"host_x_peak={drive_meta.host_x_vel_peak:.3f} host_theta_peak={drive_meta.host_theta_vel_peak:.3f} "
-                    f"host_x_last={drive_meta.host_x_vel_last:.3f} host_theta_last={drive_meta.host_theta_vel_last:.3f})"
+                    f"(elapsed={float(drive_track_meta['elapsed_s']):.2f}s "
+                    f"bursts={int(drive_track_meta['bursts_completed'])} "
+                    f"stopped_by_block={bool(drive_track_meta['stopped_by_block'])} "
+                    f"lock_lost={bool(drive_track_meta['lock_lost'])} "
+                    f"blocked_points={int(drive_track_meta['blocked_points'])} "
+                    f"tracked_move=({drive_hint_dx_local_m:.3f}m, {drive_hint_dy_local_m:.3f}m, "
+                    f"{drive_hint_dtheta_deg:.1f}deg))"
                 )
                 force_drive_after_turn = False
                 drive_checkpoints_since_scan += 1
@@ -1664,7 +2147,7 @@ def main() -> int:
                     pending_turn_deg = float(args.turn_deg)
                     should_turn = False
                     turn_reason = "drive_only"
-                elif drive_meta.stopped_by_block:
+                elif drive_stopped_by_block:
                     should_turn = False
                     if active_explore_target is not None:
                         active_explore_target_blocked_count += 1
@@ -1720,56 +2203,83 @@ def main() -> int:
                         force_live_frontier_cycles -= 1
                 motion_hint = MotionHint(
                     kind="drive",
-                    expected_dx_local_m=float(drive_hint_distance_m),
-                    expected_dy_local_m=0.0,
-                    expected_dtheta_deg=0.0,
+                    expected_dx_local_m=float(drive_hint_dx_local_m),
+                    expected_dy_local_m=float(drive_hint_dy_local_m),
+                    expected_dtheta_deg=float(drive_hint_dtheta_deg),
                     search_xy_m=float(drive_search_xy_m),
-                    search_theta_window_deg=float(args.drive_theta_window_deg),
+                    search_theta_window_deg=float(drive_theta_window_deg),
                     label=f"drive_capture_{capture_index:02d}",
                 )
                 print(
                     "[wander] drive capture hint "
-                    f"(pose_source=lidar_first, search_xy_m={drive_search_xy_m:.3f}, "
-                    f"cmd_x={drive_meta.commanded_forward_speed:.3f}, "
-                    f"expected_dx_local_m={drive_hint_distance_m:.3f}, expected_dtheta_deg=0.000)"
+                    f"(pose_source=lidar_tracked, search_xy_m={drive_search_xy_m:.3f}, "
+                    f"expected_dx_local_m={drive_hint_dx_local_m:.3f}, "
+                    f"expected_dy_local_m={drive_hint_dy_local_m:.3f}, "
+                    f"expected_dtheta_deg={drive_hint_dtheta_deg:.1f})"
                 )
-                if drive_meta.host_feedback_updates <= 0:
-                    print("[wander] warning: no fresh host motion feedback arrived during drive sequence")
-                elif drive_meta.host_x_vel_peak <= 0.05:
-                    print(
-                        "[wander] warning: host reported near-zero forward velocity during drive sequence "
-                        f"(host_x_peak={drive_meta.host_x_vel_peak:.3f})"
-                    )
                 settle_s = float(args.move_settle_s)
 
             if should_turn:
+                if float(chosen_turn_deg) > 55.0:
+                    # A capture must land before the view rotates into mostly
+                    # unmapped territory: with a ~180deg FOV, 55deg per capture
+                    # keeps >=125deg of the previous view in frame, which keeps
+                    # solve scores strong. Larger goals just take two captures.
+                    print(
+                        "[wander] capping turn at 55deg per capture to keep map overlap strong "
+                        f"(requested={float(chosen_turn_deg):.1f}deg)"
+                    )
+                    chosen_turn_deg = 55.0
                 print(
                     "[wander] rotating before stitched capture "
                     f"(reason={turn_reason}, target={float(chosen_turn_deg):.1f}deg "
                     f"{'ccw' if chosen_direction_sign >= 0.0 else 'cw'})"
                 )
-                turn_meta = _turn_to_progress(
+                # Anchor tracking at the dead-reckoned pose INCLUDING any
+                # pending (discarded-capture) motion — after a lock-lost
+                # discard the robot is physically far from the last stitched
+                # pose, and anchoring there makes every retry solve miss.
+                # (If live relocalization already re-anchored this cycle, the
+                # pending motion is baked into current_live_pose and will be
+                # dropped at composition time — don't double-count it here.)
+                turn_start_pose = (
+                    _advance_pose(current_live_pose, pending_motion_hint)
+                    if (pending_motion_hint is not None and not live_pose_accepted)
+                    else current_live_pose
+                )
+                turn_meta = _turn_with_arc_tracking(
                     robot=robot,
                     feed=feed,
-                    reference_frame=last_captured_frame,
+                    transformed_sets=stitch_state["transformed_sets"],
+                    start_pose=turn_start_pose,
+                    lidar_offset_forward_m=float(args.lidar_offset_forward_m),
+                    resolution_m=float(args.stitch_resolution_m),
                     target_turn_deg=float(chosen_turn_deg),
                     direction_sign=float(chosen_direction_sign),
                     turn_speed=float(args.turn_speed),
                     turn_burst_s=float(args.turn_burst_s),
                     turn_settle_s=float(args.turn_settle_s),
-                    rotation_signature_min_distance_m=float(args.rotation_signature_min_distance_m),
+                    forward_angle_deg=float(args.forward_angle_deg),
+                    valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+                    invert_lateral_axis=bool(args.invert_lateral_axis),
                     max_distance_m=float(args.max_distance_m),
+                    min_range_m=float(args.min_range_m),
                     min_confidence=int(args.min_confidence),
-                    rotation_signature_bin_deg=float(args.rotation_signature_bin_deg),
-                    stop_tolerance_deg=float(args.stop_tolerance_deg),
-                    min_overlap_ratio=float(args.min_turn_overlap_ratio),
+                    stop_tolerance_deg=min(8.0, float(args.stop_tolerance_deg)),
                     max_bursts=int(args.max_turn_bursts),
                 )
                 print(
                     "[wander] turn complete "
-                    f"(progress={turn_meta['progress_deg']:.1f}deg overlap={turn_meta['overlap_ratio']:.2f} score={turn_meta['score']:.4f})"
+                    f"(tracked={turn_meta['turned_deg']:+.1f}deg, final_theta={turn_meta['final_theta_deg']:.1f}deg, "
+                    f"missed_updates={int(turn_meta['missed_updates'])}, completed={int(turn_meta['completed'])})"
                 )
-                measured_signed_turn_deg = float(turn_meta["progress_deg"]) * float(chosen_direction_sign)
+                measured_signed_turn_deg = float(turn_meta["turned_deg"])
+                # The capture solve only needs to confirm/refine the tracked
+                # heading; widen its window a bit for each burst the tracker
+                # could not update on.
+                turn_capture_theta_window_deg = min(
+                    80.0, 25.0 + 8.0 * float(turn_meta["missed_updates"])
+                )
                 print(
                     "[wander] turn motion hint "
                     f"(requested_dtheta_deg={float(chosen_turn_deg) * float(chosen_direction_sign):.1f}, "
@@ -1792,14 +2302,23 @@ def main() -> int:
                     force_drive_after_turn = True
                     if active_explore_target is not None and turn_reason == "frontier_seek":
                         active_explore_target.coarse_turns_used += 1
+                lever_dx_local_m, lever_dy_local_m = _turn_lever_arm_local_delta(
+                    float(measured_signed_turn_deg),
+                    lidar_offset_forward_m=float(args.lidar_offset_forward_m),
+                )
                 motion_hint = MotionHint(
                     kind="turn",
-                    expected_dx_local_m=0.0,
-                    expected_dy_local_m=0.0,
+                    expected_dx_local_m=float(lever_dx_local_m),
+                    expected_dy_local_m=float(lever_dy_local_m),
                     expected_dtheta_deg=float(measured_signed_turn_deg),
                     search_xy_m=float(args.turn_search_xy_m),
                     search_theta_window_deg=float(args.turn_theta_window_deg),
                     label=f"turn_capture_{capture_index:02d}",
+                )
+                print(
+                    "[wander] turn lever-arm hint "
+                    f"(expected_dx_local={lever_dx_local_m:.3f}m, expected_dy_local={lever_dy_local_m:.3f}m, "
+                    f"offset={float(args.lidar_offset_forward_m):.3f}m)"
                 )
                 settle_s = float(args.capture_settle_s)
 
@@ -1829,60 +2348,232 @@ def main() -> int:
             if len(local_points_xy) == 0:
                 print(f"[wander] warning: snapshot {capture_index} contains zero local points after filtering")
 
+            if pending_motion_hint is not None:
+                if live_pose_accepted:
+                    print(
+                        "[wander] dropping pending discarded-capture motion; "
+                        "live relocalization already re-anchored the pose"
+                    )
+                else:
+                    motion_hint = _compose_motion_hints(pending_motion_hint, motion_hint)
+                    print(
+                        "[wander] composed pending motion from discarded capture into current hint "
+                        f"(expected_dx={motion_hint.expected_dx_local_m:.3f}m, "
+                        f"expected_dy={motion_hint.expected_dy_local_m:.3f}m, "
+                        f"expected_dtheta={motion_hint.expected_dtheta_deg:.1f}deg)"
+                    )
+                pending_motion_hint = None
+
             motion_hints.append(motion_hint)
             rebuild_started = time.monotonic()
             print("[wander] appending stitched capture " f"(capture={capture_index}, snapshots={len(motion_hints)})")
             capture_expected_pose = _advance_pose(current_live_pose, motion_hint)
-            capture_pose_result = _estimate_pose_against_stitched_map(
-                points_xy=captured_snapshot.points_xy,
-                transformed_sets=stitch_state["transformed_sets"],
-                initial_pose=capture_expected_pose,
-                resolution_m=float(args.stitch_resolution_m),
-                search_xy_m=max(float(motion_hint.search_xy_m), 0.35 if motion_hint.kind == "turn" else 0.65),
-                theta_window_deg=max(
-                    float(motion_hint.search_theta_window_deg),
-                    40.0 if motion_hint.kind == "turn" else 24.0,
-                ),
-                max_translation_from_initial_m=(
-                    max(0.32, float(motion_hint.search_xy_m) + 0.12)
-                    if motion_hint.kind == "turn"
-                    else max(0.75, float(motion_hint.search_xy_m) + 0.25)
-                ),
-                prior_translation_weight=0.22 if motion_hint.kind == "turn" else 0.18,
-                prior_theta_weight=0.10 if motion_hint.kind == "turn" else 0.06,
-            )
-            if capture_pose_result is not None:
-                candidate_capture_pose, capture_live_meta = capture_pose_result
-                if _accept_relocalized_pose(
-                    label=f"capture_{capture_index}",
-                    candidate_pose=candidate_capture_pose,
-                    score_meta=capture_live_meta,
-                    expected_pose=capture_expected_pose,
-                    motion_hint=motion_hint,
-                    max_translation_error_m=(
-                        max(0.32, float(motion_hint.search_xy_m) + 0.12)
-                        if motion_hint.kind == "turn"
-                        else max(0.75, float(motion_hint.search_xy_m) + 0.25)
-                    ),
-                    max_theta_error_deg=(
-                        max(20.0, float(motion_hint.search_theta_window_deg) * 0.75)
-                        if motion_hint.kind == "turn"
-                        else max(18.0, float(motion_hint.search_theta_window_deg) * 1.10)
-                    ),
-                    min_score=6.5 if motion_hint.kind == "turn" else 7.5,
-                ):
-                    capture_live_pose = candidate_capture_pose
-                else:
-                    capture_live_pose = None
-                    capture_live_meta = None
-                    print(
-                        "[wander] capture relocalization fallback "
-                        f"(capture={capture_index}, using strict append solver around prior stitched map)"
+            capture_live_pose = None
+            capture_live_meta = None
+            append_solver_pose = None
+            append_solver_meta = None
+            if motion_hint.kind == "turn":
+                # In-place turn: the robot center is pinned, so solve on the
+                # lever-arm arc. The measured turn angle only centers a wide
+                # search window — it is too unreliable to act as a hard prior.
+                arc_theta_half_window_deg = min(
+                    110.0,
+                    float(turn_capture_theta_window_deg)
+                    + (30.0 if "+" in str(motion_hint.label or "") else 0.0),
+                )
+                arc_result = _solve_turn_arc_pose(
+                    snapshot_points_xy=captured_snapshot.points_xy,
+                    transformed_sets=stitch_state["transformed_sets"],
+                    previous_pose=current_live_pose,
+                    lidar_offset_forward_m=float(args.lidar_offset_forward_m),
+                    resolution_m=float(args.stitch_resolution_m),
+                    expected_theta_deg=float(capture_expected_pose.theta_deg),
+                    theta_half_window_deg=float(arc_theta_half_window_deg),
+                )
+                if arc_result is not None:
+                    arc_solved_pose, arc_meta = arc_result
+                    append_solver_pose = arc_solved_pose
+                    append_solver_meta = arc_meta
+                    arc_score = float(arc_meta.get("score") or -1e9)
+                    solved_turn_deg = _normalize_angle_deg(
+                        float(arc_solved_pose.theta_deg) - float(current_live_pose.theta_deg)
                     )
-            if capture_pose_result is None:
-                capture_live_pose = None
-                capture_live_meta = None
-                print(f"[wander] capture relocalization unavailable (capture={capture_index})")
+                    print(
+                        "[wander] turn arc solve "
+                        f"(capture={capture_index}, pose=({arc_solved_pose.x:.3f}, {arc_solved_pose.y:.3f}, "
+                        f"{arc_solved_pose.theta_deg:.1f}deg), turned={solved_turn_deg:.1f}deg, "
+                        f"hinted={float(motion_hint.expected_dtheta_deg):.1f}deg, score={arc_score:.3f}, "
+                        f"window=+-{arc_theta_half_window_deg:.0f}deg)"
+                    )
+                    hint_discrepancy_deg = abs(
+                        _normalize_angle_deg(solved_turn_deg - float(motion_hint.expected_dtheta_deg))
+                    )
+                    if hint_discrepancy_deg > 75.0:
+                        print(
+                            "[wander] warning: arc solve disagrees strongly with the measured turn "
+                            f"(discrepancy={hint_discrepancy_deg:.1f}deg); possible room-symmetry mode"
+                        )
+                    arc_accept_gate = float(args.min_append_score)
+                    if hint_discrepancy_deg <= 8.0:
+                        # Geometry and continuous tracking independently agree;
+                        # that mutual confirmation outweighs a modest absolute
+                        # score (which dips while facing sparsely mapped areas).
+                        # Discarding such captures caused blind-motion cascades.
+                        arc_accept_gate = min(arc_accept_gate, 3.5)
+                    if arc_score >= arc_accept_gate:
+                        capture_live_pose = arc_solved_pose
+                        capture_live_meta = arc_meta
+                    else:
+                        print(
+                            "[wander] turn arc solve below gate "
+                            f"(capture={capture_index}, score={arc_score:.3f}, min={float(args.min_append_score):.2f})"
+                        )
+                else:
+                    print(f"[wander] turn arc solve unavailable (capture={capture_index})")
+            else:
+                capture_pose_result = _estimate_pose_against_stitched_map(
+                    points_xy=captured_snapshot.points_xy,
+                    transformed_sets=stitch_state["transformed_sets"],
+                    initial_pose=capture_expected_pose,
+                    resolution_m=float(args.stitch_resolution_m),
+                    search_xy_m=max(float(motion_hint.search_xy_m), 0.65),
+                    theta_window_deg=max(float(motion_hint.search_theta_window_deg), 24.0),
+                    max_translation_from_initial_m=max(0.75, float(motion_hint.search_xy_m) + 0.25),
+                    prior_translation_weight=0.18,
+                    prior_theta_weight=0.06,
+                )
+                if capture_pose_result is not None:
+                    candidate_capture_pose, candidate_capture_meta = capture_pose_result
+                    if _accept_relocalized_pose(
+                        label=f"capture_{capture_index}",
+                        candidate_pose=candidate_capture_pose,
+                        score_meta=candidate_capture_meta,
+                        expected_pose=capture_expected_pose,
+                        motion_hint=motion_hint,
+                        max_translation_error_m=max(0.75, float(motion_hint.search_xy_m) + 0.25),
+                        max_theta_error_deg=max(18.0, float(motion_hint.search_theta_window_deg) * 1.10),
+                        min_score=7.5,
+                    ):
+                        capture_live_pose = candidate_capture_pose
+                        capture_live_meta = candidate_capture_meta
+                    else:
+                        print(
+                            "[wander] capture relocalization fallback "
+                            f"(capture={capture_index}, using strict append solver around prior stitched map)"
+                        )
+                if capture_pose_result is None:
+                    print(f"[wander] capture relocalization unavailable (capture={capture_index})")
+
+            if capture_live_pose is None and motion_hint.kind != "turn":
+                # Run the strict append solver here (instead of inside _append_stitch)
+                # so its score can be gated before the capture is committed to the map.
+                is_turn_like_hint = motion_hint.kind in {"turn", "bootstrap_turn"}
+                append_global_points_xy = np.concatenate(
+                    [points for points in stitch_state["transformed_sets"] if len(points)], axis=0
+                )
+                append_prior_pose, append_prior_tw, append_prior_thw = _prior_weights_for_hint(
+                    capture_expected_pose, motion_hint
+                )
+                append_solver_pose, append_solver_meta = _search_pose(
+                    snapshot_points_xy=captured_snapshot.points_xy,
+                    global_points_xy=append_global_points_xy,
+                    initial_pose=capture_expected_pose,
+                    resolution_m=float(args.stitch_resolution_m),
+                    search_xy_m=float(motion_hint.search_xy_m),
+                    coarse_angle_step_deg=4.0,
+                    fine_angle_step_deg=0.5,
+                    theta_window_deg=float(motion_hint.search_theta_window_deg),
+                    whole_map_theta_center_deg=float(capture_expected_pose.theta_deg),
+                    whole_map_theta_window_deg=(
+                        float(max(motion_hint.search_theta_window_deg, 36.0))
+                        if is_turn_like_hint
+                        else float(max(motion_hint.search_theta_window_deg, 45.0))
+                    ),
+                    # Motion is lidar-tracked burst-by-burst now, so even the
+                    # fallback search stays bounded — an unbounded whole-map
+                    # drive search is how phantom room-sized jumps got in.
+                    max_translation_from_initial_m=(
+                        float(max(motion_hint.search_xy_m + 0.20, 0.55))
+                        if is_turn_like_hint
+                        else float(max(motion_hint.search_xy_m + 0.35, 0.90))
+                    ),
+                    prior_pose=append_prior_pose,
+                    prior_translation_weight=float(append_prior_tw),
+                    prior_theta_weight=float(append_prior_thw),
+                )
+                append_solver_meta = {
+                    **append_solver_meta,
+                    "source": f"append_{append_solver_meta.get('source', 'unknown')}",
+                }
+                append_solver_score = float(append_solver_meta.get("score") or -1e9)
+                append_translation_err_m, append_theta_err_deg = _pose_delta_metrics(
+                    capture_expected_pose, append_solver_pose
+                )
+                append_gate = float(args.min_append_score)
+                if append_translation_err_m <= 0.30 and append_theta_err_deg <= 10.0:
+                    # Solver landed where burst-by-burst tracking said we are;
+                    # mutual confirmation earns a relaxed absolute gate.
+                    append_gate = min(append_gate, 3.5)
+                if append_solver_score >= append_gate:
+                    capture_live_pose = append_solver_pose
+                    capture_live_meta = append_solver_meta
+                else:
+                    print(
+                        "[wander] append solver score below gate "
+                        f"(capture={capture_index}, score={append_solver_score:.3f}, "
+                        f"min={append_gate:.2f}); attempting wide rescue relocalization"
+                    )
+                    rescue_result = _estimate_pose_against_stitched_map(
+                        points_xy=captured_snapshot.points_xy,
+                        transformed_sets=stitch_state["transformed_sets"],
+                        initial_pose=capture_expected_pose,
+                        resolution_m=float(args.stitch_resolution_m),
+                        search_xy_m=1.00,
+                        theta_window_deg=80.0,
+                        max_translation_from_initial_m=1.40,
+                        prior_translation_weight=0.05,
+                        prior_theta_weight=0.02,
+                    )
+                    if rescue_result is not None:
+                        rescue_pose, rescue_meta = rescue_result
+                        if _accept_relocalized_pose(
+                            label=f"capture_{capture_index}_rescue",
+                            candidate_pose=rescue_pose,
+                            score_meta=rescue_meta,
+                            expected_pose=capture_expected_pose,
+                            motion_hint=motion_hint,
+                            max_translation_error_m=1.40,
+                            max_theta_error_deg=85.0,
+                            min_score=7.5,
+                        ):
+                            capture_live_pose = rescue_pose
+                            capture_live_meta = {**rescue_meta, "source": f"rescue_{rescue_meta.get('source', 'unknown')}"}
+
+            if capture_live_pose is None:
+                consecutive_append_discards += 1
+                if consecutive_append_discards <= max(0, int(args.max_consecutive_append_discards)):
+                    print(
+                        "[wander] discarding capture to protect the map "
+                        f"(capture={capture_index}, best_score="
+                        f"{float((append_solver_meta or {}).get('score') or -1e9):.3f}, "
+                        f"consecutive_discards={consecutive_append_discards}); "
+                        "its expected motion will carry into the next capture"
+                    )
+                    motion_hints.pop()
+                    pending_motion_hint = motion_hint
+                    last_frame_id = int(frame_id)
+                    last_captured_frame = captured_frame
+                    continue
+                print(
+                    "[wander] WARNING: accepting low-confidence pose after "
+                    f"{consecutive_append_discards} consecutive discards "
+                    f"(capture={capture_index}, score={float((append_solver_meta or {}).get('score') or -1e9):.3f}); "
+                    "map quality may degrade"
+                )
+                capture_live_pose = append_solver_pose
+                capture_live_meta = append_solver_meta
+            consecutive_append_discards = 0
+
             stitch_state = _append_stitch(
                 stitch_dir=stitch_dir,
                 snapshot_dir=snapshot_dir,

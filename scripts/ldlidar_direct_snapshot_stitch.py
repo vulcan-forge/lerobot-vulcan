@@ -182,6 +182,7 @@ def _score_candidate(
     *,
     exact_grid: np.ndarray,
     dilated_grid: np.ndarray,
+    known_grid: np.ndarray,
     grid_origin_xy: np.ndarray,
     resolution_m: float,
     global_sampled_xy: np.ndarray,
@@ -198,15 +199,26 @@ def _score_candidate(
     )
     if not np.any(inside):
         return -1e9
+    inside_points = candidate_points[inside]
     valid = ij[inside]
-    exact_hits = exact_grid[valid[:, 1], valid[:, 0]]
-    nearby_hits = dilated_grid[valid[:, 1], valid[:, 0]]
-    exact_hit_ratio = float(np.count_nonzero(exact_hits)) / float(len(candidate_points))
-    nearby_hit_ratio = float(np.count_nonzero(nearby_hits)) / float(len(candidate_points))
-    inside_ratio = float(np.count_nonzero(inside)) / float(len(candidate_points))
+    # Only judge alignment on points that fall inside the map's observed
+    # neighborhood (`known_grid`). Points beyond it are NEW coverage — e.g. the
+    # unseen half of the room after a 90deg turn with a ~180deg FOV — and carry
+    # no alignment information. Scoring them as misses made every exploratory
+    # capture look wrong, which is exactly what stalls a spin-to-map bootstrap.
+    known = known_grid[valid[:, 1], valid[:, 0]]
+    matchable_count = int(np.count_nonzero(known))
+    total_count = int(len(candidate_points))
+    if matchable_count < max(12, int(0.15 * total_count)):
+        return -1e9
+    matchable = valid[known]
+    exact_hit_ratio = float(np.count_nonzero(exact_grid[matchable[:, 1], matchable[:, 0]])) / float(matchable_count)
+    nearby_hit_ratio = float(np.count_nonzero(dilated_grid[matchable[:, 1], matchable[:, 0]])) / float(matchable_count)
+    inside_ratio = float(np.count_nonzero(inside)) / float(total_count)
     miss_ratio = 1.0 - nearby_hit_ratio
 
-    sampled = candidate_points[:: max(1, len(candidate_points) // 24)]
+    matchable_points = inside_points[known]
+    sampled = matchable_points[:: max(1, len(matchable_points) // 24)]
     if use_nearest_penalty and len(global_sampled_xy) and len(sampled):
         deltas = sampled[:, None, :] - global_sampled_xy[None, :, :]
         distances_sq = np.sum(deltas * deltas, axis=2, dtype=np.float32)
@@ -215,13 +227,18 @@ def _score_candidate(
     else:
         nearest_mean = 0.0
 
-    return (
+    base_score = (
         exact_hit_ratio * 12.0
         + nearby_hit_ratio * 3.0
         + inside_ratio * 1.5
         - miss_ratio * 6.0
         - min(nearest_mean, 0.5) * 10.0
     )
+    # Prefer solutions explained by more of the map, but a 50% overlap (the
+    # honest value right after a 90deg turn) already earns full weight.
+    coverage_ratio = float(matchable_count) / float(total_count)
+    coverage_weight = 0.55 + 0.45 * min(1.0, coverage_ratio / 0.50)
+    return base_score * coverage_weight if base_score > 0.0 else base_score
 
 
 def _evaluate_pose_score(
@@ -230,6 +247,7 @@ def _evaluate_pose_score(
     pose: Pose2D,
     exact_grid: np.ndarray,
     dilated_grid: np.ndarray,
+    known_grid: np.ndarray,
     grid_origin_xy: np.ndarray,
     resolution_m: float,
     global_sampled_xy: np.ndarray,
@@ -240,6 +258,7 @@ def _evaluate_pose_score(
         candidate_points,
         exact_grid=exact_grid,
         dilated_grid=dilated_grid,
+        known_grid=known_grid,
         grid_origin_xy=grid_origin_xy,
         resolution_m=resolution_m,
         global_sampled_xy=global_sampled_xy,
@@ -282,6 +301,7 @@ def _refine_pose(
     best_score: float,
     exact_grid: np.ndarray,
     dilated_grid: np.ndarray,
+    known_grid: np.ndarray,
     grid_origin_xy: np.ndarray,
     resolution_m: float,
     global_sampled_xy: np.ndarray,
@@ -316,6 +336,7 @@ def _refine_pose(
                     pose=pose,
                     exact_grid=exact_grid,
                     dilated_grid=dilated_grid,
+                    known_grid=known_grid,
                     grid_origin_xy=grid_origin_xy,
                     resolution_m=resolution_m,
                     global_sampled_xy=global_sampled_xy,
@@ -417,6 +438,9 @@ def _search_pose(
     build_started = time.monotonic()
     exact_grid, origin = _build_occupancy(global_points_xy, resolution_m=resolution_m, padding_m=search_xy_m + 0.4)
     dilated = _dilate(exact_grid, radius_cells=2)
+    # "Known region" of the map: anywhere within ~0.30 m of an observed point.
+    # Scan points outside it are new coverage and are excluded from scoring.
+    known_grid = _dilate(exact_grid, radius_cells=max(3, int(round(0.30 / max(resolution_m, 1e-3)))))
     global_sampled_xy = global_points_xy[:: max(1, len(global_points_xy) // 128)] if len(global_points_xy) else global_points_xy
     build_elapsed_s = time.monotonic() - build_started
 
@@ -442,6 +466,7 @@ def _search_pose(
                     pose=pose,
                     exact_grid=exact_grid,
                     dilated_grid=dilated,
+                    known_grid=known_grid,
                     grid_origin_xy=origin,
                     resolution_m=resolution_m,
                     global_sampled_xy=global_sampled_xy,
@@ -465,6 +490,7 @@ def _search_pose(
         best_score=local_best_score,
         exact_grid=exact_grid,
         dilated_grid=dilated,
+        known_grid=known_grid,
         grid_origin_xy=origin,
         resolution_m=resolution_m,
         global_sampled_xy=global_sampled_xy,
@@ -503,6 +529,7 @@ def _search_pose(
                 pose=seed_pose,
                 exact_grid=exact_grid,
                 dilated_grid=dilated,
+                known_grid=known_grid,
                 grid_origin_xy=origin,
                 resolution_m=resolution_m,
                 global_sampled_xy=global_sampled_xy,
@@ -521,6 +548,7 @@ def _search_pose(
                 best_score=seed_score,
                 exact_grid=exact_grid,
                 dilated_grid=dilated,
+                known_grid=known_grid,
                 grid_origin_xy=origin,
                 resolution_m=resolution_m,
                 global_sampled_xy=global_sampled_xy,
@@ -562,6 +590,186 @@ def _search_pose(
             "local_search": round(local_search_elapsed_s, 4),
             "whole_map_search": round(whole_map_search_elapsed_s, 4),
             "total_search": round(build_elapsed_s + local_search_elapsed_s + whole_map_search_elapsed_s, 4),
+        },
+    }
+
+
+def _build_score_grids(
+    global_points_xy: np.ndarray,
+    *,
+    resolution_m: float,
+    padding_m: float,
+) -> dict[str, object]:
+    """Precompute the occupancy/known-region grids used by _score_candidate so
+    many poses (e.g. one solve per lidar revolution during a turn) can be
+    scored against a static map without rebuilding grids each time."""
+    exact_grid, grid_origin_xy = _build_occupancy(
+        global_points_xy, resolution_m=float(resolution_m), padding_m=float(padding_m)
+    )
+    return {
+        "exact_grid": exact_grid,
+        "dilated_grid": _dilate(exact_grid, radius_cells=2),
+        "known_grid": _dilate(exact_grid, radius_cells=max(3, int(round(0.30 / max(float(resolution_m), 1e-3))))),
+        "grid_origin_xy": grid_origin_xy,
+        "resolution_m": float(resolution_m),
+        "global_sampled_xy": global_points_xy[:: max(1, len(global_points_xy) // 128)],
+    }
+
+
+def _solve_arc_pose_on_grids(
+    *,
+    snapshot_points_xy: np.ndarray,
+    grids: dict[str, object],
+    arc_center_xy: tuple[float, float],
+    lidar_offset_forward_m: float,
+    expected_theta_deg: float,
+    theta_half_window_deg: float,
+    theta_step_deg: float = 1.5,
+    center_slack_m: float = 0.10,
+    slack_step_m: float = 0.05,
+    theta_prior_weight_per_deg: float = 0.022,
+    refine: bool = True,
+) -> tuple[Pose2D, float]:
+    """Score arc-constrained poses against prebuilt grids: for each candidate
+    heading the sensor position is center + R(theta)*(offset, 0) plus a small
+    slip slack. Returns the best pose and its RAW geometry score (a gentle
+    dead-reckoning prior only biases selection between near-tied modes)."""
+    r = float(lidar_offset_forward_m)
+    center_x = float(arc_center_xy[0])
+    center_y = float(arc_center_xy[1])
+
+    def arc_pose(theta_deg: float, dx: float, dy: float) -> Pose2D:
+        theta_rad = math.radians(float(theta_deg))
+        return Pose2D(
+            x=center_x + r * math.cos(theta_rad) + float(dx),
+            y=center_y + r * math.sin(theta_rad) + float(dy),
+            theta_deg=float(theta_deg),
+        )
+
+    def score_pose(pose: Pose2D, use_nearest_penalty: bool) -> float:
+        return _score_candidate(
+            _transform_points(snapshot_points_xy, pose),
+            use_nearest_penalty=use_nearest_penalty,
+            **grids,
+        )
+
+    prior_w = max(0.0, float(theta_prior_weight_per_deg))
+
+    def theta_penalty(theta_deg: float) -> float:
+        return prior_w * abs(_normalize_angle_deg(float(theta_deg) - float(expected_theta_deg)))
+
+    slack = max(0.0, float(center_slack_m))
+    half_window = max(float(theta_half_window_deg), float(theta_step_deg))
+    coarse_offsets = np.arange(-slack, slack + 1e-6, max(0.01, float(slack_step_m)), dtype=np.float32)
+    coarse_thetas = np.arange(
+        float(expected_theta_deg) - half_window,
+        float(expected_theta_deg) + half_window + 1e-6,
+        max(0.5, float(theta_step_deg)),
+        dtype=np.float32,
+    )
+    best_theta_deg = float(expected_theta_deg)
+    best_dx = 0.0
+    best_dy = 0.0
+    best_score = -1e9
+    best_adjusted = -1e9
+    for theta_deg in coarse_thetas:
+        penalty = theta_penalty(float(theta_deg))
+        for dx in coarse_offsets:
+            for dy in coarse_offsets:
+                score = score_pose(arc_pose(float(theta_deg), float(dx), float(dy)), False)
+                adjusted = float(score) - penalty
+                if adjusted > best_adjusted:
+                    best_adjusted = adjusted
+                    best_score = float(score)
+                    best_theta_deg = float(theta_deg)
+                    best_dx = float(dx)
+                    best_dy = float(dy)
+    best_pose = arc_pose(best_theta_deg, best_dx, best_dy)
+    if not refine:
+        return best_pose, float(best_score)
+
+    fine_offsets = np.arange(-0.04, 0.04 + 1e-6, 0.02, dtype=np.float32)
+    fine_thetas = np.arange(best_theta_deg - 3.0, best_theta_deg + 3.0 + 1e-6, 0.5, dtype=np.float32)
+    offset_cap = slack + 0.04
+    best_score = -1e9
+    best_adjusted = -1e9
+    for theta_deg in fine_thetas:
+        penalty = theta_penalty(float(theta_deg))
+        for ddx in fine_offsets:
+            for ddy in fine_offsets:
+                dx = max(-offset_cap, min(offset_cap, best_dx + float(ddx)))
+                dy = max(-offset_cap, min(offset_cap, best_dy + float(ddy)))
+                pose = arc_pose(float(theta_deg), dx, dy)
+                score = score_pose(pose, True)
+                adjusted = float(score) - penalty
+                if adjusted > best_adjusted:
+                    best_adjusted = adjusted
+                    best_score = float(score)
+                    best_pose = pose
+    return best_pose, float(best_score)
+
+
+def _solve_turn_arc_pose(
+    *,
+    snapshot_points_xy: np.ndarray,
+    transformed_sets: list[np.ndarray],
+    previous_pose: Pose2D,
+    lidar_offset_forward_m: float,
+    resolution_m: float,
+    expected_theta_deg: float,
+    theta_half_window_deg: float = 80.0,
+    theta_step_deg: float = 1.5,
+    center_slack_m: float = 0.10,
+    theta_prior_weight_per_deg: float = 0.022,
+) -> tuple[Pose2D, dict[str, object]] | None:
+    """Solve an in-place-turn capture with the sensor constrained to the arc it
+    physically rides. The robot's rotation center sits `lidar_offset_forward_m`
+    BEHIND the sensor and cannot translate during a spin, so each candidate
+    heading fully determines the sensor position (up to a small slip slack)."""
+    non_empty_sets = [points for points in transformed_sets if len(points)]
+    if len(snapshot_points_xy) < 12 or not non_empty_sets:
+        return None
+    global_points_xy = np.concatenate(non_empty_sets, axis=0)
+    build_started = time.monotonic()
+    grids = _build_score_grids(
+        global_points_xy,
+        resolution_m=float(resolution_m),
+        padding_m=float(center_slack_m) + 0.8,
+    )
+    build_elapsed_s = time.monotonic() - build_started
+
+    r = float(lidar_offset_forward_m)
+    prev_theta_rad = math.radians(float(previous_pose.theta_deg))
+    arc_center_xy = (
+        float(previous_pose.x) - r * math.cos(prev_theta_rad),
+        float(previous_pose.y) - r * math.sin(prev_theta_rad),
+    )
+    search_started = time.monotonic()
+    best_pose, best_score = _solve_arc_pose_on_grids(
+        snapshot_points_xy=snapshot_points_xy,
+        grids=grids,
+        arc_center_xy=arc_center_xy,
+        lidar_offset_forward_m=r,
+        expected_theta_deg=float(expected_theta_deg),
+        theta_half_window_deg=float(theta_half_window_deg),
+        theta_step_deg=float(theta_step_deg),
+        center_slack_m=float(center_slack_m),
+        theta_prior_weight_per_deg=float(theta_prior_weight_per_deg),
+        refine=True,
+    )
+    search_elapsed_s = time.monotonic() - search_started
+
+    return best_pose, {
+        "score": round(best_score, 4),
+        "local_score": round(best_score, 4),
+        "whole_map_score": round(best_score, 4),
+        "source": "turn_arc",
+        "whole_map_searched": False,
+        "timing_s": {
+            "build_occupancy": round(build_elapsed_s, 4),
+            "local_search": round(search_elapsed_s, 4),
+            "whole_map_search": 0.0,
+            "total_search": round(build_elapsed_s + search_elapsed_s, 4),
         },
     }
 
