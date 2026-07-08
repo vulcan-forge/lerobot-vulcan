@@ -2439,7 +2439,33 @@ def main() -> int:
                     f"distance={planning_frontier_choice.mean_distance_m:.2f}m, score={planning_frontier_choice.score:.2f})"
                 )
 
-            if wander_mode == "smart":
+            if (
+                wander_mode == "smart"
+                and pending_motion_hint is not None
+                and not live_pose_accepted
+                and abs(float(pending_motion_hint.expected_dtheta_deg)) > 20.0
+            ):
+                # The last capture was DISCARDED after a turn: the robot has
+                # physically rotated away from the map, but the map never
+                # absorbed that rotation. Planning a fresh frontier turn from
+                # the stale pose rotates even FURTHER from the only overlap we
+                # have, scores collapse toward zero, and a garbage pose ends up
+                # force-accepted (observed: score 0.053 poisoned a whole run).
+                # Recover by turning BACK toward the last stitched heading,
+                # where overlap — and therefore a confident solve — is
+                # guaranteed, then capture to re-anchor before exploring on.
+                should_turn = True
+                pending_turn_reason = None
+                turn_reason = "reanchor_turn_back"
+                reanchor_dtheta_deg = float(pending_motion_hint.expected_dtheta_deg)
+                chosen_direction_sign = -1.0 if reanchor_dtheta_deg >= 0.0 else 1.0
+                chosen_turn_deg = max(15.0, min(85.0, abs(reanchor_dtheta_deg)))
+                print(
+                    "[wander] last capture was discarded after a turn; turning back "
+                    f"{chosen_turn_deg:.1f}deg {'ccw' if chosen_direction_sign >= 0.0 else 'cw'} "
+                    "toward the last stitched heading to re-anchor"
+                )
+            elif wander_mode == "smart":
                 # ================= frontier exploration =================
                 # One rule, no special cases: model what has been observed
                 # (free / occupied / unknown), find the nearest reachable
@@ -2466,6 +2492,7 @@ def main() -> int:
                         observed_from_xy=[
                             (float(p.x), float(p.y)) for p in stitch_state["poses"]
                         ],
+                        robot_theta_deg=float(current_live_pose.theta_deg),
                     )
                 if (
                     active_survey_xy is None
@@ -2486,6 +2513,7 @@ def main() -> int:
                         survey_from_xy=[
                             (float(p.x), float(p.y)) for p in stitch_state["poses"]
                         ],
+                        robot_theta_deg=float(current_live_pose.theta_deg),
                     )
                     if str(survey_probe.get("status")) == "survey":
                         active_survey_xy = (
@@ -2660,6 +2688,7 @@ def main() -> int:
                                 grid=idle_grid,
                                 robot_xy=(float(current_live_pose.x), float(current_live_pose.y)),
                                 robot_radius_m=float(args.robot_radius_m),
+                                robot_theta_deg=float(current_live_pose.theta_deg),
                             )
                             if str(idle_plan.get("status")) == "ok":
                                 print(
@@ -2898,6 +2927,7 @@ def main() -> int:
                                 observed_from_xy=[
                                     (float(p.x), float(p.y)) for p in stitch_state["poses"]
                                 ],
+                                robot_theta_deg=float(transit_pose.theta_deg),
                             )
                             if str(transit_plan.get("status")) not in ("ok", "survey", "observe"):
                                 transit_stop_reason = "replan_" + str(transit_plan.get("status"))
@@ -3344,16 +3374,24 @@ def main() -> int:
                 settle_s = float(args.move_settle_s)
 
             if should_turn:
-                if float(chosen_turn_deg) > 85.0:
+                turn_cap_deg = 85.0
+                if len(stitch_state["poses"]) < 2 and turn_reason != "reanchor_turn_back":
+                    # With a SINGLE capture in the map and a ~180deg FOV, an
+                    # 85deg turn leaves too little overlap to track or solve
+                    # against — lock loss at ~72deg observed in the field twice,
+                    # and the failed retry spiral poisoned the map. 55deg keeps
+                    # the first solves strong; from 2+ captures 85deg is safe.
+                    turn_cap_deg = 55.0
+                if float(chosen_turn_deg) > turn_cap_deg:
                     # A capture must land before the view rotates into mostly
                     # unmapped territory: with a ~180deg FOV, 55deg per capture
                     # keeps >=125deg of the previous view in frame, which keeps
                     # solve scores strong. Larger goals just take two captures.
                     print(
-                        "[wander] capping turn at 85deg per capture to keep map overlap strong "
+                        f"[wander] capping turn at {turn_cap_deg:.0f}deg per capture to keep map overlap strong "
                         f"(requested={float(chosen_turn_deg):.1f}deg)"
                     )
-                    chosen_turn_deg = 85.0
+                    chosen_turn_deg = turn_cap_deg
                 print(
                     "[wander] rotating before stitched capture "
                     f"(reason={turn_reason}, target={float(chosen_turn_deg):.1f}deg "
@@ -3532,25 +3570,65 @@ def main() -> int:
                     hint_discrepancy_deg = abs(
                         _normalize_angle_deg(solved_turn_deg - float(motion_hint.expected_dtheta_deg))
                     )
-                    if hint_discrepancy_deg > 75.0:
+                    arc_accept_gate = float(args.min_append_score)
+                    if hint_discrepancy_deg > 30.0:
+                        # The solver is overriding the tracked turn by a lot. In a
+                        # square room the wrong 90-degree rotation mode scores
+                        # respectably, so a big override needs strong evidence,
+                        # not the standard gate. Discarding here is safe: the
+                        # motion hint carries forward and the next capture solves
+                        # with a wider window and more map context.
+                        arc_accept_gate += 1.5
                         print(
                             "[wander] warning: arc solve disagrees strongly with the measured turn "
-                            f"(discrepancy={hint_discrepancy_deg:.1f}deg); possible room-symmetry mode"
+                            f"(discrepancy={hint_discrepancy_deg:.1f}deg); possible room-symmetry mode, "
+                            f"raising gate to {arc_accept_gate:.2f}"
                         )
-                    arc_accept_gate = float(args.min_append_score)
-                    if hint_discrepancy_deg <= 8.0:
-                        # Geometry and continuous tracking independently agree;
-                        # that mutual confirmation outweighs a modest absolute
-                        # score (which dips while facing sparsely mapped areas).
-                        # Discarding such captures caused blind-motion cascades.
-                        arc_accept_gate = min(arc_accept_gate, 3.5)
                     if arc_score >= arc_accept_gate:
                         capture_live_pose = arc_solved_pose
                         capture_live_meta = arc_meta
+                    elif hint_discrepancy_deg <= 8.0:
+                        # Rotation is mutually confirmed by geometry and tracking,
+                        # so a poor absolute fit usually means the robot CENTER has
+                        # drifted (skid accumulates over consecutive in-place turns
+                        # and the arc constraint only allows +-10cm). Refine xy
+                        # around the arc pose and re-gate at full strength instead
+                        # of painting a laterally-offset scan into the map.
+                        refine_result = _estimate_pose_against_stitched_map(
+                            points_xy=captured_snapshot.points_xy,
+                            transformed_sets=stitch_state["transformed_sets"],
+                            initial_pose=arc_solved_pose,
+                            resolution_m=float(args.stitch_resolution_m),
+                            search_xy_m=0.35,
+                            theta_window_deg=8.0,
+                            max_translation_from_initial_m=0.35,
+                            prior_translation_weight=1.2,
+                            prior_theta_weight=0.10,
+                        )
+                        refined_ok = False
+                        if refine_result is not None:
+                            refined_pose, refined_meta = refine_result
+                            refined_score = float(refined_meta.get("score") or -1e9)
+                            print(
+                                "[wander] turn arc xy-refine "
+                                f"(capture={capture_index}, pose=({refined_pose.x:.3f}, {refined_pose.y:.3f}, "
+                                f"{refined_pose.theta_deg:.1f}deg), score={refined_score:.3f}, "
+                                f"arc_score={arc_score:.3f})"
+                            )
+                            if refined_score >= float(args.min_append_score):
+                                capture_live_pose = refined_pose
+                                capture_live_meta = {**refined_meta, "source": "turn_arc_refined"}
+                                refined_ok = True
+                        if not refined_ok:
+                            print(
+                                "[wander] turn arc solve below gate even after xy-refine "
+                                f"(capture={capture_index}, arc_score={arc_score:.3f}, "
+                                f"min={float(args.min_append_score):.2f})"
+                            )
                     else:
                         print(
                             "[wander] turn arc solve below gate "
-                            f"(capture={capture_index}, score={arc_score:.3f}, min={float(args.min_append_score):.2f})"
+                            f"(capture={capture_index}, score={arc_score:.3f}, min={arc_accept_gate:.2f})"
                         )
                 else:
                     print(f"[wander] turn arc solve unavailable (capture={capture_index})")
@@ -3562,9 +3640,14 @@ def main() -> int:
                     resolution_m=float(args.stitch_resolution_m),
                     search_xy_m=max(float(motion_hint.search_xy_m), 0.45),
                     theta_window_deg=max(float(motion_hint.search_theta_window_deg), 24.0),
-                    max_translation_from_initial_m=max(0.75, float(motion_hint.search_xy_m) + 0.25),
-                    prior_translation_weight=0.18,
-                    prior_theta_weight=0.06,
+                    # The pose is burst-tracked to ~5cm: the solve REFINES the
+                    # tracked expectation, it does not search for it. A loose
+                    # bound plus a token prior let captures slide ~0.5m along
+                    # featureless straight walls at full score (phantom
+                    # duplicate-wall lines in the map).
+                    max_translation_from_initial_m=max(0.45, float(motion_hint.search_xy_m) + 0.10),
+                    prior_translation_weight=2.5,
+                    prior_theta_weight=0.12,
                 )
                 if capture_pose_result is not None:
                     candidate_capture_pose, candidate_capture_meta = capture_pose_result
@@ -3574,7 +3657,7 @@ def main() -> int:
                         score_meta=candidate_capture_meta,
                         expected_pose=capture_expected_pose,
                         motion_hint=motion_hint,
-                        max_translation_error_m=max(0.75, float(motion_hint.search_xy_m) + 0.25),
+                        max_translation_error_m=max(0.30, 0.65 * float(motion_hint.search_xy_m)),
                         max_theta_error_deg=max(18.0, float(motion_hint.search_theta_window_deg) * 1.10),
                         min_score=7.5,
                     ):
@@ -3638,23 +3721,42 @@ def main() -> int:
                     # Solver landed where burst-by-burst tracking said we are;
                     # mutual confirmation earns a relaxed absolute gate.
                     append_gate = min(append_gate, 3.5)
-                if append_solver_score >= append_gate:
+                # The fallback used to gate on SCORE alone. Near a featureless
+                # wall a slid pose scores as well as the true one, so a capture
+                # 0.64m from its fully-locked tracked expectation got in and
+                # painted a ghost wall. Motion is lidar-tracked: bound the
+                # fallback by the expectation just like the strict solve.
+                append_translation_gate_m = max(0.40, 0.75 * float(motion_hint.search_xy_m))
+                append_theta_gate_deg = max(18.0, float(motion_hint.search_theta_window_deg) * 1.10)
+                append_pose_ok = (
+                    append_translation_err_m <= append_translation_gate_m
+                    and append_theta_err_deg <= append_theta_gate_deg
+                )
+                if append_solver_score >= append_gate and append_pose_ok:
                     capture_live_pose = append_solver_pose
                     capture_live_meta = append_solver_meta
                 else:
                     print(
-                        "[wander] append solver score below gate "
-                        f"(capture={capture_index}, score={append_solver_score:.3f}, "
-                        f"min={append_gate:.2f}); attempting wide rescue relocalization"
+                        "[wander] append solver rejected "
+                        f"(capture={capture_index}, score={append_solver_score:.3f}, min={append_gate:.2f}, "
+                        f"translation_error={append_translation_err_m:.3f}m<= {append_translation_gate_m:.2f}m, "
+                        f"theta_error={append_theta_err_deg:.1f}deg<= {append_theta_gate_deg:.0f}deg); "
+                        "attempting wide-theta rescue relocalization"
                     )
+                    # Rescue exists for one failure mode: the HEADING went blind
+                    # (lock-lost turn bursts), so theta may be far off while the
+                    # position stays bounded by tracked driving — lock loss stops
+                    # all translation. Search wide in theta, tight in xy. The old
+                    # flat 1.40m/85deg gates predate tracked motion and accepted
+                    # a pose 0.97m/43deg out, skewing the whole map.
                     rescue_result = _estimate_pose_against_stitched_map(
                         points_xy=captured_snapshot.points_xy,
                         transformed_sets=stitch_state["transformed_sets"],
                         initial_pose=capture_expected_pose,
                         resolution_m=float(args.stitch_resolution_m),
-                        search_xy_m=1.00,
+                        search_xy_m=append_translation_gate_m + 0.10,
                         theta_window_deg=80.0,
-                        max_translation_from_initial_m=1.40,
+                        max_translation_from_initial_m=append_translation_gate_m,
                         prior_translation_weight=0.05,
                         prior_theta_weight=0.02,
                     )
@@ -3666,8 +3768,10 @@ def main() -> int:
                             score_meta=rescue_meta,
                             expected_pose=capture_expected_pose,
                             motion_hint=motion_hint,
-                            max_translation_error_m=1.40,
-                            max_theta_error_deg=85.0,
+                            max_translation_error_m=append_translation_gate_m,
+                            max_theta_error_deg=max(
+                                35.0, float(motion_hint.search_theta_window_deg) + 10.0
+                            ),
                             min_score=7.5,
                         ):
                             capture_live_pose = rescue_pose
@@ -3688,10 +3792,28 @@ def main() -> int:
                     last_frame_id = int(frame_id)
                     last_captured_frame = captured_frame
                     continue
+                force_accept_score = float((append_solver_meta or {}).get("score") or -1e9)
+                if append_solver_pose is None or force_accept_score < 3.5:
+                    # Force-accepting a sub-floor pose stitches an effectively
+                    # random scan into the map and poisons everything after it
+                    # (observed: score 0.053 accepted -> the whole run mapped a
+                    # phantom room). Keep discarding instead — the re-anchor
+                    # turn-back recovers overlap so scores climb back over the
+                    # gate on a later attempt.
+                    print(
+                        "[wander] refusing to force-accept a garbage pose "
+                        f"(capture={capture_index}, score={force_accept_score:.3f} < floor=3.50); "
+                        "continuing recovery instead"
+                    )
+                    motion_hints.pop()
+                    pending_motion_hint = motion_hint
+                    last_frame_id = int(frame_id)
+                    last_captured_frame = captured_frame
+                    continue
                 print(
                     "[wander] WARNING: accepting low-confidence pose after "
                     f"{consecutive_append_discards} consecutive discards "
-                    f"(capture={capture_index}, score={float((append_solver_meta or {}).get('score') or -1e9):.3f}); "
+                    f"(capture={capture_index}, score={force_accept_score:.3f}); "
                     "map quality may degrade"
                 )
                 capture_live_pose = append_solver_pose

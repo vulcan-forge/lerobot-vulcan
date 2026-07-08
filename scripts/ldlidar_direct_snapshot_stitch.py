@@ -283,11 +283,12 @@ def _apply_pose_prior(
 
 
 def _prior_weights_for_hint(initial_pose: Pose2D, hint: MotionHint) -> tuple[Pose2D | None, float, float]:
-    if hint.kind == "drive":
-        # Drive captures must localize from LiDAR geometry, not commanded motion.
-        # We still seed the search near the previous pose, but do not bias scoring
-        # toward "you probably moved this far".
-        return None, 0.0, 0.0
+    if hint.kind in {"drive", "mixed"}:
+        # Drive/mixed hints are LIDAR-TRACKED burst-by-burst (~5cm accurate),
+        # not commanded motion — so the expected pose deserves real weight.
+        # Without it, a capture taken beside a long straight wall can slide
+        # along the wall at zero score cost and paint a phantom duplicate wall.
+        return initial_pose, 2.0, 0.10
     if hint.kind in {"turn", "bootstrap_turn"}:
         # Turning progress is measured from LiDAR overlap in the caller, so keep
         # only a very light prior here to break ties without overriding geometry.
@@ -874,6 +875,7 @@ def _plan_frontier_path(
     min_survey_spacing_m: float = 0.80,
     observed_from_xy: list[tuple[float, float]] | None = None,
     observation_range_m: float = 2.80,
+    robot_theta_deg: float | None = None,
 ) -> dict[str, object]:
     """Classic frontier exploration: BFS through known-free space (inflated by
     the robot's radius, so gaps it cannot fit through are simply not
@@ -901,6 +903,21 @@ def _plan_frontier_path(
             float(origin_xy[0]) + float(cx) * res,
             float(origin_xy[1]) + float(cy) * res,
         )
+
+    def turn_cost_m(target_world_xy: tuple[float, float]) -> float:
+        """Price heading change like travel distance (~0.9m per 90deg) so goal
+        selection sweeps by angular continuity: 'nearest unknown first' alone
+        flips sides after every scan and the robot ping-pongs through 180deg
+        turnarounds between opposite openings."""
+        if robot_theta_deg is None:
+            return 0.0
+        bearing_deg = math.degrees(
+            math.atan2(
+                float(target_world_xy[1]) - float(robot_xy[1]),
+                float(target_world_xy[0]) - float(robot_xy[0]),
+            )
+        )
+        return 0.9 * abs(_normalize_angle_deg(bearing_deg - float(robot_theta_deg))) / 90.0
 
     seed_x, seed_y = to_cell(robot_xy[0], robot_xy[1])
     seed_x = max(0, min(width - 1, seed_x))
@@ -1114,12 +1131,14 @@ def _plan_frontier_path(
                     return False
             return True
 
-        clusters.sort(
-            key=lambda members: math.hypot(
-                centroid_of(members)[0] - float(robot_xy[0]),
-                centroid_of(members)[1] - float(robot_xy[1]),
+        def observation_cluster_cost(members: list[tuple[int, int]]) -> float:
+            centroid = centroid_of(members)
+            travel_m = math.hypot(
+                centroid[0] - float(robot_xy[0]), centroid[1] - float(robot_xy[1])
             )
-        )
+            return travel_m + turn_cost_m(centroid)
+
+        clusters.sort(key=observation_cluster_cost)
         for members in clusters:
             centroid_xy = centroid_of(members)
             d_to_centroid = np.hypot(
@@ -1208,14 +1227,23 @@ def _plan_frontier_path(
 
     best_cell = None
     best_cluster = None
+    best_cluster_cost = math.inf
     for cluster in clusters:
         members = cluster["members"]
         if len(members) < int(min_frontier_cells):
             continue
-        for cx, cy in members:
-            if best_cell is None or dist[cy, cx] < dist[best_cell[1], best_cell[0]]:
-                best_cell = (cx, cy)
-                best_cluster = cluster
+        nearest_cell = min(members, key=lambda c: dist[c[1], c[0]])
+        cluster_centroid = (
+            float(np.mean([to_world(cx, cy)[0] for cx, cy in members])),
+            float(np.mean([to_world(cx, cy)[1] for cx, cy in members])),
+        )
+        cluster_cost = float(dist[nearest_cell[1], nearest_cell[0]]) * res + turn_cost_m(
+            cluster_centroid
+        )
+        if cluster_cost < best_cluster_cost:
+            best_cluster_cost = cluster_cost
+            best_cell = nearest_cell
+            best_cluster = cluster
     if best_cell is None:
         return observation_or_fallback()
 
