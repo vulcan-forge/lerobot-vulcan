@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -771,6 +772,481 @@ def _solve_turn_arc_pose(
             "whole_map_search": 0.0,
             "total_search": round(build_elapsed_s + search_elapsed_s, 4),
         },
+    }
+
+
+def _build_exploration_grid(
+    *,
+    poses: list[Pose2D],
+    transformed_sets: list[np.ndarray],
+    resolution_m: float,
+    padding_m: float = 0.6,
+    robot_clear_radius_m: float = 0.0,
+    lidar_offset_forward_m: float = 0.0,
+) -> dict[str, object] | None:
+    """Explicit model of what has been OBSERVED: for every capture, the space
+    along each lidar beam (sensor pose -> return) is known-FREE, the return
+    cell is OCCUPIED, and everything no beam ever crossed is UNKNOWN. This is
+    the map knowledge that makes 'where have I not mapped yet?' a computable
+    question instead of a heuristic."""
+    paired = [
+        (pose, points)
+        for pose, points in zip(poses, transformed_sets, strict=False)
+        if len(points)
+    ]
+    if not paired:
+        return None
+    all_points = np.concatenate([points for _pose, points in paired], axis=0)
+    pose_xy = np.asarray([[float(p.x), float(p.y)] for p, _pts in paired], dtype=np.float32)
+    res = max(0.03, float(resolution_m))
+    mins = np.minimum(all_points.min(axis=0), pose_xy.min(axis=0)) - float(padding_m)
+    maxs = np.maximum(all_points.max(axis=0), pose_xy.max(axis=0)) + float(padding_m)
+    width = int(math.ceil((maxs[0] - mins[0]) / res)) + 1
+    height = int(math.ceil((maxs[1] - mins[1]) / res)) + 1
+    if width <= 2 or height <= 2:
+        return None
+    free_grid = np.zeros((height, width), dtype=bool)
+    occupied_grid = np.zeros((height, width), dtype=bool)
+    mins32 = mins.astype(np.float32)
+
+    for pose, points in paired:
+        origin_xy = np.asarray([float(pose.x), float(pose.y)], dtype=np.float32)
+        for point_xy in points:
+            delta = point_xy - origin_xy
+            beam_len = float(math.hypot(float(delta[0]), float(delta[1])))
+            if beam_len < res:
+                continue
+            n_samples = int(beam_len / res) + 1
+            ts = np.arange(n_samples, dtype=np.float32) / float(n_samples)
+            samples = origin_xy[None, :] + delta[None, :] * ts[:, None]
+            ij = np.round((samples - mins32) / res).astype(np.int32)
+            ij[:, 0] = np.clip(ij[:, 0], 0, width - 1)
+            ij[:, 1] = np.clip(ij[:, 1], 0, height - 1)
+            free_grid[ij[:, 1], ij[:, 0]] = True
+        end_ij = np.round((points - mins32) / res).astype(np.int32)
+        end_ij[:, 0] = np.clip(end_ij[:, 0], 0, width - 1)
+        end_ij[:, 1] = np.clip(end_ij[:, 1], 0, height - 1)
+        occupied_grid[end_ij[:, 1], end_ij[:, 0]] = True
+
+    # The robot's own footprint is observed BY OCCUPANCY: it physically stands
+    # there, so that space is known-free even though no beam can cross it (the
+    # sensor rides a lever arm, so the disk under the body is never swept —
+    # without this stamp it stays "unknown" forever and the planner chases a
+    # phantom frontier directly beneath the robot).
+    clear_cells = int(round(max(0.0, float(robot_clear_radius_m)) / res))
+    if clear_cells > 0:
+        disk_offsets = [
+            (dx, dy)
+            for dy in range(-clear_cells, clear_cells + 1)
+            for dx in range(-clear_cells, clear_cells + 1)
+            if dx * dx + dy * dy <= clear_cells * clear_cells
+        ]
+        for pose, _points in paired:
+            theta_rad = math.radians(float(pose.theta_deg))
+            center_x = float(pose.x) - float(lidar_offset_forward_m) * math.cos(theta_rad)
+            center_y = float(pose.y) - float(lidar_offset_forward_m) * math.sin(theta_rad)
+            ci = int(round((center_x - float(mins32[0])) / res))
+            cj = int(round((center_y - float(mins32[1])) / res))
+            for dx, dy in disk_offsets:
+                gx, gy = ci + dx, cj + dy
+                if 0 <= gx < width and 0 <= gy < height:
+                    free_grid[gy, gx] = True
+
+    free_grid &= ~occupied_grid
+    return {
+        "free": free_grid,
+        "occupied": occupied_grid,
+        "origin_xy": mins32,
+        "resolution_m": res,
+    }
+
+
+def _plan_frontier_path(
+    *,
+    grid: dict[str, object],
+    robot_xy: tuple[float, float],
+    robot_radius_m: float,
+    min_frontier_cells: int = 8,
+    goal_standoff_m: float = 0.35,
+    waypoint_lookahead_m: float = 1.10,
+    target_xy: tuple[float, float] | None = None,
+    survey_from_xy: list[tuple[float, float]] | None = None,
+    min_survey_spacing_m: float = 0.80,
+    observed_from_xy: list[tuple[float, float]] | None = None,
+    observation_range_m: float = 2.80,
+) -> dict[str, object]:
+    """Classic frontier exploration: BFS through known-free space (inflated by
+    the robot's radius, so gaps it cannot fit through are simply not
+    traversable) to the nearest sizeable boundary between known and unknown
+    space. Returns the goal (a standoff pose near the frontier), the next
+    waypoint along the actual traversable path, and the frontier centroid to
+    face when scanning. status: ok | no_frontier | stuck."""
+    free_grid: np.ndarray = grid["free"]
+    occupied_grid: np.ndarray = grid["occupied"]
+    origin_xy: np.ndarray = grid["origin_xy"]
+    res = float(grid["resolution_m"])
+    height, width = free_grid.shape
+
+    inflated = _dilate(occupied_grid, radius_cells=max(1, int(round(float(robot_radius_m) / res))))
+    traversable = free_grid & ~inflated
+
+    def to_cell(x: float, y: float) -> tuple[int, int]:
+        return (
+            int(round((float(x) - float(origin_xy[0])) / res)),
+            int(round((float(y) - float(origin_xy[1])) / res)),
+        )
+
+    def to_world(cx: int, cy: int) -> tuple[float, float]:
+        return (
+            float(origin_xy[0]) + float(cx) * res,
+            float(origin_xy[1]) + float(cy) * res,
+        )
+
+    seed_x, seed_y = to_cell(robot_xy[0], robot_xy[1])
+    seed_x = max(0, min(width - 1, seed_x))
+    seed_y = max(0, min(height - 1, seed_y))
+    if not traversable[seed_y, seed_x]:
+        # The robot itself may stand within the inflation band next to
+        # clutter; seed the search from the nearest traversable cell.
+        search_r = max(1, int(round(0.60 / res)))
+        best = None
+        for dy in range(-search_r, search_r + 1):
+            for dx in range(-search_r, search_r + 1):
+                nx, ny = seed_x + dx, seed_y + dy
+                if 0 <= nx < width and 0 <= ny < height and traversable[ny, nx]:
+                    d2 = dx * dx + dy * dy
+                    if best is None or d2 < best[0]:
+                        best = (d2, nx, ny)
+        if best is None:
+            return {"status": "stuck"}
+        seed_x, seed_y = best[1], best[2]
+
+    dist = np.full((height, width), -1, dtype=np.int32)
+    dist[seed_y, seed_x] = 0
+    queue: deque[tuple[int, int]] = deque([(seed_x, seed_y)])
+    while queue:
+        cx, cy = queue.popleft()
+        d_next = dist[cy, cx] + 1
+        for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+            if 0 <= nx < width and 0 <= ny < height and traversable[ny, nx] and dist[ny, nx] < 0:
+                dist[ny, nx] = d_next
+                queue.append((nx, ny))
+
+    def backtrack_path(from_cell: tuple[int, int]) -> list[tuple[int, int]]:
+        path: list[tuple[int, int]] = [from_cell]
+        px, py = from_cell
+        while dist[py, px] > 0:
+            d_here = dist[py, px]
+            for nx, ny in ((px + 1, py), (px - 1, py), (px, py + 1), (px, py - 1)):
+                if 0 <= nx < width and 0 <= ny < height and dist[ny, nx] == d_here - 1:
+                    px, py = nx, ny
+                    path.append((px, py))
+                    break
+            else:
+                break
+        path.reverse()  # robot -> destination
+        return path
+
+    if target_xy is not None:
+        # Navigate to an explicit destination (e.g. a survey vantage) through
+        # the same traversable space, instead of hunting for a frontier.
+        tx, ty = to_cell(float(target_xy[0]), float(target_xy[1]))
+        search_r = max(1, int(round(0.60 / res)))
+        best_target_cell = None
+        for dy in range(-search_r, search_r + 1):
+            for dx in range(-search_r, search_r + 1):
+                nx, ny = tx + dx, ty + dy
+                if 0 <= nx < width and 0 <= ny < height and dist[ny, nx] >= 0:
+                    d2 = dx * dx + dy * dy
+                    if best_target_cell is None or d2 < best_target_cell[0]:
+                        best_target_cell = (d2, nx, ny)
+        if best_target_cell is None:
+            return {"status": "target_unreachable"}
+        target_cell = (best_target_cell[1], best_target_cell[2])
+        path_cells = backtrack_path(target_cell)
+        goal_xy = to_world(*target_cell)
+        waypoint_xy = goal_xy
+        for cell in path_cells:
+            wx, wy = to_world(*cell)
+            if math.hypot(wx - float(robot_xy[0]), wy - float(robot_xy[1])) >= float(waypoint_lookahead_m):
+                waypoint_xy = (wx, wy)
+                break
+        return {
+            "status": "ok",
+            "goal_xy": goal_xy,
+            "waypoint_xy": waypoint_xy,
+            "face_xy": (float(target_xy[0]), float(target_xy[1])),
+            "path_length_m": float(dist[target_cell[1], target_cell[0]]) * res,
+            "frontier_cells": 0,
+        }
+
+    def survey_or_no_frontier() -> dict[str, object]:
+        """No frontier left: optionally propose a SURVEY vantage instead — the
+        reachable cell farthest from every previous capture position. Uses the
+        same BFS reachability as navigation, so a proposed vantage is
+        guaranteed pathable (a separate ray heuristic can silently disagree)."""
+        if not survey_from_xy:
+            return {"status": "no_frontier"}
+        # Prefer COMFORTABLE vantages: max-distance-from-past-poses alone is
+        # always won by a wall corner — the worst place to stand (blocked stop
+        # box, poor visibility). Require extra obstacle clearance, falling back
+        # to any reachable cell only if nothing comfortable qualifies.
+        comfortable_block = _dilate(
+            occupied_grid,
+            radius_cells=max(1, int(round((float(robot_radius_m) + 0.25) / res))),
+        )
+        reached_cells = np.argwhere((dist >= 0) & ~comfortable_block)
+        if len(reached_cells) == 0:
+            reached_cells = np.argwhere(dist >= 0)
+        if len(reached_cells) == 0:
+            return {"status": "no_frontier"}
+        world_pts = np.column_stack(
+            [
+                float(origin_xy[0]) + reached_cells[:, 1].astype(np.float32) * res,
+                float(origin_xy[1]) + reached_cells[:, 0].astype(np.float32) * res,
+            ]
+        )
+        min_spacing = np.full(len(world_pts), np.inf, dtype=np.float32)
+        for sx, sy in survey_from_xy:
+            np.minimum(
+                min_spacing,
+                np.hypot(world_pts[:, 0] - float(sx), world_pts[:, 1] - float(sy)),
+                out=min_spacing,
+            )
+        best_i = int(np.argmax(min_spacing))
+        if float(min_spacing[best_i]) < float(min_survey_spacing_m):
+            return {
+                "status": "no_frontier",
+                "best_survey_spacing_m": float(min_spacing[best_i]),
+            }
+        survey_cell = (int(reached_cells[best_i][1]), int(reached_cells[best_i][0]))
+        path_cells = backtrack_path(survey_cell)
+        goal_xy = to_world(*survey_cell)
+        waypoint_xy = goal_xy
+        for cell in path_cells:
+            wx, wy = to_world(*cell)
+            if math.hypot(wx - float(robot_xy[0]), wy - float(robot_xy[1])) >= float(waypoint_lookahead_m):
+                waypoint_xy = (wx, wy)
+                break
+        return {
+            "status": "survey",
+            "goal_xy": goal_xy,
+            "waypoint_xy": waypoint_xy,
+            "face_xy": goal_xy,
+            "path_length_m": float(dist[survey_cell[1], survey_cell[0]]) * res,
+            "frontier_cells": 0,
+            "survey_spacing_m": float(min_spacing[best_i]),
+        }
+
+    def observation_goal_or_none() -> dict[str, object] | None:
+        """Frontiers the robot cannot REACH (gaps narrower than its body) can
+        still be MAPPED: the lidar only needs line-of-sight, not passage. Find
+        unknown-adjacent free cells that BFS cannot reach, cluster them, and
+        for the nearest cluster pick a reachable vantage with a clear sight
+        line to it — excluding vantages already captured from, so each opening
+        is peered through a bounded number of times."""
+        if observed_from_xy is None:
+            return None
+        unreached_frontier = free_grid & adjacent_unknown & (dist < 0)
+        if not np.any(unreached_frontier):
+            return None
+        reached_cells = np.argwhere(dist >= 0)
+        if len(reached_cells) == 0:
+            return None
+        reached_world = np.column_stack(
+            [
+                float(origin_xy[0]) + reached_cells[:, 1].astype(np.float32) * res,
+                float(origin_xy[1]) + reached_cells[:, 0].astype(np.float32) * res,
+            ]
+        )
+        # exclude vantages within 0.45m of any previous capture pose
+        vantage_ok = np.ones(len(reached_world), dtype=bool)
+        for px, py in observed_from_xy:
+            vantage_ok &= (
+                np.hypot(reached_world[:, 0] - float(px), reached_world[:, 1] - float(py)) > 0.45
+            )
+        if not np.any(vantage_ok):
+            return None
+
+        # cluster the unreachable frontier cells (8-connected)
+        seen = np.zeros_like(unreached_frontier)
+        clusters: list[list[tuple[int, int]]] = []
+        for fy, fx in np.argwhere(unreached_frontier):
+            if seen[fy, fx]:
+                continue
+            members: list[tuple[int, int]] = []
+            stack: deque[tuple[int, int]] = deque([(int(fx), int(fy))])
+            seen[fy, fx] = True
+            while stack:
+                cx, cy = stack.popleft()
+                members.append((cx, cy))
+                for nx in (cx - 1, cx, cx + 1):
+                    for ny in (cy - 1, cy, cy + 1):
+                        if (
+                            0 <= nx < width
+                            and 0 <= ny < height
+                            and unreached_frontier[ny, nx]
+                            and not seen[ny, nx]
+                        ):
+                            seen[ny, nx] = True
+                            stack.append((nx, ny))
+            if len(members) >= int(min_frontier_cells):
+                clusters.append(members)
+        if not clusters:
+            return None
+
+        def centroid_of(members: list[tuple[int, int]]) -> tuple[float, float]:
+            return (
+                float(np.mean([to_world(cx, cy)[0] for cx, cy in members])),
+                float(np.mean([to_world(cx, cy)[1] for cx, cy in members])),
+            )
+
+        def line_of_sight_clear(from_xy: tuple[float, float], to_xy: tuple[float, float]) -> bool:
+            span = math.hypot(to_xy[0] - from_xy[0], to_xy[1] - from_xy[1])
+            n_samples = max(2, int(span / res))
+            for t_index in range(1, n_samples):
+                t = t_index / float(n_samples)
+                sx = from_xy[0] + (to_xy[0] - from_xy[0]) * t
+                sy = from_xy[1] + (to_xy[1] - from_xy[1]) * t
+                gx = int(round((sx - float(origin_xy[0])) / res))
+                gy = int(round((sy - float(origin_xy[1])) / res))
+                if 0 <= gx < width and 0 <= gy < height and occupied_grid[gy, gx]:
+                    return False
+            return True
+
+        clusters.sort(
+            key=lambda members: math.hypot(
+                centroid_of(members)[0] - float(robot_xy[0]),
+                centroid_of(members)[1] - float(robot_xy[1]),
+            )
+        )
+        for members in clusters:
+            centroid_xy = centroid_of(members)
+            d_to_centroid = np.hypot(
+                reached_world[:, 0] - centroid_xy[0], reached_world[:, 1] - centroid_xy[1]
+            )
+            candidate_indices = np.nonzero(
+                vantage_ok & (d_to_centroid >= 0.35) & (d_to_centroid <= float(observation_range_m))
+            )[0]
+            if len(candidate_indices) == 0:
+                continue
+            travel_cost = (
+                dist[reached_cells[candidate_indices, 0], reached_cells[candidate_indices, 1]].astype(
+                    np.float32
+                )
+                * res
+                + 0.6 * d_to_centroid[candidate_indices]
+            )
+            for local_i in np.argsort(travel_cost)[:40]:
+                idx = int(candidate_indices[local_i])
+                vantage_xy = (float(reached_world[idx, 0]), float(reached_world[idx, 1]))
+                if not line_of_sight_clear(vantage_xy, centroid_xy):
+                    continue
+                vantage_cell = (int(reached_cells[idx][1]), int(reached_cells[idx][0]))
+                path_cells = backtrack_path(vantage_cell)
+                waypoint_xy = vantage_xy
+                for cell in path_cells:
+                    wx, wy = to_world(*cell)
+                    if (
+                        math.hypot(wx - float(robot_xy[0]), wy - float(robot_xy[1]))
+                        >= float(waypoint_lookahead_m)
+                    ):
+                        waypoint_xy = (wx, wy)
+                        break
+                return {
+                    "status": "observe",
+                    "goal_xy": vantage_xy,
+                    "waypoint_xy": waypoint_xy,
+                    "face_xy": centroid_xy,
+                    "path_length_m": float(dist[vantage_cell[1], vantage_cell[0]]) * res,
+                    "frontier_cells": int(len(members)),
+                }
+        return None
+
+    def observation_or_fallback() -> dict[str, object]:
+        observation_plan = observation_goal_or_none()
+        if observation_plan is not None:
+            return observation_plan
+        return survey_or_no_frontier()
+
+    unknown = ~free_grid & ~occupied_grid
+    adjacent_unknown = np.zeros_like(unknown)
+    adjacent_unknown[1:, :] |= unknown[:-1, :]
+    adjacent_unknown[:-1, :] |= unknown[1:, :]
+    adjacent_unknown[:, 1:] |= unknown[:, :-1]
+    adjacent_unknown[:, :-1] |= unknown[:, 1:]
+    frontier_mask = (dist >= 0) & adjacent_unknown
+    if not np.any(frontier_mask):
+        return observation_or_fallback()
+
+    # Cluster frontier cells (8-connected); ignore tiny slivers, which are
+    # sensor noise or unfittable cracks rather than rooms to explore.
+    cluster_ids = np.zeros((height, width), dtype=np.int32)
+    clusters: list[dict[str, object]] = []
+    frontier_cells = np.argwhere(frontier_mask)
+    for fy, fx in frontier_cells:
+        if cluster_ids[fy, fx]:
+            continue
+        cluster_index = len(clusters) + 1
+        members: list[tuple[int, int]] = []
+        cluster_queue: deque[tuple[int, int]] = deque([(int(fx), int(fy))])
+        cluster_ids[fy, fx] = cluster_index
+        while cluster_queue:
+            cx, cy = cluster_queue.popleft()
+            members.append((cx, cy))
+            for nx in (cx - 1, cx, cx + 1):
+                for ny in (cy - 1, cy, cy + 1):
+                    if (
+                        0 <= nx < width
+                        and 0 <= ny < height
+                        and frontier_mask[ny, nx]
+                        and not cluster_ids[ny, nx]
+                    ):
+                        cluster_ids[ny, nx] = cluster_index
+                        cluster_queue.append((nx, ny))
+        clusters.append({"members": members})
+
+    best_cell = None
+    best_cluster = None
+    for cluster in clusters:
+        members = cluster["members"]
+        if len(members) < int(min_frontier_cells):
+            continue
+        for cx, cy in members:
+            if best_cell is None or dist[cy, cx] < dist[best_cell[1], best_cell[0]]:
+                best_cell = (cx, cy)
+                best_cluster = cluster
+    if best_cell is None:
+        return observation_or_fallback()
+
+    members = best_cluster["members"]
+    centroid_xy = (
+        float(np.mean([to_world(cx, cy)[0] for cx, cy in members])),
+        float(np.mean([to_world(cx, cy)[1] for cx, cy in members])),
+    )
+
+    # Backtrack the BFS distance field from the chosen frontier cell to the
+    # robot: this is an actual traversable path, not a straight-line hope.
+    path_cells = backtrack_path(best_cell)
+
+    standoff_cells = max(0, int(round(float(goal_standoff_m) / res)))
+    goal_index = max(0, len(path_cells) - 1 - standoff_cells)
+    goal_xy = to_world(*path_cells[goal_index])
+
+    waypoint_xy = goal_xy
+    for cell in path_cells[: goal_index + 1]:
+        wx, wy = to_world(*cell)
+        if math.hypot(wx - float(robot_xy[0]), wy - float(robot_xy[1])) >= float(waypoint_lookahead_m):
+            waypoint_xy = (wx, wy)
+            break
+
+    return {
+        "status": "ok",
+        "goal_xy": goal_xy,
+        "waypoint_xy": waypoint_xy,
+        "face_xy": centroid_xy,
+        "path_length_m": float(dist[best_cell[1], best_cell[0]]) * res,
+        "frontier_cells": int(len(members)),
     }
 
 
