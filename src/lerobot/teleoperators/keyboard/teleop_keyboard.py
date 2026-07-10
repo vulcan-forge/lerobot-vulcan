@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import logging
+import json
 import os
 import sys
 import time
@@ -35,16 +36,6 @@ from .configuration_keyboard import (
 
 PYNPUT_AVAILABLE = _pynput_available
 keyboard = None
-if PYNPUT_AVAILABLE:
-    try:
-        if ("DISPLAY" not in os.environ) and ("linux" in sys.platform):
-            logging.info("No DISPLAY set. Skipping pynput import.")
-            PYNPUT_AVAILABLE = False
-        else:
-            from pynput import keyboard
-    except Exception as e:
-        PYNPUT_AVAILABLE = False
-        logging.info(f"Could not import pynput: {e}")
 
 
 class KeyboardTeleop(Teleoperator):
@@ -65,6 +56,7 @@ class KeyboardTeleop(Teleoperator):
         self.current_pressed = {}
         self.key_down_edges = []
         self.listener = None
+        self._file_connected = False
         self.logs = {}
 
     @property
@@ -81,7 +73,9 @@ class KeyboardTeleop(Teleoperator):
 
     @property
     def is_connected(self) -> bool:
-        return PYNPUT_AVAILABLE and isinstance(self.listener, keyboard.Listener) and self.listener.is_alive()
+        if self.config.input_state_path:
+            return self._file_connected
+        return PYNPUT_AVAILABLE and keyboard is not None and isinstance(self.listener, keyboard.Listener) and self.listener.is_alive()
 
     @property
     def is_calibrated(self) -> bool:
@@ -89,6 +83,22 @@ class KeyboardTeleop(Teleoperator):
 
     @check_if_already_connected
     def connect(self) -> None:
+        global keyboard, PYNPUT_AVAILABLE
+        if self.config.input_state_path:
+            self._file_connected = True
+            logging.info("Using focused desktop keyboard input bridge.")
+            return
+
+        try:
+            if ("DISPLAY" not in os.environ) and ("linux" in sys.platform):
+                raise RuntimeError("No DISPLAY set")
+            from pynput import keyboard as pynput_keyboard
+
+            keyboard = pynput_keyboard
+        except Exception as e:
+            PYNPUT_AVAILABLE = False
+            logging.info(f"Could not import pynput: {e}")
+
         if PYNPUT_AVAILABLE:
             logging.info("pynput is available - enabling local keyboard listener.")
             self.listener = keyboard.Listener(
@@ -118,6 +128,17 @@ class KeyboardTeleop(Teleoperator):
             self.disconnect()
 
     def _drain_pressed_keys(self):
+        if self.config.input_state_path:
+            try:
+                with open(self.config.input_state_path, encoding="utf-8") as state_file:
+                    pressed_keys = set(json.load(state_file))
+            except (OSError, ValueError, TypeError):
+                pressed_keys = set()
+            previous_keys = {key for key, pressed in self.current_pressed.items() if pressed}
+            self.key_down_edges.extend(sorted(pressed_keys - previous_keys))
+            self.current_pressed = {key: True for key in pressed_keys}
+            return
+
         while not self.event_queue.empty():
             key_char, is_pressed = self.event_queue.get_nowait()
             was_pressed = bool(self.current_pressed.get(key_char, False))
@@ -154,6 +175,7 @@ class KeyboardTeleop(Teleoperator):
 
     @check_if_not_connected
     def disconnect(self) -> None:
+        self._file_connected = False
         if self.listener is not None:
             self.listener.stop()
 

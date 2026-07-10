@@ -25,7 +25,9 @@ from ..config import TeleoperatorConfig
 class KeyboardTeleopConfig(TeleoperatorConfig):
     """KeyboardTeleopConfig"""
 
-    # TODO(Steven): Consider setting in here the keys that we want to capture/listen
+    # Optional JSON file containing a list of pressed keys. The desktop app uses
+    # this focused-input bridge on macOS to avoid global Accessibility access.
+    input_state_path: str | None = None
 
 
 @TeleoperatorConfig.register_subclass("keyboard_ee")

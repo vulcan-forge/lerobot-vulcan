@@ -226,13 +226,21 @@ def connect_teleop(teleop: Teleoperator) -> bool:
 
 
 def _get_keyboard_base_action(
-    robot: Robot, obs: RobotObservation, teleop_keyboard: KeyboardTeleop | None
+    robot: Robot, obs: RobotObservation, teleop_keyboard: KeyboardTeleop | None, events: dict | None = None
 ) -> RobotAction:
     if teleop_keyboard is None or not teleop_keyboard.is_connected:
         return {}
 
-    if hasattr(robot, "on_key_down"):
-        for key_char in teleop_keyboard.pop_key_down_edges():
+    for key_char in teleop_keyboard.pop_key_down_edges():
+        if events is not None and key_char == "arrowright":
+            events["exit_early"] = True
+        elif events is not None and key_char == "arrowleft":
+            events["rerecord_episode"] = True
+            events["exit_early"] = True
+        elif events is not None and key_char == "escape":
+            events["stop_recording"] = True
+            events["exit_early"] = True
+        elif hasattr(robot, "on_key_down"):
             robot.on_key_down(key_char)
 
     keyboard_action = teleop_keyboard.get_action()
@@ -346,7 +354,7 @@ def record_loop(
             act = teleop.get_action()
             if robot.name == "unitree_g1":
                 teleop.send_feedback(obs)
-            base_action = _get_keyboard_base_action(robot, obs, teleop_keyboard)
+            base_action = _get_keyboard_base_action(robot, obs, teleop_keyboard, events)
             if base_action:
                 act = {**act, **base_action}
 
@@ -502,7 +510,10 @@ def record(
             connect_teleop(teleop)
         keyboard_connected = connect_keyboard(teleop_keyboard) if teleop_keyboard is not None else False
 
-        listener, events = init_keyboard_listener()
+        uses_focused_keyboard = bool(
+            teleop_keyboard is not None and teleop_keyboard.config.input_state_path
+        )
+        listener, events = init_keyboard_listener(use_global_listener=not uses_focused_keyboard)
 
         if not cfg.dataset.streaming_encoding:
             logging.info(
