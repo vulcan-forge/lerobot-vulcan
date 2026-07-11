@@ -784,6 +784,7 @@ def _build_exploration_grid(
     padding_m: float = 0.6,
     robot_clear_radius_m: float = 0.0,
     lidar_offset_forward_m: float = 0.0,
+    extra_occupied_xy: np.ndarray | None = None,
 ) -> dict[str, object] | None:
     """Explicit model of what has been OBSERVED: for every capture, the space
     along each lidar beam (sensor pose -> return) is known-FREE, the return
@@ -798,6 +799,10 @@ def _build_exploration_grid(
     if not paired:
         return None
     all_points = np.concatenate([points for _pose, points in paired], axis=0)
+    if extra_occupied_xy is not None and len(extra_occupied_xy):
+        all_points = np.concatenate(
+            [all_points, np.asarray(extra_occupied_xy, dtype=np.float32)], axis=0
+        )
     pose_xy = np.asarray([[float(p.x), float(p.y)] for p, _pts in paired], dtype=np.float32)
     res = max(0.03, float(resolution_m))
     mins = np.minimum(all_points.min(axis=0), pose_xy.min(axis=0)) - float(padding_m)
@@ -853,6 +858,17 @@ def _build_exploration_grid(
                 if 0 <= gx < width and 0 <= gy < height:
                     free_grid[gy, gx] = True
 
+    # Camera-confirmed ELEVATED obstacles (table edges etc.) the lidar cannot
+    # see: stamped occupied AFTER everything else so no beam or footprint can
+    # clear them — the planner must never route through one.
+    if extra_occupied_xy is not None and len(extra_occupied_xy):
+        extra = np.asarray(extra_occupied_xy, dtype=np.float32)
+        extra_ij = np.round((extra - mins32) / res).astype(np.int32)
+        extra_ij[:, 0] = np.clip(extra_ij[:, 0], 0, width - 1)
+        extra_ij[:, 1] = np.clip(extra_ij[:, 1], 0, height - 1)
+        occupied_grid[extra_ij[:, 1], extra_ij[:, 0]] = True
+        free_grid[extra_ij[:, 1], extra_ij[:, 0]] = False
+
     free_grid &= ~occupied_grid
     return {
         "free": free_grid,
@@ -868,6 +884,7 @@ def _plan_frontier_path(
     robot_xy: tuple[float, float],
     robot_radius_m: float,
     min_frontier_cells: int = 8,
+    preferred_frontier_cells: int = 24,
     goal_standoff_m: float = 0.35,
     waypoint_lookahead_m: float = 1.10,
     target_xy: tuple[float, float] | None = None,
@@ -876,13 +893,21 @@ def _plan_frontier_path(
     observed_from_xy: list[tuple[float, float]] | None = None,
     observation_range_m: float = 2.80,
     robot_theta_deg: float | None = None,
+    avoid_face_xy: list[tuple[float, float]] | None = None,
+    avoid_radius_m: float = 0.55,
 ) -> dict[str, object]:
     """Classic frontier exploration: BFS through known-free space (inflated by
     the robot's radius, so gaps it cannot fit through are simply not
-    traversable) to the nearest sizeable boundary between known and unknown
-    space. Returns the goal (a standoff pose near the frontier), the next
-    waypoint along the actual traversable path, and the frontier centroid to
-    face when scanning. status: ok | no_frontier | stuck."""
+    traversable) to the best boundary between known and unknown space.
+    Selection is TWO-TIER: any cluster with >= preferred_frontier_cells (a
+    genuinely unexplored region) outranks every smaller scrap regardless of
+    distance — nearest-first alone grinds 8-cell slivers next to the robot
+    while half the room sits unmapped. Ties within a tier break by
+    path + turn cost. Clusters whose centroid falls within avoid_radius_m of
+    an avoid_face_xy entry (repeatedly blocked/unreachable goals) are skipped.
+    Returns the goal (a standoff pose near the frontier), the next waypoint
+    along the actual traversable path, and the frontier centroid to face when
+    scanning. status: ok | no_frontier | stuck."""
     free_grid: np.ndarray = grid["free"]
     occupied_grid: np.ndarray = grid["occupied"]
     origin_xy: np.ndarray = grid["origin_xy"]
@@ -902,6 +927,14 @@ def _plan_frontier_path(
         return (
             float(origin_xy[0]) + float(cx) * res,
             float(origin_xy[1]) + float(cy) * res,
+        )
+
+    def is_avoided(point_xy: tuple[float, float]) -> bool:
+        if not avoid_face_xy:
+            return False
+        return any(
+            math.hypot(point_xy[0] - float(ax), point_xy[1] - float(ay)) <= float(avoid_radius_m)
+            for ax, ay in avoid_face_xy
         )
 
     def turn_cost_m(target_world_xy: tuple[float, float]) -> float:
@@ -1141,6 +1174,8 @@ def _plan_frontier_path(
         clusters.sort(key=observation_cluster_cost)
         for members in clusters:
             centroid_xy = centroid_of(members)
+            if is_avoided(centroid_xy):
+                continue
             d_to_centroid = np.hypot(
                 reached_world[:, 0] - centroid_xy[0], reached_world[:, 1] - centroid_xy[1]
             )
@@ -1227,7 +1262,7 @@ def _plan_frontier_path(
 
     best_cell = None
     best_cluster = None
-    best_cluster_cost = math.inf
+    best_cluster_rank: tuple[int, float] = (2, math.inf)
     for cluster in clusters:
         members = cluster["members"]
         if len(members) < int(min_frontier_cells):
@@ -1237,11 +1272,17 @@ def _plan_frontier_path(
             float(np.mean([to_world(cx, cy)[0] for cx, cy in members])),
             float(np.mean([to_world(cx, cy)[1] for cx, cy in members])),
         )
+        if is_avoided(cluster_centroid):
+            continue
         cluster_cost = float(dist[nearest_cell[1], nearest_cell[0]]) * res + turn_cost_m(
             cluster_centroid
         )
-        if cluster_cost < best_cluster_cost:
-            best_cluster_cost = cluster_cost
+        # Tier 0: real unexplored regions; tier 1: leftover scraps. A big
+        # frontier across the room ALWAYS beats an 8-cell sliver at the
+        # robot's feet — scraps are mopped up only once nothing big remains.
+        cluster_rank = (0 if len(members) >= int(preferred_frontier_cells) else 1, cluster_cost)
+        if cluster_rank < best_cluster_rank:
+            best_cluster_rank = cluster_rank
             best_cell = nearest_cell
             best_cluster = cluster
     if best_cell is None:

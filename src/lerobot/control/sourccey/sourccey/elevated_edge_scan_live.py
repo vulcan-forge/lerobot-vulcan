@@ -9,13 +9,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
-from lerobot.utils.robot_utils import precise_sleep
-from lerobot.control.sourccey.sourccey.survey_rotation_protocol import (
-    _apply_min_effective_magnitude,
-    _build_action as _survey_build_action,
-    _run_action_for_duration,
-)
+# NOTE: robot-stack imports (SourcceyClient, survey_rotation_protocol,
+# precise_sleep) are imported LAZILY inside the functions that use them, so
+# that ElevatedEdgeDetector — reused by the anti-collision safety layer —
+# stays importable without the full robot stack.
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # type hints only; not imported at runtime
+    from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient
 
 
 @dataclass
@@ -40,7 +41,11 @@ class ElevatedEdgeScanConfig:
     min_center_y_ratio: float = 0.46
     max_center_y_ratio: float = 0.82
     min_abs_slope: float = 0.0
-    max_abs_slope: float = 1.25
+    # 2.5 (~68deg image slope) so diagonally-approached edges qualify; the
+    # contrast bands sample perpendicular to the line, so steep lines get the
+    # same treatment as horizontal ones. Near-vertical structures (door
+    # frames) are still rejected.
+    max_abs_slope: float = 2.5
     pair_center_y_tolerance_ratio: float = 0.10
     pair_distance_tolerance_m: float = 0.40
     near_distance_m: float = 0.9144
@@ -124,7 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _connect_with_retry(robot: SourcceyClient, delay_s: float = 0.25) -> None:
+def _connect_with_retry(robot: "SourcceyClient", delay_s: float = 0.25) -> None:
     attempt = 0
     while True:
         attempt += 1
@@ -157,6 +162,10 @@ def _determine_z_hold_pos(
 
 
 def _build_action(*, theta_vel_rad_s: float, z_hold_pos: float) -> dict[str, float | bool]:
+    from lerobot.control.sourccey.sourccey.survey_rotation_protocol import (
+        _build_action as _survey_build_action,
+    )
+
     return _survey_build_action(
         x_vel_m_s=0.0,
         theta_vel_rad_s=float(theta_vel_rad_s),
@@ -173,6 +182,11 @@ def _send_motion_command(
     hold_s: float,
     minimum_abs_turn_speed_rad_s: float,
 ) -> None:
+    from lerobot.control.sourccey.sourccey.survey_rotation_protocol import (
+        _apply_min_effective_magnitude,
+        _run_action_for_duration,
+    )
+
     theta_cmd = float(theta_vel_rad_s)
     if abs(theta_cmd) > 1e-6:
         theta_cmd = _apply_min_effective_magnitude(
@@ -215,28 +229,39 @@ class ElevatedEdgeDetector:
             rho=1,
             theta=np.pi / 180.0,
             threshold=max(int(width * 0.10), 16),
-            minLineLength=min_len,
+            # HoughLinesP counts PIXELS: a steep diagonal of geometric length
+            # L contains only ~L/sqrt(2) pixels, so the pixel threshold must
+            # be scaled down; the true geometric min_len is enforced in the
+            # candidate loop below.
+            minLineLength=max(int(min_len * 0.7), 24),
             maxLineGap=max(int(width * 0.08), 24),
         )
         if lines is None or len(lines) == 0:
             return EdgeObservation(False, 0.0, None, None, None, None, None, 0.0, 0.0, "no_line")
 
+        sobel_x = cv2.Sobel(roi, cv2.CV_32F, 1, 0, ksize=3)
         sobel_y = cv2.Sobel(roi, cv2.CV_32F, 0, 1, ksize=3)
-        abs_sobel_y = np.abs(sobel_y)
+        # HoughLinesP chains collinear noise across gaps into full-width
+        # PHANTOM lines; a real boundary has near-continuous edge pixels
+        # along its whole length. Sampled against a slightly dilated edge map.
+        edges_dilated = cv2.dilate(edges, np.ones((3, 3), np.uint8))
         best: EdgeObservation | None = None
+        roi_h = roi.shape[0]
 
-        for line in lines[:, 0, :]:
+        for line in np.asarray(lines).reshape(-1, 4):
             x1, y1_local, x2, y2_local = [int(v) for v in line]
             if x2 < x1:
                 x1, x2 = x2, x1
                 y1_local, y2_local = y2_local, y1_local
             dx = float(x2 - x1)
-            if dx < float(min_len):
+            dy = float(y2_local - y1_local)
+            length = math.hypot(dx, dy)
+            # Length along the LINE (not horizontal extent): a diagonally
+            # approached table edge is steep in the image but just as long.
+            if length < float(min_len):
                 continue
 
-            dy = float(y2_local - y1_local)
-            slope = dy / max(dx, 1.0)
-            abs_slope = abs(slope)
+            abs_slope = abs(dy) / max(abs(dx), 1.0)
             if abs_slope < self.config.min_abs_slope or abs_slope > self.config.max_abs_slope:
                 continue
 
@@ -246,26 +271,33 @@ class ElevatedEdgeDetector:
             if center_y_ratio < self.config.min_center_y_ratio or center_y_ratio > self.config.max_center_y_ratio:
                 continue
 
-            x_margin = max(int(dx * 0.08), 8)
-            xs0 = int(np.clip(x1 + x_margin, 0, width - 1))
-            xs1 = int(np.clip(x2 - x_margin, 0, width - 1))
-            if xs1 <= xs0 + 8:
-                continue
-
+            # Contrast bands are sampled PERPENDICULAR to the line, so a
+            # steeply angled edge (diagonal approach) gets the exact same
+            # bright-top/shadow-below treatment as a head-on one. For a
+            # horizontal line this reduces to the original vertical bands.
+            ux, uy = dx / length, dy / length
+            nx, ny = -uy, ux
+            if ny > 0:  # normal must point UP in the image (toward the top surface)
+                nx, ny = -nx, -ny
             band_h = max(int(height * 0.018), 4)
-            line_y_mid = int(round(center_y_local))
-            upper0 = int(np.clip(line_y_mid - (2 * band_h), 0, roi.shape[0] - 1))
-            upper1 = int(np.clip(line_y_mid - band_h, 0, roi.shape[0]))
-            lower0 = int(np.clip(line_y_mid + band_h, 0, roi.shape[0] - 1))
-            lower1 = int(np.clip(line_y_mid + (2 * band_h), 0, roi.shape[0]))
-            if upper1 <= upper0 or lower1 <= lower0:
-                continue
+            sample_count = max(int(length / 6.0), 10)
+            ts = np.linspace(0.08, 0.92, sample_count)
+            px = x1 + ts * dx
+            py = y1_local + ts * dy
 
-            upper_band = roi[upper0:upper1, xs0:xs1]
-            lower_band = roi[lower0:lower1, xs0:xs1]
-            if upper_band.size == 0 or lower_band.size == 0:
-                continue
+            def _band_values(offset_px: float) -> np.ndarray:
+                xs = np.clip(px + nx * offset_px, 0, width - 1).astype(np.intp)
+                ys = np.clip(py + ny * offset_px, 0, roi_h - 1).astype(np.intp)
+                return roi[ys, xs].astype(np.float32)
 
+            on_xs = np.clip(px, 0, width - 1).astype(np.intp)
+            on_ys = np.clip(py, 0, roi_h - 1).astype(np.intp)
+            on_edge_ratio = float(np.mean(edges_dilated[on_ys, on_xs] > 0))
+            if on_edge_ratio < 0.55:
+                continue  # phantom line (gap-chained), not a real boundary
+
+            upper_band = _band_values(1.5 * band_h)  # above the edge: table top
+            lower_band = _band_values(-1.5 * band_h)  # below: shadow/underside
             upper_mean = float(np.mean(upper_band))
             lower_mean = float(np.mean(lower_band))
             shadow_contrast = upper_mean - lower_mean
@@ -274,23 +306,28 @@ class ElevatedEdgeDetector:
             if upper_mean < self.config.min_upper_band_brightness:
                 continue
 
-            top_surface_support_ratio = float(np.mean(upper_band >= (upper_mean - 8.0)))
-            lower_shadow_support_ratio = float(np.mean(lower_band <= (lower_mean + 8.0)))
+            # Support = fraction of each band on the correct side of the
+            # upper/lower midpoint (SEPARATION, not uniformity — histogram
+            # equalization stretches small noise into big value gaps, which
+            # made the old within-8-gray-levels uniformity test brittle).
+            band_midpoint = 0.5 * (upper_mean + lower_mean)
+            top_surface_support_ratio = float(np.mean(upper_band >= band_midpoint))
+            lower_shadow_support_ratio = float(np.mean(lower_band <= band_midpoint))
             if top_surface_support_ratio < self.config.min_top_surface_support_ratio:
                 continue
             if lower_shadow_support_ratio < self.config.min_lower_shadow_support_ratio:
                 continue
 
-            edge_y0 = int(np.clip(line_y_mid - band_h, 0, roi.shape[0] - 1))
-            edge_y1 = int(np.clip(line_y_mid + band_h + 1, 0, roi.shape[0]))
-            edge_window = abs_sobel_y[edge_y0:edge_y1, xs0:xs1]
-            if edge_window.size == 0:
-                continue
-            vertical_edge_strength = float(np.mean(edge_window))
+            # Gradient ALONG the normal at the line itself (generalizes the
+            # old vertical-Sobel window to any line angle).
+            normal_gradient = np.abs(
+                sobel_x[on_ys, on_xs] * nx + sobel_y[on_ys, on_xs] * ny
+            )
+            vertical_edge_strength = float(np.mean(normal_gradient))
             if vertical_edge_strength < self.config.min_vertical_edge_strength:
                 continue
 
-            width_score = dx * 1.35
+            width_score = length * 1.35
             contrast_score = shadow_contrast * 18.0
             edge_score = vertical_edge_strength * 9.0
             support_score = (top_surface_support_ratio * 160.0) + (lower_shadow_support_ratio * 120.0)
@@ -298,9 +335,11 @@ class ElevatedEdgeDetector:
             center_pref = 140.0 * (1.0 - abs(center_y_ratio - 0.68))
             score = width_score + contrast_score + edge_score + support_score + lower_bias + center_pref
 
-            bbox_y0 = int(np.clip(y0 + line_y_mid - (3 * band_h), 0, height - 1))
-            bbox_y1 = int(np.clip(y0 + line_y_mid + (3 * band_h), 0, height))
-            bbox = (xs0, bbox_y0, xs1, bbox_y1)
+            bbox_x0 = int(np.clip(min(x1, x2), 0, width - 1))
+            bbox_x1 = int(np.clip(max(x1, x2), 0, width))
+            bbox_y0 = int(np.clip(y0 + min(y1_local, y2_local) - (2 * band_h), 0, height - 1))
+            bbox_y1 = int(np.clip(y0 + max(y1_local, y2_local) + (2 * band_h), 0, height))
+            bbox = (bbox_x0, bbox_y0, bbox_x1, bbox_y1)
             line_xy = ((x1, y0 + y1_local), (x2, y0 + y2_local))
             distance_ratio = float(np.clip((center_y_ratio - self.config.min_center_y_ratio) / max(self.config.max_center_y_ratio - self.config.min_center_y_ratio, 1e-6), 0.0, 1.0))
             estimated_distance_m = float(
@@ -320,8 +359,25 @@ class ElevatedEdgeDetector:
                 vertical_edge_strength=vertical_edge_strength,
                 reason="ok" if score >= self.config.min_line_score else "score_low",
             )
-            if best is None or candidate.score > best.score:
+            # Prefer the LOWEST qualifying edge, not the strongest: objects
+            # ON a table (boxes, keyboards, monitors) present the same
+            # bright-top/shadow-below signature as the table itself, but the
+            # table's own front edge — the boundary that can actually be hit
+            # — is always the DEEPEST one in the image. Score only breaks
+            # near-ties (within ~2% of frame height). The bright-band-above
+            # gate already verified a surface extends upward from the line.
+            if best is None:
                 best = candidate
+            elif candidate.detected and not best.detected:
+                best = candidate
+            elif candidate.detected == best.detected:
+                if candidate.center_y_ratio > best.center_y_ratio + 0.02:
+                    best = candidate
+                elif (
+                    abs(candidate.center_y_ratio - best.center_y_ratio) <= 0.02
+                    and candidate.score > best.score
+                ):
+                    best = candidate
 
         if best is None:
             return EdgeObservation(False, 0.0, None, None, None, None, None, 0.0, 0.0, "filtered_out")
@@ -614,6 +670,9 @@ def _draw_map(
 
 
 def elevated_edge_scan_live(cfg: ElevatedEdgeScanConfig) -> int:
+    from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
+    from lerobot.utils.robot_utils import precise_sleep
+
     robot = SourcceyClient(SourcceyClientConfig(remote_ip=cfg.remote_ip, id=cfg.id))
     _connect_with_retry(robot)
     robot.untorque_left_active = True
