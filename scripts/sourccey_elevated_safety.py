@@ -35,6 +35,7 @@ import json
 import math
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field, replace
 
 import cv2
@@ -69,6 +70,11 @@ class ConfirmedEdge:
     height_m: float
     nearest_m: float
     monotonic: float
+    # Depth mode: floor-projected footprint of the whole elevated region
+    # (robot-frame points). When present the mapper stamps THESE like lidar
+    # points instead of the p1/p2 line — the region's true shape and
+    # placement, no fitted-line abstraction.
+    points_robot_xy: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass
@@ -95,6 +101,10 @@ class ElevatedSafetyConfig:
     elevated_corridor_half_width_m: float = 0.40
     # Frames older than this while armed = driving blind: deny forward.
     stale_timeout_s: float = 1.5
+    # Depth-perception results older than this fall back to the classic
+    # detector for the tick (CPU inference runs ~1-2s/eye; the gate
+    # compensates for the robot's travel since the analyzed frame).
+    depth_stale_timeout_s: float = 3.5
     # Eye detector ROI band and score gates (candidate generation only).
     roi_min_y_ratio: float = 0.46
     roi_max_y_ratio: float = 0.95
@@ -525,6 +535,12 @@ class _EdgeTracker:
     travel_at_first_m: float = 0.0
     last_y_ratio: float = 0.0
     solved_height_m: float | None = None
+    # Baseline the current height solve used. Parallax accuracy grows with
+    # baseline, so the solve keeps REFINING as the robot approaches instead
+    # of freezing at the first minimum-baseline estimate (field 2026-07-11:
+    # a 0.15m first solve pinned a 0.74m table at 0.36m, throwing every
+    # distance off ~2x and misplacing the mapped edge).
+    solved_baseline_m: float = 0.0
     active: bool = False
     miss_ticks: int = 0
 
@@ -534,6 +550,7 @@ class _EdgeTracker:
         self.travel_at_first_m = float(travel_m)
         self.last_y_ratio = float(y_ratio)
         self.solved_height_m = None
+        self.solved_baseline_m = 0.0
         self.active = True
         self.miss_ticks = 0
 
@@ -547,10 +564,17 @@ class ElevatedHazardMonitor:
     arrays of the newest scan in the robot's local frame, or None.
     """
 
-    def __init__(self, config: ElevatedSafetyConfig, frame_source, lidar_ranges_fn=None) -> None:
+    def __init__(
+        self, config: ElevatedSafetyConfig, frame_source, lidar_ranges_fn=None, depth_worker=None
+    ) -> None:
         self.config = config
         self._source = frame_source
         self._lidar_ranges_fn = lidar_ranges_fn
+        # Optional monocular-depth perception (sourccey_depth_perception.
+        # DepthWorker). When it has FRESH results the eyes are classified from
+        # metric 3D instead of the Hough detector; when absent/stale/failed,
+        # the classic detector path below runs unchanged (fail-soft).
+        self._depth_worker = depth_worker
         self._detector = ElevatedEdgeDetector(config.detector_config())
         self._bottom_detector = BottomFloorDetector(config.bottom_model, config)
         self._lock = threading.Lock()
@@ -565,6 +589,10 @@ class ElevatedHazardMonitor:
         # Motion integration.
         self._last_tick_monotonic: float | None = None
         self._forward_travel_m = 0.0
+        # (monotonic, cumulative forward travel) history so slow depth
+        # results can be latency-compensated: distance NOW = distance at the
+        # analyzed frame minus how far the robot has driven since.
+        self._travel_log: deque[tuple[float, float]] = deque(maxlen=120)
         # Parallax trackers per eye.
         self._trackers = {config.left_key: _EdgeTracker(), config.right_key: _EdgeTracker()}
         # Blind-zone vanish latch.
@@ -578,6 +606,12 @@ class ElevatedHazardMonitor:
         # Tracked rotation reported by the client since the last stop/latch
         # armed; releases holds/latches when reversing is unavailable.
         self._rotation_since_stop_deg = 0.0
+        # When the client last finished rotating: depth results whose source
+        # frame predates this were captured at a DIFFERENT heading and must
+        # never be stamped into the map (travel compensation handles forward
+        # motion, not rotation — field 2026-07-12: table segments stamped
+        # rotated ~30deg because the depth frame was from mid-align-turn).
+        self._last_rotation_monotonic = 0.0
         # Parallax-confirmed edge measurements awaiting the map consumer.
         self._confirmed_edge_queue: list[ConfirmedEdge] = []
         # Post-stop hold (anti-ratchet).
@@ -659,6 +693,7 @@ class ElevatedHazardMonitor:
         release demands reverse, the map forbids reverse, forward is held."""
         with self._lock:
             self._rotation_since_stop_deg += abs(float(delta_deg))
+            self._last_rotation_monotonic = time.monotonic()
 
     def _update_hold(
         self, stopping_now: bool, stop_reason: str, reverse_only: bool = False
@@ -734,6 +769,116 @@ class ElevatedHazardMonitor:
                 self._retreat_m += -float(x_vel) * dt_s
             if self._hold_active:
                 self._hold_retreat_m += -float(x_vel) * dt_s
+        self._travel_log.append((time.monotonic(), self._forward_travel_m))
+
+    def _travel_at(self, monotonic_t: float) -> float:
+        """Cumulative forward travel at (or just before) the given time."""
+        best = None
+        for t, travel in self._travel_log:
+            if t <= float(monotonic_t):
+                best = travel
+            else:
+                break
+        if best is not None:
+            return float(best)
+        if self._travel_log:
+            return float(self._travel_log[0][1])
+        return float(self._forward_travel_m)
+
+    def _candidates_from_depth(
+        self, depth_results: dict[str, object]
+    ) -> dict[str, tuple[str, float | None, float | None, float | None, float]]:
+        """DepthEyeResults -> the classify ladder's candidate format.
+
+        Distances are latency-compensated: the depth frame is old (CPU
+        inference), so subtract however far the robot has driven since it
+        was captured. Near segments are published as ConfirmedEdges so the
+        map layer stamps REAL measured geometry instead of synthetic
+        blockers."""
+        cfg = self.config
+        candidates: dict[str, tuple[str, float | None, float | None, float | None, float]] = {}
+        now = time.monotonic()
+        for eye_key, result in depth_results.items():
+            advance = max(
+                0.0, self._forward_travel_m - self._travel_at(float(result.frame_monotonic))
+            )
+            gate = (
+                None
+                if result.nearest_gate_m is None
+                else max(0.05, float(result.nearest_gate_m) - advance)
+            )
+            nearest = (
+                None
+                if result.nearest_any_m is None
+                else max(0.05, float(result.nearest_any_m) - advance)
+            )
+            if gate is None and nearest is None:
+                continue
+            bearing = 0.0 if result.bearing_deg is None else float(result.bearing_deg)
+            candidates[eye_key] = (
+                "elevated_confirmed",
+                gate,
+                nearest,
+                None if result.edge_height_m is None else float(result.edge_height_m),
+                bearing,
+            )
+            # Publish measured geometry for the map ONLY at stop range in
+            # the CORRIDOR (the map layer records what stops the robot, not
+            # everything the eyes sweep past) AND only from frames captured
+            # AFTER the last rotation ended (a mid-turn frame's robot frame
+            # is rotated relative to the stamp pose; travel compensation
+            # cannot fix heading).
+            footprint = tuple(
+                (float(px) - advance, float(py))
+                for px, py in getattr(result, "region_points_xy", ()) or ()
+            )
+            # Depth mode publishes FOOTPRINTS ONLY, and only from APPROACH-
+            # range observations (corridor gate 0.30..1.5m, nearest >= 0.35m)
+            # where monocular depth is proven good. Frame-filling close-ups
+            # at the stop moment are physics-degenerate — no floor, no wall,
+            # no scale cues; field 2026-07-12: a 0.19m close-up read
+            # "elevated 1.01m" and smeared an 800-point blob across the map.
+            # The stop itself is covered by the synthetic blocker at the
+            # exactly-known stop pose.
+            if (
+                gate is not None
+                and 0.30 <= gate <= 1.50
+                and nearest is not None
+                and nearest >= 0.35
+                and float(result.frame_monotonic) >= self._last_rotation_monotonic + 0.2
+                and footprint
+            ):
+                if (
+                    result.segment_p1 is not None
+                    and result.segment_p2 is not None
+                    and result.edge_height_m is not None
+                ):
+                    seg_p1 = (
+                        float(result.segment_p1[0]) - advance,
+                        float(result.segment_p1[1]),
+                    )
+                    seg_p2 = (
+                        float(result.segment_p2[0]) - advance,
+                        float(result.segment_p2[1]),
+                    )
+                    seg_height = float(result.edge_height_m)
+                else:
+                    seg_p1 = seg_p2 = (float(gate), 0.0)
+                    seg_height = 0.5
+                with self._lock:
+                    self._confirmed_edge_queue.append(
+                        ConfirmedEdge(
+                            eye=str(eye_key),
+                            p1_robot_xy=seg_p1,
+                            p2_robot_xy=seg_p2,
+                            height_m=seg_height,
+                            nearest_m=float(nearest if nearest is not None else gate),
+                            monotonic=now,
+                            points_robot_xy=footprint,
+                        )
+                    )
+                    del self._confirmed_edge_queue[:-60]
+        return candidates
 
     def _lidar_explains(self, bearing_deg: float, distance_m: float) -> bool:
         if self._lidar_ranges_fn is None:
@@ -838,8 +983,12 @@ class ElevatedHazardMonitor:
             tracker.bearing_deg = bearing
             tracker.last_y_ratio = y_ratio
 
-        if tracker.solved_height_m is None:
-            baseline = self._forward_travel_m - tracker.travel_at_first_m
+        baseline = self._forward_travel_m - tracker.travel_at_first_m
+        if tracker.solved_height_m is None or baseline > tracker.solved_baseline_m + 0.05:
+            # Solve — and keep RE-solving as the baseline grows. Parallax
+            # accuracy scales with baseline; the first minimum-baseline
+            # estimate is coarse and must not be frozen (a bad height skews
+            # every downstream distance and the mapped segment's placement).
             solved = solve_edge_by_parallax(
                 model,
                 first_y_ratio=tracker.first_y_ratio,
@@ -855,6 +1004,7 @@ class ElevatedHazardMonitor:
                 tracker.solved_height_m = min(
                     float(edge_height), float(self.config.parallax_max_edge_height_m)
                 )
+                tracker.solved_baseline_m = float(baseline)
 
         if tracker.solved_height_m is not None:
             # Confirmed edge: collision geometry from the full SEGMENT, not
@@ -868,14 +1018,16 @@ class ElevatedHazardMonitor:
             if obs.line_xy is not None and nearest_distance is not None:
                 frame_h, frame_w = int(frame_shape[0]), int(frame_shape[1])
                 (lpx1, lpy1), (lpx2, lpy2) = obs.line_xy
-                # A head-on edge sits on ONE image row; a few pixels of Hough
-                # tilt projects into fake depth spread and the mapped segment
-                # comes out diagonal (field 2026-07-11). Flatten near-
-                # horizontal lines to their mean row before projecting.
-                if abs(float(lpy2) - float(lpy1)) <= 0.06 * frame_h:
-                    mean_row = 0.5 * (float(lpy1) + float(lpy2))
-                    lpy1 = mean_row
-                    lpy2 = mean_row
+                # ALWAYS project both endpoints at the line's mean image row:
+                # per-endpoint depth is hypersensitive to image tilt (a few
+                # degrees of camera roll = ~17px tilt = ~30deg of fake world
+                # diagonal), so the published segment is the straight chord
+                # at the center distance. Gating still uses the exact
+                # unflattened geometry; a genuinely oblique edge gets traced
+                # by chords from successive stop/sweep headings instead.
+                mean_row = 0.5 * (float(lpy1) + float(lpy2))
+                lpy1 = mean_row
+                lpy2 = mean_row
                 p1 = edge_point_robot_frame(
                     model,
                     lpx1 / max(frame_w - 1, 1),
@@ -966,32 +1118,71 @@ class ElevatedHazardMonitor:
         if bottom_available:
             bottom_obstacles = self._bottom_detector.detect(bottom_frame)
 
-        left_obs = self._detector.detect(left_frame)
-        right_obs = self._detector.detect(right_frame)
-
-        # ---- classify eye candidates -------------------------------------------
+        # ---- eye perception ------------------------------------------------------
+        # With a depth worker attached, depth OWNS the eyes — no fallback.
+        # Failed or stale depth is a blind sensor: fail SAFE (deny forward,
+        # loud reason) exactly like stale camera frames, and stay that way
+        # until depth recovers or the operator fixes it.
+        used_depth = False
+        depth_results: dict[str, object] = {}
+        left_obs = right_obs = None
         candidates: dict[str, tuple[str, float | None, float | None, float | None, float]] = {}
-        for eye_key, model, obs in (
-            (cfg.left_key, cfg.eye_left_model, left_obs),
-            (cfg.right_key, cfg.eye_right_model, right_obs),
-        ):
-            if obs.detected:
-                self._trackers[eye_key].miss_ticks = 0
-                candidates[eye_key] = self._classify_candidate(
-                    eye_key,
-                    model,
-                    obs,
-                    bottom_obstacles,
-                    bottom_available,
-                    left_frame.shape[:2] if eye_key == cfg.left_key else right_frame.shape[:2],
-                )
-            else:
-                # Detection flicker tolerance: keep the parallax baseline
-                # alive across short gaps or it can never accumulate travel.
-                tracker = self._trackers[eye_key]
-                tracker.miss_ticks += 1
-                if tracker.miss_ticks > max(int(cfg.parallax_miss_tolerance_ticks), 0):
-                    tracker.active = False
+        if self._depth_worker is not None:
+            depth_failure = getattr(self._depth_worker, "failure", None)
+            if depth_failure is None and getattr(self._depth_worker, "ready", False):
+                for eye_key in (cfg.left_key, cfg.right_key):
+                    depth_result = self._depth_worker.latest(
+                        eye_key, max_age_s=float(cfg.depth_stale_timeout_s)
+                    )
+                    if depth_result is not None:
+                        depth_results[eye_key] = depth_result
+            if not depth_results:
+                fail_reason = "depth_failed" if depth_failure is not None else "depth_stale"
+                hold, hold_reason, hold_permanent = self._update_hold(True, fail_reason)
+                with self._lock:
+                    self._state = replace(
+                        self._state,
+                        enabled=True,
+                        active=True,
+                        near_freeze=False,
+                        side="none",
+                        reason=fail_reason,
+                        frames_stale=True,
+                        hold=hold,
+                        hold_reason=hold_reason,
+                        permanent_hold=hold_permanent,
+                        frame_age_s=worst_age,
+                        updated_monotonic=time.monotonic(),
+                    )
+                return self._state
+            used_depth = True
+            candidates = self._candidates_from_depth(depth_results)
+        if not used_depth:
+            left_obs = self._detector.detect(left_frame)
+            right_obs = self._detector.detect(right_frame)
+
+            # ---- classify eye candidates ---------------------------------------
+            for eye_key, model, obs in (
+                (cfg.left_key, cfg.eye_left_model, left_obs),
+                (cfg.right_key, cfg.eye_right_model, right_obs),
+            ):
+                if obs.detected:
+                    self._trackers[eye_key].miss_ticks = 0
+                    candidates[eye_key] = self._classify_candidate(
+                        eye_key,
+                        model,
+                        obs,
+                        bottom_obstacles,
+                        bottom_available,
+                        left_frame.shape[:2] if eye_key == cfg.left_key else right_frame.shape[:2],
+                    )
+                else:
+                    # Detection flicker tolerance: keep the parallax baseline
+                    # alive across short gaps or it can never accumulate travel.
+                    tracker = self._trackers[eye_key]
+                    tracker.miss_ticks += 1
+                    if tracker.miss_ticks > max(int(cfg.parallax_miss_tolerance_ticks), 0):
+                        tracker.active = False
 
         elevated: list[tuple[str, str, float | None, float | None, float | None, float]] = []
         for eye_key, (klass, gate_dist, nearest_dist, height, bearing) in candidates.items():
@@ -1085,13 +1276,26 @@ class ElevatedHazardMonitor:
             near_freeze = True
 
         # ---- blind-zone vanish latch --------------------------------------------
-        deep_rows = [
-            float(obs.center_y_ratio)
-            for eye_key, obs in ((cfg.left_key, left_obs), (cfg.right_key, right_obs))
-            if obs.detected
-            and obs.center_y_ratio is not None
-            and candidates.get(eye_key, ("",))[0] in ("elevated_confirmed", "elevated_unresolved")
-        ]
+        if used_depth:
+            # Depth perception does not go blind close-in — a near surface is
+            # a LARGE mask, not a vanished line — so the Hough-era latch is
+            # unnecessary and its row bookkeeping has no inputs here. Release
+            # any latch left over from detector-mode ticks: the depth result
+            # now owns the near field.
+            self._blind_latched = False
+            self._vanish_armed = False
+            self._vanish_hits = 0
+            self._vanish_misses = 0
+            deep_rows = []
+        else:
+            deep_rows = [
+                float(obs.center_y_ratio)
+                for eye_key, obs in ((cfg.left_key, left_obs), (cfg.right_key, right_obs))
+                if obs.detected
+                and obs.center_y_ratio is not None
+                and candidates.get(eye_key, ("",))[0]
+                in ("elevated_confirmed", "elevated_unresolved")
+            ]
         deepest_row = max(deep_rows) if deep_rows else None
         # "Blind" must mean NO deep detection AT ALL — classification flapping
         # (elevated <-> floor_*) previously latched "EDGE LOST" while both
@@ -1099,7 +1303,7 @@ class ElevatedHazardMonitor:
         any_rows = [
             float(obs.center_y_ratio)
             for obs in (left_obs, right_obs)
-            if obs.detected and obs.center_y_ratio is not None
+            if obs is not None and obs.detected and obs.center_y_ratio is not None
         ]
         deepest_any = max(any_rows) if any_rows else None
         # Visible at/below the recede row (any classification) = we can still
@@ -1131,7 +1335,7 @@ class ElevatedHazardMonitor:
                 self._vanish_armed = True
                 self._vanish_row = deepest_row
                 self._vanish_side = side if side != "none" else (
-                    "left" if left_obs.detected else "right"
+                    "left" if (left_obs is not None and left_obs.detected) else "right"
                 )
         elif deepest_row is not None and deepest_row < float(cfg.vanish_recede_row_ratio):
             # Candidate receded (moved up in the frame): disarm.
@@ -1159,7 +1363,10 @@ class ElevatedHazardMonitor:
         reason = "clear"
         blind_zone = False
         if active:
-            reason = "elevated_parallax" if edge_height is not None else "line_edge"
+            if used_depth:
+                reason = "depth_elevated"
+            else:
+                reason = "elevated_parallax" if edge_height is not None else "line_edge"
         if self._blind_latched:
             active = True
             near_freeze = True
@@ -1258,20 +1465,34 @@ class ElevatedHazardMonitor:
             hold=hold,
             hold_reason=hold_reason,
             permanent_hold=hold_permanent,
-            detail=detail,
-            left_score=float(left_obs.score),
-            right_score=float(right_obs.score),
+            detail=("depth " if used_depth else "") + detail,
+            left_score=float(left_obs.score) if left_obs is not None else 0.0,
+            right_score=float(right_obs.score) if right_obs is not None else 0.0,
             frame_age_s=worst_age,
             updated_monotonic=time.monotonic(),
         )
-        annotated_left = render_overlay(
-            left_frame, cfg.left_key, left_obs, state, cfg,
-            classification=candidates.get(cfg.left_key, ("none", None, None, None, 0.0)),
-        )
-        annotated_right = render_overlay(
-            right_frame, cfg.right_key, right_obs, state, cfg,
-            classification=candidates.get(cfg.right_key, ("none", None, None, None, 0.0)),
-        )
+        if used_depth:
+            left_result = depth_results.get(cfg.left_key)
+            right_result = depth_results.get(cfg.right_key)
+            annotated_left = (
+                left_result.overlay_bgr
+                if left_result is not None and left_result.overlay_bgr is not None
+                else left_frame
+            )
+            annotated_right = (
+                right_result.overlay_bgr
+                if right_result is not None and right_result.overlay_bgr is not None
+                else right_frame
+            )
+        else:
+            annotated_left = render_overlay(
+                left_frame, cfg.left_key, left_obs, state, cfg,
+                classification=candidates.get(cfg.left_key, ("none", None, None, None, 0.0)),
+            )
+            annotated_right = render_overlay(
+                right_frame, cfg.right_key, right_obs, state, cfg,
+                classification=candidates.get(cfg.right_key, ("none", None, None, None, 0.0)),
+            )
         with self._lock:
             self._state = state
             self._annotated[cfg.left_key] = annotated_left

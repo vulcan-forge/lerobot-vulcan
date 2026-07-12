@@ -315,6 +315,8 @@ def _refine_pose(
     prior_translation_weight: float = 0.0,
     prior_theta_weight: float = 0.0,
     use_nearest_penalty: bool = True,
+    anchor_pose: Pose2D | None = None,
+    max_translation_m: float | None = None,
 ) -> tuple[Pose2D, float]:
     best_pose = seed_pose
     theta_candidates = np.arange(
@@ -333,6 +335,18 @@ def _refine_pose(
         for dx in offset_candidates:
             for dy in offset_candidates:
                 pose = Pose2D(float(seed_pose.x + dx), float(seed_pose.y + dy), float(theta_deg))
+                if (
+                    anchor_pose is not None
+                    and max_translation_m is not None
+                    and math.hypot(pose.x - anchor_pose.x, pose.y - anchor_pose.y)
+                    > float(max_translation_m)
+                ):
+                    # The caller's translation bound is a HARD promise: the
+                    # refine walk used to add its window on top of the coarse
+                    # grid, letting a wall-slide exceed the bound by ~40%
+                    # (field 2026-07-12: a 0.53m jump through a 0.35m cap
+                    # shifted the whole map half a meter).
+                    continue
                 score = _evaluate_pose_score(
                     snapshot_points_xy=snapshot_points_xy,
                     pose=pose,
@@ -462,6 +476,10 @@ def _search_pose(
     for theta_deg in coarse_theta_candidates:
         for dx in coarse_offset_candidates:
             for dy in coarse_offset_candidates:
+                if max_translation_from_initial_m is not None and math.hypot(dx, dy) > float(
+                    max_translation_from_initial_m
+                ):
+                    continue
                 pose = Pose2D(float(initial_pose.x + dx), float(initial_pose.y + dy), float(theta_deg))
                 raw_score = _evaluate_pose_score(
                     snapshot_points_xy=snapshot_points_xy,
@@ -504,6 +522,8 @@ def _search_pose(
         prior_translation_weight=float(prior_translation_weight),
         prior_theta_weight=float(prior_theta_weight),
         use_nearest_penalty=True,
+        anchor_pose=initial_pose,
+        max_translation_m=max_translation_from_initial_m,
     )
     local_search_elapsed_s = time.monotonic() - local_search_started
 
@@ -562,6 +582,8 @@ def _search_pose(
                 prior_translation_weight=float(prior_translation_weight),
                 prior_theta_weight=float(prior_theta_weight),
                 use_nearest_penalty=True,
+                anchor_pose=initial_pose,
+                max_translation_m=max_translation_from_initial_m,
             )
             if max_translation_from_initial_m is not None:
                 refined_translation = math.hypot(refined_pose.x - initial_pose.x, refined_pose.y - initial_pose.y)
@@ -895,6 +917,9 @@ def _plan_frontier_path(
     robot_theta_deg: float | None = None,
     avoid_face_xy: list[tuple[float, float]] | None = None,
     avoid_radius_m: float = 0.55,
+    prefer_face_xy: tuple[float, float] | None = None,
+    prefer_radius_m: float = 0.60,
+    prefer_bonus_m: float = 1.20,
 ) -> dict[str, object]:
     """Classic frontier exploration: BFS through known-free space (inflated by
     the robot's radius, so gaps it cannot fit through are simply not
@@ -935,6 +960,22 @@ def _plan_frontier_path(
         return any(
             math.hypot(point_xy[0] - float(ax), point_xy[1] - float(ay)) <= float(avoid_radius_m)
             for ax, ay in avoid_face_xy
+        )
+
+    def is_preferred(point_xy: tuple[float, float]) -> bool:
+        """GOAL COMMITMENT: the frontier chosen last cycle keeps priority
+        until consumed or blacklisted. Re-picking from scratch every capture
+        made the winner flip sides as cluster sizes shifted a few cells —
+        the robot spun through 100-165deg turnarounds cycle after cycle
+        (field 2026-07-11: ten captures of pure rotation) instead of
+        finishing what it was facing."""
+        if prefer_face_xy is None:
+            return False
+        return (
+            math.hypot(
+                point_xy[0] - float(prefer_face_xy[0]), point_xy[1] - float(prefer_face_xy[1])
+            )
+            <= float(prefer_radius_m)
         )
 
     def turn_cost_m(target_world_xy: tuple[float, float]) -> float:
@@ -1169,7 +1210,10 @@ def _plan_frontier_path(
             travel_m = math.hypot(
                 centroid[0] - float(robot_xy[0]), centroid[1] - float(robot_xy[1])
             )
-            return travel_m + turn_cost_m(centroid)
+            cost = travel_m + turn_cost_m(centroid)
+            if is_preferred(centroid):
+                cost = max(0.0, cost - float(prefer_bonus_m))
+            return cost
 
         clusters.sort(key=observation_cluster_cost)
         for members in clusters:
@@ -1277,10 +1321,19 @@ def _plan_frontier_path(
         cluster_cost = float(dist[nearest_cell[1], nearest_cell[0]]) * res + turn_cost_m(
             cluster_centroid
         )
-        # Tier 0: real unexplored regions; tier 1: leftover scraps. A big
-        # frontier across the room ALWAYS beats an 8-cell sliver at the
-        # robot's feet — scraps are mopped up only once nothing big remains.
-        cluster_rank = (0 if len(members) >= int(preferred_frontier_cells) else 1, cluster_cost)
+        cluster_preferred = is_preferred(cluster_centroid)
+        if cluster_preferred:
+            cluster_cost = max(0.0, cluster_cost - float(prefer_bonus_m))
+        # Tier 0: real unexplored regions (or the committed frontier from
+        # last cycle); tier 1: leftover scraps. A big frontier across the
+        # room ALWAYS beats an 8-cell sliver at the robot's feet — scraps
+        # are mopped up only once nothing big remains.
+        cluster_rank = (
+            0
+            if cluster_preferred or len(members) >= int(preferred_frontier_cells)
+            else 1,
+            cluster_cost,
+        )
         if cluster_rank < best_cluster_rank:
             best_cluster_rank = cluster_rank
             best_cell = nearest_cell

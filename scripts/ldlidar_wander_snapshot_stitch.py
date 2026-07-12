@@ -1975,6 +1975,15 @@ def main() -> int:
         help="slam_input.v1 camera stream endpoint (default tcp://<remote-ip>:5560).",
     )
     parser.add_argument(
+        "--eye-perception",
+        choices=("depth", "hough"),
+        default="depth",
+        help="Eye-camera hazard perception: 'depth' = Depth-Anything-V2 metric "
+        "depth (3D obstacle test, lidar-anchored scale; falls back to 'hough' "
+        "until the model is ready or if it fails to load); 'hough' = the "
+        "classic line detector + parallax pipeline.",
+    )
+    parser.add_argument(
         "--edge-mapping",
         choices=("on", "off"),
         default="on",
@@ -2070,15 +2079,79 @@ def main() -> int:
                     np.hypot(safety_points[:, 0], safety_points[:, 1]),
                 )
 
+            depth_worker = None
+            if str(args.eye_perception) == "depth":
+                # NO FALLBACK: depth requested = depth required. If it cannot
+                # load, the run aborts with the reason — never a silent switch
+                # to the old detector (use --eye-perception hough explicitly
+                # for that pipeline).
+                from sourccey_depth_perception import DepthWorker
+
+                depth_worker = DepthWorker(
+                    hazard_subscriber,
+                    {
+                        safety_config.left_key: safety_config.eye_left_model,
+                        safety_config.right_key: safety_config.eye_right_model,
+                    },
+                    lidar_ranges_fn=_safety_lidar_ranges,
+                )
+                depth_worker.start()
+                print(
+                    "[safety] loading depth perception (Depth-Anything-V2 metric indoor; "
+                    "first run downloads the weights) ..."
+                )
+                load_started = time.monotonic()
+                while not depth_worker.ready and depth_worker.failure is None:
+                    if time.monotonic() - load_started > 300.0:
+                        raise SystemExit(
+                            "[safety] FATAL: depth perception did not load within 300s"
+                        )
+                    time.sleep(0.5)
+                if depth_worker.failure is not None:
+                    raise SystemExit(
+                        f"[safety] FATAL: depth perception failed to load "
+                        f"({depth_worker.failure}). Fix the environment (is "
+                        f"'--with transformers' in the run command?) or run with "
+                        f"--eye-perception hough explicitly."
+                    )
+                # Model loaded — now require a first result from BOTH eyes so
+                # the mission starts with live depth, not a stale-stop.
+                first_result_deadline = time.monotonic() + 60.0
+                while time.monotonic() < first_result_deadline:
+                    if all(
+                        depth_worker.latest(eye, max_age_s=10.0) is not None
+                        for eye in (safety_config.left_key, safety_config.right_key)
+                    ):
+                        break
+                    if depth_worker.failure is not None:
+                        raise SystemExit(
+                            f"[safety] FATAL: depth inference failed on the first "
+                            f"frames ({depth_worker.failure})"
+                        )
+                    time.sleep(0.25)
+                else:
+                    raise SystemExit(
+                        "[safety] FATAL: depth perception produced no results "
+                        "within 60s of loading"
+                    )
+                print(
+                    f"[safety] depth perception live for both eyes "
+                    f"(inference ~{max(depth_worker.inference_s, 0.01):.2f}s/frame)"
+                )
+
             hazard_monitor = ElevatedHazardMonitor(
-                safety_config, hazard_subscriber, lidar_ranges_fn=_safety_lidar_ranges
+                safety_config,
+                hazard_subscriber,
+                lidar_ranges_fn=_safety_lidar_ranges,
+                depth_worker=depth_worker,
             )
             hazard_monitor.start()
             bottom_present = hazard_subscriber.latest(safety_config.bottom_key)[0] is not None
             bottom_label = "present" if bottom_present else "ABSENT (low floor objects unprotected)"
             print(
                 f"[safety] anti-collision gate ARMED (cameras via {safety_endpoint}, "
-                f"bottom_camera={bottom_label}, lidar_referee=on)"
+                f"bottom_camera={bottom_label}, lidar_referee=on, "
+                f"eye_perception={'depth' if depth_worker is not None else 'hough'})"
             )
         else:
             hazard_subscriber.stop()
@@ -2093,10 +2166,13 @@ def main() -> int:
             "above the lidar plane are INVISIBLE and the base WILL drive into them"
         )
 
-    # Camera-confirmed elevated edges, stamped into the PLANNING map (world
-    # frame) so the wanderer never routes into a table edge the lidar cannot
-    # see. Session-scoped: the map frame is rebuilt each run.
+    # Camera-confirmed elevated geometry, stamped into the PLANNING map
+    # (world frame) so the wanderer never routes into a table the lidar
+    # cannot see. Session-scoped: the map frame is rebuilt each run.
+    # Depth mode stamps floor-projected FOOTPRINT POINTS (the region's true
+    # shape); hough mode stamps fitted segments.
     elevated_segments_world: list[dict] = []
+    elevated_points_world: list[tuple[float, float, float]] = []
     elevated_occupied_world: set[tuple[int, int]] = set()
     investigated_spots_world: list[tuple[float, float]] = []
 
@@ -2107,6 +2183,10 @@ def main() -> int:
     # permanently hide real space.
     frontier_strike_counts: dict[tuple[int, int], int] = {}
     frontier_blacklist: list[dict[str, float]] = []
+    # Goal commitment: the frontier face chosen last cycle keeps priority in
+    # the planner until consumed or blacklisted, so the target cannot flip
+    # sides every capture (turn-thrash).
+    committed_frontier_face: tuple[float, float] | None = None
 
     direction_sign = 1.0 if args.turn_direction == "ccw" else -1.0
     signed_turn_deg = float(args.turn_deg) * float(direction_sign)
@@ -2246,16 +2326,38 @@ def main() -> int:
             if float(capture_index) - float(entry["added_at"]) <= 30.0
         ]
 
-    def _strike_frontier(face_xy, reason: str) -> None:
+    def _strike_frontier(face_xy, reason: str, force: bool = False) -> None:
         """A planned frontier failed (path blocked / hazard-held). Two strikes
         blacklist it for ~30 captures: the planner explores the REST of the
-        room instead of re-planning the same doomed goal every cycle."""
+        room instead of re-planning the same doomed goal every cycle.
+        force=True blacklists immediately (provably-failing actions, e.g. a
+        lock-lost face-turn, must never be retried at all)."""
+        nonlocal committed_frontier_face
         strike_key = (
             int(round(float(face_xy[0]) / 0.4)),
             int(round(float(face_xy[1]) / 0.4)),
         )
-        frontier_strike_counts[strike_key] = frontier_strike_counts.get(strike_key, 0) + 1
-        if frontier_strike_counts[strike_key] == 2:
+        if force:
+            frontier_strike_counts[strike_key] = max(
+                2, frontier_strike_counts.get(strike_key, 0) + 1
+            )
+        else:
+            frontier_strike_counts[strike_key] = frontier_strike_counts.get(strike_key, 0) + 1
+        if committed_frontier_face is not None and (
+            math.hypot(
+                float(face_xy[0]) - committed_frontier_face[0],
+                float(face_xy[1]) - committed_frontier_face[1],
+            )
+            <= 0.6
+        ):
+            # A failed attempt breaks the commitment so the planner is free
+            # to pick a different frontier next cycle.
+            committed_frontier_face = None
+        already_listed = any(
+            math.hypot(float(face_xy[0]) - ax, float(face_xy[1]) - ay) <= 0.4
+            for ax, ay in _active_frontier_blacklist()
+        )
+        if frontier_strike_counts[strike_key] >= 2 and not already_listed:
             frontier_blacklist.append(
                 {
                     "x": float(face_xy[0]),
@@ -2373,7 +2475,7 @@ def main() -> int:
         return bool(
             hs.hold
             and str(hs.hold_reason)
-            in ("vanished_near", "line_edge", "elevated_parallax", "hazard")
+            in ("vanished_near", "line_edge", "elevated_parallax", "depth_elevated", "hazard")
         )
 
     def _stamp_world_segment(w1: tuple[float, float], w2: tuple[float, float], height_m: float) -> int:
@@ -2413,6 +2515,47 @@ def main() -> int:
                 static=True,
             )
         return segment_new_cells
+
+    stop_debug_dir = output_dir / "stop_debug"
+    stop_debug_dir.mkdir(parents=True, exist_ok=True)
+    stop_debug_counter = {"n": 0}
+
+    def _dump_stop_debug(stop_pose: Pose2D, note: str) -> None:
+        """Field-diagnosis bundle per hazard stop: what the robot SAW (eye
+        overlays) and BELIEVED (pose, gate state) at the moment of the stop,
+        so misplaced map geometry can be traced to mask vs projection vs
+        pose instead of inferred from logs."""
+        if hazard_monitor is None:
+            return
+        import cv2 as _cv2
+
+        stop_debug_counter["n"] += 1
+        bundle_index = stop_debug_counter["n"]
+        hs = hazard_monitor.state()
+        for cam in ("front_left", "front_right", "bottom"):
+            annotated = hazard_monitor.annotated(cam)
+            if annotated is not None:
+                _cv2.imwrite(
+                    str(stop_debug_dir / f"stop{bundle_index:03d}_{cam}.png"), annotated
+                )
+        meta = {
+            "note": str(note),
+            "pose_xy_theta": [
+                round(float(stop_pose.x), 4),
+                round(float(stop_pose.y), 4),
+                round(float(stop_pose.theta_deg), 2),
+            ],
+            "reason": hs.reason,
+            "side": hs.side,
+            "est_distance_m": hs.est_distance_m,
+            "classification": hs.classification,
+            "detail": hs.detail,
+            "map_cells_total": len(elevated_occupied_world),
+        }
+        (stop_debug_dir / f"stop{bundle_index:03d}.json").write_text(
+            json.dumps(meta, indent=2), encoding="utf-8"
+        )
+        print(f"[debug] stop bundle #{bundle_index} saved -> {stop_debug_dir}")
 
     def _hazard_sighted_now() -> bool:
         """A LIVE gate (camera actually seeing something) vs a lingering
@@ -2470,8 +2613,38 @@ def main() -> int:
         theta_rad = math.radians(float(stamp_pose.theta_deg))
         cos_t, sin_t = math.cos(theta_rad), math.sin(theta_rad)
         new_cells = 0
+        new_points = 0
+        segment_added = False
+        # Footprints: stamp only the NEWEST result per eye. Stamping the
+        # union of every queued frame smeared per-frame depth noise into an
+        # 800-point blob (field 2026-07-12).
+        newest_footprint_mono: dict[str, float] = {}
+        for edge in drained_edges:
+            footprint_probe = getattr(edge, "points_robot_xy", ()) or ()
+            if footprint_probe:
+                eye_key = str(edge.eye)
+                if float(edge.monotonic) > newest_footprint_mono.get(eye_key, -1.0):
+                    newest_footprint_mono[eye_key] = float(edge.monotonic)
         for edge in drained_edges:
             if now_mono - float(edge.monotonic) > 1.0:
+                continue
+            footprint = getattr(edge, "points_robot_xy", ()) or ()
+            if footprint and float(edge.monotonic) < newest_footprint_mono.get(str(edge.eye), -1.0):
+                continue
+            if footprint:
+                # Depth mode: stamp the region's floor-projected footprint
+                # directly, like lidar points — true shape, true placement,
+                # no fitted-line abstraction.
+                for pf, pl in footprint:
+                    wx = float(stamp_pose.x) + float(pf) * cos_t - float(pl) * sin_t
+                    wy = float(stamp_pose.y) + float(pf) * sin_t + float(pl) * cos_t
+                    cell = (int(round(wx / 0.04)), int(round(wy / 0.04)))
+                    if cell not in elevated_occupied_world and len(elevated_occupied_world) < 20000:
+                        elevated_occupied_world.add(cell)
+                        new_cells += 1
+                        if len(elevated_points_world) < 6000:
+                            elevated_points_world.append((wx, wy, float(edge.height_m)))
+                            new_points += 1
                 continue
             w1 = (
                 float(stamp_pose.x) + edge.p1_robot_xy[0] * cos_t - edge.p1_robot_xy[1] * sin_t,
@@ -2481,8 +2654,24 @@ def main() -> int:
                 float(stamp_pose.x) + edge.p2_robot_xy[0] * cos_t - edge.p2_robot_xy[1] * sin_t,
                 float(stamp_pose.y) + edge.p2_robot_xy[0] * sin_t + edge.p2_robot_xy[1] * cos_t,
             )
-            new_cells += _stamp_world_segment(w1, w2, float(edge.height_m))
-        if new_cells:
+            seg_cells = _stamp_world_segment(w1, w2, float(edge.height_m))
+            new_cells += seg_cells
+            segment_added = segment_added or seg_cells > 0
+        if new_points:
+            rr.log(
+                "world/elevated_regions",
+                rr.Points3D(
+                    [[px, py, ph] for px, py, ph in elevated_points_world],
+                    colors=[[200, 0, 0]] * len(elevated_points_world),
+                    radii=0.02,
+                ),
+                static=True,
+            )
+            print(
+                "[edge-map] elevated footprint mapped "
+                f"(+{new_points} points, map_cells={len(elevated_occupied_world)})"
+            )
+        if segment_added and elevated_segments_world:
             latest = elevated_segments_world[-1]
             latest_width_m = math.hypot(
                 latest["p2"][0] - latest["p1"][0], latest["p2"][1] - latest["p1"][1]
@@ -2818,6 +3007,10 @@ def main() -> int:
             chosen_direction_sign = float(direction_sign)
             chosen_turn_deg = float(args.turn_deg)
             motion_hint: MotionHint | None = None
+            # Set when a hazard stop happened after so little motion that a
+            # checkpoint capture would re-anchor nothing: skip the capture
+            # and carry the tracked motion into the next one instead.
+            checkpoint_skippable = False
             settle_s = float(args.move_settle_s)
             turn_capture_theta_window_deg = 80.0
             bootstrap_scan_active = (
@@ -3094,6 +3287,13 @@ def main() -> int:
                     f"{chosen_turn_deg:.1f}deg {'ccw' if chosen_direction_sign >= 0.0 else 'cw'} "
                     "toward the last stitched heading to re-anchor"
                 )
+                if committed_frontier_face is not None:
+                    # A face-turn toward this frontier just lost tracking and
+                    # got discarded: facing it from here PROVABLY fails. Never
+                    # retry the identical turn — blacklist the frontier
+                    # immediately (this also breaks the goal commitment that
+                    # would otherwise re-pick it) and explore elsewhere.
+                    _strike_frontier(committed_frontier_face, "turn_lock_lost", force=True)
             elif wander_mode == "smart":
                 # ================= frontier exploration =================
                 # One rule, no special cases: model what has been observed
@@ -3132,6 +3332,7 @@ def main() -> int:
                         ],
                         robot_theta_deg=float(current_live_pose.theta_deg),
                         avoid_face_xy=_active_frontier_blacklist(),
+                        prefer_face_xy=committed_frontier_face,
                     )
                 if (
                     active_survey_xy is None
@@ -3179,6 +3380,10 @@ def main() -> int:
                     frontier_plan = {"status": "no_frontier"}
                 plan_status = str(frontier_plan.get("status"))
                 if plan_status in ("ok", "survey", "observe"):
+                    committed_frontier_face = (
+                        float(frontier_plan["face_xy"][0]),
+                        float(frontier_plan["face_xy"][1]),
+                    )
                     print(
                         "[wander] frontier plan "
                         f"(status={plan_status}, "
@@ -3189,6 +3394,7 @@ def main() -> int:
                         f"frontier_cells={int(frontier_plan['frontier_cells'])})"
                     )
                 else:
+                    committed_frontier_face = None
                     print(f"[wander] frontier plan (status={plan_status})")
 
                 # Survey arrival is a STATIONARY action (scan in place), so it
@@ -3651,13 +3857,14 @@ def main() -> int:
                             transit_legs += 1
                             if bool(drive_track_meta.get("stopped_by_hazard")):
                                 # A confirmed edge stopped this leg. Its measured
-                                # segment is seconds-fresh and the tracked stop
+                                # geometry is seconds-fresh and the tracked stop
                                 # pose is where it was measured — stamp it into
                                 # the planning map NOW. Without this, only full
                                 # investigations mapped edges, and stops near a
                                 # cooled-down spot taught the planner nothing:
                                 # it re-planned the same goal and oscillated
                                 # approach/stop/reverse at the same table.
+                                _dump_stop_debug(transit_pose, "transit_hazard_stop")
                                 if (
                                     _stamp_confirmed_edges(transit_pose, newest_only=True) == 0
                                     and _hazard_sighted_now()
@@ -3695,6 +3902,7 @@ def main() -> int:
                                 ],
                                 robot_theta_deg=float(transit_pose.theta_deg),
                                 avoid_face_xy=_active_frontier_blacklist(),
+                                prefer_face_xy=committed_frontier_face,
                             )
                             if str(transit_plan.get("status")) not in ("ok", "survey", "observe"):
                                 transit_stop_reason = "replan_" + str(transit_plan.get("status"))
@@ -3766,6 +3974,21 @@ def main() -> int:
                             f"reason={transit_stop_reason}); capturing checkpoint"
                         )
                         motion_hint = transit_hint
+                        if (
+                            transit_stop_reason == "blocked_or_lock"
+                            and transit_hint is not None
+                            and transit_traveled_m < 0.15
+                            and math.hypot(
+                                float(transit_hint.expected_dx_local_m),
+                                float(transit_hint.expected_dy_local_m),
+                            )
+                            < 0.15
+                            and abs(float(transit_hint.expected_dtheta_deg)) < 10.0
+                        ):
+                            # A hazard stop after barely any motion: a full
+                            # checkpoint capture would re-anchor nothing and
+                            # just stacks rings at the same spot.
+                            checkpoint_skippable = True
                         settle_s = float(args.move_settle_s)
                         if motion_hint is None:
                             # Degenerate: nothing moved (immediate align abort);
@@ -4026,9 +4249,10 @@ def main() -> int:
                     or bool(drive_track_meta.get("stopped_by_hazard"))
                 )
                 if bool(drive_track_meta.get("stopped_by_hazard")):
-                    # Stamp the freshly measured edge segment at the tracked
+                    # Stamp the freshly measured geometry at the tracked
                     # stop pose (see transit path): every hazard stop teaches
                     # the planner the boundary, not just investigations.
+                    _dump_stop_debug(drive_tracked_pose, "forward_hazard_stop")
                     if (
                         _stamp_confirmed_edges(drive_tracked_pose, newest_only=True) == 0
                         and _hazard_sighted_now()
@@ -4066,6 +4290,12 @@ def main() -> int:
                 )
                 force_drive_after_turn = False
                 drive_checkpoints_since_scan += 1
+                if (
+                    bool(drive_track_meta.get("stopped_by_hazard"))
+                    and math.hypot(drive_hint_dx_local_m, drive_hint_dy_local_m) < 0.15
+                    and abs(drive_hint_dtheta_deg) < 10.0
+                ):
+                    checkpoint_skippable = True
                 if not drive_stopped_by_block:
                     # Only a drive that actually got somewhere disarms the
                     # wedge detection. A one-burst drive straight into the stop
@@ -4284,6 +4514,17 @@ def main() -> int:
                     "skipping the duplicate capture and replanning"
                 )
                 time.sleep(max(0.5, float(settle_s)))
+                continue
+            if checkpoint_skippable and pending_motion_hint is None:
+                # Hazard stop after <0.15m of motion: skip the checkpoint
+                # capture (it would re-anchor nothing) and carry the tracked
+                # motion into the NEXT capture's expectation instead.
+                print(
+                    "[wander] short hazard stop; skipping the checkpoint capture "
+                    "and carrying the tracked motion forward"
+                )
+                pending_motion_hint = motion_hint
+                time.sleep(0.3)
                 continue
 
             print(f"[wander] settling for {settle_s:.2f}s before capture")
