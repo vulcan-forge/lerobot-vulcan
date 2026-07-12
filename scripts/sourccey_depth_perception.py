@@ -259,10 +259,13 @@ def analyze_depth(
         big = np.float32(1e6)
         fp_fwd_col = np.where(fp_candidate, robot_forward, big).min(axis=0)
         above_fwd_col = np.where(wall_above, robot_forward, big).min(axis=0)
+        # 0.30m: a true wall rises at ~zero forward offset from the band
+        # surface; upper cabinets over a countertop are typically recessed
+        # ~0.3m+ and must NOT suppress the counter's footprint.
         wall_cols = (
             (fp_fwd_col < big)
             & (above_fwd_col < big)
-            & (np.abs(above_fwd_col - fp_fwd_col) < 0.45)
+            & (np.abs(above_fwd_col - fp_fwd_col) < 0.30)
         )
         footprint = fp_candidate & ~wall_cols[None, :]
         if np.any(footprint):
