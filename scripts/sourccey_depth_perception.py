@@ -1,7 +1,7 @@
 """Monocular-depth perception for Sourccey's eye cameras.
 
-Replaces the Hough edge detector as the ELEVATED-obstacle candidate source:
-Depth-Anything-V2 (metric, indoor) turns each eye frame into per-pixel depth;
+Uses the Hough edge detector as the ELEVATED-obstacle proposal source, then
+uses Depth-Anything-V2 (metric, indoor) only inside that verified edge band;
 the field-calibrated CameraModel turns depth into robot-frame 3D; anything
 0.30..1.10m above the floor is a surface the base can hit ("floating edge"),
 with its distance, bearing and extent measured directly — no line heuristics,
@@ -31,6 +31,10 @@ import cv2
 import numpy as np
 
 from sourccey_camera_geometry import CameraModel
+from lerobot.control.sourccey.sourccey.elevated_edge_scan_live import (
+    ElevatedEdgeDetector,
+    ElevatedEdgeScanConfig,
+)
 
 DEFAULT_DEPTH_MODEL = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
 
@@ -38,9 +42,78 @@ ELEVATED_MIN_M = 0.30  # just above the lidar scan plane (0.28m)
 ELEVATED_MAX_M = 1.10
 REPORT_RANGE_M = 2.50
 CORRIDOR_HALF_WIDTH_M = 0.40
+# Squeeze tier: the robot's half-width is 0.28m. When the WIDE corridor is
+# obstructed but this narrow one is clear, the gap is physically passable —
+# the gate demands creep speed instead of stopping, so the robot approaches,
+# keeps refining the edge with close-range footprints, and squeezes through
+# doorway-sized gaps beside furniture instead of striking the frontier out.
+CORRIDOR_NARROW_HALF_WIDTH_M = 0.30
+# Map only the leading band of an elevated component.  A metric-depth image
+# sees an entire tabletop face, but filling that surface in the 2-D map turns
+# a table into a large solid red slab and can seal a nearby doorway.  For
+# navigation, its nearest boundary is the occupied geometry that matters.
+FOOTPRINT_BOUNDARY_DEPTH_M = 0.10
 FLOOR_BAND_M = 0.12
 SCALE_MIN = 0.45
 SCALE_MAX = 2.20
+# Outer columns of the frame are excluded from map evidence (footprints and
+# floor clearing): lens distortion and calibration error are worst at the
+# horizontal FOV edges, and smeared edge-column footprints painted phantom
+# blockage beside real furniture (field 2026-07-12: doorway walled off).
+EDGE_COL_TRIM_RATIO = 0.08
+# The eye lenses are mounted above and slightly ahead of the chassis. Their
+# steep lower/outboard rays can still intersect the robot even after the FOV
+# edge trim (last-run evidence: a -49 deg, 0.11 m "elevated" return).  This
+# rectangle is entirely inside the robot's swept body envelope, so it cannot
+# contain a forward obstacle the eyes should make the gate stop for.
+SELF_BODY_FORWARD_M = 0.30
+SELF_BODY_HALF_WIDTH_M = 0.45
+# The 8% image trim still retains rays around +/-49 degrees.  On the current
+# eye mount, near returns in that remaining outboard band are the chassis/lens
+# rim, not geometry in the 18-inch robot's forward swept path.  A 0.50 m ray
+# at 46 degrees is already 0.52 m off centre, well outside that path.  Keep
+# real centre/forward obstacles intact while rejecting this proven artifact
+# before it can trigger near-freeze or paint the map.
+OUTER_NEAR_BEARING_DEG = 46.0
+OUTER_NEAR_FORWARD_M = 0.50
+# Occlusion-bridge ("membrane") rejection: monocular depth interpolates
+# smoothly across open gaps between a near object and the far background,
+# fabricating a surface where there is only air — field 2026-07-12: the open
+# doorway read as part of the table, walling off the exit. Real furniture is
+# axis-aligned: vertical faces have ~zero forward-gradient, horizontal tops
+# have ~zero height-gradient, so min(|grad h|, |grad fwd|) is ~0 on every
+# real surface interior but 0.035..0.08 m/deg on bridges (measured on exact
+# ray-cast scenes). Pixels above this are fabrications, not obstacles.
+MEMBRANE_MIN_GRAD_M_PER_DEG = 0.025
+# Ghost-wall (lidar-transparency) veto: textureless white walls/doors give
+# the model nothing to anchor depth on, so it hallucinates them nearer than
+# they are (field 2026-07-12: a white wall beside the exit kept re-painting
+# a phantom blob over the doorway corridor faster than floor evidence could
+# clear it, and gated the exit shut). A claimed surface that CONTINUES DOWN
+# to the floor is floor-connected — wall, cabinet, box — and the lidar MUST
+# see it at about its claimed range; if every nearby beam passes well
+# beyond the claim, the surface is fabricated. Genuine floating overhangs
+# (tabletops, counters, pedestal tables) are not floor-connected and are
+# NEVER tested against the lidar — the standing constraint holds: the lidar
+# never clamps depth on overhangs.
+GHOST_FLOOR_CONNECT_GAP_M = 0.30
+GHOST_LIDAR_MARGIN_M = 0.45
+GHOST_BEAM_WINDOW_DEG = 2.5
+# Floor evidence covers the SAME range as footprints: the pitched-down eyes
+# first see floor ~1.05m out, so a shorter cap left almost no clearing band
+# and stale cells beyond it were unerasable. Occupied and free evidence must
+# cover the same region or the map ratchets toward blocked.
+FLOOR_EVIDENCE_RANGE_M = 1.8
+# A vertical door, wall, or cabinet face reaches the floor at essentially the
+# same range.  Those are already measured by the lidar at bumper height; if
+# the eye model also treats their upper pixels as an elevated overhang, it
+# joins them to a nearby table and paints the doorway red.  Keep camera depth
+# for genuinely suspended geometry (tabletops/counters), and delegate
+# floor-connected surfaces to lidar.
+GROUND_CONNECTED_MAX_HEIGHT_M = 0.28
+GROUND_CONNECTED_RANGE_TOLERANCE_M = 0.18
+GROUND_CONNECTED_MIN_COLUMN_FRACTION = 0.55
+GROUND_CONNECTED_MIN_COMPONENT_PIXELS = 12
 
 
 @dataclass(frozen=True)
@@ -49,7 +122,15 @@ class DepthEyeResult:
     frame_monotonic: float  # when the analyzed frame was received
     scale: float
     scale_source: str  # "lidar" | "floor" | "raw"
+    # A conventional contrast/line detector proposed this image region.
+    # Depth may create an elevated candidate only inside this proposal.
+    proposal_detected: bool
+    proposal_score: float
+    proposal_line_xy: tuple[tuple[int, int], tuple[int, int]] | None
     nearest_gate_m: float | None  # nearest elevated point inside the corridor
+    # Nearest elevated point inside the NARROW (body-width) corridor: clear
+    # here while the wide corridor is blocked = a squeezable gap.
+    nearest_gate_narrow_m: float | None
     nearest_any_m: float | None  # nearest elevated point at any bearing
     edge_height_m: float | None
     bearing_deg: float | None  # robot-frame bearing of the nearest point
@@ -60,12 +141,63 @@ class DepthEyeResult:
     # stamps THIS, like lidar points — an "edge line" fitted to a whole
     # visible tabletop is the wrong abstraction for a dense depth sensor.
     region_points_xy: tuple[tuple[float, float], ...]
+    # Floor-band pixels' robot-frame (forward, lateral) positions (close
+    # range, FOV-edge trimmed, decimated): POSITIVE evidence of traversable
+    # floor, used by the map to CLEAR stale elevated cells it contradicts.
+    # Occupancy mapping must be symmetric — without free-space evidence a
+    # single overshot footprint blocks a doorway forever.
+    floor_points_xy: tuple[tuple[float, float], ...]
     elevated_ratio: float
     # What the LIDAR says is nearest in the same corridor (robot-forward
     # meters), for on-overlay bias diagnosis of the depth ranges. None when
     # no lidar beams landed in the corridor.
     lidar_corridor_min_m: float | None
     overlay_bgr: np.ndarray | None
+
+
+def _ground_connected_components(
+    elevated: np.ndarray,
+    height: np.ndarray,
+    robot_forward: np.ndarray,
+) -> np.ndarray:
+    """Return elevated pixels belonging to floor-connected vertical faces.
+
+    This is deliberately a component/column test rather than a color or
+    semantic test. A door beside a table can be visually indistinguishable
+    from the table, but in metric geometry the door continues below the
+    elevated band at the same forward range in most of its columns. A table
+    top has floor *behind* it, not directly below it at that range.
+    """
+    ground_connected = np.zeros_like(elevated, dtype=bool)
+    count, labels = cv2.connectedComponents(elevated.astype(np.uint8), connectivity=8)
+    row_indices = np.arange(elevated.shape[0])[:, None]
+    lower_band = (height >= 0.02) & (height <= GROUND_CONNECTED_MAX_HEIGHT_M)
+    for label in range(1, count):
+        component = labels == label
+        if np.count_nonzero(component) < GROUND_CONNECTED_MIN_COMPONENT_PIXELS:
+            continue
+        component_cols = np.unique(np.where(component)[1])
+        supported_cols = 0
+        for col in component_cols:
+            component_rows = np.where(component[:, col])[0]
+            if not len(component_rows):
+                continue
+            reference_forward = float(np.median(robot_forward[component_rows, col]))
+            below_component = row_indices[:, 0] > int(component_rows.max())
+            same_range_lower = (
+                lower_band[:, col]
+                & below_component
+                & (np.abs(robot_forward[:, col] - reference_forward)
+                   <= GROUND_CONNECTED_RANGE_TOLERANCE_M)
+            )
+            if np.any(same_range_lower):
+                supported_cols += 1
+        if (
+            supported_cols / max(len(component_cols), 1)
+            >= GROUND_CONNECTED_MIN_COLUMN_FRACTION
+        ):
+            ground_connected |= component
+    return ground_connected
 
 
 def _pixel_fields(model: CameraModel, shape: tuple[int, int]) -> dict[str, np.ndarray]:
@@ -186,6 +318,21 @@ def _lidar_scale(
     return best_scale
 
 
+def _decimate_xy(fwd: np.ndarray, lat: np.ndarray, cell_m: float = 0.06, cap: int = 240) -> tuple[tuple[float, float], ...]:
+    """Snap (forward, lateral) samples to a grid, dedupe, cap the count."""
+    cells = np.unique(
+        np.stack(
+            [np.round(fwd / cell_m).astype(np.int32), np.round(lat / cell_m).astype(np.int32)],
+            axis=1,
+        ),
+        axis=0,
+    )
+    if len(cells) > cap:
+        keep = np.linspace(0, len(cells) - 1, cap).astype(int)
+        cells = cells[keep]
+    return tuple((float(c[0]) * cell_m, float(c[1]) * cell_m) for c in cells)
+
+
 def analyze_depth(
     model: CameraModel,
     depth_m: np.ndarray,
@@ -195,6 +342,8 @@ def analyze_depth(
     frame_bgr: np.ndarray | None = None,
     lidar_bearings_deg: np.ndarray | None = None,
     lidar_ranges_m: np.ndarray | None = None,
+    proposal_line_xy: tuple[tuple[int, int], tuple[int, int]] | None = None,
+    proposal_score: float = 0.0,
 ) -> DepthEyeResult:
     """Turn one metric depth map into a robot-frame elevated-obstacle report."""
     depth_m = np.asarray(depth_m, dtype=np.float32)
@@ -225,16 +374,194 @@ def analyze_depth(
     )
     robot_lateral = fwd_cam * math.sin(yaw_rad) + lat_cam * math.cos(yaw_rad)
 
+    # Membrane rejection (see MEMBRANE_MIN_GRAD_M_PER_DEG): angular-
+    # normalized gradients of height and robot-forward, on lightly smoothed
+    # maps so per-pixel model noise cannot fake a slope. A pixel where BOTH
+    # change fast lies on a diagonal ramp in the forward/height plane —
+    # something the physical world almost never builds but depth bridging
+    # always does. Silhouette rims (real depth jumps) also trip it; losing
+    # that 1-2px halo is free (it never was surface).
+    h_px, w_px = depth_m.shape
+    row_deg = float(model.vfov_deg) / max(h_px - 1, 1)
+    col_deg = float(model.hfov_deg) / max(w_px - 1, 1)
+    height_sm = cv2.GaussianBlur(height, (5, 5), 1.0)
+    forward_sm = cv2.GaussianBlur(robot_forward, (5, 5), 1.0)
+    gh_r, gh_c = np.gradient(height_sm)
+    gf_r, gf_c = np.gradient(forward_sm)
+    grad_h = np.hypot(gh_r / row_deg, gh_c / col_deg)
+    grad_f = np.hypot(gf_r / row_deg, gf_c / col_deg)
+    membrane = (grad_h > MEMBRANE_MIN_GRAD_M_PER_DEG) & (grad_f > MEMBRANE_MIN_GRAD_M_PER_DEG)
+
+    # The outer FOV columns are excluded from ALL eye evidence — the GATE
+    # included, not just the map. Field 2026-07-13: the outermost columns
+    # (bearing ~±56° = yaw + hfov/2) reported "elevated at 0.05m" — the
+    # robot seeing its own chassis / lens-edge garbage — which held the
+    # near-freeze tier on and phantom-stopped every exit approach.
+    trim = int(round(w_px * EDGE_COL_TRIM_RATIO))
+    col_ok = np.zeros(w_px, dtype=bool)
+    col_ok[trim : w_px - trim] = True
+    col_ok = col_ok[None, :]
+
+    # Exclude the camera's view of Sourccey's own shell from every elevated
+    # output, including nearest_any_m.  It must happen before the near-freeze
+    # calculation: trimming only the outer 8% left the observed -49 deg body
+    # return inside the retained columns, where it defeated the clear narrow
+    # corridor and prevented squeeze_creep.
+    self_body = (
+        (robot_forward < SELF_BODY_FORWARD_M)
+        & (np.abs(robot_lateral) < SELF_BODY_HALF_WIDTH_M)
+    )
+    outer_near_self_sighting = (
+        (np.abs(fields["bearing_deg"]) >= OUTER_NEAR_BEARING_DEG)
+        & (robot_forward < OUTER_NEAR_FORWARD_M)
+    )
+
+    # The depth model supplies metric geometry, not reliable object
+    # boundaries. The classic detector must first find a long, continuous
+    # high-contrast edge with a supported top and underside. Restrict the
+    # depth result to a narrow image band around that exact line so texture,
+    # lighting, and broad flat regions cannot invent a collision obstacle.
+    proposal_mask_u8 = np.zeros((h_px, w_px), dtype=np.uint8)
+    if proposal_line_xy is not None:
+        (x1, y1), (x2, y2) = proposal_line_xy
+        cv2.line(
+            proposal_mask_u8,
+            (int(x1), int(y1)),
+            (int(x2), int(y2)),
+            255,
+            thickness=max(int(round(h_px * 0.075)), 18),
+            lineType=cv2.LINE_AA,
+        )
+    proposal_mask = proposal_mask_u8.astype(bool)
+
     elevated = (
         (height >= ELEVATED_MIN_M)
         & (height <= ELEVATED_MAX_M)
         & (robot_forward > 0.05)
         & (robot_forward <= REPORT_RANGE_M)
         & (fwd_cam > 0.05)
+        & ~membrane
+        & col_ok
+        & ~self_body
+        & ~outer_near_self_sighting
+        & proposal_mask
     )
+
+    # Ghost-wall veto (see GHOST_* constants), applied per CONNECTED
+    # COMPONENT — floor-connectivity is a property of the object, not of a
+    # single column (a blob's lateral edge columns clip only its mid-height
+    # and look "floating" column-locally). A component is vetoed only when
+    # ALL THREE hold: it is floor-connected somewhere, NO column of it is
+    # lidar-corroborated, and several columns have beams passing well
+    # beyond the claim. One corroborated column spares the whole component,
+    # so a table whose thin legs the lidar clips in only one column keeps
+    # everything.
+    if lidar_bearings_deg is not None and lidar_ranges_m is not None and len(lidar_bearings_deg):
+        lb_all = np.asarray(lidar_bearings_deg, dtype=np.float32)
+        lr_all = np.asarray(lidar_ranges_m, dtype=np.float32)
+        good_l = (lr_all > 0.10) & (lr_all < 8.0)
+        l_fwd = lr_all[good_l] * np.cos(np.radians(lb_all[good_l])) + 0.229
+        l_lat = lr_all[good_l] * np.sin(np.radians(lb_all[good_l]))
+        l_bear = np.degrees(np.arctan2(l_lat, l_fwd))
+        l_rng = np.hypot(l_fwd, l_lat)
+        near_elev = elevated & (robot_forward <= 2.0)
+        if len(l_rng) and np.any(near_elev):
+            below_band = (height > 0.03) & (height < ELEVATED_MIN_M) & (fwd_cam > 0.05)
+            _n_ghost, ghost_labels = cv2.connectedComponents(
+                near_elev.astype(np.uint8), connectivity=8
+            )
+            for lab in range(1, _n_ghost):
+                comp = ghost_labels == lab
+                if np.count_nonzero(comp) < 12:
+                    continue
+                floor_connected = False
+                corroborated = 0
+                passthrough = 0
+                for col in np.unique(np.where(comp)[1]):
+                    col_fwd = robot_forward[:, col]
+                    rows = np.where(comp[:, col])[0]
+                    iy = rows[np.argmin(col_fwd[rows])]
+                    d_col = float(col_fwd[iy])
+                    rows_below = below_band[:, col]
+                    if (
+                        not floor_connected
+                        and np.any(rows_below)
+                        and float(np.min(np.abs(col_fwd[rows_below] - d_col)))
+                        <= GHOST_FLOOR_CONNECT_GAP_M
+                    ):
+                        floor_connected = True
+                    claim_bear = math.degrees(
+                        math.atan2(float(robot_lateral[iy, col]), d_col)
+                    )
+                    claim_rng = math.hypot(d_col, float(robot_lateral[iy, col]))
+                    near = (
+                        np.abs(((l_bear - claim_bear) + 180.0) % 360.0 - 180.0)
+                        <= GHOST_BEAM_WINDOW_DEG
+                    )
+                    if not np.any(near):
+                        continue
+                    if float(np.min(np.abs(l_rng[near] - claim_rng))) <= GHOST_LIDAR_MARGIN_M:
+                        corroborated += 1
+                    elif float(np.min(l_rng[near])) > claim_rng + GHOST_LIDAR_MARGIN_M:
+                        passthrough += 1
+                if floor_connected and corroborated == 0 and passthrough >= 3:
+                    elevated &= ~comp
+
+    # Do not let a floor-connected vertical surface merge into the map/gate
+    # component for a suspended edge beside it. The lidar, unlike monocular
+    # depth, measures those surfaces directly at bumper height.
+    ground_connected = _ground_connected_components(elevated, height, robot_forward)
+    elevated = elevated & ~ground_connected
     elevated_ratio = float(np.mean(elevated))
 
+    floor_mask = (
+        (np.abs(height) <= FLOOR_BAND_M)
+        & (fwd_cam > 0.05)
+        & (robot_forward > 0.05)
+        & (robot_forward <= FLOOR_EVIDENCE_RANGE_M)
+        & col_ok
+        & ~membrane  # a bridge ramping down to the far floor is not floor
+    )
+    floor_points: tuple[tuple[float, float], ...] = ()
+    if np.any(floor_mask):
+        floor_points = _decimate_xy(robot_forward[floor_mask], robot_lateral[floor_mask])
+        # Floor is genuinely visible UNDER furniture (the gap below a
+        # tabletop is under the elevated band) — such points must never
+        # erase the furniture's own footprint. Drop floor points within
+        # ~0.12m of any elevated projection seen in THIS frame; phantom
+        # cells have floor evidence with no co-located elevated surface.
+        # RAW band pixels (no column trim / membrane / ghost filtering):
+        # suppression of CLEARING must stay conservative — a surface too
+        # dubious to stamp can still be real enough that erasing it is wrong.
+        near_elev = (
+            (height >= ELEVATED_MIN_M)
+            & (height <= ELEVATED_MAX_M)
+            & (fwd_cam > 0.05)
+            & (robot_forward > 0.05)
+            & (robot_forward <= FLOOR_EVIDENCE_RANGE_M + 0.3)
+        )
+        if floor_points and np.any(near_elev):
+            elev_cells = {
+                (int(ci), int(cj))
+                for ci, cj in zip(
+                    np.round(robot_forward[near_elev] / 0.06).astype(np.int32),
+                    np.round(robot_lateral[near_elev] / 0.06).astype(np.int32),
+                )
+            }
+            kept = []
+            for pf, pl in floor_points:
+                ci, cj = int(round(pf / 0.06)), int(round(pl / 0.06))
+                if any(
+                    (ci + di, cj + dj) in elev_cells
+                    for di in (-2, -1, 0, 1, 2)
+                    for dj in (-2, -1, 0, 1, 2)
+                ):
+                    continue
+                kept.append((pf, pl))
+            floor_points = tuple(kept)
+
     nearest_gate_m: float | None = None
+    nearest_gate_narrow_m: float | None = None
     nearest_any_m: float | None = None
     edge_height_m: float | None = None
     bearing_deg: float | None = None
@@ -255,7 +582,7 @@ def analyze_depth(
         )
         # Footprint limited to 1.8m: monocular depth error grows with range
         # (~10-15%), and stops only need the nearby furniture placed well.
-        fp_candidate = elevated & (robot_forward <= 1.8)
+        fp_candidate = elevated & (robot_forward <= 1.8) & col_ok
         big = np.float32(1e6)
         fp_fwd_col = np.where(fp_candidate, robot_forward, big).min(axis=0)
         above_fwd_col = np.where(wall_above, robot_forward, big).min(axis=0)
@@ -268,22 +595,6 @@ def analyze_depth(
             & (np.abs(above_fwd_col - fp_fwd_col) < 0.30)
         )
         footprint = fp_candidate & ~wall_cols[None, :]
-        if np.any(footprint):
-            fp_fwd = robot_forward[footprint]
-            fp_lat = robot_lateral[footprint]
-            # Decimate to a 6cm grid, cap the count: the map rasterizes at
-            # 4cm anyway and the queue must stay light.
-            cells = np.unique(
-                np.stack(
-                    [np.round(fp_fwd / 0.06).astype(np.int32), np.round(fp_lat / 0.06).astype(np.int32)],
-                    axis=1,
-                ),
-                axis=0,
-            )
-            if len(cells) > 240:
-                keep = np.linspace(0, len(cells) - 1, 240).astype(int)
-                cells = cells[keep]
-            region_points = tuple((float(c[0]) * 0.06, float(c[1]) * 0.06) for c in cells)
         masked_fwd = np.where(elevated, robot_forward, np.inf)
         any_iy, any_ix = np.unravel_index(int(np.argmin(masked_fwd)), masked_fwd.shape)
         nearest_any_m = float(robot_forward[any_iy, any_ix])
@@ -294,13 +605,16 @@ def analyze_depth(
             corridor_fwd = np.where(corridor, robot_forward, np.inf)
             ref_iy, ref_ix = np.unravel_index(int(np.argmin(corridor_fwd)), corridor_fwd.shape)
             nearest_gate_m = float(robot_forward[ref_iy, ref_ix])
-        # Near-boundary segment for the map: the depth band just behind the
-        # nearest point, restricted to the CONNECTED surface that contains
-        # it. Taking the global lateral extremes bridged two separate
-        # objects at similar depth into a phantom wall across the free gap
-        # between them (field 2026-07-12: red diagonals across open floor).
+            narrow = corridor & (np.abs(robot_lateral) <= CORRIDOR_NARROW_HALF_WIDTH_M)
+            if np.any(narrow):
+                nearest_gate_narrow_m = float(np.min(np.where(narrow, robot_forward, np.inf)))
+        # Map only the near boundary of the closest connected elevated
+        # component.  Taking every pixel in `footprint` stamps a whole
+        # tabletop/cabinet face as occupancy; a 2-D planner needs its leading
+        # edge, not its visible surface area.  The connected-component guard
+        # also prevents two nearby objects from being joined across open floor.
         near_ref = nearest_gate_m if nearest_gate_m is not None else nearest_any_m
-        band = elevated & (robot_forward <= near_ref + 0.15)
+        band = footprint & (robot_forward <= near_ref + FOOTPRINT_BOUNDARY_DEPTH_M)
         if np.count_nonzero(band) >= 8 and band[ref_iy, ref_ix]:
             _n_labels, band_labels = cv2.connectedComponents(
                 band.astype(np.uint8), connectivity=8
@@ -324,6 +638,13 @@ def analyze_depth(
                 col_overlap = np.intersect1d(comp_cols, above_cols)
                 is_wall = len(comp_cols) > 0 and (len(col_overlap) / len(comp_cols)) > 0.4
                 if not is_wall:
+                    # Decimate this 10cm leading band, not the entire
+                    # elevated surface.  It produces a thin obstacle boundary
+                    # in the world map and leaves the adjacent free floor
+                    # available for path planning.
+                    region_points = _decimate_xy(
+                        robot_forward[component], robot_lateral[component]
+                    )
                     comp_lat = robot_lateral[component].astype(np.float64)
                     comp_fwd = robot_forward[component].astype(np.float64)
                     # Least-squares line over the WHOLE component, endpoints
@@ -361,9 +682,26 @@ def analyze_depth(
         overlay = frame_bgr.copy()
         if overlay.shape[:2] == depth_m.shape:
             floorish = np.abs(height) <= FLOOR_BAND_M
+            # Red: camera-owned suspended collision geometry. Orange:
+            # floor-connected geometry intentionally delegated to lidar. The
+            # distinct colors make a doorway/table separation visible during
+            # a live run instead of looking like one giant red obstacle.
+            overlay[ground_connected] = (
+                0.45 * overlay[ground_connected] + 0.55 * np.array([0, 150, 255])
+            ).astype(np.uint8)
             overlay[elevated] = (0.35 * overlay[elevated] + 0.65 * np.array([0, 0, 220])).astype(np.uint8)
             overlay[floorish] = (0.7 * overlay[floorish] + 0.3 * np.array([0, 160, 0])).astype(np.uint8)
-            text = "clear" if nearest_gate_m is None else f"elevated {nearest_gate_m:.2f}m"
+            text = (
+                "no hough edge"
+                if proposal_line_xy is None
+                else "clear" if nearest_gate_m is None else f"elevated {nearest_gate_m:.2f}m"
+            )
+            if nearest_gate_m is not None:
+                text += (
+                    " nw=-"
+                    if nearest_gate_narrow_m is None
+                    else f" nw={nearest_gate_narrow_m:.2f}"
+                )
             if lidar_corridor_min_m is not None:
                 text += f" | lidar {lidar_corridor_min_m:.2f}m"
             cv2.putText(
@@ -375,19 +713,33 @@ def analyze_depth(
                 (255, 255, 255),
                 1,
             )
+            if proposal_line_xy is not None:
+                cv2.line(
+                    overlay,
+                    proposal_line_xy[0],
+                    proposal_line_xy[1],
+                    (0, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
 
     return DepthEyeResult(
         eye=str(eye),
         frame_monotonic=float(frame_monotonic),
         scale=scale,
         scale_source=scale_source,
+        proposal_detected=proposal_line_xy is not None,
+        proposal_score=float(proposal_score),
+        proposal_line_xy=proposal_line_xy,
         nearest_gate_m=nearest_gate_m,
+        nearest_gate_narrow_m=nearest_gate_narrow_m,
         nearest_any_m=nearest_any_m,
         edge_height_m=edge_height_m,
         bearing_deg=bearing_deg,
         segment_p1=seg_p1,
         segment_p2=seg_p2,
         region_points_xy=region_points,
+        floor_points_xy=floor_points,
         elevated_ratio=elevated_ratio,
         lidar_corridor_min_m=lidar_corridor_min_m,
         overlay_bgr=overlay,
@@ -437,12 +789,16 @@ class DepthWorker:
         eye_models: dict[str, CameraModel],
         *,
         lidar_ranges_fn=None,
+        edge_detector_config: ElevatedEdgeScanConfig | None = None,
         model_name: str = DEFAULT_DEPTH_MODEL,
         max_frame_age_s: float = 1.0,
     ) -> None:
         self._subscriber = subscriber
         self._eye_models = dict(eye_models)
         self._lidar_ranges_fn = lidar_ranges_fn
+        self._proposal_detector = ElevatedEdgeDetector(
+            edge_detector_config or ElevatedEdgeScanConfig()
+        )
         self._estimator = DepthEstimator(model_name)
         self._max_frame_age_s = float(max_frame_age_s)
         self._lock = threading.Lock()
@@ -509,6 +865,7 @@ class DepthWorker:
                     lidar_b = lidar_r = None
             started = time.monotonic()
             try:
+                proposal = self._proposal_detector.detect(frame)
                 depth = self._estimator.infer(frame)
                 result = analyze_depth(
                     self._eye_models[eye],
@@ -518,6 +875,8 @@ class DepthWorker:
                     frame_bgr=frame,
                     lidar_bearings_deg=lidar_b,
                     lidar_ranges_m=lidar_r,
+                    proposal_line_xy=proposal.line_xy if proposal.detected else None,
+                    proposal_score=float(proposal.score),
                 )
             except Exception as exc:
                 self.failure = f"{type(exc).__name__}: {exc}"

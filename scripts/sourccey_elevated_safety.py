@@ -77,6 +77,19 @@ class ConfirmedEdge:
     points_robot_xy: tuple[tuple[float, float], ...] = ()
 
 
+@dataclass(frozen=True)
+class FloorEvidence:
+    """Depth-observed traversable floor, measured in the ROBOT frame. The
+    map consumer transforms these points with the tracked pose and CLEARS
+    any elevated cells they land on: free-space evidence is the symmetric
+    half of occupancy mapping — without it one overshot footprint blocks a
+    doorway for the rest of the run."""
+
+    eye: str
+    monotonic: float
+    points_robot_xy: tuple[tuple[float, float], ...]
+
+
 @dataclass
 class ElevatedSafetyConfig:
     """All anti-collision tunables in one place."""
@@ -94,6 +107,13 @@ class ElevatedSafetyConfig:
     forward_block_distance_m: float = 0.55
     near_freeze_distance_m: float = 0.35
     near_release_margin_m: float = 0.15
+    # The elevated-depth cameras are pitched and mounted ahead of the base.
+    # Their conservative projective range consistently reads an obstacle
+    # closer than the base can physically reach it.  Apply this correction
+    # ONLY to depth-derived motion gates: lidar / bottom-camera stops and
+    # depth geometry stamped into the map retain their measured coordinates.
+    # Six inches = 0.1524m.
+    depth_edge_approach_allowance_m: float = 0.1524
     # The forward gate intersects the detected edge SEGMENT with the corridor
     # the robot's body sweeps: exact for diagonal approaches (the near END of
     # the edge governs, not its center), and edges fully outside the corridor
@@ -222,6 +242,13 @@ class HazardState:
     reason: str = "clear"
     est_distance_m: float | None = None
     edge_height_m: float | None = None
+    # Squeeze tier: the WIDE gate corridor is obstructed but the body-width
+    # narrow corridor is clear at safe distance — the gap is physically
+    # passable. Forward is ALLOWED at creep speed instead of stopped, so the
+    # robot closes in, keeps refining the edge with approach footprints, and
+    # squeezes through doorway-sized gaps beside furniture instead of
+    # striking the frontier out.
+    squeeze: bool = False
     frames_stale: bool = False
     blind_zone: bool = False
     # Bottom-camera ground gate (floor band the lidar cannot see).
@@ -267,6 +294,17 @@ def gate_forward_allowed(state: HazardState) -> tuple[bool, str]:
     if state.frames_stale:
         return False, "camera_stale_stop"
     if state.active or state.blind_zone or state.ground_active:
+        if (
+            state.squeeze
+            and state.active
+            and not state.blind_zone
+            and not state.ground_active
+            and not state.hold
+        ):
+            # Passable gap: forward allowed, but the caller MUST creep.  A
+            # near-side point may still freeze rotation, yet cannot block a
+            # straight path when the body-width corridor is clear.
+            return True, "squeeze_creep"
         return False, state.decision_label()
     if state.hold:
         return False, f"post_stop_hold({state.hold_reason})"
@@ -614,6 +652,16 @@ class ElevatedHazardMonitor:
         self._last_rotation_monotonic = 0.0
         # Parallax-confirmed edge measurements awaiting the map consumer.
         self._confirmed_edge_queue: list[ConfirmedEdge] = []
+        # One publish per analyzed FRAME per eye: the monitor ticks ~10Hz
+        # while depth frames land ~0.5s apart, and re-publishing the same
+        # frame with fresh tick timestamps would let the map's two-frame
+        # persistence gate "confirm" a cell from a single observation.
+        self._last_footprint_frame_mono: dict[str, float] = {}
+        # Depth-observed floor (free space) awaiting the map consumer, plus
+        # the last-published frame time per eye so each depth result is
+        # queued once, not once per monitor tick.
+        self._floor_evidence_queue: list[FloorEvidence] = []
+        self._floor_evidence_last_frame: dict[str, float] = {}
         # Post-stop hold (anti-ratchet).
         self._hold_active = False
         self._hold_reason = ""
@@ -677,6 +725,15 @@ class ElevatedHazardMonitor:
             edges = list(self._confirmed_edge_queue)
             self._confirmed_edge_queue.clear()
         return edges
+
+    def drain_floor_evidence(self) -> list[FloorEvidence]:
+        """Depth-observed floor points since the last drain. Robot-frame
+        coordinates at (approximately) the moment of measurement — pair with
+        the current tracked pose when clearing world cells."""
+        with self._lock:
+            evidence = list(self._floor_evidence_queue)
+            self._floor_evidence_queue.clear()
+        return evidence
 
     def report_external_stop(self, reason: str) -> None:
         """External gates (e.g. the lidar stop box) report their stops here so
@@ -799,18 +856,51 @@ class ElevatedHazardMonitor:
         candidates: dict[str, tuple[str, float | None, float | None, float | None, float]] = {}
         now = time.monotonic()
         for eye_key, result in depth_results.items():
+            # Depth verifies the geometry of a classic high-contrast edge; it
+            # cannot independently invent an elevated hazard. Fixtures from
+            # before this field existed keep their legacy behavior.
+            if getattr(result, "proposal_detected", True) is False:
+                continue
             advance = max(
                 0.0, self._forward_travel_m - self._travel_at(float(result.frame_monotonic))
             )
+            # Floor (free-space) evidence flows on EVERY rotation-fresh
+            # result — including hazard-free frames, which are exactly the
+            # ones that prove a mapped red cell isn't there. Published once
+            # per depth result, not once per monitor tick.
+            floor_pts = getattr(result, "floor_points_xy", ()) or ()
+            if (
+                floor_pts
+                and float(result.frame_monotonic) >= self._last_rotation_monotonic + 0.2
+                and self._floor_evidence_last_frame.get(eye_key)
+                != float(result.frame_monotonic)
+            ):
+                self._floor_evidence_last_frame[eye_key] = float(result.frame_monotonic)
+                with self._lock:
+                    self._floor_evidence_queue.append(
+                        FloorEvidence(
+                            eye=str(eye_key),
+                            monotonic=now,
+                            points_robot_xy=tuple(
+                                (float(px) - advance, float(py)) for px, py in floor_pts
+                            ),
+                        )
+                    )
+                    del self._floor_evidence_queue[:-20]
+            # Treat a depth edge as this much farther away for *motion
+            # gating* after latency compensation.  The raw measured position
+            # still feeds the map below, so this is not a phantom map shift
+            # and does not relax any lidar or ground-obstacle protection.
+            depth_allowance = max(0.0, float(cfg.depth_edge_approach_allowance_m))
             gate = (
                 None
                 if result.nearest_gate_m is None
-                else max(0.05, float(result.nearest_gate_m) - advance)
+                else max(0.05, float(result.nearest_gate_m) - advance + depth_allowance)
             )
             nearest = (
                 None
                 if result.nearest_any_m is None
-                else max(0.05, float(result.nearest_any_m) - advance)
+                else max(0.05, float(result.nearest_any_m) - advance + depth_allowance)
             )
             if gate is None and nearest is None:
                 continue
@@ -832,22 +922,28 @@ class ElevatedHazardMonitor:
                 (float(px) - advance, float(py))
                 for px, py in getattr(result, "region_points_xy", ()) or ()
             )
-            # Depth mode publishes FOOTPRINTS ONLY, and only from APPROACH-
-            # range observations (corridor gate 0.30..1.5m, nearest >= 0.35m)
-            # where monocular depth is proven good. Frame-filling close-ups
-            # at the stop moment are physics-degenerate — no floor, no wall,
-            # no scale cues; field 2026-07-12: a 0.19m close-up read
-            # "elevated 1.01m" and smeared an 800-point blob across the map.
-            # The stop itself is covered by the synthetic blocker at the
-            # exactly-known stop pose.
+            # Depth mode publishes the thin leading boundary from ANY
+            # bearing whose nearest point sits in the reliable band
+            # (0.30..1.80m) — not just the forward corridor. The corridor is
+            # a STOP concept; for the MAP, drive-by side sightings are how
+            # furniture beside the path gets recorded (field 2026-07-13: the
+            # starting room's table was never mapped because the exit path
+            # never pointed at it inside gate range, so the planner had no
+            # red cells to route around). The map layer's persistence gate
+            # and floor clearing guard what this wider band lets through;
+            # frame-filling close-ups remain excluded by the 0.30m minimum,
+            # and footprint points are already range-capped at 1.8m by the
+            # perception layer.
+            publish_metric = nearest if nearest is not None else gate
             if (
-                gate is not None
-                and 0.30 <= gate <= 1.50
-                and nearest is not None
-                and nearest >= 0.35
+                publish_metric is not None
+                and 0.30 <= publish_metric <= 1.80
                 and float(result.frame_monotonic) >= self._last_rotation_monotonic + 0.2
+                and float(result.frame_monotonic)
+                != self._last_footprint_frame_mono.get(str(eye_key), -1.0)
                 and footprint
             ):
+                self._last_footprint_frame_mono[str(eye_key)] = float(result.frame_monotonic)
                 if (
                     result.segment_p1 is not None
                     and result.segment_p2 is not None
@@ -863,7 +959,7 @@ class ElevatedHazardMonitor:
                     )
                     seg_height = float(result.edge_height_m)
                 else:
-                    seg_p1 = seg_p2 = (float(gate), 0.0)
+                    seg_p1 = seg_p2 = (float(publish_metric), 0.0)
                     seg_height = 0.5
                 with self._lock:
                     self._confirmed_edge_queue.append(
@@ -872,7 +968,7 @@ class ElevatedHazardMonitor:
                             p1_robot_xy=seg_p1,
                             p2_robot_xy=seg_p2,
                             height_m=seg_height,
-                            nearest_m=float(nearest if nearest is not None else gate),
+                            nearest_m=float(publish_metric),
                             monotonic=now,
                             points_robot_xy=footprint,
                         )
@@ -1419,11 +1515,40 @@ class ElevatedHazardMonitor:
         if ground_active and reason == "clear":
             reason = "ground_obstacle"
 
+        # ---- squeeze tier ----------------------------------------------------------
+        # Wide corridor obstructed (active) but the body-width narrow corridor
+        # clear beyond the block distance on EVERY fresh eye: passable gap.
+        # Latency-compensated like the main gates. Depth mode only — hough has
+        # no narrow-corridor measurement.
+        squeeze = False
+        if used_depth and active and not blind_zone:
+            narrow_min: float | None = None
+            for result in depth_results.values():
+                narrow_gate = getattr(result, "nearest_gate_narrow_m", None)
+                if narrow_gate is None:
+                    continue
+                advance = max(
+                    0.0,
+                    self._forward_travel_m - self._travel_at(float(result.frame_monotonic)),
+                )
+                value = max(
+                    0.05,
+                    float(narrow_gate)
+                    - advance
+                    + max(0.0, float(cfg.depth_edge_approach_allowance_m)),
+                )
+                if narrow_min is None or value < narrow_min:
+                    narrow_min = value
+            squeeze = narrow_min is None or narrow_min > float(cfg.forward_block_distance_m)
+
         # ---- post-stop hold (anti-ratchet) ----------------------------------------
         with self._lock:
             external_reason = self._external_stop_reason
             self._external_stop_reason = None
-        stopping_now = bool(active or blind_zone or ground_active or external_reason)
+        # A squeeze pass-through is not a stop: it must not arm a hold.
+        stopping_now = bool(
+            (active and not squeeze) or blind_zone or ground_active or external_reason
+        )
         stop_reason = (
             external_reason
             if external_reason
@@ -1455,6 +1580,7 @@ class ElevatedHazardMonitor:
             reason=reason,
             est_distance_m=est_distance,
             edge_height_m=edge_height,
+            squeeze=squeeze,
             frames_stale=False,
             blind_zone=blind_zone,
             ground_active=bool(ground_active),

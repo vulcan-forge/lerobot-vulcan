@@ -1025,6 +1025,7 @@ def _drive_forward_burst(
     host_theta_vel_last = 0.0
     stopped_by_hazard = False
     hazard_reason = ""
+    squeeze_notified = False
     effective_forward_speed = _apply_min_effective_magnitude(
         float(forward_speed),
         minimum_abs=float(min_effective_move_speed),
@@ -1039,6 +1040,7 @@ def _drive_forward_burst(
                     f"(frame_id={frame_id}, blocked_points={blocked_points}, baseline={zone_cfg.baseline_points})"
                 )
                 break
+        commanded_forward_speed = effective_forward_speed
         if hazard_monitor is not None:
             hazard_ok, hazard_reason_now = hazard_monitor.forward_allowed()
             if not hazard_ok:
@@ -1049,9 +1051,22 @@ def _drive_forward_burst(
                     f"({hazard_reason}); halting"
                 )
                 break
+            if str(hazard_reason_now) == "squeeze_creep":
+                # Passable gap beside furniture: advance at the minimum
+                # effective speed so the approach keeps refining the edge
+                # and the narrow-corridor gate can veto in time.
+                commanded_forward_speed = min(
+                    effective_forward_speed, float(min_effective_move_speed)
+                )
+                if not squeeze_notified:
+                    squeeze_notified = True
+                    print(
+                        "[safety] passable gap beside furniture: creeping through "
+                        "at minimum speed (squeeze)"
+                    )
         robot.send_action(
             {
-                "x.vel": float(effective_forward_speed),
+                "x.vel": float(commanded_forward_speed),
                 "y.vel": 0.0,
                 "theta.vel": float(steer_theta_vel),
                 "z.pos": getattr(robot, "_z_pos_cmd", 100.0),
@@ -1649,6 +1664,41 @@ def _reverse_escape(
         robot_radius_m=float(robot_radius_m),
         lidar_offset_forward_m=float(lidar_offset_forward_m),
     )
+    # LIVE rear check: the map clearance is cast from the TRACKED pose, and
+    # reverse escapes fire mostly during relocalization crises when that
+    # pose is a stale fallback (field 2026-07-13: pose error >1m after a
+    # doorway transit — "0.76m clear behind" was measured somewhere else and
+    # the robot backed into the open door leaf). The live scan is robot-
+    # relative, immune to pose error; ~270deg of it is usable, so much of
+    # the rear quarter IS visible. Ranges below 0.65m are the robot's own
+    # body (rear corner sits ~0.58m from the forward-offset lidar) and are
+    # skipped; a fully occluded rear yields no points and falls back to the
+    # map check unchanged.
+    live_rear_m: float | None = None
+    _live_id, live_frame = feed.latest()
+    if live_frame is not None:
+        all_points = _scan_to_local_points(
+            points=live_frame.points,
+            forward_angle_deg=float(forward_angle_deg),
+            valid_angle_half_width_deg=180.0,
+            invert_lateral_axis=bool(invert_lateral_axis),
+            max_distance_m=3.0,
+            min_confidence=int(min_confidence),
+            min_range_m=float(lidar_offset_forward_m) + float(robot_radius_m) + 0.14,
+        )
+        if len(all_points):
+            rear_bumper_x = -(float(lidar_offset_forward_m) + float(robot_radius_m))
+            behind = (all_points[:, 0] < rear_bumper_x) & (
+                np.abs(all_points[:, 1]) <= float(robot_radius_m) + 0.08
+            )
+            if np.any(behind):
+                live_rear_m = float(np.min(-all_points[behind, 0]) + rear_bumper_x)
+    if live_rear_m is not None and live_rear_m < clearance_m:
+        print(
+            f"[wander] live lidar shows only {live_rear_m:.2f}m clear behind "
+            f"(map claimed {clearance_m:.2f}m); trusting the live scan"
+        )
+        clearance_m = live_rear_m
     if clearance_m >= 0.30:
         target_reverse_m = min(0.45, clearance_m - 0.10)
         print(
@@ -1923,9 +1973,9 @@ def main() -> int:
     parser.add_argument(
         "--robot-radius-m",
         type=float,
-        default=0.30,
-        help="Half-width of the robot's collision footprint. Map frontiers behind gaps "
-        "narrower than twice this are treated as unreachable.",
+        default=0.29,
+        help="Planning collision radius: 18in / 0.229m body half-width plus a 0.06m "
+        "clearance margin. Map frontiers behind narrower gaps are unreachable.",
     )
     parser.add_argument(
         "--lidar-offset-forward-m",
@@ -1959,6 +2009,12 @@ def main() -> int:
     parser.add_argument("--rerun-mode", choices=("web", "local"), default="web")
     parser.add_argument("--rerun-grpc-port", type=int, default=9877)
     parser.add_argument("--rerun-web-port", type=int, default=9878)
+    parser.add_argument(
+        "--camera-feedback-hz",
+        type=float,
+        default=5.0,
+        help="Live Rerun camera-panel update rate (0 disables). Shows annotated front eyes and bottom camera.",
+    )
     parser.add_argument(
         "--elevated-safety",
         choices=("off", "on"),
@@ -2094,6 +2150,7 @@ def main() -> int:
                         safety_config.right_key: safety_config.eye_right_model,
                     },
                     lidar_ranges_fn=_safety_lidar_ranges,
+                    edge_detector_config=safety_config.detector_config(),
                 )
                 depth_worker.start()
                 print(
@@ -2172,9 +2229,23 @@ def main() -> int:
     # Depth mode stamps floor-projected FOOTPRINT POINTS (the region's true
     # shape); hough mode stamps fitted segments.
     elevated_segments_world: list[dict] = []
-    elevated_points_world: list[tuple[float, float, float]] = []
+    # Rendered red points keyed by their 4cm map cell so floor (free-space)
+    # evidence can remove them along with the planning cell.
+    # Rendered red points keyed by their 4cm map cell so floor (free-space)
+    # evidence can remove them along with the planning cell.
+    elevated_points_world: dict[tuple[int, int], tuple[float, float, float]] = {}
+    # Two-frame persistence gate for FAR footprint cells: beyond 0.9m a cell
+    # becomes a planning obstacle only after being observed elevated in two
+    # frames separated by >= 0.75s (a different frame, not this moment's
+    # other eye). Monocular depth's worst failures are SINGLE-FRAME —
+    # textureless-wall bulges and scale wobble (field 2026-07-13:
+    # x1.08..x1.77 across frames) splatted one-off cells over the exit
+    # corridor, and the add-only map kept them forever. Real furniture
+    # re-observes on the same cells; noise does not. cell -> (mono, hits)
+    elevated_pending_world: dict[tuple[int, int], tuple[float, int]] = {}
     elevated_occupied_world: set[tuple[int, int]] = set()
     investigated_spots_world: list[tuple[float, float]] = []
+    sidestep_spots_world: list[tuple[float, float]] = []
 
     # Frontier goals that repeatedly failed (path blocked / hazard-held on
     # approach). Two strikes blacklist the frontier for a while so the
@@ -2249,6 +2320,18 @@ def main() -> int:
     active_explore_target_blocked_count = 0
     force_live_frontier_cycles = 0
     pending_motion_hint: MotionHint | None = None
+    # A failed turn capture is recovered by continuing around the room, not by
+    # reversing into the same weak-reference view. Two 85deg sectors create
+    # fresh overlap before the planner retries the deferred frontier.
+    orbit_recovery_turns_remaining = 0
+    orbit_recovery_direction_sign: float | None = None
+    # At most one recovery turn may follow an unlocalized turn. If it also
+    # loses tracking, further rotations are unobservable and only amplify the
+    # heading error; force a fresh capture/drive cycle instead of spinning.
+    orbit_recovery_turn_attempts = 0
+    # Consecutive stationary "scan the new area" captures from one spot: a
+    # second identical scan cannot add information, so >= 1 forces a turn.
+    stationary_scan_streak = 0
     consecutive_append_discards = 0
     consecutive_blocked_cycles = 0
     failed_reverse_escapes = 0
@@ -2258,6 +2341,10 @@ def main() -> int:
     # oscillation. Allow one lock-lost rotate-away per episode; after that
     # the ladder escalates straight to the slow blind reverse.
     rotate_away_lock_losses = 0
+    # Keep recovery turns in one direction until a real forward drive
+    # succeeds. Per-frame left/right hazard flips must not make the robot
+    # rotate back and forth in place.
+    recovery_turn_sign: float | None = None
     wedged_events = 0
     no_frontier_cycles = 0
     survey_targets_used = 0
@@ -2371,6 +2458,26 @@ def main() -> int:
                 f"blacklisted after repeated failures ({reason}); exploring elsewhere first"
             )
 
+    def _strike_frontier_if_reached(face_xy, stop_pose: Pose2D, reason: str) -> None:
+        """Strike a frontier only when its own face was actually reached.
+
+        A camera stop well before a distant frontier says that a *local*
+        obstacle needs mapping and a path replan.  Counting it against the
+        distant target blacklisted open exits after two shelf/table stops.
+        """
+        face_distance_m = math.hypot(
+            float(face_xy[0]) - float(stop_pose.x),
+            float(face_xy[1]) - float(stop_pose.y),
+        )
+        if face_distance_m > 0.50:
+            print(
+                "[wander] local hazard stop "
+                f"{face_distance_m:.2f}m before frontier face; mapping/replanning "
+                "without striking the distant frontier"
+            )
+            return
+        _strike_frontier(face_xy, reason)
+
     def _plan_drives_into_blocked_front() -> bool:
         """True when the current plan's FIRST move is forward through the
         occupied stop box — the only case where front occupancy vetoes the
@@ -2388,7 +2495,9 @@ def main() -> int:
         )
         return abs(wp_delta_deg) <= 40.0
 
-    def _rotate_away_hint(start_pose: Pose2D, hazard_side: str) -> MotionHint | None:
+    def _rotate_away_hint(
+        start_pose: Pose2D, hazard_side: str, preferred_delta_deg: float | None = None
+    ) -> MotionHint | None:
         """Wedged-pocket escape of last resort (field deadlock 2026-07-11):
         forward was held, reverse had no map clearance, and the hold could
         only be released by reversing — the wanderer looped forever. Rotate
@@ -2400,7 +2509,16 @@ def main() -> int:
             if not turn_ok:
                 print(f"[safety] cannot rotate away: rotation frozen ({turn_denial})")
                 return None
-        rotate_sign = -1.0 if str(hazard_side) == "left" else 1.0
+        nonlocal recovery_turn_sign
+        if recovery_turn_sign is not None:
+            rotate_sign = float(recovery_turn_sign)
+        elif preferred_delta_deg is not None and abs(float(preferred_delta_deg)) >= 20.0:
+            # Favor the live lidar's open direction over an arbitrary
+            # side-based recovery turn.
+            rotate_sign = 1.0 if float(preferred_delta_deg) >= 0.0 else -1.0
+        else:
+            rotate_sign = -1.0 if str(hazard_side) == "left" else 1.0
+        recovery_turn_sign = float(rotate_sign)
         print(
             "[safety] rotating away from the hazard "
             f"(side={hazard_side}, target=85.0deg {'cw' if rotate_sign < 0 else 'ccw'})"
@@ -2461,6 +2579,161 @@ def main() -> int:
             label=f"hazard_rotate_away_{capture_index:02d}",
         )
 
+    def _sidestep_waypoint_hint(
+        start_pose: Pose2D,
+        hazard_side: str,
+        preferred_delta_deg: float | None = None,
+    ) -> MotionHint | None:
+        """Repair a locally bad waypoint with a guarded lateral offset.
+
+        The base can strafe, but the established lidar stop box and eye gate
+        guard forward motion.  Use them unchanged: turn 90 degrees away from
+        the close side edge, advance a short amount, then turn back before
+        replanning the same frontier from the offset pose.
+        """
+        if hazard_monitor is not None and not hazard_monitor.turn_allowed()[0]:
+            return None
+        # A left-side edge means translate right (clockwise turn first), and
+        # vice versa. A front edge is the normal table-at-exit case: take the
+        # side that points toward the current frontier, then restore heading.
+        # This is the bounded 90deg -> forward -> -90deg bypass rather than
+        # repeatedly turning in place at the same blocked waypoint.
+        if str(hazard_side) == "left":
+            turn_sign = -1.0
+        elif str(hazard_side) == "right":
+            turn_sign = 1.0
+        elif preferred_delta_deg is not None and abs(float(preferred_delta_deg)) >= 10.0:
+            turn_sign = 1.0 if float(preferred_delta_deg) >= 0.0 else -1.0
+        else:
+            return None
+        print(
+            "[wander] repairing blocked waypoint with guarded sidestep "
+            f"(edge={hazard_side}, turn=90deg {'cw' if turn_sign < 0 else 'ccw'})"
+        )
+
+        first = _turn_with_arc_tracking(
+            robot=robot, feed=feed, transformed_sets=stitch_state["transformed_sets"],
+            start_pose=start_pose, lidar_offset_forward_m=float(args.lidar_offset_forward_m),
+            resolution_m=float(args.stitch_resolution_m), target_turn_deg=90.0,
+            direction_sign=turn_sign, turn_speed=float(args.turn_speed),
+            turn_burst_s=float(args.turn_burst_s), turn_settle_s=float(args.turn_settle_s),
+            forward_angle_deg=float(args.forward_angle_deg),
+            valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+            invert_lateral_axis=bool(args.invert_lateral_axis), max_distance_m=float(args.max_distance_m),
+            min_range_m=float(args.min_range_m), min_confidence=int(args.min_confidence),
+            stop_tolerance_deg=min(8.0, float(args.stop_tolerance_deg)),
+            max_bursts=int(args.max_turn_bursts), hazard_monitor=hazard_monitor,
+        )
+        if bool(first.get("lock_lost")) or abs(float(first["turned_deg"])) < 70.0:
+            print("[wander] sidestep cancelled: could not complete the first safe quarter-turn")
+            return None
+        d1x, d1y = _turn_lever_arm_local_delta(
+            float(first["turned_deg"]), lidar_offset_forward_m=float(args.lidar_offset_forward_m)
+        )
+        t0 = math.radians(float(start_pose.theta_deg))
+        side_pose = Pose2D(
+            x=float(start_pose.x) + math.cos(t0) * d1x - math.sin(t0) * d1y,
+            y=float(start_pose.y) + math.sin(t0) * d1x + math.cos(t0) * d1y,
+            theta_deg=float(first["final_theta_deg"]),
+        )
+        side_pose, drive_meta = _drive_with_tracking(
+            robot=robot, feed=feed, zone_cfg=zone_cfg,
+            transformed_sets=stitch_state["transformed_sets"], start_pose=side_pose,
+            resolution_m=float(args.stitch_resolution_m), forward_speed=float(args.move_speed),
+            min_effective_move_speed=float(args.min_effective_move_speed), burst_s=0.25,
+            burst_count=1, inter_burst_pause_s=0.0, steer_theta_vel=0.0,
+            forward_angle_deg=float(args.forward_angle_deg),
+            valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+            invert_lateral_axis=bool(args.invert_lateral_axis), max_distance_m=float(args.max_distance_m),
+            min_range_m=float(args.min_range_m), min_confidence=int(args.min_confidence),
+            hazard_monitor=hazard_monitor,
+        )
+        shifted_m = math.hypot(float(side_pose.x) - float(start_pose.x), float(side_pose.y) - float(start_pose.y))
+        if (
+            bool(drive_meta.get("stopped_by_hazard"))
+            or bool(drive_meta.get("stopped_by_block"))
+            or bool(drive_meta.get("lock_lost"))
+            or shifted_m < 0.08
+        ):
+            print("[wander] sidestep stopped before a useful offset; keeping the turned safety pose")
+            final_pose = side_pose
+        else:
+            second = _turn_with_arc_tracking(
+                robot=robot, feed=feed, transformed_sets=stitch_state["transformed_sets"],
+                start_pose=side_pose, lidar_offset_forward_m=float(args.lidar_offset_forward_m),
+                resolution_m=float(args.stitch_resolution_m), target_turn_deg=90.0,
+                direction_sign=-turn_sign, turn_speed=float(args.turn_speed),
+                turn_burst_s=float(args.turn_burst_s), turn_settle_s=float(args.turn_settle_s),
+                forward_angle_deg=float(args.forward_angle_deg),
+                valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+                invert_lateral_axis=bool(args.invert_lateral_axis), max_distance_m=float(args.max_distance_m),
+                min_range_m=float(args.min_range_m), min_confidence=int(args.min_confidence),
+                stop_tolerance_deg=min(8.0, float(args.stop_tolerance_deg)),
+                max_bursts=int(args.max_turn_bursts), hazard_monitor=hazard_monitor,
+            )
+            d2x, d2y = _turn_lever_arm_local_delta(
+                float(second["turned_deg"]), lidar_offset_forward_m=float(args.lidar_offset_forward_m)
+            )
+            t1 = math.radians(float(side_pose.theta_deg))
+            final_pose = Pose2D(
+                x=float(side_pose.x) + math.cos(t1) * d2x - math.sin(t1) * d2y,
+                y=float(side_pose.y) + math.sin(t1) * d2x + math.cos(t1) * d2y,
+                theta_deg=float(second["final_theta_deg"]),
+            )
+        t_start = math.radians(float(start_pose.theta_deg))
+        dx = float(final_pose.x) - float(start_pose.x)
+        dy = float(final_pose.y) - float(start_pose.y)
+        print(f"[wander] sidestep offset={math.hypot(dx, dy):.2f}m; replanning the same frontier")
+        return MotionHint(
+            kind="mixed",
+            expected_dx_local_m=math.cos(t_start) * dx + math.sin(t_start) * dy,
+            expected_dy_local_m=-math.sin(t_start) * dx + math.cos(t_start) * dy,
+            expected_dtheta_deg=_normalize_angle_deg(float(final_pose.theta_deg) - float(start_pose.theta_deg)),
+            search_xy_m=0.55,
+            search_theta_window_deg=30.0,
+            label=f"waypoint_sidestep_{capture_index:02d}",
+        )
+
+    def _live_frontier_probe_hint(start_pose: Pose2D, choice: FrontierChoice) -> MotionHint:
+        """Cautiously extend a map that ends before a live lidar opening.
+
+        The stitched grid can have no reachable unknown cells immediately
+        after a doorway transit, while the current lidar still sees open
+        space.  One normal safety-gated forward burst creates the next map
+        evidence; completion is never the right action in that state.
+        """
+        print(
+            "[wander] map frontier exhausted but live lidar is open; probing forward "
+            f"(delta={choice.delta_deg:.1f}deg, range={choice.mean_distance_m:.2f}m)"
+        )
+        end_pose, probe_meta = _drive_with_tracking(
+            robot=robot, feed=feed, zone_cfg=zone_cfg,
+            transformed_sets=stitch_state["transformed_sets"], start_pose=start_pose,
+            resolution_m=float(args.stitch_resolution_m), forward_speed=float(args.move_speed),
+            min_effective_move_speed=float(args.min_effective_move_speed),
+            burst_s=min(0.80, float(args.move_burst_s)), burst_count=1,
+            inter_burst_pause_s=0.0, steer_theta_vel=0.0,
+            forward_angle_deg=float(args.forward_angle_deg),
+            valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+            invert_lateral_axis=bool(args.invert_lateral_axis), max_distance_m=float(args.max_distance_m),
+            min_range_m=float(args.min_range_m), min_confidence=int(args.min_confidence),
+            hazard_monitor=hazard_monitor,
+        )
+        t0 = math.radians(float(start_pose.theta_deg))
+        dx = float(end_pose.x) - float(start_pose.x)
+        dy = float(end_pose.y) - float(start_pose.y)
+        if bool(probe_meta.get("stopped_by_hazard")):
+            print("[wander] live-frontier probe stopped by a safety gate; replanning from the tracked stop pose")
+        return MotionHint(
+            kind="drive",
+            expected_dx_local_m=math.cos(t0) * dx + math.sin(t0) * dy,
+            expected_dy_local_m=-math.sin(t0) * dx + math.cos(t0) * dy,
+            expected_dtheta_deg=_normalize_angle_deg(float(end_pose.theta_deg) - float(start_pose.theta_deg)),
+            search_xy_m=0.45,
+            search_theta_window_deg=18.0,
+            label=f"live_frontier_probe_{capture_index:02d}",
+        )
+
     def _elevated_hazard_engaged() -> bool:
         """True when an elevated-edge stop is in effect — including a
         post-stop HOLD left behind by one. Field run 2026-07-09: the hold
@@ -2519,6 +2792,8 @@ def main() -> int:
     stop_debug_dir = output_dir / "stop_debug"
     stop_debug_dir.mkdir(parents=True, exist_ok=True)
     stop_debug_counter = {"n": 0}
+    # Rate limiter for planning-denial bundles (same reason at most every 20s).
+    planning_denial_last: dict[str, object] = {"reason": "", "mono": -1e9}
 
     def _dump_stop_debug(stop_pose: Pose2D, note: str) -> None:
         """Field-diagnosis bundle per hazard stop: what the robot SAW (eye
@@ -2550,6 +2825,14 @@ def main() -> int:
             "est_distance_m": hs.est_distance_m,
             "classification": hs.classification,
             "detail": hs.detail,
+            # Ground-gate + hold state: planning-time denials are mostly
+            # ground_stop_* / post_stop_hold and were undiagnosable without
+            # these (field 2026-07-13 night: ~8 ground denials, zero bundles).
+            "ground_active": bool(getattr(hs, "ground_active", False)),
+            "ground_distance_m": getattr(hs, "ground_distance_m", None),
+            "ground_side": getattr(hs, "ground_side", "none"),
+            "hold": bool(getattr(hs, "hold", False)),
+            "hold_reason": getattr(hs, "hold_reason", ""),
             "map_cells_total": len(elevated_occupied_world),
         }
         (stop_debug_dir / f"stop{bundle_index:03d}.json").write_text(
@@ -2615,36 +2898,134 @@ def main() -> int:
         new_cells = 0
         new_points = 0
         segment_added = False
-        # Footprints: stamp only the NEWEST result per eye. Stamping the
-        # union of every queued frame smeared per-frame depth noise into an
-        # 800-point blob (field 2026-07-12).
-        newest_footprint_mono: dict[str, float] = {}
+        # FREE-SPACE pass first: depth-observed floor CLEARS any elevated
+        # cell it lands on. The map is otherwise add-only, so one overshot
+        # footprint would wall off a doorway for the rest of the run even
+        # while the eyes stare straight down its traversable floor (field
+        # 2026-07-12). Clear-then-stamp: this drain's own footprints re-add
+        # anything genuinely occupied. 3x3 neighborhood: floor evidence is
+        # 6cm-decimated while cells are 4cm — exact-cell clearing would
+        # leave stripes.
+        cleared_cells = 0
+        floor_batches = (
+            hazard_monitor.drain_floor_evidence()
+            if hasattr(hazard_monitor, "drain_floor_evidence")
+            else []
+        )
+        if newest_only and floor_batches:
+            newest_floor = max(float(ev.monotonic) for ev in floor_batches)
+            floor_batches = [
+                ev for ev in floor_batches if newest_floor - float(ev.monotonic) <= 0.3
+            ]
+        newest_floor_mono: dict[str, float] = {}
+        for ev in floor_batches:
+            if float(ev.monotonic) > newest_floor_mono.get(str(ev.eye), -1.0):
+                newest_floor_mono[str(ev.eye)] = float(ev.monotonic)
+        for ev in floor_batches:
+            if now_mono - float(ev.monotonic) > 1.0:
+                continue
+            if float(ev.monotonic) < newest_floor_mono.get(str(ev.eye), -1.0):
+                continue
+            for pf, pl in ev.points_robot_xy:
+                wx = float(stamp_pose.x) + float(pf) * cos_t - float(pl) * sin_t
+                wy = float(stamp_pose.y) + float(pf) * sin_t + float(pl) * cos_t
+                cx, cy = int(round(wx / 0.04)), int(round(wy / 0.04))
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        cell = (cx + dx, cy + dy)
+                        elevated_pending_world.pop(cell, None)
+                        if cell in elevated_occupied_world:
+                            elevated_occupied_world.discard(cell)
+                            elevated_points_world.pop(cell, None)
+                            cleared_cells += 1
+        # Footprints: the NEWEST frame per eye is the stamping frame; the
+        # frame before it (>=0.4s older, within a 3.0s window — the robot is
+        # settled/travel-compensated over that span) is CONFIRMATION-ONLY.
+        # Far cells promote on the INTERSECTION of the two frames: an AND
+        # across frames is noise-resistant where stamping the union of the
+        # whole queue smeared an 800-point blob (field 2026-07-12). A
+        # newest-only + cross-checkpoint persistence design mapped ZERO
+        # cells in the field (2026-07-13 evening run): checkpoints are taken
+        # at different poses/headings, so far cells never re-observed and
+        # pended forever.
+        footprint_monos: dict[str, list[float]] = {}
         for edge in drained_edges:
-            footprint_probe = getattr(edge, "points_robot_xy", ()) or ()
-            if footprint_probe:
+            if getattr(edge, "points_robot_xy", ()) or ():
                 eye_key = str(edge.eye)
-                if float(edge.monotonic) > newest_footprint_mono.get(eye_key, -1.0):
-                    newest_footprint_mono[eye_key] = float(edge.monotonic)
+                mono = float(edge.monotonic)
+                if mono not in footprint_monos.setdefault(eye_key, []):
+                    footprint_monos[eye_key].append(mono)
+        stamp_frame_mono: dict[str, float] = {}
+        confirm_frame_mono: dict[str, float] = {}
+        for eye_key, monos in footprint_monos.items():
+            monos.sort(reverse=True)
+            fresh = [m for m in monos if now_mono - m <= 3.0]
+            if not fresh:
+                continue
+            stamp_frame_mono[eye_key] = fresh[0]
+            for older in fresh[1:]:
+                if fresh[0] - older >= 0.4:
+                    confirm_frame_mono[eye_key] = older
+                    break
         for edge in drained_edges:
-            if now_mono - float(edge.monotonic) > 1.0:
-                continue
             footprint = getattr(edge, "points_robot_xy", ()) or ()
-            if footprint and float(edge.monotonic) < newest_footprint_mono.get(str(edge.eye), -1.0):
-                continue
             if footprint:
-                # Depth mode: stamp the region's floor-projected footprint
-                # directly, like lidar points — true shape, true placement,
-                # no fitted-line abstraction.
+                eye_key = str(edge.eye)
+                obs_mono = float(edge.monotonic)
+                if obs_mono == confirm_frame_mono.get(eye_key):
+                    # Confirmation-only frame: its points arm pending cells;
+                    # they never stamp directly (weaker pose match).
+                    for pf, pl in footprint:
+                        wx = float(stamp_pose.x) + float(pf) * cos_t - float(pl) * sin_t
+                        wy = float(stamp_pose.y) + float(pf) * sin_t + float(pl) * cos_t
+                        cell = (int(round(wx / 0.04)), int(round(wy / 0.04)))
+                        if (
+                            cell not in elevated_occupied_world
+                            and cell not in elevated_pending_world
+                            and len(elevated_pending_world) < 40000
+                        ):
+                            elevated_pending_world[cell] = (obs_mono, 1)
+                    continue
+                if obs_mono != stamp_frame_mono.get(eye_key):
+                    continue
+                # Stamping frame. DISTANCE-SCALED TRUST: points within 0.9m
+                # stamp immediately (close range is monocular depth's good
+                # regime, and a stop must teach the planner NOW — directive:
+                # every stop teaches something); farther points only become
+                # obstacles when a pending observation >= 0.4s older agrees
+                # (this drain's confirmation frame or a previous drain). The
+                # exit-corridor splats were all 1.3..1.9m one-offs.
                 for pf, pl in footprint:
                     wx = float(stamp_pose.x) + float(pf) * cos_t - float(pl) * sin_t
                     wy = float(stamp_pose.y) + float(pf) * sin_t + float(pl) * cos_t
                     cell = (int(round(wx / 0.04)), int(round(wy / 0.04)))
-                    if cell not in elevated_occupied_world and len(elevated_occupied_world) < 20000:
+                    if cell in elevated_occupied_world:
+                        continue
+                    if float(pf) > 0.9:
+                        pending = elevated_pending_world.get(cell)
+                        if pending is None:
+                            if len(elevated_pending_world) < 40000:
+                                elevated_pending_world[cell] = (obs_mono, 1)
+                            continue
+                        if obs_mono - pending[0] < 0.4:
+                            continue
+                    if len(elevated_occupied_world) < 20000:
+                        elevated_pending_world.pop(cell, None)
                         elevated_occupied_world.add(cell)
                         new_cells += 1
                         if len(elevated_points_world) < 6000:
-                            elevated_points_world.append((wx, wy, float(edge.height_m)))
+                            elevated_points_world[cell] = (wx, wy, float(edge.height_m))
                             new_points += 1
+                # Pending entries that never re-confirm are noise; sweep the
+                # stale ones so the dict cannot grow without bound.
+                if len(elevated_pending_world) > 20000:
+                    stale_before = now_mono - 30.0
+                    for stale_cell in [
+                        c for c, (m, _) in elevated_pending_world.items() if m < stale_before
+                    ]:
+                        del elevated_pending_world[stale_cell]
+                continue
+            if now_mono - float(edge.monotonic) > 1.0:
                 continue
             w1 = (
                 float(stamp_pose.x) + edge.p1_robot_xy[0] * cos_t - edge.p1_robot_xy[1] * sin_t,
@@ -2657,19 +3038,26 @@ def main() -> int:
             seg_cells = _stamp_world_segment(w1, w2, float(edge.height_m))
             new_cells += seg_cells
             segment_added = segment_added or seg_cells > 0
-        if new_points:
+        if new_points or cleared_cells:
             rr.log(
                 "world/elevated_regions",
                 rr.Points3D(
-                    [[px, py, ph] for px, py, ph in elevated_points_world],
+                    [[px, py, ph] for px, py, ph in elevated_points_world.values()],
                     colors=[[200, 0, 0]] * len(elevated_points_world),
                     radii=0.02,
                 ),
                 static=True,
             )
+        if cleared_cells:
+            print(
+                "[edge-map] floor evidence cleared "
+                f"{cleared_cells} stale cells (map_cells={len(elevated_occupied_world)})"
+            )
+        if new_points:
             print(
                 "[edge-map] elevated footprint mapped "
-                f"(+{new_points} points, map_cells={len(elevated_occupied_world)})"
+                f"(+{new_points} points, map_cells={len(elevated_occupied_world)}, "
+                f"pending={len(elevated_pending_world)})"
             )
         if segment_added and elevated_segments_world:
             latest = elevated_segments_world[-1]
@@ -2689,7 +3077,12 @@ def main() -> int:
         if hazard_monitor is None:
             return
         hazard_monitor.drain_confirmed_edges()
-        time.sleep(0.45)
+        if hasattr(hazard_monitor, "drain_floor_evidence"):
+            hazard_monitor.drain_floor_evidence()
+        # Two fresh frames per eye (~0.56s cadence each) must accumulate so
+        # the map's two-frame persistence gate can confirm far cells from
+        # this settled pose, not just stamp the near band.
+        time.sleep(1.3)
         _stamp_confirmed_edges(stamp_pose)
 
     def _investigate_edge_hint(start_pose: Pose2D) -> MotionHint | None:
@@ -2754,42 +3147,11 @@ def main() -> int:
             pose = _advance_pose(pose, escape_hint)
             _settle_and_stamp(pose)
 
-        # Heading sweep: walk the edge across both eyes to map its extent.
-        for sweep_target_deg, sweep_sign in ((35.0, 1.0), (70.0, -1.0), (35.0, 1.0)):
-            sweep_meta = _turn_with_arc_tracking(
-                robot=robot,
-                feed=feed,
-                transformed_sets=stitch_state["transformed_sets"],
-                start_pose=pose,
-                lidar_offset_forward_m=float(args.lidar_offset_forward_m),
-                resolution_m=float(args.stitch_resolution_m),
-                target_turn_deg=float(sweep_target_deg),
-                direction_sign=float(sweep_sign),
-                turn_speed=float(args.turn_speed),
-                turn_burst_s=float(args.turn_burst_s),
-                turn_settle_s=float(args.turn_settle_s),
-                forward_angle_deg=float(args.forward_angle_deg),
-                valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
-                invert_lateral_axis=bool(args.invert_lateral_axis),
-                max_distance_m=float(args.max_distance_m),
-                min_range_m=float(args.min_range_m),
-                min_confidence=int(args.min_confidence),
-                stop_tolerance_deg=min(8.0, float(args.stop_tolerance_deg)),
-                max_bursts=int(args.max_turn_bursts),
-                hazard_monitor=hazard_monitor,
-            )
-            sweep_turned_deg = float(sweep_meta["turned_deg"])
-            lever_dx, lever_dy = _turn_lever_arm_local_delta(
-                sweep_turned_deg, lidar_offset_forward_m=float(args.lidar_offset_forward_m)
-            )
-            theta0_rad = math.radians(float(pose.theta_deg))
-            cos0, sin0 = math.cos(theta0_rad), math.sin(theta0_rad)
-            pose = Pose2D(
-                x=float(pose.x) + cos0 * lever_dx - sin0 * lever_dy,
-                y=float(pose.y) + sin0 * lever_dx + cos0 * lever_dy,
-                theta_deg=float(sweep_meta["final_theta_deg"]),
-            )
-            _settle_and_stamp(pose)
+        # The old 35deg -> 70deg -> 35deg eye sweep ended at the original
+        # heading but spent three turns oscillating in place. The leading
+        # boundary already suffices for the 2-D planner; preserve this
+        # stand-off heading and let the next cycle attempt a forward route.
+        print("[edge-map] boundary measured; skipping rotational sweep and replanning forward")
 
         # One composite motion hint for the checkpoint capture: net tracked
         # motion from where the investigation began to where it ended.
@@ -2906,6 +3268,11 @@ def main() -> int:
         print(f"[wander] initial stitched map ready: {stitch_state['html_path']}")
 
         capture_index = 2
+        last_camera_feedback_monotonic = 0.0
+        # Panorama is a bounded phase, not a condition that can repeat after
+        # discarded captures. Count commanded turns independently of appended
+        # snapshots so a weak scan cannot trap the robot spinning in place.
+        bootstrap_turn_commands = 0
         # Feed circuit breaker: if the lidar host stops delivering fresh
         # revolutions, ALL motion must stop. Field 2026-07-11: the host died
         # mid-run and the loop kept executing turns and reverses BLIND on a
@@ -2998,6 +3365,28 @@ def main() -> int:
                 points_xy=live_points_xy,
                 cone_half_width_deg=float(args.valid_angle_half_width_deg),
             )
+            # Keep the Rerun camera panels live between captures. These are
+            # the exact annotated frames used by the safety monitor, not a
+            # second video path; viewing them cannot affect control.
+            feedback_hz = max(0.0, float(args.camera_feedback_hz))
+            if (
+                hazard_monitor is not None
+                and feedback_hz > 0.0
+                and time.monotonic() - last_camera_feedback_monotonic >= 1.0 / feedback_hz
+            ):
+                last_camera_feedback_monotonic = time.monotonic()
+                live_state = hazard_monitor.state()
+                for safety_cam in ("front_left", "front_right", "bottom"):
+                    safety_frame = hazard_monitor.annotated(safety_cam)
+                    if safety_frame is not None:
+                        rr.log(f"cameras/live_{safety_cam}", rr.Image(safety_frame[:, :, ::-1]))
+                rr.log(
+                    "safety/live_decision",
+                    rr.TextLog(
+                        f"{live_state.decision_label()} side={live_state.side} "
+                        f"distance={live_state.est_distance_m} detail={live_state.detail}"
+                    ),
+                )
 
             blocked_points = _blocked_points_for_frame(live_frame, zone_cfg)
             blocked = blocked_points >= zone_cfg.blocked_trigger_count()
@@ -3016,7 +3405,7 @@ def main() -> int:
             bootstrap_scan_active = (
                 wander_mode == "smart"
                 and not rotation_coverage_complete
-                and int(capture_index) <= max(1, int(args.bootstrap_turn_captures)) + 4
+                and bootstrap_turn_commands < max(1, int(args.bootstrap_turn_captures))
             )
             # Legacy heuristic, superseded by the frontier planner in smart mode.
             forced_drive_due_to_turn_streak = (
@@ -3276,18 +3665,46 @@ def main() -> int:
                 # Recover by turning BACK toward the last stitched heading,
                 # where overlap — and therefore a confident solve — is
                 # guaranteed, then capture to re-anchor before exploring on.
+                if orbit_recovery_turns_remaining <= 0:
+                    if orbit_recovery_turn_attempts >= 1:
+                        # The prior recovery turn also produced no trusted
+                        # pose. Do not issue another blind 85deg command: it
+                        # is the source of the endless cw/ccw-looking loop in
+                        # the field run. Leave the base stopped, discard the
+                        # untrusted turn hint, and let the next cycle capture
+                        # a fresh view before the normal safety-gated drive.
+                        print(
+                            "[wander] unlocalized-turn recovery budget exhausted; "
+                            "stopping rotation and forcing a new-view drive cycle"
+                        )
+                        pending_motion_hint = None
+                        orbit_recovery_direction_sign = None
+                        force_drive_after_turn = True
+                        continue
+                    orbit_recovery_direction_sign = (
+                        1.0 if float(pending_motion_hint.expected_dtheta_deg) >= 0.0 else -1.0
+                    )
+                    orbit_recovery_turns_remaining = 1
+                    orbit_recovery_turn_attempts += 1
+                orbit_recovery_turns_remaining -= 1
                 should_turn = True
                 pending_turn_reason = None
-                turn_reason = "reanchor_turn_back"
-                reanchor_dtheta_deg = float(pending_motion_hint.expected_dtheta_deg)
-                chosen_direction_sign = -1.0 if reanchor_dtheta_deg >= 0.0 else 1.0
-                chosen_turn_deg = max(15.0, min(85.0, abs(reanchor_dtheta_deg)))
-                print(
-                    "[wander] last capture was discarded after a turn; turning back "
-                    f"{chosen_turn_deg:.1f}deg {'ccw' if chosen_direction_sign >= 0.0 else 'cw'} "
-                    "toward the last stitched heading to re-anchor"
+                bootstrap_turn_commands = max(
+                    bootstrap_turn_commands, max(1, int(args.bootstrap_turn_captures))
                 )
-                if committed_frontier_face is not None:
+                rotation_coverage_complete = True
+                bootstrap_scan_active = False
+                chosen_direction_sign = float(orbit_recovery_direction_sign)
+                chosen_turn_deg = 85.0
+                turn_reason = "orbit_recovery"
+                print(
+                    "[wander] turn capture could not be localized; continuing around the room "
+                    f"({orbit_recovery_turns_remaining + 1}/1, 85deg "
+                    f"{'ccw' if chosen_direction_sign >= 0.0 else 'cw'}) before retrying that frontier"
+                )
+                if orbit_recovery_turns_remaining == 0:
+                    force_drive_after_turn = True
+                if False and committed_frontier_face is not None:
                     # A face-turn toward this frontier just lost tracking and
                     # got discarded: facing it from here PROVABLY fails. Never
                     # retry the identical turn — blacklist the frontier
@@ -3411,7 +3828,28 @@ def main() -> int:
                     survey_arrived = survey_goal_distance_m <= max(
                         0.45, float(args.frontier_goal_reached_m)
                     )
-                if survey_arrived:
+                if bootstrap_scan_active:
+                    # Panorama is deliberately finite and monotonic: four
+                    # same-direction views, then translation. Do not chase a
+                    # missing heading bin forever when turn tracking is weak.
+                    bootstrap_turn_commands += 1
+                    chosen_direction_sign = float(direction_sign)
+                    chosen_turn_deg = min(85.0, float(args.turn_deg))
+                    should_turn = True
+                    turn_reason = "bootstrap_scan"
+                    print(
+                        "[wander] bootstrap panorama turn "
+                        f"({bootstrap_turn_commands}/{max(1, int(args.bootstrap_turn_captures))}, "
+                        f"turn={chosen_turn_deg:.1f}deg {'ccw' if chosen_direction_sign >= 0.0 else 'cw'})"
+                    )
+                    if bootstrap_turn_commands >= max(1, int(args.bootstrap_turn_captures)):
+                        rotation_coverage_complete = True
+                        force_drive_after_turn = True
+                        print(
+                            "[wander] bootstrap panorama budget reached; next cycle must translate "
+                            "to a new viewpoint"
+                        )
+                elif survey_arrived:
                     print(
                         "[wander] survey vantage reached; scanning from the new viewpoint "
                         f"({active_survey_xy[0]:.2f}, {active_survey_xy[1]:.2f})"
@@ -3454,8 +3892,51 @@ def main() -> int:
                         f"[safety] forward denied while planning ({forward_denial}, "
                         f"side={hazard_state_now.side}); recovering"
                     )
+                    # Bundle these denials too: they dominate runs (ground
+                    # gate / holds) and were undiagnosable from logs alone.
+                    # Rate-limited so a hold that denies every cycle does not
+                    # flood the directory with identical bundles.
+                    now_denial_mono = time.monotonic()
+                    if forward_denial != planning_denial_last["reason"] or (
+                        now_denial_mono - planning_denial_last["mono"] >= 20.0
+                    ):
+                        planning_denial_last["reason"] = forward_denial
+                        planning_denial_last["mono"] = now_denial_mono
+                        _dump_stop_debug(current_live_pose, f"planning_denial:{forward_denial}")
                     if (
-                        str(args.edge_mapping) == "on"
+                        _elevated_hazard_engaged()
+                        and not hazard_state_now.frames_stale
+                        and not hazard_state_now.blind_zone
+                        and not hazard_state_now.ground_active
+                        and str(hazard_state_now.side) in ("left", "right", "front")
+                        and not any(
+                            math.hypot(
+                                float(current_live_pose.x) - sx,
+                                float(current_live_pose.y) - sy,
+                            )
+                            <= 0.45
+                            for sx, sy in sidestep_spots_world
+                        )
+                    ):
+                        sidestep_hint = _sidestep_waypoint_hint(
+                            current_live_pose,
+                            str(hazard_state_now.side),
+                            (
+                                float(planning_frontier_choice.delta_deg)
+                                if planning_frontier_choice is not None
+                                else None
+                            ),
+                        )
+                        if sidestep_hint is not None:
+                            sidestep_spots_world.append(
+                                (float(current_live_pose.x), float(current_live_pose.y))
+                            )
+                            del sidestep_spots_world[:-16]
+                            motion_hint = sidestep_hint
+                            settle_s = float(args.move_settle_s)
+                    if (
+                        motion_hint is None
+                        and str(args.edge_mapping) == "on"
                         and _elevated_hazard_engaged()
                         and not hazard_state_now.frames_stale
                         and not any(
@@ -3491,15 +3972,29 @@ def main() -> int:
                             rotate_away_lock_losses = 0
                             motion_hint = escape_hint
                             settle_s = float(args.move_settle_s)
-                    if motion_hint is None and rotate_away_lock_losses == 0:
+                    # One recovery turn is followed by a forward-planning
+                    # attempt. Do not spin again just because the next depth
+                    # frame calls the hazard the other side.
+                    if (
+                        motion_hint is None
+                        and rotate_away_lock_losses == 0
+                        and recovery_turn_sign is None
+                    ):
                         rotate_hint = _rotate_away_hint(
-                            current_live_pose, hazard_state_now.side
+                            current_live_pose,
+                            hazard_state_now.side,
+                            (
+                                float(live_frontier_choice.delta_deg)
+                                if live_frontier_choice is not None
+                                else None
+                            ),
                         )
                         if rotate_hint is not None:
                             if rotate_away_lock_losses == 0:
                                 failed_reverse_escapes = 0
                             motion_hint = rotate_hint
                             settle_s = float(args.capture_settle_s)
+                            force_live_frontier_cycles = max(force_live_frontier_cycles, 2)
                     if motion_hint is None:
                         failed_reverse_escapes += 1
                         motion_hint = MotionHint(
@@ -3560,110 +4055,168 @@ def main() -> int:
                         should_turn = True
                         turn_reason = "blocked_replan"
                 elif plan_status == "no_frontier":
-                    no_frontier_cycles += 1
-                    if no_frontier_cycles >= 2:
-                        print(
-                            "[wander] mapping complete: no reachable unmapped space remains and all "
-                            "survey vantages have been visited "
-                            f"(captures={len(stitch_state['snapshots'])}, "
-                            f"html={stitch_state['html_path']})"
-                        )
-                        if str(args.on_complete) == "stop":
-                            break
-                        print(
-                            "[wander] entering idle watch: holding position; exploration resumes "
-                            "automatically if new reachable space appears (Ctrl+C to exit)"
-                        )
-                        _send_stop(robot)
-                        idle_resume = False
-                        while not idle_resume:
-                            time.sleep(3.0)
-                            # Heartbeat: a zero-velocity action every tick keeps
+                    # A live lidar opening is newer than the stitched grid and
+                    # may be beyond its current boundary (especially just
+                    # after crossing a doorway). Do not declare completion
+                    # while it exists: align to it, then take one guarded
+                    # probe drive to extend the map.
+                    if live_frontier_choice is not None:
+                        no_frontier_cycles = 0
+                        live_delta_deg = float(live_frontier_choice.delta_deg)
+                        if abs(live_delta_deg) > 20.0:
+                            chosen_direction_sign = 1.0 if live_delta_deg >= 0.0 else -1.0
+                            chosen_turn_deg = max(15.0, min(85.0, abs(live_delta_deg)))
+                            should_turn = True
+                            turn_reason = "live_frontier_probe_align"
+                            force_drive_after_turn = True
+                            print(
+                                "[wander] map has no frontier but live lidar is open; aligning "
+                                f"{chosen_turn_deg:.1f}deg for a guarded probe"
+                            )
+                        else:
+                            motion_hint = _live_frontier_probe_hint(
+                                current_live_pose, live_frontier_choice
+                            )
+                            settle_s = float(args.move_settle_s)
+                    else:
+                        no_frontier_cycles += 1
+                    if live_frontier_choice is None:
+                        if motion_hint is None and no_frontier_cycles >= 2:
+                            print(
+                                "[wander] mapping complete: no reachable unmapped space remains and all "
+                                "survey vantages have been visited "
+                                f"(captures={len(stitch_state['snapshots'])}, "
+                                f"html={stitch_state['html_path']})"
+                            )
+                            if str(args.on_complete) == "stop":
+                                break
+                            print(
+                                "[wander] entering idle watch: holding position; exploration resumes "
+                                "automatically if new reachable space appears (Ctrl+C to exit)"
+                            )
+                            _send_stop(robot)
+                            idle_resume = False
+                            while not idle_resume:
+                                time.sleep(3.0)
+                                # Heartbeat: a zero-velocity action every tick keeps
                             # the radio link busy — an idle link lets the Pi's
-                            # WiFi power-save kick in and the lidar stream then
-                            # stalls into reconnect loops.
-                            try:
-                                robot.send_action(
-                                    {
-                                        "x.vel": 0.0,
-                                        "y.vel": 0.0,
-                                        "theta.vel": 0.0,
-                                        "z.pos": getattr(robot, "_z_pos_cmd", 100.0),
-                                        "untorque_left": True,
-                                        "untorque_right": True,
-                                    }
-                                )
-                            except Exception:
-                                pass
-                            _idle_frame_id, idle_frame = feed.latest()
-                            if idle_frame is None:
-                                continue
-                            idle_points_xy = _scan_to_local_points(
-                                points=idle_frame.points,
-                                forward_angle_deg=float(args.forward_angle_deg),
-                                valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
-                                invert_lateral_axis=bool(args.invert_lateral_axis),
-                                max_distance_m=float(args.max_distance_m),
-                                min_confidence=int(args.min_confidence),
-                                min_range_m=float(args.min_range_m),
-                            )
-                            if len(idle_points_xy) < 12:
-                                continue
-                            # Treat the live scan as a virtual capture: if the
-                            # world changed (a door opened in view), the grid
-                            # gains new free space and a frontier appears.
-                            idle_world_xy = _transform_points(idle_points_xy, current_live_pose)
-                            idle_grid = _build_exploration_grid(
-                                poses=[*list(stitch_state["poses"]), current_live_pose],
-                                transformed_sets=[*list(stitch_state["transformed_sets"]), idle_world_xy],
-                                resolution_m=max(0.05, float(args.stitch_resolution_m)),
-                                robot_clear_radius_m=float(args.robot_radius_m) + 0.06,
-                                lidar_offset_forward_m=float(args.lidar_offset_forward_m),
-                                extra_occupied_xy=(
-                                    np.asarray(
-                                        [[c[0] * 0.04, c[1] * 0.04] for c in elevated_occupied_world],
-                                        dtype=np.float32,
+                                # WiFi power-save kick in and the lidar stream then
+                                # stalls into reconnect loops.
+                                try:
+                                    robot.send_action(
+                                        {
+                                            "x.vel": 0.0,
+                                            "y.vel": 0.0,
+                                            "theta.vel": 0.0,
+                                            "z.pos": getattr(robot, "_z_pos_cmd", 100.0),
+                                            "untorque_left": True,
+                                            "untorque_right": True,
+                                        }
                                     )
-                                    if elevated_occupied_world
-                                    else None
-                                ),
-                            )
-                            if idle_grid is None:
-                                continue
-                            idle_plan = _plan_frontier_path(
-                                grid=idle_grid,
-                                robot_xy=(float(current_live_pose.x), float(current_live_pose.y)),
-                                robot_radius_m=float(args.robot_radius_m),
-                                robot_theta_deg=float(current_live_pose.theta_deg),
-                                avoid_face_xy=_active_frontier_blacklist(),
-                            )
-                            if str(idle_plan.get("status")) == "ok":
-                                print(
-                                    "[wander] new reachable space detected during idle watch; "
-                                    "resuming exploration"
+                                except Exception:
+                                    pass
+                                _idle_frame_id, idle_frame = feed.latest()
+                                if idle_frame is None:
+                                    continue
+                                idle_points_xy = _scan_to_local_points(
+                                    points=idle_frame.points,
+                                    forward_angle_deg=float(args.forward_angle_deg),
+                                    valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+                                    invert_lateral_axis=bool(args.invert_lateral_axis),
+                                    max_distance_m=float(args.max_distance_m),
+                                    min_confidence=int(args.min_confidence),
+                                    min_range_m=float(args.min_range_m),
                                 )
-                                no_frontier_cycles = 0
-                                idle_resume = True
-                        continue
-                    should_turn = True
-                    chosen_direction_sign = float(direction_sign)
-                    chosen_turn_deg = 85.0
-                    turn_reason = "completion_verification"
-                    print("[wander] no frontier and no unvisited vantage; one verification scan before stopping")
+                                if len(idle_points_xy) < 12:
+                                    continue
+                                # Treat the live scan as a virtual capture: if the
+                                # world changed (a door opened in view), the grid
+                                # gains new free space and a frontier appears.
+                                idle_world_xy = _transform_points(idle_points_xy, current_live_pose)
+                                idle_grid = _build_exploration_grid(
+                                    poses=[*list(stitch_state["poses"]), current_live_pose],
+                                    transformed_sets=[*list(stitch_state["transformed_sets"]), idle_world_xy],
+                                    resolution_m=max(0.05, float(args.stitch_resolution_m)),
+                                    robot_clear_radius_m=float(args.robot_radius_m) + 0.06,
+                                    lidar_offset_forward_m=float(args.lidar_offset_forward_m),
+                                    extra_occupied_xy=(
+                                        np.asarray(
+                                            [[c[0] * 0.04, c[1] * 0.04] for c in elevated_occupied_world],
+                                            dtype=np.float32,
+                                        )
+                                        if elevated_occupied_world
+                                        else None
+                                    ),
+                                )
+                                if idle_grid is None:
+                                    continue
+                                idle_plan = _plan_frontier_path(
+                                    grid=idle_grid,
+                                    robot_xy=(float(current_live_pose.x), float(current_live_pose.y)),
+                                    robot_radius_m=float(args.robot_radius_m),
+                                    robot_theta_deg=float(current_live_pose.theta_deg),
+                                    avoid_face_xy=_active_frontier_blacklist(),
+                                )
+                                if str(idle_plan.get("status")) == "ok":
+                                    print(
+                                        "[wander] new reachable space detected during idle watch; "
+                                        "resuming exploration"
+                                    )
+                                    no_frontier_cycles = 0
+                                    idle_resume = True
+                            continue
+                        should_turn = True
+                        chosen_direction_sign = float(direction_sign)
+                        chosen_turn_deg = 85.0
+                        turn_reason = "completion_verification"
+                        print("[wander] no frontier and no unvisited vantage; one verification scan before stopping")
                 else:
                     no_frontier_cycles = 0
                     goal_dx_m = float(frontier_plan["goal_xy"][0]) - float(current_live_pose.x)
                     goal_dy_m = float(frontier_plan["goal_xy"][1]) - float(current_live_pose.y)
                     goal_distance_m = math.hypot(goal_dx_m, goal_dy_m)
                     if goal_distance_m <= max(0.40, float(args.frontier_goal_reached_m)):
-                        face_bearing_deg = math.degrees(
-                            math.atan2(
-                                float(frontier_plan["face_xy"][1]) - float(current_live_pose.y),
-                                float(frontier_plan["face_xy"][0]) - float(current_live_pose.x),
+                        face_dx_m = float(frontier_plan["face_xy"][0]) - float(current_live_pose.x)
+                        face_dy_m = float(frontier_plan["face_xy"][1]) - float(current_live_pose.y)
+                        face_distance_m = math.hypot(face_dx_m, face_dy_m)
+                        if face_distance_m < 0.30:
+                            # A face point at (or under) the robot has no
+                            # meaningful bearing: atan2 over centimeters made
+                            # "facing it" trivially true and the robot scanned
+                            # in place for 4 identical captures (field
+                            # 2026-07-13: "It didn't move"). The live frontier
+                            # candidate knows the real direction — use it.
+                            if live_frontier_choice is not None:
+                                face_delta_deg = float(live_frontier_choice.delta_deg)
+                            else:
+                                face_delta_deg = 85.0
+                            print(
+                                "[wander] frontier face point degenerate "
+                                f"({face_distance_m:.2f}m away); using live candidate "
+                                f"bearing (delta={face_delta_deg:.1f}deg)"
                             )
-                        )
-                        face_delta_deg = _normalize_angle_deg(face_bearing_deg - float(current_live_pose.theta_deg))
+                        else:
+                            face_bearing_deg = math.degrees(math.atan2(face_dy_m, face_dx_m))
+                            face_delta_deg = _normalize_angle_deg(
+                                face_bearing_deg - float(current_live_pose.theta_deg)
+                            )
+                        if abs(face_delta_deg) <= 30.0 and stationary_scan_streak >= 1:
+                            # Already scanned from this exact pose and the plan
+                            # came back unchanged: a second identical scan can
+                            # teach nothing. Rotate instead — motion is the
+                            # only way out of a stale plan.
+                            face_delta_deg = (
+                                float(live_frontier_choice.delta_deg)
+                                if live_frontier_choice is not None
+                                and abs(float(live_frontier_choice.delta_deg)) > 30.0
+                                else 85.0
+                            )
+                            print(
+                                "[wander] stationary scan already taken here; forcing a "
+                                f"turn (delta={face_delta_deg:.1f}deg) instead of re-scanning"
+                            )
                         if abs(face_delta_deg) > 30.0:
+                            stationary_scan_streak = 0
                             chosen_direction_sign = 1.0 if face_delta_deg >= 0.0 else -1.0
                             chosen_turn_deg = max(15.0, min(85.0, abs(face_delta_deg)))
                             should_turn = True
@@ -3673,6 +4226,7 @@ def main() -> int:
                                 f"(delta={face_delta_deg:.1f}deg)"
                             )
                         else:
+                            stationary_scan_streak += 1
                             motion_hint = MotionHint(
                                 kind="drive",
                                 expected_dx_local_m=0.0,
@@ -3689,6 +4243,7 @@ def main() -> int:
                         # space, chain several lidar-tracked turn+drive legs
                         # and commit ONE capture at the end — captures en route
                         # add no map information and slow the journey down.
+                        stationary_scan_streak = 0
                         transit_pose = current_live_pose
                         transit_plan: dict[str, object] = frontier_plan
                         transit_hint: MotionHint | None = None
@@ -3837,6 +4392,7 @@ def main() -> int:
                                 consecutive_blocked_cycles = 0
                                 failed_reverse_escapes = 0
                                 rotate_away_lock_losses = 0
+                                recovery_turn_sign = None
                                 wedged_events = 0
                             drive_leg_hint = MotionHint(
                                 kind="drive",
@@ -3875,7 +4431,9 @@ def main() -> int:
                                 # blacklist). Only genuine attempts count — a
                                 # hold lingering across planning cycles is one
                                 # event, not repeated evidence.
-                                _strike_frontier(transit_plan["face_xy"], "hazard_stop")
+                                _strike_frontier_if_reached(
+                                    transit_plan["face_xy"], transit_pose, "hazard_stop"
+                                )
                             if drive_stopped_by_block:
                                 transit_stop_reason = "blocked_or_lock"
                                 break
@@ -4259,7 +4817,9 @@ def main() -> int:
                     ):
                         _stamp_synthetic_block(drive_tracked_pose)
                     if plan_status in ("ok", "survey", "observe"):
-                        _strike_frontier(frontier_plan["face_xy"], "hazard_stop")
+                        _strike_frontier_if_reached(
+                            frontier_plan["face_xy"], drive_tracked_pose, "hazard_stop"
+                        )
                 # Motion hint straight from the tracked poses — no commanded-
                 # speed or wheel-feedback guessing.
                 drive_ddx_world = float(drive_tracked_pose.x) - float(drive_start_pose.x)
@@ -4897,6 +5457,9 @@ def main() -> int:
                 capture_live_pose = append_solver_pose
                 capture_live_meta = append_solver_meta
             consecutive_append_discards = 0
+            orbit_recovery_turn_attempts = 0
+            orbit_recovery_turns_remaining = 0
+            orbit_recovery_direction_sign = None
 
             stitch_state = _append_stitch(
                 stitch_dir=stitch_dir,
