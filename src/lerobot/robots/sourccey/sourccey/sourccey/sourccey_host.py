@@ -52,10 +52,29 @@ class SourcceyHost:
         self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
         self.zmq_observation_socket.bind(f"tcp://*:{config.port_zmq_observations}")
 
+        # Keep the legacy PUSH channel for Python clients while exposing the
+        # same live observation packets to Unity's SUB socket.
+        self.zmq_observation_broadcast_socket = self.zmq_context.socket(zmq.PUB)
+        self.zmq_observation_broadcast_socket.setsockopt(zmq.CONFLATE, 1)
+        self.zmq_observation_broadcast_socket.bind(
+            f"tcp://*:{config.port_zmq_observations_broadcast}"
+        )
+        print(
+            "[HOST] Unity camera stream: PUB on "
+            f"tcp://*:{config.port_zmq_observations_broadcast}"
+        )
+
         self.zmq_slam_input_socket = None
         self.slam_input_publisher = _build_host_slam_input_publisher(config)
         if config.slam_input_enabled:
             self.zmq_slam_input_socket = create_slam_pub_socket(self.zmq_context, config.slam_input_endpoint)
+            # Keep this visible even when the host logger is configured above INFO.
+            # The panorama service consumes this exact stereo stream on port 5560.
+            print(
+                "[HOST] Fused-vision stereo stream: PUB on "
+                f"{config.slam_input_endpoint} "
+                f"({config.slam_stereo_left_key}, {config.slam_stereo_right_key})"
+            )
             logging.info(
                 "Host SLAM publisher enabled: endpoint=%s left=%s right=%s extra=%s jpeg=%d publish_fps=%.2f resize=%sx%s",
                 config.slam_input_endpoint,
@@ -96,6 +115,7 @@ class SourcceyHost:
     def disconnect(self):
         close_slam_pub_socket(self.zmq_slam_input_socket)
         close_slam_pub_socket(self.zmq_slam_obstacle_socket)
+        self.zmq_observation_broadcast_socket.close()
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
@@ -534,8 +554,17 @@ def main(host_config: SourcceyHostConfig):
                     # Convert observation to protobuf using existing method
                     robot_state = robot.protobuf_converter.observation_to_protobuf(observation)
 
-                    # Send protobuf message instead of JSON
-                    host.zmq_observation_socket.send(robot_state.SerializeToString(), flags=zmq.NOBLOCK)
+                    payload = robot_state.SerializeToString()
+
+                    # The recorder's legacy PULL stream is optional. A missing
+                    # legacy client must not prevent Unity's PUB stream from
+                    # receiving the same camera-bearing observation.
+                    try:
+                        host.zmq_observation_socket.send(payload, flags=zmq.NOBLOCK)
+                    except zmq.Again:
+                        pass
+
+                    host.zmq_observation_broadcast_socket.send(payload, flags=zmq.NOBLOCK)
             except zmq.Again:
                 logging.info("Dropping observation, no client connected")
             except Exception as e:

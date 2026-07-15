@@ -193,6 +193,9 @@ class SourcceyHostConfig:
     # Network Configuration
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
+    # Broadcast observations for Unity and other SUB consumers. Port 5560 is
+    # reserved for the SLAM/fused-vision stereo sidecar.
+    port_zmq_observations_broadcast: int = 5561
     # Text + audio (used by voice pipeline)
     port_zmq_text_in: int = 5557  # receive text from client
     port_zmq_text_out: int = 5558  # send text/events to client
