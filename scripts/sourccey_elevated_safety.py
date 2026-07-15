@@ -1226,7 +1226,12 @@ class ElevatedHazardMonitor:
         if self._depth_worker is not None:
             depth_failure = getattr(self._depth_worker, "failure", None)
             if depth_failure is None and getattr(self._depth_worker, "ready", False):
-                for eye_key in (cfg.left_key, cfg.right_key):
+                # The worker declares its result keys: ("panorama",) in fused
+                # mode, the two eye keys in per-eye mode.
+                worker_keys = tuple(
+                    getattr(self._depth_worker, "eye_keys", (cfg.left_key, cfg.right_key))
+                )
+                for eye_key in worker_keys:
                     depth_result = self._depth_worker.latest(
                         eye_key, max_age_s=float(cfg.depth_stale_timeout_s)
                     )
@@ -1303,8 +1308,14 @@ class ElevatedHazardMonitor:
         # the near tier (a diagonal edge beside the shoulder must still stop
         # the robot even if its corridor entry point is farther out).
         confirmed_in_range = [
-            (eye_key, gate_dist if gate_dist is not None else nearest_dist, nearest_dist, height)
-            for eye_key, klass, gate_dist, nearest_dist, height, _ in elevated
+            (
+                eye_key,
+                gate_dist if gate_dist is not None else nearest_dist,
+                nearest_dist,
+                height,
+                bearing,
+            )
+            for eye_key, klass, gate_dist, nearest_dist, height, bearing in elevated
             if klass == "elevated_confirmed"
             and (
                 (gate_dist is not None and gate_dist <= float(cfg.forward_block_distance_m))
@@ -1337,17 +1348,28 @@ class ElevatedHazardMonitor:
         confidence = 0.0
         nearest_confirmed: float | None = None
         if confirmed_in_range:
-            eyes = {eye for eye, _, _, _ in confirmed_in_range}
-            if cfg.left_key in eyes and cfg.right_key in eyes:
+            eyes = {eye for eye, _, _, _, _ in confirmed_in_range}
+            if "panorama" in eyes:
+                # Fused mode: one central view, so side attribution comes
+                # from the nearest confirmed point's BEARING, not from which
+                # eye saw it (bearing positive = left, per lidar convention).
+                nearest_entry = min(
+                    (e for e in confirmed_in_range if e[1] is not None),
+                    key=lambda e: e[1],
+                    default=confirmed_in_range[0],
+                )
+                b = float(nearest_entry[4])
+                side = "left" if b > 10.0 else ("right" if b < -10.0 else "front")
+            elif cfg.left_key in eyes and cfg.right_key in eyes:
                 side = "front"
             elif cfg.left_key in eyes:
                 side = "left"
             else:
                 side = "right"
-            est_distance = min(d for _, d, _, _ in confirmed_in_range if d is not None)
-            nearest_values = [n for _, _, n, _ in confirmed_in_range if n is not None]
+            est_distance = min(d for _, d, _, _, _ in confirmed_in_range if d is not None)
+            nearest_values = [n for _, _, n, _, _ in confirmed_in_range if n is not None]
             nearest_confirmed = min(nearest_values) if nearest_values else None
-            heights = [h for _, _, _, h in confirmed_in_range if h is not None]
+            heights = [h for _, _, _, h, _ in confirmed_in_range if h is not None]
             edge_height = min(heights) if heights else None
             confidence = 0.9
         elif active:
@@ -1569,7 +1591,10 @@ class ElevatedHazardMonitor:
             h = "-" if height is None else f"{height:.2f}"
             return f"{klass} g={g} n={n} h={h} b={bearing:.0f}"
 
-        detail = f"L[{_cand_text(cfg.left_key)}] R[{_cand_text(cfg.right_key)}]"
+        if "panorama" in candidates or (used_depth and "panorama" in depth_results):
+            detail = f"P[{_cand_text('panorama')}]"
+        else:
+            detail = f"L[{_cand_text(cfg.left_key)}] R[{_cand_text(cfg.right_key)}]"
 
         state = HazardState(
             enabled=True,
@@ -1597,7 +1622,11 @@ class ElevatedHazardMonitor:
             frame_age_s=worst_age,
             updated_monotonic=time.monotonic(),
         )
+        annotated_panorama = None
         if used_depth:
+            pano_result = depth_results.get("panorama")
+            if pano_result is not None and pano_result.overlay_bgr is not None:
+                annotated_panorama = pano_result.overlay_bgr
             left_result = depth_results.get(cfg.left_key)
             right_result = depth_results.get(cfg.right_key)
             annotated_left = (
@@ -1623,6 +1652,8 @@ class ElevatedHazardMonitor:
             self._state = state
             self._annotated[cfg.left_key] = annotated_left
             self._annotated[cfg.right_key] = annotated_right
+            if annotated_panorama is not None:
+                self._annotated["panorama"] = annotated_panorama
             if bottom_available:
                 self._annotated[cfg.bottom_key] = render_bottom_overlay(
                     bottom_frame, bottom_obstacles, state, cfg

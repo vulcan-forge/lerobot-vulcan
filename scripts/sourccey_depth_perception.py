@@ -219,9 +219,19 @@ def _pixel_fields(model: CameraModel, shape: tuple[int, int]) -> dict[str, np.nd
     up_unit = np.broadcast_to(up_unit, (h, w))
     x_unit = np.broadcast_to(x_unit, (h, w))
     x_ratio = np.broadcast_to(u / max(w - 1, 1), (h, w))
-    bearing_deg = float(model.bearing_sign) * (
-        float(model.yaw_deg) - (x_ratio - 0.5) * float(model.hfov_deg)
-    )
+    if float(model.hfov_deg) > 90.0:
+        # Wide pinhole (the fused panorama): the linear column->bearing
+        # approximation breaks at tan-stretched edges (>10deg error at the
+        # wings of a 104deg frame). Use the exact per-column ray angle.
+        # Per-eye models keep the legacy linear form bit-for-bit — their
+        # referee windows were field-tuned against it.
+        bearing_deg = float(model.bearing_sign) * (
+            float(model.yaw_deg) - np.degrees(np.arctan(x_unit))
+        )
+    else:
+        bearing_deg = float(model.bearing_sign) * (
+            float(model.yaw_deg) - (x_ratio - 0.5) * float(model.hfov_deg)
+        )
     return {
         "fwd_unit": fwd_unit.astype(np.float32),
         "up_unit": up_unit.astype(np.float32),
@@ -344,8 +354,18 @@ def analyze_depth(
     lidar_ranges_m: np.ndarray | None = None,
     proposal_line_xy: tuple[tuple[int, int], tuple[int, int]] | None = None,
     proposal_score: float = 0.0,
+    seam_cols: tuple[int, int] | None = None,
+    coverage_mask: np.ndarray | None = None,
 ) -> DepthEyeResult:
-    """Turn one metric depth map into a robot-frame elevated-obstacle report."""
+    """Turn one metric depth map into a robot-frame elevated-obstacle report.
+
+    seam_cols / coverage_mask (fused-panorama mode): the mosaic's hard seam
+    sits dead ahead (bearing 0 — the most safety-critical column), where the
+    two eyes' content can step by the residual calibration error and edges
+    look chopped. The seam band is FORGIVEN, never trusted alone: evidence
+    living only inside it cannot gate or map, proposals bridge across it, and
+    floor evidence from it never erases the map. Pixels outside coverage
+    (black, no eye saw them) are excluded from everything."""
     depth_m = np.asarray(depth_m, dtype=np.float32)
     fields = _pixel_fields(model, depth_m.shape)
 
@@ -433,6 +453,25 @@ def analyze_depth(
             lineType=cv2.LINE_AA,
         )
     proposal_mask = proposal_mask_u8.astype(bool)
+    seam_band = None
+    if seam_cols is not None:
+        c0 = max(0, int(seam_cols[0]))
+        c1 = min(w_px, int(seam_cols[1]))
+        if c1 > c0:
+            seam_band = np.zeros((h_px, w_px), dtype=bool)
+            seam_band[:, c0:c1] = True
+            # Proposal bridging: an edge crossing the seam is often broken or
+            # stepped there, so the Hough line stops at the band. Any row
+            # where the proposal reaches within 25px of either band edge gets
+            # the band filled — the edge is allowed to continue across.
+            near_l = proposal_mask[:, max(0, c0 - 25) : c0].any(axis=1)
+            near_r = proposal_mask[:, c1 : min(w_px, c1 + 25)].any(axis=1)
+            bridge_rows = near_l | near_r
+            if np.any(bridge_rows):
+                grow = cv2.dilate(
+                    bridge_rows.astype(np.uint8)[:, None], np.ones((13, 1), np.uint8)
+                ).ravel().astype(bool)
+                proposal_mask[grow, c0:c1] = True
 
     elevated = (
         (height >= ELEVATED_MIN_M)
@@ -446,6 +485,8 @@ def analyze_depth(
         & ~outer_near_self_sighting
         & proposal_mask
     )
+    if coverage_mask is not None and coverage_mask.shape == elevated.shape:
+        elevated &= coverage_mask
 
     # Ghost-wall veto (see GHOST_* constants), applied per CONNECTED
     # COMPONENT — floor-connectivity is a property of the object, not of a
@@ -512,6 +553,20 @@ def analyze_depth(
     # depth, measures those surfaces directly at bumper height.
     ground_connected = _ground_connected_components(elevated, height, robot_forward)
     elevated = elevated & ~ground_connected
+
+    # Seam forgiveness: a component living (almost) entirely inside the seam
+    # band is a stitch artifact — the band sits DEAD AHEAD, so trusting it
+    # would phantom-stop straight-line driving. A real obstacle ahead is
+    # wider than the ~28px band and survives via its out-of-band pixels.
+    if seam_band is not None and np.any(elevated & seam_band):
+        _n_seam, seam_labels = cv2.connectedComponents(
+            elevated.astype(np.uint8), connectivity=8
+        )
+        for lab in range(1, _n_seam):
+            comp = seam_labels == lab
+            n_comp = int(np.count_nonzero(comp))
+            if n_comp and np.count_nonzero(comp & seam_band) / n_comp >= 0.85:
+                elevated &= ~comp
     elevated_ratio = float(np.mean(elevated))
 
     floor_mask = (
@@ -522,6 +577,11 @@ def analyze_depth(
         & col_ok
         & ~membrane  # a bridge ramping down to the far floor is not floor
     )
+    if coverage_mask is not None and coverage_mask.shape == floor_mask.shape:
+        floor_mask &= coverage_mask
+    if seam_band is not None:
+        # Seam mush must never ERASE mapped obstacles either.
+        floor_mask &= ~seam_band
     floor_points: tuple[tuple[float, float], ...] = ()
     if np.any(floor_mask):
         floor_points = _decimate_xy(robot_forward[floor_mask], robot_lateral[floor_mask])
@@ -779,9 +839,21 @@ class DepthEstimator:
 
 
 class DepthWorker:
-    """Daemon thread: alternately runs depth on each eye's freshest frame and
-    publishes DepthEyeResults. Model load failures set .failure and the
-    thread exits — consumers fall back to the classic detector."""
+    """Daemon thread: runs depth perception and publishes DepthEyeResults.
+
+    Two modes:
+      - per-eye (mosaic=None): alternately analyzes each eye's freshest frame
+        through its own CameraModel (legacy geometry: yaw +-15, no roll).
+      - panorama (mosaic=PerceptionMosaic): each cycle grabs BOTH eyes'
+        freshest near-simultaneous frames, hard-cut fuses them through the
+        CALIBRATED virtual forward camera, and runs ONE inference on the
+        single central view — the result is published under the "panorama"
+        key. One inference instead of two alternating ones roughly HALVES the
+        gate's result staleness, and the narrow squeeze corridor is measured
+        dead-center where the fused view is most accurate.
+
+    Model load failures set .failure and the thread exits — consumers fail
+    safe (deny forward), never silently fall back."""
 
     def __init__(
         self,
@@ -792,6 +864,7 @@ class DepthWorker:
         edge_detector_config: ElevatedEdgeScanConfig | None = None,
         model_name: str = DEFAULT_DEPTH_MODEL,
         max_frame_age_s: float = 1.0,
+        mosaic=None,
     ) -> None:
         self._subscriber = subscriber
         self._eye_models = dict(eye_models)
@@ -801,6 +874,10 @@ class DepthWorker:
         )
         self._estimator = DepthEstimator(model_name)
         self._max_frame_age_s = float(max_frame_age_s)
+        # PerceptionMosaic (sourccey_eye_panorama) or None for per-eye mode.
+        self._mosaic = mosaic
+        if mosaic is not None:
+            self._eye_models = {"panorama": mosaic.model}
         self._lock = threading.Lock()
         self._results: dict[str, DepthEyeResult] = {}
         self.ready = False
@@ -808,6 +885,11 @@ class DepthWorker:
         self.inference_s: float = 0.0
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+
+    @property
+    def eye_keys(self) -> tuple[str, ...]:
+        """The result keys this worker publishes ("panorama",) or the eyes."""
+        return tuple(self._eye_models.keys())
 
     def start(self) -> None:
         if self._thread is not None:
@@ -848,13 +930,37 @@ class DepthWorker:
         eyes = list(self._eye_models.keys())
         eye_index = 0
         while not self._stop_event.is_set():
-            eye = eyes[eye_index % len(eyes)]
-            eye_index += 1
-            frame, age_s = self._subscriber.latest(eye)
-            if frame is None or age_s is None or age_s > self._max_frame_age_s:
-                time.sleep(0.05)
-                continue
-            frame_monotonic = time.monotonic() - float(age_s)
+            if self._mosaic is not None:
+                eye = "panorama"
+                left, age_l = self._subscriber.latest("front_left")
+                right, age_r = self._subscriber.latest("front_right")
+                if (
+                    left is None
+                    or right is None
+                    or age_l is None
+                    or age_r is None
+                    or max(age_l, age_r) > self._max_frame_age_s
+                    or abs(float(age_l) - float(age_r)) > 0.35
+                ):
+                    # Both eyes must be fresh AND near-simultaneous: fusing
+                    # frames from different moments puts the two halves of
+                    # the world at different times.
+                    time.sleep(0.05)
+                    continue
+                frame = self._mosaic.compose(left, right)
+                frame_monotonic = time.monotonic() - float(max(age_l, age_r))
+                seam_cols = self._mosaic.seam_cols
+                coverage = self._mosaic.coverage()
+            else:
+                eye = eyes[eye_index % len(eyes)]
+                eye_index += 1
+                frame, age_s = self._subscriber.latest(eye)
+                if frame is None or age_s is None or age_s > self._max_frame_age_s:
+                    time.sleep(0.05)
+                    continue
+                frame_monotonic = time.monotonic() - float(age_s)
+                seam_cols = None
+                coverage = None
             lidar_b = lidar_r = None
             if self._lidar_ranges_fn is not None:
                 try:
@@ -865,7 +971,27 @@ class DepthWorker:
                     lidar_b = lidar_r = None
             started = time.monotonic()
             try:
-                proposal = self._proposal_detector.detect(frame)
+                if self._mosaic is not None:
+                    # The Hough proposal detector is threshold-tuned for the
+                    # 320px-wide per-eye frames: run it on a 320-wide copy of
+                    # the mosaic (same calibrated regime) and scale the line
+                    # back up to mosaic pixels.
+                    mh, mw = frame.shape[:2]
+                    det_w = 320
+                    det_h = max(1, int(round(mh * det_w / mw)))
+                    det_frame = cv2.resize(frame, (det_w, det_h))
+                    proposal = self._proposal_detector.detect(det_frame)
+                    proposal_line = None
+                    if proposal.detected and proposal.line_xy is not None:
+                        sx, sy = mw / det_w, mh / det_h
+                        (px1, py1), (px2, py2) = proposal.line_xy
+                        proposal_line = (
+                            (int(round(px1 * sx)), int(round(py1 * sy))),
+                            (int(round(px2 * sx)), int(round(py2 * sy))),
+                        )
+                else:
+                    proposal = self._proposal_detector.detect(frame)
+                    proposal_line = proposal.line_xy if proposal.detected else None
                 depth = self._estimator.infer(frame)
                 result = analyze_depth(
                     self._eye_models[eye],
@@ -875,8 +1001,10 @@ class DepthWorker:
                     frame_bgr=frame,
                     lidar_bearings_deg=lidar_b,
                     lidar_ranges_m=lidar_r,
-                    proposal_line_xy=proposal.line_xy if proposal.detected else None,
+                    proposal_line_xy=proposal_line,
                     proposal_score=float(proposal.score),
+                    seam_cols=seam_cols,
+                    coverage_mask=coverage,
                 )
             except Exception as exc:
                 self.failure = f"{type(exc).__name__}: {exc}"

@@ -232,3 +232,71 @@ def test_side_sighting_footprint_publishes_for_the_map() -> None:
 
     assert len(edges) == 1
     assert edges[0].points_robot_xy
+
+
+def _seam_test_fields(shape, blob_cols, up_blob=-0.3, up_bg=-0.9):
+    h, w = shape
+    up = np.full(shape, up_bg, dtype=np.float32)
+    up[6:18, blob_cols[0] : blob_cols[1]] = up_blob
+    return {
+        "fwd_unit": np.ones(shape, dtype=np.float32),
+        "up_unit": up,
+        "x_unit": np.zeros(shape, dtype=np.float32),
+        "bearing_deg": np.zeros(shape, dtype=np.float32),
+    }
+
+
+def test_seam_only_blob_is_forgiven(monkeypatch) -> None:
+    """An elevated blob living entirely inside the mosaic's seam band is a
+    stitch artifact dead ahead — it must not gate (the user's 'edges get a
+    bit chopped up in the middle' forgiveness)."""
+    shape = (24, 48)
+    monkeypatch.setattr(
+        depth_perception, "_pixel_fields", lambda *_: _seam_test_fields(shape, (21, 27))
+    )
+    monkeypatch.setattr(depth_perception, "_floor_scale", lambda *_: 1.0)
+    model = replace(default_eye_right(), yaw_deg=0.0, forward_offset_m=0.0)
+
+    result = depth_perception.analyze_depth(
+        model,
+        np.ones(shape, dtype=np.float32),
+        eye="panorama",
+        frame_monotonic=1.0,
+        proposal_line_xy=((0, 12), (47, 12)),
+        seam_cols=(20, 28),
+    )
+
+    assert result.nearest_gate_m is None
+    assert result.nearest_any_m is None
+
+
+def test_blob_crossing_seam_still_gates(monkeypatch) -> None:
+    """A REAL edge spanning the seam keeps gating via its out-of-band pixels."""
+    shape = (24, 48)
+    monkeypatch.setattr(
+        depth_perception, "_pixel_fields", lambda *_: _seam_test_fields(shape, (10, 27))
+    )
+    monkeypatch.setattr(depth_perception, "_floor_scale", lambda *_: 1.0)
+    model = replace(default_eye_right(), yaw_deg=0.0, forward_offset_m=0.0)
+
+    result = depth_perception.analyze_depth(
+        model,
+        np.ones(shape, dtype=np.float32),
+        eye="panorama",
+        frame_monotonic=1.0,
+        proposal_line_xy=((0, 12), (47, 12)),
+        seam_cols=(20, 28),
+    )
+
+    assert result.nearest_gate_m is not None
+
+
+def test_depth_worker_panorama_keys() -> None:
+    """With a mosaic attached the worker serves the single 'panorama' key."""
+    mosaic = SimpleNamespace(model=default_eye_right(), seam_cols=(0, 1), coverage=lambda: None)
+    worker = depth_perception.DepthWorker(object(), {"a": default_eye_right()}, mosaic=mosaic)
+    assert worker.eye_keys == ("panorama",)
+    worker_per_eye = depth_perception.DepthWorker(
+        object(), {"front_left": default_eye_right(), "front_right": default_eye_right()}
+    )
+    assert worker_per_eye.eye_keys == ("front_left", "front_right")

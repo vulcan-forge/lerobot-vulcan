@@ -109,10 +109,10 @@ class SourcceyFollowerSafety:
                 continue
 
             if stalled_direction == 0:
-                modified_goal_pos[motor_name] = present_pos[motor_name]
-                logger.warning(
-                    f"Holding {motor_name} at {present_pos[motor_name]} because it is already over current ({current}mA)."
-                )
+                # A gripper can legitimately report holding current while it is stationary.
+                # With no previous stalled direction, freezing the first new target prevents
+                # it from ever opening again. Let this command establish a direction; a later
+                # frame will back off if the motor remains stalled while moving into the load.
                 continue
 
             backoff = self._get_motor_current_safety_backoff(motor_name)

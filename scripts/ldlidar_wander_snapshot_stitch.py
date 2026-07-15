@@ -2040,6 +2040,16 @@ def main() -> int:
         "classic line detector + parallax pipeline.",
     )
     parser.add_argument(
+        "--eye-fusion",
+        choices=("panorama", "per-eye"),
+        default="panorama",
+        help="How depth perception sees: 'panorama' (default) fuses both eyes "
+        "into ONE calibrated central forward view (requires the eye panorama "
+        "calibration — run scripts/sourccey_eye_panorama.py --mode capture "
+        "then --mode calibrate; aborts loudly if missing); 'per-eye' uses the "
+        "legacy per-eye camera models (yaw/roll known to be off).",
+    )
+    parser.add_argument(
         "--edge-mapping",
         choices=("on", "off"),
         default="on",
@@ -2143,6 +2153,23 @@ def main() -> int:
                 # for that pipeline).
                 from sourccey_depth_perception import DepthWorker
 
+                eye_mosaic = None
+                if str(args.eye_fusion) == "panorama":
+                    # Fused central vision: both eyes hard-cut onto the
+                    # CALIBRATED virtual forward camera; one inference on one
+                    # straight-ahead view (the legacy per-eye models carried
+                    # yaw ~5deg off and unmodeled ~6-10deg roll — every
+                    # bearing and edge placement inherited that error).
+                    # NO FALLBACK: panorama requested = calibration required.
+                    from sourccey_eye_panorama import load_perception_mosaic
+
+                    eye_mosaic = load_perception_mosaic()
+                    print(
+                        "[safety] eye fusion: calibrated panorama "
+                        f"({eye_mosaic.virt.width}x{eye_mosaic.virt.height}, "
+                        f"hfov={eye_mosaic.model.hfov_deg:.1f}deg, seam band "
+                        f"cols {eye_mosaic.seam_cols[0]}..{eye_mosaic.seam_cols[1]} forgiven)"
+                    )
                 depth_worker = DepthWorker(
                     hazard_subscriber,
                     {
@@ -2151,6 +2178,7 @@ def main() -> int:
                     },
                     lidar_ranges_fn=_safety_lidar_ranges,
                     edge_detector_config=safety_config.detector_config(),
+                    mosaic=eye_mosaic,
                 )
                 depth_worker.start()
                 print(
@@ -2171,13 +2199,14 @@ def main() -> int:
                         f"'--with transformers' in the run command?) or run with "
                         f"--eye-perception hough explicitly."
                     )
-                # Model loaded — now require a first result from BOTH eyes so
-                # the mission starts with live depth, not a stale-stop.
+                # Model loaded — now require a first result on every key the
+                # worker serves (the fused panorama, or both eyes) so the
+                # mission starts with live depth, not a stale-stop.
                 first_result_deadline = time.monotonic() + 60.0
                 while time.monotonic() < first_result_deadline:
                     if all(
                         depth_worker.latest(eye, max_age_s=10.0) is not None
-                        for eye in (safety_config.left_key, safety_config.right_key)
+                        for eye in depth_worker.eye_keys
                     ):
                         break
                     if depth_worker.failure is not None:
@@ -2192,7 +2221,7 @@ def main() -> int:
                         "within 60s of loading"
                     )
                 print(
-                    f"[safety] depth perception live for both eyes "
+                    f"[safety] depth perception live on {'/'.join(depth_worker.eye_keys)} "
                     f"(inference ~{max(depth_worker.inference_s, 0.01):.2f}s/frame)"
                 )
 
@@ -2208,7 +2237,8 @@ def main() -> int:
             print(
                 f"[safety] anti-collision gate ARMED (cameras via {safety_endpoint}, "
                 f"bottom_camera={bottom_label}, lidar_referee=on, "
-                f"eye_perception={'depth' if depth_worker is not None else 'hough'})"
+                f"eye_perception={'depth' if depth_worker is not None else 'hough'}"
+                f"{'+panorama' if depth_worker is not None and 'panorama' in depth_worker.eye_keys else ''})"
             )
         else:
             hazard_subscriber.stop()
@@ -2807,7 +2837,7 @@ def main() -> int:
         stop_debug_counter["n"] += 1
         bundle_index = stop_debug_counter["n"]
         hs = hazard_monitor.state()
-        for cam in ("front_left", "front_right", "bottom"):
+        for cam in ("front_left", "front_right", "panorama", "bottom"):
             annotated = hazard_monitor.annotated(cam)
             if annotated is not None:
                 _cv2.imwrite(
@@ -3376,7 +3406,7 @@ def main() -> int:
             ):
                 last_camera_feedback_monotonic = time.monotonic()
                 live_state = hazard_monitor.state()
-                for safety_cam in ("front_left", "front_right", "bottom"):
+                for safety_cam in ("front_left", "front_right", "panorama", "bottom"):
                     safety_frame = hazard_monitor.annotated(safety_cam)
                     if safety_frame is not None:
                         rr.log(f"cameras/live_{safety_cam}", rr.Image(safety_frame[:, :, ::-1]))
@@ -5484,7 +5514,7 @@ def main() -> int:
                 # Eye-camera panels + safety decision alongside the map, so
                 # the user sees what the robot sees while it wanders.
                 hazard_state_now = hazard_monitor.state()
-                for safety_cam in ("front_left", "front_right", "bottom"):
+                for safety_cam in ("front_left", "front_right", "panorama", "bottom"):
                     safety_frame = hazard_monitor.annotated(safety_cam)
                     if safety_frame is not None:
                         rr.log(f"cameras/{safety_cam}", rr.Image(safety_frame[:, :, ::-1]))
