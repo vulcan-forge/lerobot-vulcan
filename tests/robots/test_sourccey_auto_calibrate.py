@@ -420,6 +420,14 @@ def test_sourccey_z_drive_uses_motor_invert_not_sensor_mapping() -> None:
     assert [call[1] for call in actuator.driver.velocity_calls] == [-0.5, -0.5]
 
 
+def test_sourccey_z_calibrator_default_endpoint_timing() -> None:
+    actuator = _CalibrationTestActuator(invert=True)
+    calibrator = SourcceyZCalibrator(actuator)
+
+    assert calibrator.stable_s == 5.0
+    assert calibrator.max_phase_s == 45.0
+
+
 def test_sourccey_z_full_calibration_raises_if_return_to_top_verification_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
