@@ -424,8 +424,8 @@ def test_sourccey_z_calibrator_default_endpoint_timing() -> None:
     actuator = _CalibrationTestActuator(invert=True)
     calibrator = SourcceyZCalibrator(actuator)
 
-    assert calibrator.stable_s == 5.0
-    assert calibrator.max_phase_s == 45.0
+    assert calibrator.stable_s == 10.0
+    assert calibrator.max_phase_s == 60.0
 
 
 def test_sourccey_z_full_calibration_raises_if_return_to_top_verification_fails(
