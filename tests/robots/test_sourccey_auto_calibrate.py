@@ -497,7 +497,7 @@ def test_sourccey_z_return_to_top_requires_min_drive_and_travel(monkeypatch: pyt
     ]
 
 
-def test_sourccey_z_seek_bottom_requires_min_drive_and_travel(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sourccey_z_seek_bottom_allows_starting_at_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
 
     actuator = _CalibrationTestActuator(invert=True)
@@ -522,13 +522,15 @@ def test_sourccey_z_seek_bottom_requires_min_drive_and_travel(monkeypatch: pytes
     ]
 
 
-def test_sourccey_z_full_calibration_rejects_immediate_stable_bottom(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sourccey_z_full_calibration_reverses_from_immediate_stable_bottom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
 
     actuator = _CalibrationTestActuator(invert=True)
     calibrator = SourcceyZCalibrator(actuator, stable_s=0.0, sample_hz=30.0, max_phase_s=0.35)
     calibrator.SEEK_BOTTOM_MIN_DRIVE_S = 0.3
-    calibrator.SEEK_BOTTOM_MIN_TRAVEL_RAW = 20
+    calibrator.SEEK_BOTTOM_MIN_TRAVEL_RAW = 0
 
     monotonic_time = {"value": 0.0}
 
@@ -538,9 +540,12 @@ def test_sourccey_z_full_calibration_rejects_immediate_stable_bottom(monkeypatch
 
     monkeypatch.setattr(z_calibrator_module.time, "monotonic", _monotonic)
     monkeypatch.setattr(calibrator, "_read_raw", lambda: 500)
+    monkeypatch.setattr(calibrator, "_return_to_top_and_verify", lambda: 100)
 
-    with pytest.raises(TimeoutError, match="timed out waiting for stability"):
-        calibrator.auto_calibrate(full_reset=True)
+    result = calibrator.auto_calibrate(full_reset=True)
+
+    assert result.raw_bottom == 500
+    assert result.raw_top == 100
 
 
 def test_auto_calibrate_script_forwards_arm_to_device(monkeypatch: pytest.MonkeyPatch) -> None:

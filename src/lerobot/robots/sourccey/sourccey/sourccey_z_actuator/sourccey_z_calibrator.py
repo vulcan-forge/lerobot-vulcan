@@ -35,7 +35,11 @@ class SourcceyZCalibrator:
 
     TOP_VERIFY_TOLERANCE_RAW = 12
     SEEK_BOTTOM_MIN_DRIVE_S = 1.0
-    SEEK_BOTTOM_MIN_TRAVEL_RAW = 20
+    # Bottom seeking must also work when calibration starts with the actuator
+    # already resting on the lower end stop. Stability plus the minimum drive
+    # time confirms that endpoint; the return-to-top phase still requires real
+    # sensor travel before any calibration is saved.
+    SEEK_BOTTOM_MIN_TRAVEL_RAW = 0
     RETURN_TOP_MIN_DRIVE_S = 1.0
     RETURN_TOP_MIN_TRAVEL_RAW = 20
 
