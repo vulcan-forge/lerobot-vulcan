@@ -122,7 +122,7 @@ def predict_action(
     return action
 
 
-def init_keyboard_listener():
+def init_keyboard_listener(use_global_listener: bool = True):
     """
     Initializes a non-blocking keyboard listener for real-time user interaction.
 
@@ -142,6 +142,9 @@ def init_keyboard_listener():
     events["exit_early"] = False
     events["rerecord_episode"] = False
     events["stop_recording"] = False
+
+    if not use_global_listener:
+        return None, events
 
     if is_headless():
         logging.warning(

@@ -9,6 +9,11 @@ Sourccey uses stable device names (not just `/dev/video0`, `/dev/video1`, ...):
 - `/dev/cameraWristLeft`
 - `/dev/cameraWristRight`
 
+Optional extra hardware aliases configured by `setup/setup.py` on the Raspberry Pi:
+
+- `/dev/cameraFrontBottom`
+- `/dev/lidarFront`
+
 These names come from the Sourccey camera config in:
 `src/lerobot/robots/sourccey/sourccey/sourccey/config_sourccey.py`
 
@@ -25,6 +30,18 @@ done
 ```
 
 If any are missing, your camera udev mapping is not active or the camera is disconnected.
+
+If you installed the optional extra camera and lidar, you can also verify them:
+
+```bash
+for dev in /dev/cameraFrontBottom /dev/lidarFront; do
+  if [ -e "$dev" ]; then
+    echo "OK: $dev -> $(readlink -f "$dev")"
+  else
+    echo "MISSING: $dev"
+  fi
+done
+```
 
 ## 2) Verify Linux sees video devices
 
@@ -89,6 +106,26 @@ PY
 ```
 
 If all cameras are healthy, you should see 4 `PASS` lines and 4 images in `camera_health/`.
+
+To sanity-check the optional bottom-front camera:
+
+```bash
+uv run python - <<'PY'
+import cv2
+
+cap = cv2.VideoCapture("/dev/cameraFrontBottom", cv2.CAP_V4L2)
+if not cap.isOpened():
+    raise SystemExit("FAIL open: /dev/cameraFrontBottom")
+
+ok, frame = cap.read()
+cap.release()
+
+if not ok or frame is None:
+    raise SystemExit("FAIL read: /dev/cameraFrontBottom")
+
+print("PASS: /dev/cameraFrontBottom")
+PY
+```
 
 ## 4) Optional: inspect camera format/caps for each Sourccey path
 

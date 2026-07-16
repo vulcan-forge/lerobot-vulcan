@@ -94,6 +94,8 @@ class Sourccey(Robot):
         # Track per-arm untorque state for edge detection
         self.untorque_left_prev = False
         self.untorque_right_prev = False
+        self._z_hardware_available = True
+        self._last_known_z_pos = 100.0
 
     def __del__(self):
         # Destructors can run on partially initialized objects if __init__ raised.
@@ -148,8 +150,17 @@ class Sourccey(Robot):
         self.left_arm.connect(calibrate)
         self.right_arm.connect(calibrate)
 
-        self.dc_motors_controller.connect()
-        self.z_actuator.connect()
+        self._z_hardware_available = True
+        try:
+            self.dc_motors_controller.connect()
+            self.z_actuator.connect()
+        except RuntimeError as exc:
+            self._z_hardware_available = False
+            self.z_actuator.use_z_actuator = False
+            logger.warning(
+                "Skipping base/Z hardware during connect: %s. Continuing without Z calibration/control.",
+                exc,
+            )
 
         # Connect only target cameras
         self._connected_cameras.clear()
@@ -197,7 +208,10 @@ class Sourccey(Robot):
 
     def auto_calibrate(self, full_reset: bool = False, arm: str | None = None) -> None:
         """
-        Auto-calibrate robot joints. If arm is None, calibrate Z first, then both arms in parallel.
+        Auto-calibrate robot joints.
+
+        If arm is None, calibrate Z first, then start left arm immediately and
+        right arm 3 seconds later.
         arm can be "left" or "right" to calibrate only that side.
         """
         if arm is None:
@@ -206,7 +220,20 @@ class Sourccey(Robot):
 
             # Soft robot calibration should not physically move the Z actuator.
             # Only a full reset re-detects Z limits by movement.
-            self.z_actuator.calibrator.auto_calibrate(full_reset=full_reset)
+            z_calibration_result = None
+            if self._z_hardware_available:
+                z_calibration_result = self.z_actuator.calibrator.auto_calibrate(full_reset=full_reset)
+                if z_calibration_result is not None:
+                    logger.info(
+                        "Z auto-calibration saved successfully: raw_min=%s raw_max=%s invert=%s",
+                        z_calibration_result.raw_min,
+                        z_calibration_result.raw_max,
+                        z_calibration_result.invert,
+                    )
+            else:
+                logger.warning(
+                    "Skipping Z auto-calibration because GPIO/Z hardware is unavailable on this machine."
+                )
 
             calibration_errors: list[tuple[str, BaseException]] = []
 
@@ -242,7 +269,10 @@ class Sourccey(Robot):
 
             if calibration_errors:
                 error_messages = ", ".join(f"{arm_name}: {exc}" for arm_name, exc in calibration_errors)
-                raise RuntimeError(f"Arm auto-calibration failed ({error_messages})") from calibration_errors[0][1]
+                message = f"Arm auto-calibration failed ({error_messages})"
+                if z_calibration_result is not None:
+                    message += ". Z calibration was saved successfully."
+                raise RuntimeError(message) from calibration_errors[0][1]
 
         elif arm == "left":
             self.left_arm.auto_calibrate(reverse=False, full_reset=full_reset)
@@ -282,14 +312,15 @@ class Sourccey(Robot):
             base_vel = self._wheel_normalized_to_body(base_wheel_vel)
             obs_dict.update(base_vel)
 
-            # Z actuator position (best-effort; keep schema stable)
-            try:
-                if self.z_actuator is not None and self.z_actuator.is_connected and self.z_actuator.use_z_actuator:
-                    obs_dict["z.pos"] = float(self.z_actuator.read_position())
-                else:
-                    obs_dict["z.pos"] = 100.0
-            except Exception:
-                obs_dict["z.pos"] = 100.0
+            # Z actuator position (best-effort; keep schema stable).
+            # Reuse the last good reading on transient ADC/SPI failures instead of
+            # snapping back to +100, which can look like live recalibration drift.
+            if self.z_actuator is not None and self.z_actuator.is_connected and self.z_actuator.use_z_actuator:
+                try:
+                    self._last_known_z_pos = float(self.z_actuator.read_position())
+                except Exception as exc:
+                    logger.warning("Failed to read z actuator position; reusing last good value: %s", exc)
+            obs_dict["z.pos"] = float(self._last_known_z_pos)
 
             for cam_key in self.cameras.keys():
                 try:

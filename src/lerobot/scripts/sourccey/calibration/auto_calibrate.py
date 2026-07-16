@@ -32,6 +32,7 @@ python -m lerobot.auto_calibrate \
 
 import logging
 from dataclasses import asdict, dataclass
+import inspect
 from pprint import pformat
 
 import draccus
@@ -81,6 +82,13 @@ def auto_calibrate(cfg: AutoCalibrateConfig):
     init_logging()
     logging.info("Starting automatic calibration process...")
     logging.info(pformat(asdict(cfg)))
+    logging.info(
+        "Calibration run: robot_id=%s full_reset=%s arm=%s sequential_full_reset=%s",
+        getattr(cfg.device, "id", None),
+        cfg.full_reset,
+        cfg.arm or "all",
+        bool(cfg.full_reset),
+    )
 
     # Create device instance
     if isinstance(cfg.device, RobotConfig):
@@ -96,7 +104,16 @@ def auto_calibrate(cfg: AutoCalibrateConfig):
 
         # Check if device supports auto-calibration
         if hasattr(device, 'auto_calibrate'):
-            device.auto_calibrate(full_reset=cfg.full_reset)
+            auto_calibrate_signature = inspect.signature(device.auto_calibrate)
+            auto_calibrate_kwargs = {"full_reset": cfg.full_reset}
+            if "arm" in auto_calibrate_signature.parameters:
+                auto_calibrate_kwargs["arm"] = cfg.arm
+            elif cfg.arm is not None:
+                raise ValueError(
+                    f"Device type '{type(device).__name__}' does not support arm-specific auto calibration."
+                )
+
+            device.auto_calibrate(**auto_calibrate_kwargs)
         else:
             logging.warning("Device does not support auto-calibration. Returning")
 

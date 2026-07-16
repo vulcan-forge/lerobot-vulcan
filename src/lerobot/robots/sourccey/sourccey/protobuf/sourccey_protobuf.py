@@ -47,9 +47,9 @@ class SourcceyProtobuf:
             base_action.theta_vel = float(action.get("theta.vel", 0.0))
             robot_action.base_target_velocity.CopyFrom(base_action)
 
-            # Process base position (linear actuator)
+            # Missing z.pos should resolve to the lifted/default position.
             base_pos = sourccey_pb2.BasePosition()
-            base_pos.z_pos = float(action.get("z.pos", 0.0))
+            base_pos.z_pos = float(action.get("z.pos", 100.0))
             robot_action.base_target_position.CopyFrom(base_pos)
 
             # Per-arm flags
@@ -162,8 +162,8 @@ class SourcceyProtobuf:
                 "theta.vel": base_vel.theta_vel,
             })
 
-            # Convert base position (linear actuator)
-            action["z.pos"] = action_msg.base_target_position.z_pos
+            # Missing z.pos should resolve to the lifted/default position.
+            action["z.pos"] = action_msg.base_target_position.z_pos if action_msg.HasField("base_target_position") else 100.0
 
             # Per-arm flags from protobuf
             action["untorque_left"] = bool(getattr(action_msg, "untorque_left", False))

@@ -89,4 +89,7 @@ def configure_sourccey_udev(
         print_error(f"Failed to install Sourccey udev rules: {exc}")
         return False
     finally:
-        temp_rules_path.unlink(missing_ok=True)
+        try:
+            temp_rules_path.unlink(missing_ok=True)
+        except OSError:
+            pass

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 from pathlib import Path
 import threading
 import time
@@ -17,6 +18,9 @@ try:
     from gpiozero import MCP3008  # type: ignore
 except Exception:  # pragma: no cover
     MCP3008 = None  # type: ignore
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -172,7 +176,8 @@ class SourcceyZActuator:
         *,
         sensor: ZSensor,
         driver: ZMotorDriver | None = None,
-        motor: str | int = "linear_actuator"
+        motor: str | int = "linear_actuator",
+        motor_invert: bool = True,
     ) -> None:
 
         self.name = "sourccey_z_actuator"
@@ -184,6 +189,8 @@ class SourcceyZActuator:
 
         # Position target (public API is position-only; motor command is internal).
         self._target_pos_m100_100: float = 0.0
+        self.motor_invert = bool(motor_invert)
+        # Published position convention (derived from sensor calibration).
         self.invert = sensor.invert
 
         # Tunables (safe defaults; tune on hardware).
@@ -295,7 +302,7 @@ class SourcceyZActuator:
 
                 # Reset controller state to avoid a D "kick" when we hand back to PD.
                 self._prev_err_valid = False
-                if self.invert:
+                if self.motor_invert:
                     cmd = -cmd
                 self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
                 return
@@ -314,7 +321,7 @@ class SourcceyZActuator:
         cmd = (self.kp * err) + (self.kd * derr)
         cmd = max(-self.max_cmd, min(self.max_cmd, cmd))
 
-        if self.invert:
+        if self.motor_invert:
             cmd = -cmd
 
         self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
@@ -444,16 +451,25 @@ class SourcceyZActuator:
         if not fpath.is_file():
             return False
 
-        with open(fpath, "r") as f:
-            data = json.load(f)
+        try:
+            with open(fpath, "r") as f:
+                data = json.load(f)
 
-        raw_min = int(data["z_actuator"]["raw_min"])
-        raw_max = int(data["z_actuator"]["raw_max"])
-        invert = bool(data["z_actuator"]["invert"])
+            raw_min = int(data["z_actuator"]["raw_min"])
+            raw_max = int(data["z_actuator"]["raw_max"])
+            invert = bool(data["z_actuator"]["invert"])
+        except Exception as exc:
+            logger.warning(
+                "Failed to load Z actuator calibration from %s: %s. "
+                "Starting with defaults and allowing recalibration.",
+                fpath,
+                exc,
+            )
+            return False
 
         self.sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
 
-        # Keep actuator inversion consistent with sensor inversion (since update() uses self.invert).
+        # Keep the published position convention consistent with sensor inversion.
         self.invert = bool(self.sensor.invert)
         return True
 
