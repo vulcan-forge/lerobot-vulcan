@@ -248,6 +248,12 @@ class SourcceyHostConfig:
     slam_publish_fps: float = 15.0
     slam_resize_width: int | None = None
     slam_resize_height: int | None = None
+    # Publish the calibrated front-eye panorama as a regular camera named
+    # `front_fused` on the Unity observation stream.
+    fused_vision_enabled: bool = True
+    fused_vision_camera_key: str = "front_fused"
+    fused_vision_publish_fps: float = 15.0
+    fused_vision_calibration_dir: str = "artifacts/eye_panorama"
     slam_imu_enabled: bool = True
     slam_imu_sample_rate_hz: float = 52.0
     slam_imu_max_samples_per_packet: int = 6

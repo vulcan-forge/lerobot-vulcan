@@ -39,10 +39,74 @@ from .sourccey import Sourccey
 # Import protobuf modules
 from ..protobuf.generated import sourccey_pb2
 
+
+class _HostPanoramaFusion:
+    """Adds the calibrated front-eye panorama to normal host observations."""
+
+    def __init__(self, config: SourcceyHostConfig):
+        self._camera_key = config.fused_vision_camera_key
+        self._interval_s = 0.0 if config.fused_vision_publish_fps <= 0 else 1.0 / config.fused_vision_publish_fps
+        self._last_publish_ts = 0.0
+        self._virt = None
+        self._refiner = None
+        self._cal = None
+        self._fuse_eyes = None
+
+        if not config.fused_vision_enabled:
+            return
+
+        # The existing panorama script owns the calibration format and image
+        # fusion math. Reuse it directly so ZMQ and the former HTTP feed render
+        # the exact same fused view.
+        try:
+            from scripts.sourccey_eye_panorama import (
+                OverlapRefiner,
+                fuse_eyes,
+                load_calibration_or_default,
+            )
+
+            self._cal, calibrated = load_calibration_or_default(Path(config.fused_vision_calibration_dir))
+            self._refiner = OverlapRefiner()
+            self._fuse_eyes = fuse_eyes
+            print(
+                "[HOST] Fused camera stream enabled: "
+                f"{self._camera_key} at {config.fused_vision_publish_fps:.1f} FPS "
+                f"(calibrated={calibrated})"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Fused camera stream disabled: unable to initialize panorama fusion (%s)", exc)
+
+    def add_to_observation(self, observation: dict) -> None:
+        if self._fuse_eyes is None:
+            return
+        now = time.monotonic()
+        if self._interval_s > 0 and now - self._last_publish_ts < self._interval_s:
+            return
+
+        left = observation.get("front_left")
+        right = observation.get("front_right")
+        if not isinstance(left, np.ndarray) or not isinstance(right, np.ndarray):
+            return
+        try:
+            fused, self._virt = self._fuse_eyes(
+                left,
+                right,
+                self._cal,
+                self._virt,
+                refine=True,
+                refiner=self._refiner,
+            )
+            observation[self._camera_key] = fused
+            self._last_publish_ts = now
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Skipping fused camera frame: %s", exc)
+
+
 class SourcceyHost:
     def __init__(self, config: SourcceyHostConfig, *, imu_provider=None):
         self.config = config
         self.imu_provider = imu_provider
+        self.panorama_fusion = _HostPanoramaFusion(config)
         self.zmq_context = zmq.Context()
         self.zmq_cmd_socket = self.zmq_context.socket(zmq.PULL)
         self.zmq_cmd_socket.setsockopt(zmq.CONFLATE, 1)
@@ -141,6 +205,9 @@ class SourcceyHost:
                 frames=frames,
                 imu_samples=imu_samples,
             )
+
+    def add_fused_camera(self, observation: dict) -> None:
+        self.panorama_fusion.add_to_observation(observation)
 
 
 def _build_slam_eye_v4l2_controls(config: SourcceyHostConfig) -> dict[str, int]:
@@ -548,6 +615,7 @@ def main(host_config: SourcceyHostConfig):
                     logging.warning("No observation received. Sending previous observation.")
 
                 if observation is not None and observation != {}:
+                    host.add_fused_camera(observation)
                     host.publish_slam_input(observation)
 
                     # Convert observation to protobuf using existing method
