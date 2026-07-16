@@ -95,6 +95,7 @@ class SlamInputPublisher:
         self._warn_last_ts: dict[str, float] = {}
         self._warn_suppressed: dict[str, int] = {}
         self._last_publish_ts: float = 0.0
+        self._first_packet_announced = False
 
     def publish(
         self,
@@ -118,6 +119,12 @@ class SlamInputPublisher:
         try:
             socket.send(payload, flags=zmq.NOBLOCK)
             self._last_publish_ts = now
+            if not self._first_packet_announced:
+                self._first_packet_announced = True
+                print(
+                    "[SLAM] First stereo packet published: "
+                    f"{self._stereo_left_key}, {self._stereo_right_key}"
+                )
         except zmq.Again:
             logging.debug("Dropping SLAM input packet, no subscriber connected.")
         except Exception as e:

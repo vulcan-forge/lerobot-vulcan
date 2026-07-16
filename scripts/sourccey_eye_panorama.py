@@ -1111,6 +1111,7 @@ class PanoramaStreamer:
         self._frame_mono: float | None = None
         self._recent_stamps: deque = deque(maxlen=30)
         self._subscriber = None
+        self._first_frame_announced = False
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -1195,6 +1196,9 @@ class PanoramaStreamer:
                 self._frame = fused
                 self._frame_mono = stamp
                 self._recent_stamps.append(time.monotonic())
+            if not self._first_frame_announced:
+                self._first_frame_announced = True
+                print("[panorama-stream] First fused stereo frame received; HTTP snapshot feed is live.")
 
     def latest_bgr(self, max_age_s: float | None = None) -> np.ndarray | None:
         """Newest fused BGR frame (a copy), or None if none yet / too stale."""
