@@ -212,7 +212,8 @@ class SourcceyHostConfig:
     arm_connect_on_startup: bool = False
     arm_calibrate_on_connect: bool = False
     arm_relax_on_startup: bool = True
-    bottom_camera_enabled: bool = False
+    # Publish the underside camera as `bottom` alongside the other live feeds.
+    bottom_camera_enabled: bool = True
     bottom_camera_path: str = "/dev/cameraBottom"
     slam_eye_only_mode: bool = False
     slam_eye_camera_fps: int = 30

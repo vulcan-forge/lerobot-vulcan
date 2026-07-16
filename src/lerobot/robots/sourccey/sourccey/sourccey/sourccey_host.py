@@ -551,6 +551,21 @@ def main(host_config: SourcceyHostConfig):
     )
     logging.info("Sourccey Host started without connecting follower arms.")
 
+    # Make the underside feed's hardware/configuration state visible once at startup.
+    # Unity receives it through the normal observation stream under the "bottom" key.
+    if host_config.bottom_camera_enabled:
+        bottom_camera = robot.cameras.get("bottom")
+        bottom_connected = bool(getattr(bottom_camera, "is_connected", False))
+        print(
+            "[HOST] Bottom camera feed: enabled "
+            f"(key=bottom path={host_config.bottom_camera_path} connected={bottom_connected})"
+        )
+    else:
+        print(
+            "[HOST] Bottom camera feed: disabled "
+            "(use --bottom_camera_enabled=true --bottom_camera_path=/dev/cameraBottom)"
+        )
+
     logging.info("Starting Host")
     imu_reporter = _IMUReporter(host_config)
     imu_reporter.start()
