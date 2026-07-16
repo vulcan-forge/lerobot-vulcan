@@ -35,13 +35,12 @@ class SourcceyZCalibrator:
 
     TOP_VERIFY_TOLERANCE_RAW = 12
     SEEK_BOTTOM_MIN_DRIVE_S = 1.0
-    # Bottom seeking must also work when calibration starts with the actuator
-    # already resting on the lower end stop. Stability plus the minimum drive
-    # time confirms that endpoint; the return-to-top phase still requires real
-    # sensor travel before any calibration is saved.
+    # Endpoint seeking must also work when calibration starts with the actuator
+    # already resting on an end stop. Stability plus the minimum drive time
+    # confirms the endpoint without requiring prior sensor travel.
     SEEK_BOTTOM_MIN_TRAVEL_RAW = 0
     RETURN_TOP_MIN_DRIVE_S = 1.0
-    RETURN_TOP_MIN_TRAVEL_RAW = 20
+    RETURN_TOP_MIN_TRAVEL_RAW = 0
 
     def __init__(
         self,
@@ -118,7 +117,12 @@ class SourcceyZCalibrator:
             now = time.monotonic()
             if now >= t_deadline:
                 self._last_move_travel_raw = int(max_travel_raw)
-                raise TimeoutError("Z calibrator timed out waiting for stability (end stop not detected).")
+                raise TimeoutError(
+                    "Z calibrator timed out waiting for stability "
+                    f"(phase={phase}, start_raw={start_raw}, last_raw={last_raw}, "
+                    f"travel_raw={max_travel_raw}, min_travel_raw={min_travel_raw}, "
+                    f"stable_eps_raw={self.stable_eps_raw}, stable_s={self.stable_s})."
+                )
 
             # KEEP MOTOR ALIVE (important for watchdog-style drivers)
             self._drive(cmd)

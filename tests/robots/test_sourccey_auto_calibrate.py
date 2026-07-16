@@ -472,7 +472,9 @@ def test_sourccey_z_full_calibration_logs_all_phases_in_order(
     assert seen_phases == ["seek_bottom", "return_top", "verify_top"]
 
 
-def test_sourccey_z_return_to_top_requires_min_drive_and_travel(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sourccey_z_return_to_top_allows_stable_endpoint_without_min_travel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
 
     actuator = _CalibrationTestActuator(invert=True)
