@@ -109,6 +109,7 @@ class SourcceyZCalibrator:
         start_raw = None
         last_raw = None
         stable_start = None
+        stable_anchor_raw = None
         max_travel_raw = 0
         min_elapsed_s = float(min_elapsed_s)
         min_travel_raw = int(min_travel_raw)
@@ -138,18 +139,22 @@ class SourcceyZCalibrator:
                 last_raw = raw
                 stable_start = None
             else:
-                if abs(raw - last_raw) <= self.stable_eps_raw:
-                    elapsed_s = now - started_at
-                    if elapsed_s < min_elapsed_s or max_travel_raw < min_travel_raw:
-                        stable_start = None
-                    elif stable_start is None:
-                        stable_start = now
-                    elif (now - stable_start) >= self.stable_s:
-                        self._last_move_travel_raw = int(max_travel_raw)
-                        return raw
-
-                else:
+                elapsed_s = now - started_at
+                if elapsed_s < min_elapsed_s or max_travel_raw < min_travel_raw:
                     stable_start = None
+                    stable_anchor_raw = None
+                elif stable_start is None or stable_anchor_raw is None:
+                    stable_start = now
+                    stable_anchor_raw = raw
+                elif abs(raw - stable_anchor_raw) > self.stable_eps_raw:
+                    # Compare against the beginning of the stability window,
+                    # not merely the previous sample. Otherwise slow movement
+                    # (for example one raw count per sample) looks stationary.
+                    stable_start = now
+                    stable_anchor_raw = raw
+                elif (now - stable_start) >= self.stable_s:
+                    self._last_move_travel_raw = int(max_travel_raw)
+                    return raw
 
                 last_raw = raw
 

@@ -530,7 +530,7 @@ def test_sourccey_z_full_calibration_reverses_from_immediate_stable_bottom(
     monkeypatch.setattr(sourccey_module.time, "sleep", lambda _seconds: None)
 
     actuator = _CalibrationTestActuator(invert=True)
-    calibrator = SourcceyZCalibrator(actuator, stable_s=0.0, sample_hz=30.0, max_phase_s=0.35)
+    calibrator = SourcceyZCalibrator(actuator, stable_s=0.0, sample_hz=30.0, max_phase_s=0.7)
     calibrator.SEEK_BOTTOM_MIN_DRIVE_S = 0.3
     calibrator.SEEK_BOTTOM_MIN_TRAVEL_RAW = 0
 
@@ -548,6 +548,30 @@ def test_sourccey_z_full_calibration_reverses_from_immediate_stable_bottom(
 
     assert result.raw_bottom == 500
     assert result.raw_top == 100
+
+
+def test_sourccey_z_stability_window_rejects_slow_continuous_motion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actuator = _CalibrationTestActuator(invert=True)
+    calibrator = SourcceyZCalibrator(actuator, stable_s=0.3, sample_hz=30.0, max_phase_s=0.8)
+    monotonic_time = {"value": 0.0}
+    raw_value = {"value": 100}
+
+    def _monotonic() -> float:
+        monotonic_time["value"] += 0.1
+        return monotonic_time["value"]
+
+    def _read_raw() -> int:
+        raw_value["value"] += 1
+        return raw_value["value"]
+
+    monkeypatch.setattr(z_calibrator_module.time, "monotonic", _monotonic)
+    monkeypatch.setattr(z_calibrator_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(calibrator, "_read_raw", _read_raw)
+
+    with pytest.raises(TimeoutError, match="timed out waiting for stability"):
+        calibrator._wait_until_stable(calibrator.up_cmd, phase="return_top")
 
 
 def test_auto_calibrate_script_forwards_arm_to_device(monkeypatch: pytest.MonkeyPatch) -> None:
