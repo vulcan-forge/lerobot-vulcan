@@ -249,9 +249,15 @@ class SourcceyHostConfig:
     slam_publish_fps: float = 15.0
     slam_resize_width: int | None = None
     slam_resize_height: int | None = None
-    # Publish the calibrated front-eye panorama as a regular camera named
-    # `front_fused` on the Unity observation stream.
-    fused_vision_enabled: bool = True
+    # HOST-SIDE panorama fusion is DISABLED: computing the fused view (warp +
+    # Farneback optical flow) at 15 FPS on the Pi starved the LiDAR serial
+    # reader (2026-07-16: motor-rpm collapse + burst reads + stream timeout
+    # the moment the host started). Fusion belongs on the client PC, not the
+    # Pi — for VR, serve the fused right-eye from the PC with
+    # `scripts/sourccey_eye_panorama.py --mode serve`. The host publishes only
+    # the raw stereo (front_left, front_right), exactly as it did before. Do
+    # NOT re-enable without moving fusion off the Pi.
+    fused_vision_enabled: bool = False
     fused_vision_camera_key: str = "front_fused"
     fused_vision_publish_fps: float = 15.0
     fused_vision_calibration_dir: str = "artifacts/eye_panorama"
