@@ -243,16 +243,58 @@ def main() -> int:
         f"Streaming scans on tcp://{args.bind_host}:{args.bind_port}"
     )
 
-    ser = serial.Serial(args.port, args.baud, timeout=1.0)
+    def _open_serial() -> serial.Serial:
+        s = serial.Serial(args.port, args.baud, timeout=1.0)
+        try:
+            s.reset_input_buffer()
+        except Exception:
+            pass
+        return s
+
+    ser = _open_serial()
     revolution_points: list[ScanPoint] = []
     previous_angle: float | None = None
     latest_rpm = 0.0
     revolution_index = 0
     revolution_started_ts = time.time()
+    # Resilience: a transient LiDAR read stall (USB bandwidth/power contention
+    # from the cameras sharing the bus, or a marginal connection) must NOT
+    # crash the whole feed — it used to raise straight out of the loop.
+    # Instead drop the partial revolution, resync, and after repeated stalls
+    # reopen the port (the CP2102 buffer can wedge). The client's feed circuit
+    # breaker already tolerates up to 5s of staleness, so brief gaps are safe.
+    consecutive_stalls = 0
 
     try:
         while True:
-            packet = _read_packet(ser)
+            try:
+                packet = _read_packet(ser)
+            except (TimeoutError, serial.SerialException, OSError) as exc:
+                consecutive_stalls += 1
+                # A resync mid-revolution would emit a corrupt scan; discard it.
+                revolution_points = []
+                previous_angle = None
+                if consecutive_stalls == 1:
+                    print(f"[host] LiDAR read stalled ({exc}); resyncing (feed stays up)")
+                if consecutive_stalls % 5 == 0:
+                    print(
+                        f"[host] {consecutive_stalls} consecutive stalls; reopening {args.port} "
+                        "(check LiDAR USB is on its own port/hub, not shared with the cameras)"
+                    )
+                    try:
+                        ser.close()
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                    try:
+                        ser = _open_serial()
+                    except Exception as reopen_exc:
+                        print(f"[host] reopen failed ({reopen_exc}); retrying in 1s")
+                        time.sleep(1.0)
+                continue
+            if consecutive_stalls:
+                print(f"[host] LiDAR feed recovered after {consecutive_stalls} stall(s)")
+                consecutive_stalls = 0
             packet_wall_ts = time.time()
             speed_deg_s, start_angle_deg, packet_points = _parse_packet(packet)
             latest_rpm = speed_deg_s / 360.0 * 60.0
