@@ -212,6 +212,11 @@ class ElevatedSafetyConfig:
     # the hold and let the live gates own the new heading.
     hold_release_rotation_deg: float = 80.0
 
+    # Measured-gap squeeze (fused vision): the robot fits when the measured
+    # clear gap extends at least this far to EACH side of its centerline.
+    # 0.28m body half-width + 0.03m margin.
+    squeeze_body_half_width_m: float = 0.31
+
     def detector_config(self) -> ElevatedEdgeScanConfig:
         return ElevatedEdgeScanConfig(
             left_key=self.left_key,
@@ -249,6 +254,8 @@ class HazardState:
     # squeezes through doorway-sized gaps beside furniture instead of
     # striking the frontier out.
     squeeze: bool = False
+    # Measured clear gap width dead ahead (fused vision), for logs/planning.
+    clear_width_m: float | None = None
     frames_stale: bool = False
     blind_zone: bool = False
     # Bottom-camera ground gate (floor band the lidar cannot see).
@@ -285,6 +292,18 @@ class HazardState:
         if self.ground_active:
             return f"ground_stop_{self.ground_side}" if self.ground_side != "none" else "ground_stop_front"
         return "clear"
+
+
+def gap_clears_body(
+    gap_left_m: float | None, gap_right_m: float | None, body_half_width_m: float
+) -> bool:
+    """Measured-gap passability: the clear gap must extend at least the
+    robot's body half-width to EACH side of the centerline. A None bound
+    means nothing was measured on that side (open)."""
+    body = float(body_half_width_m)
+    left_ok = gap_left_m is None or float(gap_left_m) <= -body
+    right_ok = gap_right_m is None or float(gap_right_m) >= body
+    return left_ok and right_ok
 
 
 def gate_forward_allowed(state: HazardState) -> tuple[bool, str]:
@@ -1538,30 +1557,42 @@ class ElevatedHazardMonitor:
             reason = "ground_obstacle"
 
         # ---- squeeze tier ----------------------------------------------------------
-        # Wide corridor obstructed (active) but the body-width narrow corridor
-        # clear beyond the block distance on EVERY fresh eye: passable gap.
-        # Latency-compensated like the main gates. Depth mode only — hough has
-        # no narrow-corridor measurement.
+        # Wide corridor obstructed (active) but the path is physically
+        # passable. FUSED mode: MEASURED — the clear gap straddling the
+        # centerline (from the single central view) must extend the robot's
+        # body half-width to each side; the actual width is surfaced for
+        # logs/planning. Per-eye legacy: binary narrow-corridor test.
         squeeze = False
+        clear_width_state: float | None = None
+        pano_result = depth_results.get("panorama") if used_depth else None
+        if pano_result is not None:
+            clear_width_state = getattr(pano_result, "clear_width_m", None)
         if used_depth and active and not blind_zone:
-            narrow_min: float | None = None
-            for result in depth_results.values():
-                narrow_gate = getattr(result, "nearest_gate_narrow_m", None)
-                if narrow_gate is None:
-                    continue
-                advance = max(
-                    0.0,
-                    self._forward_travel_m - self._travel_at(float(result.frame_monotonic)),
+            if pano_result is not None:
+                squeeze = gap_clears_body(
+                    getattr(pano_result, "clear_gap_left_m", None),
+                    getattr(pano_result, "clear_gap_right_m", None),
+                    float(cfg.squeeze_body_half_width_m),
                 )
-                value = max(
-                    0.05,
-                    float(narrow_gate)
-                    - advance
-                    + max(0.0, float(cfg.depth_edge_approach_allowance_m)),
-                )
-                if narrow_min is None or value < narrow_min:
-                    narrow_min = value
-            squeeze = narrow_min is None or narrow_min > float(cfg.forward_block_distance_m)
+            else:
+                narrow_min: float | None = None
+                for result in depth_results.values():
+                    narrow_gate = getattr(result, "nearest_gate_narrow_m", None)
+                    if narrow_gate is None:
+                        continue
+                    advance = max(
+                        0.0,
+                        self._forward_travel_m - self._travel_at(float(result.frame_monotonic)),
+                    )
+                    value = max(
+                        0.05,
+                        float(narrow_gate)
+                        - advance
+                        + max(0.0, float(cfg.depth_edge_approach_allowance_m)),
+                    )
+                    if narrow_min is None or value < narrow_min:
+                        narrow_min = value
+                squeeze = narrow_min is None or narrow_min > float(cfg.forward_block_distance_m)
 
         # ---- post-stop hold (anti-ratchet) ----------------------------------------
         with self._lock:
@@ -1593,6 +1624,8 @@ class ElevatedHazardMonitor:
 
         if "panorama" in candidates or (used_depth and "panorama" in depth_results):
             detail = f"P[{_cand_text('panorama')}]"
+            if clear_width_state is not None:
+                detail += f" cw={clear_width_state:.2f}"
         else:
             detail = f"L[{_cand_text(cfg.left_key)}] R[{_cand_text(cfg.right_key)}]"
 
@@ -1606,6 +1639,7 @@ class ElevatedHazardMonitor:
             est_distance_m=est_distance,
             edge_height_m=edge_height,
             squeeze=squeeze,
+            clear_width_m=clear_width_state,
             frames_stale=False,
             blind_zone=blind_zone,
             ground_active=bool(ground_active),

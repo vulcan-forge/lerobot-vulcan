@@ -1060,9 +1060,17 @@ def _drive_forward_burst(
                 )
                 if not squeeze_notified:
                     squeeze_notified = True
+                    measured_width = getattr(
+                        hazard_monitor.state(), "clear_width_m", None
+                    )
+                    width_note = (
+                        f"measured gap {measured_width:.2f}m wide"
+                        if measured_width is not None
+                        else "gap width unmeasured"
+                    )
                     print(
                         "[safety] passable gap beside furniture: creeping through "
-                        "at minimum speed (squeeze)"
+                        f"at minimum speed (squeeze; {width_note})"
                     )
         robot.send_action(
             {

@@ -53,6 +53,20 @@ CORRIDOR_NARROW_HALF_WIDTH_M = 0.30
 # a table into a large solid red slab and can seal a nearby doorway.  For
 # navigation, its nearest boundary is the occupied geometry that matters.
 FOOTPRINT_BOUNDARY_DEPTH_M = 0.10
+# Fused-vision candidacy (require_proposal=False): the calibrated panorama's
+# metric 3D owns obstacle candidacy directly — a Hough line is a corroborator,
+# not a gate (the line-gate made the eyes MUTE on big low-texture furniture:
+# field "no hough" on a dark cabinet, unmapped, and it cut edge mapping to one
+# thin line-band sliver per frame). Without the line gate, speckle suppression
+# falls to a minimum component size; components overlapping a detected line
+# keep the old bypass (thin distant edges stay visible).
+MIN_COMPONENT_PX = 45
+# Measured forward passability: gap bounds around the robot's centerline from
+# elevated pixels within this forward horizon (block distance + allowance +
+# margin — farther obstacles re-gate during the creep, exactly like the old
+# narrow-corridor rule) and lateral window.
+CLEAR_GAP_HORIZON_M = 0.80
+CLEAR_GAP_LATERAL_WINDOW_M = 0.95
 FLOOR_BAND_M = 0.12
 SCALE_MIN = 0.45
 SCALE_MAX = 2.20
@@ -153,6 +167,13 @@ class DepthEyeResult:
     # no lidar beams landed in the corridor.
     lidar_corridor_min_m: float | None
     overlay_bgr: np.ndarray | None
+    # Measured forward passability (fused mode): gap bounds straddling the
+    # robot's centerline within CLEAR_GAP_HORIZON_M, and the resulting width.
+    # None = nothing near enough to measure (fully open). The monitor
+    # compares these against the robot's body half-width for squeeze.
+    clear_gap_left_m: float | None = None
+    clear_gap_right_m: float | None = None
+    clear_width_m: float | None = None
 
 
 def _ground_connected_components(
@@ -198,6 +219,48 @@ def _ground_connected_components(
         ):
             ground_connected |= component
     return ground_connected
+
+
+def _ground_connected_columns(
+    elevated: np.ndarray,
+    height: np.ndarray,
+    robot_forward: np.ndarray,
+) -> np.ndarray:
+    """COLUMN-wise floor-connected-face delegation for FUSED candidacy.
+
+    The component version above assumes candidacy forms one component per
+    object; fused edge-anchored candidacy connects most of a cluttered scene
+    into a single mega-component, and a component-level veto then acts
+    globally (field capture: 56k pixels -> 14). The physics is column-local
+    anyway. A column's elevated pixels are delegated to the lidar when BOTH:
+      - the column's elevated run itself reaches DOWN near the band floor
+        (<= 0.35m): a vertical face (door/wall/cabinet). A floating tabletop
+        lip never does — its run starts at tabletop height — so overhangs
+        are structurally exempt (hard rule: lidar owns floor-connected
+        claims ONLY).
+      - lower-band surface (0.02..0.28m) exists below the run at the same
+        forward range (GROUND_CONNECTED_RANGE_TOLERANCE_M).
+    """
+    out = np.zeros_like(elevated, dtype=bool)
+    lower_band = (height >= 0.02) & (height <= GROUND_CONNECTED_MAX_HEIGHT_M)
+    reaches_low = elevated & (height <= 0.35)
+    cols = np.where(elevated.any(axis=0) & reaches_low.any(axis=0))[0]
+    for col in cols:
+        rows = np.where(elevated[:, col])[0]
+        reference_forward = float(np.median(robot_forward[rows, col]))
+        below = np.zeros(elevated.shape[0], dtype=bool)
+        below[rows.max() + 1 :] = True
+        same_range_lower = (
+            lower_band[:, col]
+            & below
+            & (
+                np.abs(robot_forward[:, col] - reference_forward)
+                <= GROUND_CONNECTED_RANGE_TOLERANCE_M
+            )
+        )
+        if np.any(same_range_lower):
+            out[rows, col] = True
+    return out
 
 
 def _pixel_fields(model: CameraModel, shape: tuple[int, int]) -> dict[str, np.ndarray]:
@@ -356,6 +419,7 @@ def analyze_depth(
     proposal_score: float = 0.0,
     seam_cols: tuple[int, int] | None = None,
     coverage_mask: np.ndarray | None = None,
+    require_proposal: bool = True,
 ) -> DepthEyeResult:
     """Turn one metric depth map into a robot-frame elevated-obstacle report.
 
@@ -483,8 +547,37 @@ def analyze_depth(
         & col_ok
         & ~self_body
         & ~outer_near_self_sighting
-        & proposal_mask
     )
+    if require_proposal:
+        # Legacy per-eye mode: depth may only claim obstacles inside the
+        # detected-line band (the per-eye geometry was too wrong to trust
+        # depth alone). Fused mode drops this gate — see MIN_COMPONENT_PX.
+        elevated &= proposal_mask
+    elif frame_bgr is not None and frame_bgr.shape[:2] == depth_m.shape:
+        # Fused mode: trust metric depth where the IMAGE shows real structure
+        # — ANY edge (dense Canny), not one Hough line per frame. Monocular
+        # depth is sharp at visual discontinuities and MUSHY on flat texture
+        # (measured on the field captures: near-flat depth over a cluttered
+        # scene, which the ground-connected veto then rightly wiped to zero).
+        # Edge-anchoring keeps hallucination resistance without the one-line
+        # blindness ("no hough" dark cabinet, unmapped) or sliver-mapping.
+        # Interiors don't matter: the gate and the map both consume the
+        # LEADING BOUNDARY, which lives exactly on visual edges.
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        edge_support = (
+            cv2.dilate(cv2.Canny(gray, 40, 120), np.ones((9, 9), np.uint8)) > 0
+        )
+        if seam_band is not None:
+            c0s, c1s = max(0, int(seam_cols[0])), min(w_px, int(seam_cols[1]))
+            near_l = edge_support[:, max(0, c0s - 25) : c0s].any(axis=1)
+            near_r = edge_support[:, c1s : min(w_px, c1s + 25)].any(axis=1)
+            bridge = near_l | near_r
+            if np.any(bridge):
+                grow = cv2.dilate(
+                    bridge.astype(np.uint8)[:, None], np.ones((13, 1), np.uint8)
+                ).ravel().astype(bool)
+                edge_support[grow, c0s:c1s] = True
+        elevated &= edge_support
     if coverage_mask is not None and coverage_mask.shape == elevated.shape:
         elevated &= coverage_mask
 
@@ -550,8 +643,14 @@ def analyze_depth(
 
     # Do not let a floor-connected vertical surface merge into the map/gate
     # component for a suspended edge beside it. The lidar, unlike monocular
-    # depth, measures those surfaces directly at bumper height.
-    ground_connected = _ground_connected_components(elevated, height, robot_forward)
+    # depth, measures those surfaces directly at bumper height. Fused
+    # candidacy uses the column-wise formulation (see
+    # _ground_connected_columns: edge-anchored masks form mega-components,
+    # where a component-level veto acts globally and wiped whole scenes).
+    if require_proposal:
+        ground_connected = _ground_connected_components(elevated, height, robot_forward)
+    else:
+        ground_connected = _ground_connected_columns(elevated, height, robot_forward)
     elevated = elevated & ~ground_connected
 
     # Seam forgiveness: a component living (almost) entirely inside the seam
@@ -567,7 +666,39 @@ def analyze_depth(
             n_comp = int(np.count_nonzero(comp))
             if n_comp and np.count_nonzero(comp & seam_band) / n_comp >= 0.85:
                 elevated &= ~comp
+
+    if not require_proposal and np.any(elevated):
+        # No line gate: speckle suppression by component size instead. Tiny
+        # blobs are depth noise unless a detected line corroborates them.
+        _n_sz, sz_labels = cv2.connectedComponents(elevated.astype(np.uint8), connectivity=8)
+        for lab in range(1, _n_sz):
+            comp = sz_labels == lab
+            if int(np.count_nonzero(comp)) < MIN_COMPONENT_PX and not np.any(
+                comp & proposal_mask
+            ):
+                elevated &= ~comp
     elevated_ratio = float(np.mean(elevated))
+
+    # Measured forward passability: the actual gap straddling the robot's
+    # centerline within the decision zone. Replaces the binary "is the narrow
+    # corridor empty" squeeze guess with real dimensions the monitor compares
+    # against the robot's body width. None = nothing near enough to measure
+    # (fully open).
+    clear_gap_left_m: float | None = None
+    clear_gap_right_m: float | None = None
+    clear_width_m: float | None = None
+    near_zone = (
+        elevated
+        & (robot_forward <= CLEAR_GAP_HORIZON_M)
+        & (np.abs(robot_lateral) <= CLEAR_GAP_LATERAL_WINDOW_M)
+    )
+    if np.any(near_zone):
+        zone_lats = robot_lateral[near_zone]
+        neg = zone_lats[zone_lats < 0.0]
+        pos = zone_lats[zone_lats > 0.0]
+        clear_gap_left_m = float(neg.max()) if len(neg) else -CLEAR_GAP_LATERAL_WINDOW_M
+        clear_gap_right_m = float(pos.min()) if len(pos) else CLEAR_GAP_LATERAL_WINDOW_M
+        clear_width_m = float(clear_gap_right_m - clear_gap_left_m)
 
     floor_mask = (
         (np.abs(height) <= FLOOR_BAND_M)
@@ -719,6 +850,22 @@ def analyze_depth(
                         seg_p1 = (float(intercept + slope * lat_lo), lat_lo)
                         seg_p2 = (float(intercept + slope * lat_hi), lat_hi)
                         edge_height_m = float(np.median(height[component]))
+        if not require_proposal and np.any(footprint):
+            # Fused mode maps EVERY visible edge's leading boundary, not just
+            # the nearest component's: each column contributes the pixels
+            # within FOOTPRINT_BOUNDARY_DEPTH_M of ITS OWN nearest surface,
+            # so a second table deeper in view maps its true lateral extent
+            # in the same frame (per-column = no lateral bridging between
+            # separate objects across open floor). This supersedes the
+            # single-component region above (kept for the segment fit).
+            col_nearest = np.where(footprint, robot_forward, big).min(axis=0)
+            boundary = footprint & (
+                robot_forward <= col_nearest[None, :] + FOOTPRINT_BOUNDARY_DEPTH_M
+            )
+            if np.count_nonzero(boundary) >= 8:
+                region_points = _decimate_xy(
+                    robot_forward[boundary], robot_lateral[boundary]
+                )
 
     # Lidar cross-check: nearest lidar return in the same corridor (robot-
     # forward meters). Shown on the overlay next to the depth estimate so
@@ -751,17 +898,20 @@ def analyze_depth(
             ).astype(np.uint8)
             overlay[elevated] = (0.35 * overlay[elevated] + 0.65 * np.array([0, 0, 220])).astype(np.uint8)
             overlay[floorish] = (0.7 * overlay[floorish] + 0.3 * np.array([0, 160, 0])).astype(np.uint8)
-            text = (
-                "no hough edge"
-                if proposal_line_xy is None
-                else "clear" if nearest_gate_m is None else f"elevated {nearest_gate_m:.2f}m"
-            )
+            if require_proposal and proposal_line_xy is None:
+                text = "no hough edge"
+            elif nearest_gate_m is None:
+                text = "clear"
+            else:
+                text = f"elevated {nearest_gate_m:.2f}m"
             if nearest_gate_m is not None:
                 text += (
                     " nw=-"
                     if nearest_gate_narrow_m is None
                     else f" nw={nearest_gate_narrow_m:.2f}"
                 )
+            if clear_width_m is not None:
+                text += f" cw={clear_width_m:.2f}"
             if lidar_corridor_min_m is not None:
                 text += f" | lidar {lidar_corridor_min_m:.2f}m"
             cv2.putText(
@@ -803,6 +953,9 @@ def analyze_depth(
         elevated_ratio=elevated_ratio,
         lidar_corridor_min_m=lidar_corridor_min_m,
         overlay_bgr=overlay,
+        clear_gap_left_m=clear_gap_left_m,
+        clear_gap_right_m=clear_gap_right_m,
+        clear_width_m=clear_width_m,
     )
 
 
@@ -1005,6 +1158,9 @@ class DepthWorker:
                     proposal_score=float(proposal.score),
                     seam_cols=seam_cols,
                     coverage_mask=coverage,
+                    # Fused mode: metric 3D owns candidacy; the detected line
+                    # is a corroborator (small-component bypass), not a gate.
+                    require_proposal=self._mosaic is None,
                 )
             except Exception as exc:
                 self.failure = f"{type(exc).__name__}: {exc}"

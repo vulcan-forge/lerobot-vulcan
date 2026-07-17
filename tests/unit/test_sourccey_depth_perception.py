@@ -300,3 +300,118 @@ def test_depth_worker_panorama_keys() -> None:
         object(), {"front_left": default_eye_right(), "front_right": default_eye_right()}
     )
     assert worker_per_eye.eye_keys == ("front_left", "front_right")
+
+
+def _fields_with_lateral(shape, up_map, x_map, fwd=0.7):
+    return {
+        "fwd_unit": np.full(shape, fwd, dtype=np.float32),
+        "up_unit": up_map,
+        "x_unit": x_map,
+        "bearing_deg": np.zeros(shape, dtype=np.float32),
+    }
+
+
+def test_fused_mode_gates_without_a_hough_proposal(monkeypatch) -> None:
+    """require_proposal=False: the metric 3D owns candidacy — a large real
+    elevated region gates with NO detected line (the 'no hough' dark-cabinet
+    blindness is gone in fused mode)."""
+    shape = (24, 48)
+    up = np.full(shape, -0.9, dtype=np.float32)
+    up[4:20, 8:40] = -0.3  # broad elevated region, no proposal anywhere
+    monkeypatch.setattr(
+        depth_perception,
+        "_pixel_fields",
+        lambda *_: _fields_with_lateral(shape, up, np.zeros(shape, dtype=np.float32)),
+    )
+    monkeypatch.setattr(depth_perception, "_floor_scale", lambda *_: 1.0)
+    model = replace(default_eye_right(), yaw_deg=0.0, forward_offset_m=0.0)
+
+    result = depth_perception.analyze_depth(
+        model, np.ones(shape, dtype=np.float32), eye="panorama",
+        frame_monotonic=1.0, require_proposal=False,
+    )
+    assert result.nearest_gate_m is not None
+    assert len(result.region_points_xy) > 0  # edge dimensions map without a line
+
+
+def test_fused_mode_speckle_needs_size_or_line(monkeypatch) -> None:
+    """Without the line gate, tiny depth-noise blobs must not gate."""
+    shape = (24, 48)
+    up = np.full(shape, -0.9, dtype=np.float32)
+    up[10:12, 20:23] = -0.3  # 6px speckle
+    monkeypatch.setattr(
+        depth_perception,
+        "_pixel_fields",
+        lambda *_: _fields_with_lateral(shape, up, np.zeros(shape, dtype=np.float32)),
+    )
+    monkeypatch.setattr(depth_perception, "_floor_scale", lambda *_: 1.0)
+    model = replace(default_eye_right(), yaw_deg=0.0, forward_offset_m=0.0)
+
+    result = depth_perception.analyze_depth(
+        model, np.ones(shape, dtype=np.float32), eye="panorama",
+        frame_monotonic=1.0, require_proposal=False,
+    )
+    assert result.nearest_any_m is None
+
+
+def test_measured_gap_bounds_and_width(monkeypatch) -> None:
+    """Two posts at lateral ~±0.5m within the decision zone must yield gap
+    bounds ~∓0.5 and a ~1.0m measured clear width — real dimensions, not a
+    binary corridor guess."""
+    shape = (24, 48)
+    up = np.full(shape, -0.9, dtype=np.float32)
+    x = np.zeros(shape, dtype=np.float32)
+    up[4:20, 4:12] = -0.3   # left-image post
+    x[:, 4:12] = 0.5        # robot_lateral = -x_unit*d = -0.5
+    up[4:20, 36:44] = -0.3  # right-image post
+    x[:, 36:44] = -0.5      # robot_lateral = +0.5
+    monkeypatch.setattr(
+        depth_perception, "_pixel_fields", lambda *_: _fields_with_lateral(shape, up, x)
+    )
+    monkeypatch.setattr(depth_perception, "_floor_scale", lambda *_: 1.0)
+    model = replace(default_eye_right(), yaw_deg=0.0, forward_offset_m=0.0)
+
+    result = depth_perception.analyze_depth(
+        model, np.ones(shape, dtype=np.float32), eye="panorama",
+        frame_monotonic=1.0, require_proposal=False,
+    )
+    assert result.clear_gap_left_m is not None and abs(result.clear_gap_left_m + 0.5) < 0.05
+    assert result.clear_gap_right_m is not None and abs(result.clear_gap_right_m - 0.5) < 0.05
+    assert result.clear_width_m is not None and abs(result.clear_width_m - 1.0) < 0.1
+
+
+def test_fused_mode_maps_multiple_edges_per_frame(monkeypatch) -> None:
+    """Per-column boundary: TWO objects at different depths both contribute
+    their leading boundary in one frame (legacy mapped only the nearest
+    component)."""
+    shape = (24, 48)
+    up = np.full(shape, -0.9, dtype=np.float32)
+    x = np.zeros(shape, dtype=np.float32)
+    fwd = np.full(shape, 0.7, dtype=np.float32)
+    up[4:20, 4:12] = -0.3
+    x[:, 4:12] = 0.5
+    up[4:20, 36:44] = -0.3
+    x[:, 36:44] = -0.5
+    fwd[:, 36:44] = 1.4  # second object twice as far
+    fields = _fields_with_lateral(shape, up, x)
+    fields["fwd_unit"] = fwd
+    monkeypatch.setattr(depth_perception, "_pixel_fields", lambda *_: fields)
+    monkeypatch.setattr(depth_perception, "_floor_scale", lambda *_: 1.0)
+    model = replace(default_eye_right(), yaw_deg=0.0, forward_offset_m=0.0)
+
+    result = depth_perception.analyze_depth(
+        model, np.ones(shape, dtype=np.float32), eye="panorama",
+        frame_monotonic=1.0, require_proposal=False,
+    )
+    lats = [pl for _, pl in result.region_points_xy]
+    assert lats and min(lats) < -0.3 and max(lats) > 0.3  # both objects mapped
+
+
+def test_gap_clears_body_helper() -> None:
+    from sourccey_elevated_safety import gap_clears_body
+
+    assert gap_clears_body(None, None, 0.31)  # nothing measured = open
+    assert gap_clears_body(-0.5, 0.5, 0.31)  # 1.0m gap centered: fits
+    assert not gap_clears_body(-0.5, 0.2, 0.31)  # right wall too close
+    assert not gap_clears_body(-0.1, 0.5, 0.31)  # left wall too close
+    assert gap_clears_body(None, 0.35, 0.31)  # open left, right clears
