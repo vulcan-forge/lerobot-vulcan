@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import socket
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,165 @@ from ldlidar_direct_snapshot_stitch import (
 )
 from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import SourcceyClientConfig
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey_client import SourcceyClient
+
+
+# Trusted heading slack (deg) applied to the dead-reckoned anchor while the IMU
+# is supplying yaw. Tight (the gyro is accurate over the few seconds of a turn),
+# so the wide-theta recovery tiebreaker can reject a room-symmetric wrong mode
+# that a lidar-only, drifted anchor would wave through.
+IMU_DEAD_RECK_SLACK_DEG = 20.0
+
+
+class ImuYawClient:
+    """Subscribes to the host's integrated-yaw PUB socket and exposes the latest
+    heading in degrees (sign-corrected to the SLAM CCW convention).
+
+    Wholly optional and non-fatal: if zmq is unavailable, the socket never
+    connects, or samples stop arriving, ``deg()`` returns ``None`` and every
+    caller falls back to the prior lidar-only behavior. Only yaw DELTAS are ever
+    consumed downstream, so unbounded gyro drift in the absolute value is fine.
+    """
+
+    def __init__(self, endpoint: str, *, sign: float = 1.0, stale_after_s: float = 1.0) -> None:
+        self._endpoint = str(endpoint)
+        self._sign = float(sign)
+        self._stale_after_s = float(stale_after_s)
+        self._lock = threading.Lock()
+        self._yaw_deg: float | None = None
+        self._last_rx_monotonic: float | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._sock = None
+        # Sign self-check: compare IMU deltas against well-tracked lidar turns.
+        self._sign_agree = 0
+        self._sign_disagree = 0
+        self._sign_warned = False
+
+    def start(self) -> None:
+        try:
+            import zmq
+
+            ctx = zmq.Context.instance()
+            sock = ctx.socket(zmq.SUB)
+            sock.setsockopt(zmq.SUBSCRIBE, b"")
+            sock.setsockopt(zmq.CONFLATE, 1)
+            sock.setsockopt(zmq.RCVTIMEO, 200)
+            sock.connect(self._endpoint)
+            self._sock = sock
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[wander] IMU yaw client disabled (connect failed: {exc}); "
+                "heading is lidar-only"
+            )
+            self._sock = None
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True, name="wander_imu_yaw")
+        self._thread.start()
+        print(
+            f"[wander] IMU yaw heading prior ENABLED (endpoint={self._endpoint}, "
+            f"sign={self._sign:+.0f}); waiting for first sample"
+        )
+
+    def _run(self) -> None:
+        import zmq
+
+        first = True
+        while not self._stop.is_set():
+            try:
+                msg = self._sock.recv()
+            except zmq.Again:
+                continue
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                data = json.loads(msg.decode("utf-8"))
+                yaw_deg = float(data["yaw_deg"]) * self._sign
+            except Exception:  # noqa: BLE001
+                continue
+            with self._lock:
+                self._yaw_deg = yaw_deg
+                self._last_rx_monotonic = time.monotonic()
+            if first:
+                first = False
+                print("[wander] IMU yaw feed live (heading prior active)")
+
+    def deg(self) -> float | None:
+        """Latest sign-corrected yaw in degrees, or None if absent/stale."""
+        with self._lock:
+            if self._yaw_deg is None or self._last_rx_monotonic is None:
+                return None
+            if (time.monotonic() - self._last_rx_monotonic) > self._stale_after_s:
+                return None
+            return float(self._yaw_deg)
+
+    def delta_since(self, yaw_before: float | None) -> float | None:
+        """Normalized yaw change since ``yaw_before`` (both sign-corrected), or None."""
+        if yaw_before is None:
+            return None
+        now = self.deg()
+        if now is None:
+            return None
+        return _normalize_angle_deg(now - float(yaw_before))
+
+    def note_tracked_turn(self, tracked_deg: float, imu_delta_deg: float | None) -> None:
+        """Cross-check IMU sign against a confidently lidar-tracked turn."""
+        if imu_delta_deg is None or abs(tracked_deg) < 8.0 or abs(imu_delta_deg) < 4.0:
+            return
+        if (tracked_deg >= 0.0) == (imu_delta_deg >= 0.0):
+            self._sign_agree += 1
+        else:
+            self._sign_disagree += 1
+        if (
+            not self._sign_warned
+            and self._sign_disagree >= 3
+            and self._sign_disagree > self._sign_agree * 2
+        ):
+            self._sign_warned = True
+            print(
+                "[wander] WARNING: IMU yaw sign looks INVERTED versus the lidar-tracked turns "
+                f"(agree={self._sign_agree}, disagree={self._sign_disagree}). Re-run with "
+                "--imu-yaw-sign -1 (or flip the host imu_yaw_gyro_sign). Until then the IMU "
+                "heading prior is IGNORED so it cannot fight the solver."
+            )
+
+    def sign_trustworthy(self) -> bool:
+        """False once the self-check is confident the configured sign is wrong."""
+        return not (self._sign_disagree >= 3 and self._sign_disagree > self._sign_agree * 2)
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        self._thread = None
+        if self._sock is not None:
+            try:
+                self._sock.close(0)
+            except Exception:  # noqa: BLE001
+                pass
+        self._sock = None
+
+
+def _imu_anchor(imu: "ImuYawClient | None", theta_deg: float) -> tuple[float, float] | None:
+    """Snapshot (gyro_yaw_now, dead_reck_theta) so the heading can later be
+    re-derived from the gyro. Returns None if the IMU yaw is unavailable."""
+    if imu is None:
+        return None
+    yaw = imu.deg()
+    if yaw is None:
+        return None
+    return (float(yaw), float(theta_deg))
+
+
+def _imu_resolved_theta(imu: "ImuYawClient | None", anchor: tuple[float, float] | None) -> float | None:
+    """Dead-reckoned heading propagated from ``anchor`` by the gyro delta since
+    it was set. None if the IMU is unavailable/stale. Not wrapped: pose theta in
+    this module runs unbounded, and every consumer normalizes the difference."""
+    if imu is None or anchor is None:
+        return None
+    delta = imu.delta_since(anchor[0])
+    if delta is None:
+        return None
+    return float(anchor[1]) + float(delta)
 
 
 @dataclass(slots=True)
@@ -229,6 +389,7 @@ def _select_frontier_choice(
     frontier_min_distance_m: float,
     frontier_bin_deg: float,
     min_gap_width_m: float = 0.0,
+    corridor_veto=None,
 ) -> FrontierChoice | None:
     half_width = max(10.0, float(valid_angle_half_width_deg))
     bin_deg = max(1.0, float(frontier_bin_deg))
@@ -308,6 +469,14 @@ def _select_frontier_choice(
             continue
         seg_center = int((start_idx + end_idx) // 2)
         seg_delta = float(bin_angles[seg_center])
+        # A 2D scan at ~20cm height sees UNDER beds and tables: a wide, deep
+        # "opening" whose corridor the eye cameras have mapped as elevated
+        # furniture is an under-furniture tunnel, not a frontier. Field
+        # 2026-07-17: the robot pirouetted in the bed/dresser corner for a
+        # whole run committing probes into exactly these tunnels while every
+        # safety gate (correctly) refused the drive.
+        if corridor_veto is not None and corridor_veto(seg_delta, seg_mean):
+            continue
         # Favor wide, far openings, but mildly penalize large steering angles.
         seg_score = seg_mean + 0.025 * seg_width - 0.003 * abs(seg_delta)
         candidate = FrontierChoice(
@@ -619,6 +788,193 @@ def _target_distance_m(target: ExploreTarget, pose: Pose2D) -> float:
     return float(math.hypot(float(target.world_x_m) - float(pose.x), float(target.world_y_m) - float(pose.y)))
 
 
+def _escape_boxed_in(
+    *,
+    robot: SourcceyClient,
+    feed: DirectLidarFeed,
+    args,
+    after_frame_id: int,
+    min_usable: int,
+) -> int:
+    """The founding scan is BOXED IN — a full revolution arrives but almost
+    every return is within min_range of the lidar. Rotating in place cannot
+    fix this (a 360deg scan is heading-invariant: the same obstacles stay at
+    the same distances, just relabeled). The only escape is to TRANSLATE
+    toward open space. Face the most-open direction, drive a short gentle
+    burst toward it (gated on a LIVE clearance check, independent of the
+    saturated stop box), and rescan — repeat until a healthy revolution
+    arrives. Returns the frame_id of the last processed revolution. Raises
+    only if the robot is genuinely surrounded (no direction with enough
+    clearance) after the attempt budget — a physical situation the operator
+    must fix. User directive 2026-07-18: 'if it finds itself boxed in, just
+    turn around and keep scanning.'"""
+    ESCAPE_CLEAR_M = 0.45  # an opening must be at least this deep to drive into
+    FWD_BLOCKED_M = 0.35   # nearest return straight ahead below this = blocked
+    ESCAPE_BURST_S = 0.22  # ~0.16m at the min effective speed
+    turn_speed = float(args.turn_speed)
+    turn_burst_s = float(args.turn_burst_s)
+    deg_per_burst = max(4.0, math.degrees(turn_speed * turn_burst_s))
+    last_id = int(after_frame_id)
+
+    def _fresh_frame():
+        nonlocal last_id
+        fid, fr = feed.wait_for_frame_after(
+            after_frame_id=last_id,
+            timeout_s=float(args.fresh_frame_timeout_s),
+            min_frame_advances=1,
+            armed_wall_ts=time.time(),
+        )
+        if fr is not None:
+            last_id = int(fid)
+        return fr
+
+    def _usable(fr) -> int:
+        return len(
+            _scan_to_local_points(
+                points=fr.points,
+                forward_angle_deg=float(args.forward_angle_deg),
+                valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+                invert_lateral_axis=bool(args.invert_lateral_axis),
+                max_distance_m=float(args.max_distance_m),
+                min_confidence=int(args.min_confidence),
+                min_range_m=float(args.min_range_m),
+            )
+        )
+
+    def _forward_clear_m(fr) -> float:
+        # Nearest return within a narrow (+-20deg) cone straight ahead.
+        best = float(args.max_distance_m)
+        for angle_deg, distance_m, confidence in fr.points:
+            if int(confidence) < int(args.min_confidence):
+                continue
+            d = float(distance_m)
+            if d <= 0.05:
+                continue
+            if abs(_normalize_angle_deg(float(angle_deg) - float(args.forward_angle_deg))) <= 20.0:
+                best = min(best, d)
+        return best
+
+    def _best_open(fr):
+        return _select_frontier_choice(
+            fr,
+            forward_angle_deg=float(args.forward_angle_deg),
+            valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+            max_distance_m=float(args.max_distance_m),
+            min_range_m=float(args.min_range_m),
+            min_confidence=int(args.min_confidence),
+            frontier_min_distance_m=ESCAPE_CLEAR_M,
+            frontier_bin_deg=float(args.frontier_bin_deg),
+        )
+
+    def _turn(delta_deg: float) -> None:
+        if abs(delta_deg) < 8.0:
+            return
+        sign = 1.0 if delta_deg >= 0.0 else -1.0
+        for _ in range(min(10, max(1, int(round(abs(delta_deg) / deg_per_burst))))):
+            _execute_turn_burst(
+                robot=robot, direction_sign=sign,
+                turn_speed=turn_speed, turn_burst_s=turn_burst_s, turn_settle_s=0.08,
+            )
+
+    def _drive_forward() -> None:
+        deadline = time.monotonic() + ESCAPE_BURST_S
+        while time.monotonic() < deadline:
+            robot.send_action(
+                {
+                    "x.vel": max(float(args.min_effective_move_speed), 0.75),
+                    "y.vel": 0.0,
+                    "theta.vel": 0.0,
+                    "z.pos": getattr(robot, "_z_pos_cmd", 100.0),
+                    "untorque_left": True,
+                    "untorque_right": True,
+                }
+            )
+            time.sleep(0.05)
+        _send_stop(robot)
+        time.sleep(0.25)
+
+    def _full_rotation_survey() -> float:
+        # Physically complete a ~360deg rotation (per user: never conclude
+        # boxed without a full look-around), returning the best open clearance
+        # seen anywhere. The lidar already sees 360deg, so this is confirmation
+        # + a deliberate, visible survey — not information the single scan
+        # lacked.
+        print("[wander] BOXED IN — no opening ahead; doing a FULL rotation to survey all directions")
+        best = 0.0
+        bursts_per_step = 2
+        steps = max(6, int(round(360.0 / max(deg_per_burst * bursts_per_step, 24.0))))
+        for _ in range(steps):
+            for _ in range(bursts_per_step):
+                _execute_turn_burst(
+                    robot=robot, direction_sign=1.0,
+                    turn_speed=turn_speed, turn_burst_s=turn_burst_s, turn_settle_s=0.05,
+                )
+            fr = _fresh_frame()
+            if fr is None:
+                continue
+            if _usable(fr) >= int(min_usable):
+                return float(args.max_distance_m)  # a healthy view appeared mid-survey
+            c = _best_open(fr)
+            if c is not None:
+                best = max(best, float(c.mean_distance_m))
+        print(f"[wander] full-rotation survey: best clearance found = {best:.2f}m")
+        return best
+
+    # COMMIT-AND-DRIVE: pick an opening, face it ONCE, then drive FORWARD
+    # through it in repeated bursts (re-picking a new lateral bearing every
+    # cycle made it oscillate between opposite openings and never translate —
+    # field 2026-07-18: drove -84deg then +84deg then gave up). Re-survey only
+    # when the committed direction becomes blocked ahead.
+    for direction_attempt in range(6):
+        fr = _fresh_frame()
+        if fr is None:
+            print(f"[wander] boxed-in escape: no fresh revolution (direction {direction_attempt + 1}/6)")
+            continue
+        if _usable(fr) >= int(min_usable):
+            print(f"[wander] escaped the box (usable={_usable(fr)}); founding the map here")
+            _send_stop(robot)
+            return last_id
+        choice = _best_open(fr)
+        if choice is None or float(choice.mean_distance_m) < ESCAPE_CLEAR_M:
+            best = _full_rotation_survey()
+            if best >= float(args.max_distance_m):
+                _send_stop(robot)
+                return last_id  # healthy view appeared during the survey
+            if best < ESCAPE_CLEAR_M:
+                _send_stop(robot)
+                raise RuntimeError(
+                    "BOXED IN with no escape route: after a FULL rotation, every direction "
+                    f"still has an obstacle within {ESCAPE_CLEAR_M:.2f}m of the lidar. The robot "
+                    "is genuinely surrounded (draped material all around, or wedged in a tight "
+                    "nook). Physically reposition it with clear space around the lidar — this is "
+                    "NOT a host/feed problem."
+                )
+            continue  # an opening exists somewhere; re-pick and drive next loop
+        # Face the opening, then commit to driving FORWARD through it.
+        print(
+            "[wander] BOXED IN — committing to the open direction "
+            f"(bearing {float(choice.delta_deg):+.0f}deg, {float(choice.mean_distance_m):.2f}m clear) "
+            "and driving through it"
+        )
+        _turn(float(choice.delta_deg))
+        for _ in range(6):
+            fr = _fresh_frame()
+            if fr is None:
+                break
+            if _usable(fr) >= int(min_usable):
+                print(f"[wander] escaped the box (usable={_usable(fr)}); founding the map here")
+                _send_stop(robot)
+                return last_id
+            if _forward_clear_m(fr) < FWD_BLOCKED_M:
+                break  # committed direction is now blocked — re-survey next loop
+            _drive_forward()
+    _send_stop(robot)
+    raise RuntimeError(
+        "Could not escape the boxed-in area after driving through 6 openings — the robot is "
+        "likely surrounded or wedged. Physically reposition it with clear space around the lidar."
+    )
+
+
 def _capture_snapshot(
     *,
     feed: DirectLidarFeed,
@@ -641,7 +997,24 @@ def _capture_snapshot(
     )
     frame = None
     frame_id = int(after_frame_id)
-    for attempt_index in range(3):
+    local_points_xy = None
+    # Two failure modes produce a capture too sparse to stitch, and they are
+    # NOT the same problem:
+    #   (1) DEGRADED FEED — the host serves partial revolutions (raw far
+    #       below the ~240 norm), e.g. USB stutter / spin-up. A host issue.
+    #   (2) BOXED IN — a FULL revolution arrives (raw ~240) but almost all
+    #       returns fall within min_range_m (self-hits / walls right against
+    #       the lidar), so few survive filtering. The robot is physically
+    #       wedged / something is draped within ~min_range of the lidar. NOT
+    #       a host issue (field 2026-07-18: baseline 168 self-hits, raw 241,
+    #       usable 49 — misreported as a feed fault).
+    # Either way the capture is refused (it would found a garbage map), but
+    # the diagnosis must be accurate so the operator fixes the right thing.
+    MIN_HEALTHY_LOCAL_POINTS = 60
+    MIN_HEALTHY_RAW_POINTS = 150
+    last_raw = 0
+    last_usable = 0
+    for attempt_index in range(6):
         armed_wall_ts = time.time()
         frame_id, frame = feed.wait_for_frame_after(
             after_frame_id=after_frame_id,
@@ -649,23 +1022,58 @@ def _capture_snapshot(
             min_frame_advances=int(fresh_frame_advances),
             armed_wall_ts=armed_wall_ts,
         )
-        if frame is not None:
+        if frame is None:
+            # Transient feed dropouts self-heal (the client auto-reconnects);
+            # give it a few chances before treating this as fatal.
+            print(
+                f"[capture] no fresh revolution yet (attempt {attempt_index + 1}/6); "
+                "waiting for feed to recover"
+            )
+            continue
+        local_points_xy = _scan_to_local_points(
+            points=frame.points,
+            forward_angle_deg=float(forward_angle_deg),
+            valid_angle_half_width_deg=float(valid_angle_half_width_deg),
+            invert_lateral_axis=bool(invert_lateral_axis),
+            max_distance_m=float(max_distance_m),
+            min_confidence=int(min_confidence),
+            min_range_m=float(min_range_m),
+        )
+        last_raw = len(frame.points)
+        last_usable = len(local_points_xy)
+        if len(local_points_xy) >= MIN_HEALTHY_LOCAL_POINTS:
             break
-        # Transient feed dropouts self-heal (the client auto-reconnects);
-        # give it a few chances before treating this as fatal.
-        print(f"[capture] no fresh revolution yet (attempt {attempt_index + 1}/3); waiting for feed to recover")
-    if frame is None:
-        raise TimeoutError("Timed out waiting for a fresh LiDAR revolution to capture.")
-
-    local_points_xy = _scan_to_local_points(
-        points=frame.points,
-        forward_angle_deg=float(forward_angle_deg),
-        valid_angle_half_width_deg=float(valid_angle_half_width_deg),
-        invert_lateral_axis=bool(invert_lateral_axis),
-        max_distance_m=float(max_distance_m),
-        min_confidence=int(min_confidence),
-        min_range_m=float(min_range_m),
-    )
+        if last_raw < MIN_HEALTHY_RAW_POINTS:
+            print(
+                f"[capture] revolution {frame_id} DEGRADED FEED (raw={last_raw} < "
+                f"{MIN_HEALTHY_RAW_POINTS} — host serving partial revolutions); waiting "
+                f"(attempt {attempt_index + 1}/6)"
+            )
+        else:
+            print(
+                f"[capture] revolution {frame_id}: FULL revolution (raw={last_raw}) but only "
+                f"{last_usable} points beyond {float(min_range_m):.2f}m — the robot is BOXED IN "
+                f"(surrounded by returns within {float(min_range_m):.2f}m); waiting "
+                f"(attempt {attempt_index + 1}/6)"
+            )
+        after_frame_id = int(frame_id)
+        frame = None
+        local_points_xy = None
+        time.sleep(0.4)
+    if frame is None or local_points_xy is None:
+        if last_raw >= MIN_HEALTHY_RAW_POINTS:
+            raise RuntimeError(
+                f"The lidar feed is HEALTHY (~{last_raw} points/revolution) but only ~{last_usable} "
+                f"survive the {float(min_range_m):.2f}m near-cutoff — the rest are self-hits / near "
+                "returns. The robot is physically BOXED IN, or something (e.g. draped material) is "
+                f"within ~{float(min_range_m):.2f}m of the lidar. Reposition it with clear space "
+                "around the lidar. This is NOT a host/feed problem."
+            )
+        raise RuntimeError(
+            f"LiDAR feed is delivering PARTIAL revolutions (raw ~{last_raw}, far below the ~240 "
+            "norm) and did not recover within 6 attempts. Check the lidar stream host on the Pi "
+            "(USB contention / power) before rerunning."
+        )
     capture_config = {
         "forward_angle_deg": float(forward_angle_deg),
         "valid_angle_half_width_deg": float(valid_angle_half_width_deg),
@@ -977,6 +1385,7 @@ def _log_live_pose_state(
     pose: Pose2D,
     points_xy: np.ndarray,
     cone_half_width_deg: float,
+    body_radius_m: float = 0.29,
 ) -> None:
     rr.set_time("capture_index", sequence=int(capture_index))
     origin = np.asarray([[pose.x, pose.y, 0.0]], dtype=np.float32)
@@ -986,16 +1395,29 @@ def _log_live_pose_state(
     )
     rr.log("world/live_pose/origin", rr.Points3D(origin, colors=[[0, 255, 255]], radii=0.06))
     rr.log("world/live_pose/heading", rr.Arrows3D(origins=origin, vectors=vector, colors=[[0, 255, 255]]))
-    arc = np.asarray(
-        [
-            [pose.x + 0.45 * math.cos(math.radians(pose.theta_deg + delta_deg)),
-             pose.y + 0.45 * math.sin(math.radians(pose.theta_deg + delta_deg)),
-             0.0]
-            for delta_deg in np.linspace(-float(cone_half_width_deg), float(cone_half_width_deg), 36)
-        ],
-        dtype=np.float32,
+
+    def _circle(radius_m: float) -> np.ndarray:
+        return np.asarray(
+            [
+                [pose.x + radius_m * math.cos(a), pose.y + radius_m * math.sin(a), 0.0]
+                for a in np.linspace(0.0, 2.0 * math.pi, 48)
+            ],
+            dtype=np.float32,
+        )
+
+    # Body-footprint gauge: bright cyan = the PLANNING collision radius (what
+    # the planner treats the robot as — a gap must exceed this DIAMETER to be
+    # "reachable"); dim teal = the SQUEEZE radius it will actually attempt to
+    # thread (radius - 5cm). Compare either circle against the exit gap.
+    squeeze_radius_m = max(0.22, float(body_radius_m) - 0.05)
+    rr.log(
+        "world/live_pose/body_radius",
+        rr.LineStrips3D([_circle(float(body_radius_m))], colors=[[0, 255, 255]], radii=0.006),
     )
-    rr.log("world/live_pose/cone", rr.LineStrips3D([arc], colors=[[0, 255, 255]], radii=0.005))
+    rr.log(
+        "world/live_pose/squeeze_radius",
+        rr.LineStrips3D([_circle(squeeze_radius_m)], colors=[[0, 140, 150]], radii=0.004),
+    )
     if len(points_xy):
         world_points_xy = _transform_points(points_xy, pose)
         world_points_xyz = np.column_stack(
@@ -1462,11 +1884,19 @@ def _drive_with_tracking(
     min_track_score: float = 5.0,
     max_consecutive_held: int = 2,
     hazard_monitor=None,
+    map_side_guard=None,
 ) -> tuple[Pose2D, dict[str, object]]:
     """Drive forward burst-by-burst while tracking the pose with the lidar
     after every burst. The drive stops when blocked, when the plan completes,
     or when tracking loses lock — the robot never travels more than one burst
-    beyond its last confirmed pose, so there is no big-jump solve afterwards."""
+    beyond its last confirmed pose, so there is no big-jump solve afterwards.
+
+    map_side_guard: optional callable(pose) -> str | None. A virtual side
+    bumper from the ELEVATED MAP: tabletop edges BESIDE the robot are
+    invisible to every live sensor (panorama covers ±52° forward, the lidar
+    passes under tabletops, the bottom camera watches the floor), but the
+    map remembers where they are. A non-None reason halts the drive like a
+    hazard stop."""
     non_empty_sets = [points for points in transformed_sets if len(points)]
     global_points_xy = np.concatenate(non_empty_sets, axis=0) if non_empty_sets else np.zeros((0, 2), np.float32)
     grids = _build_score_grids(global_points_xy, resolution_m=float(resolution_m), padding_m=1.4)
@@ -1485,6 +1915,13 @@ def _drive_with_tracking(
     frame_wait_timeout_s = max(2.0, float(burst_s) + 1.5)
 
     for burst_index in range(max(1, int(burst_count))):
+        if map_side_guard is not None:
+            guard_reason = map_side_guard(current_pose)
+            if guard_reason:
+                stopped_by_hazard = True
+                hazard_reason = str(guard_reason)
+                print(f"[drive] {guard_reason}; halting before burst {burst_index + 1:02d}")
+                break
         burst_meta = _drive_forward_burst(
             robot=robot,
             feed=feed,
@@ -1701,6 +2138,12 @@ def _reverse_escape(
             )
             if np.any(behind):
                 live_rear_m = float(np.min(-all_points[behind, 0]) + rear_bumper_x)
+    # rear_visible: the live scan actually returned points in the rear
+    # corridor, so we CAN see what is behind (not occluded). live_rear_m is
+    # None either when the rear is genuinely open (no points) or when an
+    # obstacle sits closer than the scan's near cutoff (~0.14m behind the
+    # bumper) — those two are disambiguated by the map clearance below.
+    rear_visible = live_rear_m is not None
     if live_rear_m is not None and live_rear_m < clearance_m:
         print(
             f"[wander] live lidar shows only {live_rear_m:.2f}m clear behind "
@@ -1713,19 +2156,48 @@ def _reverse_escape(
             f"[wander] reversing out of pocket (map shows {clearance_m:.2f}m clear behind, "
             f"target={target_reverse_m:.2f}m)"
         )
-    elif allow_blind:
-        # Last resort: still wedged after a previous failed escape. A short,
-        # slow blind reverse risks a gentle nudge; staying wedged forever is
-        # worse. The stop box keeps protecting the front.
+    elif rear_visible:
+        # The live lidar SEES the rear and it is tight — a real wall, not a
+        # blind spot. Never drive into a wall we can see (field 2026-07-18:
+        # the old blind reverse backed the robot into the wall behind it
+        # repeatedly). Take only the genuinely clear margin; if there is
+        # none, refuse and let the recovery ladder ROTATE instead.
+        safe_reverse_m = clearance_m - 0.12
+        if safe_reverse_m >= 0.08:
+            target_reverse_m = safe_reverse_m
+            reverse_speed = min(abs(float(reverse_speed)), 0.8)
+            bursts = 1
+            print(
+                f"[wander] reversing the safe margin only ({target_reverse_m:.2f}m); live "
+                f"lidar sees a wall {clearance_m:.2f}m behind"
+            )
+        else:
+            print(
+                f"[wander] cannot reverse-escape: live lidar sees a wall {clearance_m:.2f}m "
+                "behind — refusing to back into it (recovery will rotate instead)"
+            )
+            return None
+    elif allow_blind and clearance_m >= 0.15:
+        # Rear OCCLUDED (no live points — too close to the scan cutoff or
+        # genuinely empty) AND the map still credits some room: the robot is
+        # wedged despite that, most likely pose drift. A short slow blind
+        # nudge is the last resort; the stop box protects the front. NOT
+        # taken when the map itself reports a wall right there (< 0.15m):
+        # a confident map wall is a real wall, don't gamble into it.
         target_reverse_m = 0.18
         reverse_speed = min(abs(float(reverse_speed)), 0.8)
         bursts = 1
         print(
-            f"[wander] WARNING: map shows only {clearance_m:.2f}m clear behind but robot is "
-            f"wedged; attempting short blind reverse ({target_reverse_m:.2f}m, slow)"
+            f"[wander] WARNING: map shows {clearance_m:.2f}m clear behind but robot is "
+            f"wedged and the rear is occluded; attempting short blind reverse "
+            f"({target_reverse_m:.2f}m, slow)"
         )
     else:
-        print(f"[wander] cannot reverse-escape: only {clearance_m:.2f}m clear behind in the map")
+        blocked_by = "map+live wall" if clearance_m < 0.15 else "rear occluded"
+        print(
+            f"[wander] cannot reverse-escape: only {clearance_m:.2f}m clear behind "
+            f"({blocked_by}) — recovery will rotate instead"
+        )
         return None
     for _burst_index in range(max(1, int(bursts))):
         burst_deadline = time.monotonic() + float(burst_s)
@@ -2058,6 +2530,46 @@ def main() -> int:
         "legacy per-eye camera models (yaw/roll known to be off).",
     )
     parser.add_argument(
+        "--edge-detection",
+        choices=("on", "off"),
+        default="on",
+        help="Camera-based ELEVATED edge detection (the eye/depth pipeline for "
+        "tabletop/counter/shelf lips the lidar cannot see). 'off' disables it "
+        "entirely — no depth model is loaded, and the eyes produce no elevated "
+        "stops, holds, or edge-map cells; the bottom-camera FLOOR gate and the "
+        "lidar stop box still protect. Use when the elevated edges are at lidar "
+        "height (e.g. draped solid) so the lidar itself maps them.",
+    )
+    parser.add_argument(
+        "--use-imu-heading",
+        choices=("on", "off"),
+        default="on",
+        help="Use the host's integrated-gyro yaw as a heading PRIOR to disambiguate "
+        "room-symmetric scan matches. The host must be publishing yaw (imu_yaw_pub_enabled, "
+        "default on). Only yaw DELTAS between captures are used, so gyro drift is irrelevant. "
+        "When 'off' or the yaw feed is silent, the loop falls back to lidar-only heading "
+        "(exactly the prior behavior). This is what keeps the robot from getting permanently "
+        "lost after a lock-lost turn into an open doorway.",
+    )
+    parser.add_argument(
+        "--imu-host",
+        default=None,
+        help="Host serving the integrated-yaw ZMQ PUB socket. Defaults to --remote-ip.",
+    )
+    parser.add_argument(
+        "--imu-yaw-port",
+        type=int,
+        default=8770,
+        help="Port for the host's integrated-yaw PUB socket (host imu_yaw_pub_endpoint).",
+    )
+    parser.add_argument(
+        "--imu-yaw-sign",
+        type=float,
+        default=1.0,
+        help="Sign applied to the received yaw so +yaw matches the robot's CCW (SLAM theta) "
+        "convention. If the run warns that the IMU sign looks inverted, pass -1.",
+    )
+    parser.add_argument(
         "--edge-mapping",
         choices=("on", "off"),
         default="on",
@@ -2101,6 +2613,20 @@ def main() -> int:
     robot.connect()
     _send_stop(robot)
 
+    # Integrated-gyro yaw heading prior. Decoupled from the lidar feed and the
+    # camera/observation stream: a dedicated PUB socket on the host. Optional and
+    # non-fatal — if it never delivers, the loop stays lidar-only.
+    imu_yaw: ImuYawClient | None = None
+    if str(args.use_imu_heading) == "on":
+        imu_host = args.imu_host or args.remote_ip
+        imu_yaw = ImuYawClient(
+            f"tcp://{imu_host}:{int(args.imu_yaw_port)}",
+            sign=float(args.imu_yaw_sign),
+        )
+        imu_yaw.start()
+    else:
+        print("[wander] IMU heading prior OFF (--use-imu-heading off); heading is lidar-only")
+
     # Optional camera-based elevated obstacle gate. The lidar map stays the
     # map owner; the eye cameras only VETO unsafe motion (forward on any
     # active hazard, rotation too in the near tier; reverse always allowed).
@@ -2117,7 +2643,17 @@ def main() -> int:
         safety_endpoint = str(args.slam_input_endpoint).strip() or endpoint_from_remote_ip(
             args.remote_ip
         )
-        safety_config = ElevatedSafetyConfig(slam_input_endpoint=safety_endpoint)
+        edge_detection_on = str(args.edge_detection) == "on"
+        safety_config = ElevatedSafetyConfig(
+            slam_input_endpoint=safety_endpoint,
+            elevated_eye_enabled=edge_detection_on,
+        )
+        if not edge_detection_on:
+            print(
+                "[safety] elevated EDGE DETECTION DISABLED (--edge-detection off): no depth "
+                "model, no elevated eye stops/holds/edge cells. Floor gate + lidar stop box "
+                "still active. Elevated obstacles are protected ONLY if the lidar sees them."
+            )
         hazard_subscriber = SlamCameraSubscriber(
             endpoint=safety_endpoint,
             camera_keys=(
@@ -2154,7 +2690,7 @@ def main() -> int:
                 )
 
             depth_worker = None
-            if str(args.eye_perception) == "depth":
+            if edge_detection_on and str(args.eye_perception) == "depth":
                 # NO FALLBACK: depth requested = depth required. If it cannot
                 # load, the run aborts with the reason — never a silent switch
                 # to the old detector (use --eye-perception hough explicitly
@@ -2242,11 +2778,18 @@ def main() -> int:
             hazard_monitor.start()
             bottom_present = hazard_subscriber.latest(safety_config.bottom_key)[0] is not None
             bottom_label = "present" if bottom_present else "ABSENT (low floor objects unprotected)"
+            if not edge_detection_on:
+                eye_perception_label = "DISABLED (--edge-detection off)"
+            elif depth_worker is not None:
+                eye_perception_label = "depth" + (
+                    "+panorama" if "panorama" in depth_worker.eye_keys else ""
+                )
+            else:
+                eye_perception_label = "hough"
             print(
                 f"[safety] anti-collision gate ARMED (cameras via {safety_endpoint}, "
                 f"bottom_camera={bottom_label}, lidar_referee=on, "
-                f"eye_perception={'depth' if depth_worker is not None else 'hough'}"
-                f"{'+panorama' if depth_worker is not None and 'panorama' in depth_worker.eye_keys else ''})"
+                f"eye_perception={eye_perception_label})"
             )
         else:
             hazard_subscriber.stop()
@@ -2281,7 +2824,24 @@ def main() -> int:
     # corridor, and the add-only map kept them forever. Real furniture
     # re-observes on the same cells; noise does not. cell -> (mono, hits)
     elevated_pending_world: dict[tuple[int, int], tuple[float, int]] = {}
+    # Decay metadata for DRIVE-BY eye cells: cell -> [stamp_bearing_deg,
+    # miss_count]. A cell the fused view re-inspects (similar bearing, good
+    # range) WITHOUT re-detecting counts a miss; 3 misses remove it.
+    # Cells measured by an investigation (_stamp_world_segment) have no
+    # entry — approach-verified geometry is permanent. Detection needs two
+    # agreeing frames to add a cell; absence symmetrically takes it back
+    # (field 2026-07-17: edge-bleed cells at a doorway were permanent
+    # unfalsifiable walls that sealed a passable corridor).
+    elevated_cell_meta: dict[tuple[int, int], list] = {}
     elevated_occupied_world: set[tuple[int, int]] = set()
+    # Single-vantage promotion budget: a wedged/held robot re-observes its
+    # own systematic depth artifacts from the SAME pose every cycle, so the
+    # two-frame persistence gate confirms them forever (field 2026-07-17:
+    # ~100 red cells piled up around one stuck pose and boxed the planner
+    # in). Each ~0.25m/20deg pose bucket may promote at most 60 cells;
+    # moving to a new vantage earns a fresh budget, so normal exploration
+    # mapping is unaffected.
+    elevated_vantage_promotions: dict[tuple[int, int, int], int] = {}
     investigated_spots_world: list[tuple[float, float]] = []
     sidestep_spots_world: list[tuple[float, float]] = []
 
@@ -2348,6 +2908,13 @@ def main() -> int:
     pending_turn_direction_sign = float(direction_sign)
     pending_turn_deg = float(args.turn_deg)
     force_drive_after_turn = False
+    # One committed world-frame probe bearing during no_frontier episodes.
+    # Field 2026-07-16: re-picking the widest live gap after every align
+    # turn oscillated between openings on opposite sides (54 -> -42 -> 60
+    # -> ...) and the robot pirouetted ~15 cycles without a single probe
+    # drive. Commit once, finish turning to THAT bearing, then drive.
+    probe_commit_world_deg: float | None = None
+    probe_commit_align_turns = 0
     rotation_coverage_bin_count = 4
     rotation_coverage_bins_seen: set[int] = set()
     rotation_coverage_complete = False
@@ -2373,6 +2940,60 @@ def main() -> int:
     consecutive_append_discards = 0
     consecutive_blocked_cycles = 0
     failed_reverse_escapes = 0
+    # ---- pose-integrity latch -------------------------------------------
+    # THE map-corruption invariant (field 2026-07-17, twice): every ghost
+    # stitch happened while the system ALREADY had loud evidence it was
+    # lost — lock-lost turns, discarded captures, live relocalization
+    # rejected at 2.7-3.2 — and appended anyway on a marginal solve
+    # (wrong 90deg symmetry modes score up to ~11.9; healthy appends run
+    # 13-16.5). When ANY lostness signal fires, the map becomes
+    # READ-ONLY: every append path demands an absolute >=12.5 match and
+    # elevated-cell stamping stops. The latch clears only when a
+    # relocalization RE-PROVES the pose at >=12.0 — including a
+    # wide-theta whole-map recovery search that ignores the (meaningless)
+    # pose expectation, which is the exit this failure mode lacked.
+    pose_lost = False
+    POSE_LOST_APPEND_GATE = 12.5
+    POSE_RECOVERY_MIN_SCORE = 12.0
+    # The first appends after recovery re-anchor everything that follows —
+    # keep them strict too (+2.0 on the gate for the next two appends).
+    post_recovery_strict_appends = 0
+    # Dead-reckoned heading bound for recovery (field 2026-07-17 run 9): in
+    # a sparse near-symmetric room the WRONG 90/180deg mode scores 12-15 —
+    # as high as truth — so score alone cannot pick the recovery basin. But
+    # physics can: a turn that TRACKED cleanly bounds the true heading to
+    # ~±30deg, and a recovery candidate 178deg away is impossible no matter
+    # its score (observed: trusted at 31deg, tracked turn to ~-46deg, then
+    # a 14.17-score recovery "restored" 131.5deg and later appends went in
+    # under two different basins). The anchor theta advances by each turn's
+    # TRACKED delta; slack grows by each turn's untracked remainder, so
+    # after truly-blind rotation chains (run 7) the bound widens to
+    # useless and recovery falls back to score-only — exactly right.
+    dead_reck_theta_deg: float | None = None
+    dead_reck_slack_deg = 15.0
+    # Gyro anchor for the dead-reckoned heading: (imu_yaw_at_set, theta_at_set).
+    # Re-derived from the gyro at the recovery tiebreaker so the heading stays
+    # accurate through ANY rotation path (align turns, recovery spins, blind
+    # bursts) — not just the main arc-tracked turn — which is what lets the
+    # robot re-anchor instead of staying lost after a lock-lost turn.
+    imu_dead_reck_anchor: tuple[float, float] | None = None
+    # Consecutive redundant-vantage capture skips (see the redundant-vantage
+    # gate at the checkpoint): capped so endless skipping inside covered
+    # space cannot starve the planner of fresh captures forever.
+    redundant_skip_streak = 0
+    # EDGE-SURVEY bookkeeping: per-cluster (0.3m bucket) attempt counts and
+    # last-adoption times. Each yellow cluster gets up to 3 deliberate
+    # second-angle observation transits before it is left to the
+    # squeeze/verification ladder.
+    edge_survey_attempts: dict[tuple[int, int], int] = {}
+    edge_survey_last_adopt: dict[tuple[int, int], float] = {}
+    # Consecutive failed lost-recoveries. Against a ONE-snapshot map,
+    # recovery can be mathematically unable to reach the 12.0 bar (field
+    # 2026-07-17 run 11: first bootstrap turn lost lock, recoveries capped
+    # at 8.6-10.3, robot deadlocked until Ctrl+C). A founding snapshot
+    # holds no investment — after 2 failures the map is RE-FOUNDED from
+    # the current position instead of waiting forever.
+    lost_recovery_failures = 0
     # Rotate-away attempts that lost tracking lock in the current stuck
     # episode. A point-starved corner (wedged start) makes rotation
     # untrackable: each attempt gets discarded and re-anchored BACK — an
@@ -2685,6 +3306,7 @@ def main() -> int:
             invert_lateral_axis=bool(args.invert_lateral_axis), max_distance_m=float(args.max_distance_m),
             min_range_m=float(args.min_range_m), min_confidence=int(args.min_confidence),
             hazard_monitor=hazard_monitor,
+            map_side_guard=_map_side_guard,
         )
         shifted_m = math.hypot(float(side_pose.x) - float(start_pose.x), float(side_pose.y) - float(start_pose.y))
         if (
@@ -2740,22 +3362,28 @@ def main() -> int:
         space.  One normal safety-gated forward burst creates the next map
         evidence; completion is never the right action in that state.
         """
+        # Scale the probe to the measured opening (leaving a 0.8m stop
+        # margin) — a single 0.15m nudge costs a full 5-12s stitch cycle
+        # and barely adds map evidence; every burst is still safety-gated.
+        probe_bursts = max(1, min(3, int((float(choice.mean_distance_m) - 0.8) / 0.25)))
         print(
             "[wander] map frontier exhausted but live lidar is open; probing forward "
-            f"(delta={choice.delta_deg:.1f}deg, range={choice.mean_distance_m:.2f}m)"
+            f"(delta={choice.delta_deg:.1f}deg, range={choice.mean_distance_m:.2f}m, "
+            f"bursts={probe_bursts})"
         )
         end_pose, probe_meta = _drive_with_tracking(
             robot=robot, feed=feed, zone_cfg=zone_cfg,
             transformed_sets=stitch_state["transformed_sets"], start_pose=start_pose,
             resolution_m=float(args.stitch_resolution_m), forward_speed=float(args.move_speed),
             min_effective_move_speed=float(args.min_effective_move_speed),
-            burst_s=min(0.80, float(args.move_burst_s)), burst_count=1,
+            burst_s=min(0.80, float(args.move_burst_s)), burst_count=probe_bursts,
             inter_burst_pause_s=0.0, steer_theta_vel=0.0,
             forward_angle_deg=float(args.forward_angle_deg),
             valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
             invert_lateral_axis=bool(args.invert_lateral_axis), max_distance_m=float(args.max_distance_m),
             min_range_m=float(args.min_range_m), min_confidence=int(args.min_confidence),
             hazard_monitor=hazard_monitor,
+            map_side_guard=_map_side_guard,
         )
         t0 = math.radians(float(start_pose.theta_deg))
         dx = float(end_pose.x) - float(start_pose.x)
@@ -2792,6 +3420,10 @@ def main() -> int:
     def _stamp_world_segment(w1: tuple[float, float], w2: tuple[float, float], height_m: float) -> int:
         """Rasterize one world-frame segment into the planning-map layer and
         the deep-red rerun overlay. Returns how many NEW cells it added."""
+        if pose_lost:
+            # World coordinates computed from a lost pose are fiction; this
+            # run's fallback-pose stamps helped seal the planning grid shut.
+            return 0
         elevated_segments_world.append({"p1": w1, "p2": w2, "height_m": float(height_m)})
         seg_len = math.hypot(w2[0] - w1[0], w2[1] - w1[1])
         steps = max(int(seg_len / 0.04), 1)
@@ -2805,6 +3437,9 @@ def main() -> int:
             if cell not in elevated_occupied_world and len(elevated_occupied_world) < 20000:
                 elevated_occupied_world.add(cell)
                 segment_new_cells += 1
+            # Investigation-measured geometry is approach-verified: permanent
+            # (no decay metadata).
+            elevated_cell_meta.pop(cell, None)
         if segment_new_cells:
             # static=True: the edge layer is session-cumulative and must be
             # visible at EVERY timeline position — logged temporally, the red
@@ -2878,41 +3513,183 @@ def main() -> int:
         )
         print(f"[debug] stop bundle #{bundle_index} saved -> {stop_debug_dir}")
 
-    def _hazard_sighted_now() -> bool:
-        """A LIVE gate (camera actually seeing something) vs a lingering
-        post-stop hold. Synthetic blockers may only come from live
-        sightings — a hold denying a burst at zero motion says nothing
-        about what is in front of the CURRENT pose."""
-        if hazard_monitor is None:
-            return False
-        hs = hazard_monitor.state()
-        return bool(hs.active or hs.blind_zone or hs.ground_active)
-
-    def _stamp_synthetic_block(stop_pose: Pose2D) -> None:
-        """A hazard stop that produced NO measurable edge geometry still must
-        teach the planner (field 2026-07-11: six forward/stop/reverse cycles
-        at one table because every stop mapped 0 cells — close in, the edge
-        line falls below the camera ROI so the gate is active but the
-        geometry is unavailable). Stamp a short synthetic boundary at the
-        gate distance dead ahead so the frontier behind it stops being
-        re-planned. Conservative: 0.6m wide, at the measured distance when
-        known, else the forward-block distance."""
-        hazard_dist = None
-        if hazard_monitor is not None:
-            hazard_dist = hazard_monitor.state().est_distance_m
-        block_dist = min(0.60, max(0.30, float(hazard_dist) if hazard_dist else 0.50))
-        theta_rad = math.radians(float(stop_pose.theta_deg))
-        center_x = float(stop_pose.x) + math.cos(theta_rad) * block_dist
-        center_y = float(stop_pose.y) + math.sin(theta_rad) * block_dist
-        perp_x, perp_y = -math.sin(theta_rad), math.cos(theta_rad)
-        w1 = (center_x - 0.30 * perp_x, center_y - 0.30 * perp_y)
-        w2 = (center_x + 0.30 * perp_x, center_y + 0.30 * perp_y)
-        added_cells = _stamp_world_segment(w1, w2, 0.50)
-        print(
-            "[edge-map] no measurable edge at this stop; stamping a synthetic blocker "
-            f"({block_dist:.2f}m ahead, 0.60m wide, +{added_cells} cells, "
-            f"total={len(elevated_occupied_world)})"
+    def _plan_edge_survey(grid, robot_pose: Pose2D) -> dict | None:
+        """EDGE-SURVEY phase: pick the nearest POTENTIAL (yellow) cluster
+        with attempts remaining and plan a transit to a vantage whose
+        observation bearing differs >=30deg from the cluster's first
+        sighting. Bleed lies along the original viewing ray, so the second
+        angle either re-detects the cells at the same world position
+        (promote to red — real edge, dimensions solid) or cleanly misses
+        (decay — phantom, corridor opens). Runs when normal frontier
+        exploration is dry, BEFORE the squeeze/verification ladder: solidify
+        the edges first, then push through what remains."""
+        if grid is None or not elevated_cell_meta:
+            return None
+        unconfirmed_cells = [
+            c
+            for c, m in elevated_cell_meta.items()
+            if len(m) >= 3 and not m[2] and c in elevated_occupied_world
+        ]
+        if not unconfirmed_cells:
+            return None
+        rx, ry = float(robot_pose.x), float(robot_pose.y)
+        unconfirmed_cells.sort(
+            key=lambda c: (c[0] * 0.04 - rx) ** 2 + (c[1] * 0.04 - ry) ** 2
         )
+        now_mono = time.monotonic()
+        tried_buckets: set[tuple[int, int]] = set()
+        for seed_cell in unconfirmed_cells[:24]:
+            seed_x, seed_y = seed_cell[0] * 0.04, seed_cell[1] * 0.04
+            cluster = [
+                c
+                for c in unconfirmed_cells
+                if abs(c[0] * 0.04 - seed_x) <= 0.5 and abs(c[1] * 0.04 - seed_y) <= 0.5
+            ]
+            centroid_x = sum(c[0] for c in cluster) / len(cluster) * 0.04
+            centroid_y = sum(c[1] for c in cluster) / len(cluster) * 0.04
+            bucket = (int(round(centroid_x / 0.3)), int(round(centroid_y / 0.3)))
+            if bucket in tried_buckets:
+                continue
+            tried_buckets.add(bucket)
+            if edge_survey_attempts.get(bucket, 0) >= 3:
+                continue
+            first_bearings = [float(elevated_cell_meta[c][0]) for c in cluster]
+            base_bearing = math.degrees(
+                math.atan2(
+                    sum(math.sin(math.radians(b)) for b in first_bearings),
+                    sum(math.cos(math.radians(b)) for b in first_bearings),
+                )
+            )
+            # Candidate vantages: side-offset bearings (kept <=95deg — past
+            # ~100deg the object may self-occlude its own near boundary).
+            for bearing_offset in (55.0, -55.0, 75.0, -75.0, 40.0, -40.0, 90.0, -90.0):
+                observe_bearing = base_bearing + bearing_offset
+                for standoff_m in (1.0, 1.3, 0.8):
+                    vantage_x = centroid_x - standoff_m * math.cos(
+                        math.radians(observe_bearing)
+                    )
+                    vantage_y = centroid_y - standoff_m * math.sin(
+                        math.radians(observe_bearing)
+                    )
+                    candidate = _plan_frontier_path(
+                        grid=grid,
+                        robot_xy=(rx, ry),
+                        robot_radius_m=float(args.robot_radius_m),
+                        target_xy=(vantage_x, vantage_y),
+                        robot_theta_deg=float(robot_pose.theta_deg),
+                    )
+                    if str(candidate.get("status")) != "ok":
+                        continue
+                    goal_x, goal_y = candidate["goal_xy"]
+                    if math.hypot(goal_x - vantage_x, goal_y - vantage_y) > 0.35:
+                        continue
+                    achieved_bearing = math.degrees(
+                        math.atan2(centroid_y - goal_y, centroid_x - goal_x)
+                    )
+                    if abs(_normalize_angle_deg(achieved_bearing - base_bearing)) < 30.0:
+                        continue
+                    if (
+                        math.hypot(goal_x - rx, goal_y - ry) < 0.35
+                        and abs(
+                            _normalize_angle_deg(
+                                math.degrees(
+                                    math.atan2(centroid_y - ry, centroid_x - rx)
+                                )
+                                - float(robot_pose.theta_deg)
+                            )
+                        )
+                        < 35.0
+                    ):
+                        # Already standing at this vantage FACING the
+                        # cluster: the look is happening — re-adopting the
+                        # same spot just spins in place (field run 21:
+                        # "attempt 1/3" re-adopted forever). Try the next
+                        # bearing offset for a genuinely different angle.
+                        continue
+                    # Attempt accounting: the adoption clock only advances
+                    # when an attempt is charged — every-adoption timestamp
+                    # updates made the 30s debounce unreachable and the
+                    # counter stuck at 1 forever (run 21).
+                    if now_mono - edge_survey_last_adopt.get(bucket, -1e9) > 30.0:
+                        edge_survey_attempts[bucket] = (
+                            edge_survey_attempts.get(bucket, 0) + 1
+                        )
+                        edge_survey_last_adopt[bucket] = now_mono
+                    candidate["face_xy"] = (centroid_x, centroid_y)
+                    print(
+                        "[wander] EDGE SURVEY: observing yellow cluster at "
+                        f"({centroid_x:.2f}, {centroid_y:.2f}) from a new angle "
+                        f"(first sighting {base_bearing:.0f}deg -> new "
+                        f"{achieved_bearing:.0f}deg, vantage=({goal_x:.2f}, {goal_y:.2f}), "
+                        f"attempt {edge_survey_attempts.get(bucket, 0)}/3, "
+                        f"path={float(candidate.get('path_length_m', 0.0) or 0.0):.2f}m)"
+                    )
+                    return candidate
+        return None
+
+    def _nearest_mapped_elevated_m(pose: Pose2D) -> float | None:
+        """Distance from the body center to the nearest MAPPED elevated cell
+        within 1.0m, or None. The map is the only sensor that covers the
+        robot's SIDES at tabletop height (panorama ±52° forward, lidar under
+        tabletops, bottom camera on the floor) — field 2026-07-17: the robot
+        ground its shoulder along a mapped table edge while turning beside
+        it ("no rotation progress")."""
+        if not elevated_occupied_world:
+            return None
+        px, py = float(pose.x), float(pose.y)
+        best: float | None = None
+        for cell_x, cell_y in elevated_occupied_world:
+            dist = math.hypot(cell_x * 0.04 - px, cell_y * 0.04 - py)
+            if dist <= 1.0 and (best is None or dist < best):
+                best = dist
+        return best
+
+    map_side_guard_state = {"pose": None, "streak": 0}
+
+    def _map_side_guard(pose: Pose2D) -> str | None:
+        """Drive-burst veto for the virtual side bumper: halt FORWARD motion
+        only for mapped cells in the forward collision corridor — ahead of
+        the body center and within body width. Cells beside/behind cannot
+        be struck by driving forward; the original direction-blind radius
+        check deadlocked the planner for 130+ zero-motion cycles (field
+        2026-07-17 run 18: a cell 0.26m from center, beside/behind the
+        robot after a reverse, vetoed every forward burst forever).
+        Threshold radius + 2cm laterally so legitimate squeeze passes
+        (planned at radius - 5cm inflation) are not blocked."""
+        if not elevated_occupied_world:
+            return None
+        guard_r = float(args.robot_radius_m) + 0.02
+        px, py = float(pose.x), float(pose.y)
+        theta_rad = math.radians(float(pose.theta_deg))
+        cos_g, sin_g = math.cos(theta_rad), math.sin(theta_rad)
+        for cell_x, cell_y in elevated_occupied_world:
+            dxc = cell_x * 0.04 - px
+            dyc = cell_y * 0.04 - py
+            if dxc * dxc + dyc * dyc > 1.0:
+                continue
+            fwd = cos_g * dxc + sin_g * dyc
+            lat = -sin_g * dxc + cos_g * dyc
+            if -0.02 <= fwd <= guard_r + 0.10 and abs(lat) <= guard_r:
+                prev_pose = map_side_guard_state["pose"]
+                if (
+                    prev_pose is not None
+                    and math.hypot(px - prev_pose[0], py - prev_pose[1]) < 0.05
+                ):
+                    map_side_guard_state["streak"] += 1
+                else:
+                    map_side_guard_state["streak"] = 1
+                map_side_guard_state["pose"] = (px, py)
+                return (
+                    f"mapped elevated cell {math.hypot(dxc, dyc):.2f}m ahead in the "
+                    "body corridor (side-collision guard)"
+                )
+        return None
+
+    # Synthetic blockers REMOVED (user directive 2026-07-17, final): a stop
+    # with no measurable geometry stamps NOTHING. Field run: a fabricated
+    # 0.6m "blocker" vastly overestimated a desk's length and walled off
+    # the room entrance. Stops still teach through frontier strikes and
+    # blacklists (non-fabricating); only MEASURED edges reach the map.
 
     def _stamp_confirmed_edges(stamp_pose: Pose2D, newest_only: bool = False) -> int:
         """Transform freshly measured (robot-frame) edge segments into world
@@ -2923,6 +3700,17 @@ def main() -> int:
         gate, within ~0.3s of it) matches the stop pose; earlier ones were
         measured metres back and would stamp the edge beyond its true spot."""
         if hazard_monitor is None:
+            return 0
+        if pose_lost:
+            # A lost pose puts every stamped cell somewhere fictional. Drain
+            # and DROP the pending measurements (they are stamped against
+            # the wrong pose forever) — the map stays clean and the eyes
+            # keep measuring fresh ones after recovery.
+            hazard_monitor.drain_confirmed_edges()
+            if hasattr(hazard_monitor, "drain_floor_evidence"):
+                hazard_monitor.drain_floor_evidence()
+            if hasattr(hazard_monitor, "drain_view_reports"):
+                hazard_monitor.drain_view_reports()
             return 0
         drained_edges = hazard_monitor.drain_confirmed_edges()
         if newest_only and drained_edges:
@@ -2945,6 +3733,8 @@ def main() -> int:
         # 6cm-decimated while cells are 4cm — exact-cell clearing would
         # leave stripes.
         cleared_cells = 0
+        decayed_cells_total = 0
+        promoted_cells = 0
         floor_batches = (
             hazard_monitor.drain_floor_evidence()
             if hasattr(hazard_monitor, "drain_floor_evidence")
@@ -2975,6 +3765,7 @@ def main() -> int:
                         if cell in elevated_occupied_world:
                             elevated_occupied_world.discard(cell)
                             elevated_points_world.pop(cell, None)
+                            elevated_cell_meta.pop(cell, None)
                             cleared_cells += 1
         # Footprints: the NEWEST frame per eye is the stamping frame; the
         # frame before it (>=0.4s older, within a 3.0s window — the robot is
@@ -3033,11 +3824,50 @@ def main() -> int:
                 # obstacles when a pending observation >= 0.4s older agrees
                 # (this drain's confirmation frame or a previous drain). The
                 # exit-corridor splats were all 1.3..1.9m one-offs.
+                # Promotions are BUDGETED per vantage (see
+                # elevated_vantage_promotions) so a wedged robot cannot
+                # confirm its own artifacts indefinitely from one pose.
+                vantage_bucket = (
+                    int(round(float(stamp_pose.x) / 0.25)),
+                    int(round(float(stamp_pose.y) / 0.25)),
+                    int(round((float(stamp_pose.theta_deg) % 360.0) / 20.0)),
+                )
+                vantage_used = elevated_vantage_promotions.get(vantage_bucket, 0)
+                vantage_capped = False
                 for pf, pl in footprint:
                     wx = float(stamp_pose.x) + float(pf) * cos_t - float(pl) * sin_t
                     wy = float(stamp_pose.y) + float(pf) * sin_t + float(pl) * cos_t
                     cell = (int(round(wx / 0.04)), int(round(wy / 0.04)))
                     if cell in elevated_occupied_world:
+                        cell_meta = elevated_cell_meta.get(cell)
+                        if cell_meta is not None:
+                            # Re-detected: DECREMENT misses, don't reset.
+                            # Systematic artifacts (edge-bleed re-detected
+                            # from the same vantage every pass) must still
+                            # decay when clean looks outnumber dirty ones.
+                            cell_meta[1] = max(0, int(cell_meta[1]) - 1)
+                            # CROSS-ANGLE CONFIRMATION: bleed lies along the
+                            # viewing ray, so a re-detection at the SAME
+                            # world position from a bearing >=28deg away is
+                            # near-proof of a real edge — promote POTENTIAL
+                            # (yellow) to CONFIRMED (red).
+                            if len(cell_meta) >= 3 and not cell_meta[2]:
+                                obs_bearing_deg = math.degrees(
+                                    math.atan2(
+                                        wy - float(stamp_pose.y),
+                                        wx - float(stamp_pose.x),
+                                    )
+                                )
+                                if (
+                                    abs(
+                                        _normalize_angle_deg(
+                                            obs_bearing_deg - float(cell_meta[0])
+                                        )
+                                    )
+                                    >= 28.0
+                                ):
+                                    cell_meta[2] = 1
+                                    promoted_cells += 1
                         continue
                     if float(pf) > 0.9:
                         pending = elevated_pending_world.get(cell)
@@ -3047,13 +3877,33 @@ def main() -> int:
                             continue
                         if obs_mono - pending[0] < 0.4:
                             continue
+                    if vantage_used >= 60:
+                        vantage_capped = True
+                        continue
                     if len(elevated_occupied_world) < 20000:
                         elevated_pending_world.pop(cell, None)
                         elevated_occupied_world.add(cell)
+                        # [first_bearing_deg, misses, confirmed] — new cells
+                        # start POTENTIAL (yellow) until re-detected from a
+                        # bearing >=28deg away (cross-angle confirmation).
+                        elevated_cell_meta[cell] = [
+                            math.degrees(
+                                math.atan2(wy - float(stamp_pose.y), wx - float(stamp_pose.x))
+                            ),
+                            0,
+                            0,
+                        ]
+                        vantage_used += 1
                         new_cells += 1
                         if len(elevated_points_world) < 6000:
                             elevated_points_world[cell] = (wx, wy, float(edge.height_m))
                             new_points += 1
+                elevated_vantage_promotions[vantage_bucket] = vantage_used
+                if vantage_capped:
+                    print(
+                        "[edge-map] vantage promotion budget reached at this pose; "
+                        "further cells need a new viewpoint"
+                    )
                 # Pending entries that never re-confirm are noise; sweep the
                 # stale ones so the dict cannot grow without bound.
                 if len(elevated_pending_world) > 20000:
@@ -3076,15 +3926,124 @@ def main() -> int:
             seg_cells = _stamp_world_segment(w1, w2, float(edge.height_m))
             new_cells += seg_cells
             segment_added = segment_added or seg_cells > 0
-        if new_points or cleared_cells:
+        # NEGATIVE-EVIDENCE DECAY: fused frames the monitor analyzed report
+        # their (possibly empty) footprint. A decayable cell the view
+        # re-inspected — good range, in-view, from a bearing similar to the
+        # one it was stamped from — without re-detecting counts a miss;
+        # 3 misses remove it. Pose association uses the same freshness
+        # windows as edge stamping (the robot is settled at drains).
+        view_reports = (
+            hazard_monitor.drain_view_reports()
+            if hasattr(hazard_monitor, "drain_view_reports")
+            else []
+        )
+        if view_reports and elevated_cell_meta:
+            newest_report_mono = max(float(r.monotonic) for r in view_reports)
+            if now_mono - newest_report_mono <= 3.0:
+                report_window_s = 0.3 if newest_only else 1.5
+                selected_reports = [
+                    r
+                    for r in view_reports
+                    if newest_report_mono - float(r.monotonic) <= report_window_s
+                ][-2:]
+                decayed_cells = 0
+                for report in selected_reports:
+                    report_pts_world = [
+                        (
+                            float(stamp_pose.x) + float(pf) * cos_t - float(pl) * sin_t,
+                            float(stamp_pose.y) + float(pf) * sin_t + float(pl) * cos_t,
+                        )
+                        for pf, pl in (report.points_robot_xy or ())
+                    ]
+                    for cell in list(elevated_cell_meta.keys()):
+                        if cell not in elevated_occupied_world:
+                            elevated_cell_meta.pop(cell, None)
+                            continue
+                        cell_meta = elevated_cell_meta[cell]
+                        cell_wx, cell_wy = cell[0] * 0.04, cell[1] * 0.04
+                        dxc = cell_wx - float(stamp_pose.x)
+                        dyc = cell_wy - float(stamp_pose.y)
+                        fwd = cos_t * dxc + sin_t * dyc
+                        lat = -sin_t * dxc + cos_t * dyc
+                        rng = math.hypot(dxc, dyc)
+                        if not (
+                            0.35 <= rng <= 1.55
+                            and fwd > 0.0
+                            and abs(math.degrees(math.atan2(lat, fwd))) <= 42.0
+                        ):
+                            continue
+                        world_bearing = math.degrees(math.atan2(dyc, dxc))
+                        bearing_diff = abs(
+                            _normalize_angle_deg(world_bearing - float(cell_meta[0]))
+                        )
+                        cell_confirmed = len(cell_meta) >= 3 and bool(cell_meta[2])
+                        # Verdict windows: CONFIRMED (red) cells only accept
+                        # verdicts from near the original side (<=55deg — a
+                        # far-side view legitimately sees a different leading
+                        # boundary). POTENTIAL (yellow) cells accept up to
+                        # 100deg: a clean look from a genuinely different
+                        # angle is exactly the cross-check that disproves
+                        # bleed; beyond ~100deg the object may self-occlude
+                        # its own near boundary, so no verdict there either.
+                        if bearing_diff > (55.0 if cell_confirmed else 100.0):
+                            continue
+                        near_hit = any(
+                            (px - cell_wx) ** 2 + (py - cell_wy) ** 2 <= 0.15 * 0.15
+                            for px, py in report_pts_world
+                        )
+                        if near_hit:
+                            cell_meta[1] = max(0, int(cell_meta[1]) - 1)
+                            if not cell_confirmed and bearing_diff >= 28.0:
+                                cell_meta[2] = 1
+                                promoted_cells += 1
+                        else:
+                            cell_meta[1] = int(cell_meta[1]) + 1
+                            if cell_meta[1] >= 3:
+                                elevated_occupied_world.discard(cell)
+                                elevated_pending_world.pop(cell, None)
+                                elevated_points_world.pop(cell, None)
+                                elevated_cell_meta.pop(cell, None)
+                                decayed_cells += 1
+                if decayed_cells:
+                    # Counted separately from floor clearing — merging the
+                    # counts made the "floor evidence cleared N" line lie
+                    # (run 19 logs: identical N on both lines).
+                    decayed_cells_total += decayed_cells
+                    print(
+                        f"[edge-map] negative evidence decayed {decayed_cells} unconfirmed cells "
+                        f"(map_cells={len(elevated_occupied_world)})"
+                    )
+        if new_points or cleared_cells or decayed_cells_total or promoted_cells:
+            confirmed_pts: list[list[float]] = []
+            potential_pts: list[list[float]] = []
+            for point_cell, (px, py, ph) in elevated_points_world.items():
+                point_meta = elevated_cell_meta.get(point_cell)
+                if point_meta is None or (len(point_meta) >= 3 and point_meta[2]):
+                    confirmed_pts.append([px, py, ph])
+                else:
+                    potential_pts.append([px, py, ph])
             rr.log(
                 "world/elevated_regions",
                 rr.Points3D(
-                    [[px, py, ph] for px, py, ph in elevated_points_world.values()],
-                    colors=[[200, 0, 0]] * len(elevated_points_world),
+                    confirmed_pts,
+                    colors=[[200, 0, 0]] * len(confirmed_pts),
                     radii=0.02,
                 ),
                 static=True,
+            )
+            rr.log(
+                "world/elevated_potential",
+                rr.Points3D(
+                    potential_pts,
+                    colors=[[240, 205, 30]] * len(potential_pts),
+                    radii=0.02,
+                ),
+                static=True,
+            )
+        if promoted_cells:
+            print(
+                f"[edge-map] cross-angle confirmed {promoted_cells} cells (yellow -> red, "
+                f"map_cells={len(elevated_occupied_world)})"
             )
         if cleared_cells:
             print(
@@ -3166,9 +4125,13 @@ def main() -> int:
         if len(elevated_occupied_world) == cells_at_start:
             if bool(approach_meta.get("stopped_by_hazard")):
                 # The re-approach got gate-stopped again but produced no
-                # publishable geometry (close in, the edge line falls below
-                # the camera ROI): the hazard is REAL — leave a scar.
-                _stamp_synthetic_block(pose)
+                # publishable geometry. NO fabricated scar (synthetic
+                # blockers removed) — the frontier strike below is the
+                # teaching mechanism.
+                print(
+                    "[edge-map] hazard stop with no measurable geometry; nothing mapped "
+                    "(strikes handle repeat offenders)"
+                )
             else:
                 # The re-approach drove its full budget WITHOUT a stop: the
                 # earlier detection did not reproduce. Treat it as a false
@@ -3226,7 +4189,7 @@ def main() -> int:
         # blocked and spends the whole run rotating in place.
         baseline_samples: list[int] = []
         baseline_frame_id = int(last_frame_id)
-        for _sample_index in range(10):
+        for _sample_index in range(24):
             sample_frame_id, sample_frame = feed.wait_for_frame_after(
                 after_frame_id=baseline_frame_id,
                 timeout_s=1.0,
@@ -3234,8 +4197,26 @@ def main() -> int:
             )
             if sample_frame is None:
                 break
-            baseline_samples.append(_blocked_points_for_frame(sample_frame, zone_cfg))
             baseline_frame_id = int(sample_frame_id)
+            if len(sample_frame.points) < 150:
+                # Degraded revolution (spin-up / USB stutter): a baseline
+                # measured from 7-11-point frames (field 2026-07-17:
+                # samples=[0,19,...] baseline=9 vs the true ~40) makes the
+                # stop box simultaneously hair-triggered and blind.
+                print(
+                    f"[wander] skipping degraded revolution in baseline sampling "
+                    f"(points={len(sample_frame.points)})"
+                )
+                continue
+            baseline_samples.append(_blocked_points_for_frame(sample_frame, zone_cfg))
+            if len(baseline_samples) >= 10:
+                break
+        if len(baseline_samples) < 5:
+            raise RuntimeError(
+                "Could not collect 5 healthy lidar revolutions for the stop-box baseline "
+                f"(got {len(baseline_samples)}). The lidar feed is degraded — check the "
+                "stream host on the Pi before rerunning."
+            )
         if baseline_samples:
             zone_cfg.baseline_points = int(np.median(np.asarray(baseline_samples, dtype=np.int32)))
             last_frame_id = baseline_frame_id
@@ -3257,6 +4238,34 @@ def main() -> int:
                 "[wander] note: the lidar permanently sees part of the robot inside the stop box; "
                 "consider recalibrating the stop box geometry"
             )
+
+        # BOXED-IN ESCAPE (user directive 2026-07-18): if the founding scan is
+        # surrounded by near returns, translate toward open space and keep
+        # scanning until healthy — instead of failing. Rotating in place would
+        # not help (a 360deg scan is heading-invariant).
+        _probe_id, _probe_frame = feed.latest()
+        if _probe_frame is not None:
+            _probe_usable = _scan_to_local_points(
+                points=_probe_frame.points,
+                forward_angle_deg=float(args.forward_angle_deg),
+                valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+                invert_lateral_axis=bool(args.invert_lateral_axis),
+                max_distance_m=float(args.max_distance_m),
+                min_confidence=int(args.min_confidence),
+                min_range_m=float(args.min_range_m),
+            )
+            if len(_probe_usable) < 60:
+                print(
+                    f"[wander] founding scan is boxed in (usable={len(_probe_usable)} < 60); "
+                    "translating toward open space before founding the map"
+                )
+                last_frame_id = _escape_boxed_in(
+                    robot=robot,
+                    feed=feed,
+                    args=args,
+                    after_frame_id=last_frame_id,
+                    min_usable=60,
+                )
 
         frame_id, captured_frame, _, initial_snapshot = _capture_snapshot(
             feed=feed,
@@ -3291,6 +4300,7 @@ def main() -> int:
             poses=stitch_state["poses"],
             solve_log=stitch_state["solve_log"],
             cone_half_width_deg=float(args.valid_angle_half_width_deg),
+            body_radius_m=float(args.robot_radius_m),
         )
         initial_pose = stitch_state["poses"][-1]
         initial_heading_bin = _heading_bin_index(
@@ -3378,17 +4388,219 @@ def main() -> int:
                 ):
                     current_live_pose = candidate_live_pose
                     live_pose_accepted = True
+                    dead_reck_theta_deg = float(candidate_live_pose.theta_deg)
+                    dead_reck_slack_deg = 15.0
+                    imu_dead_reck_anchor = _imu_anchor(imu_yaw, dead_reck_theta_deg)
+                    if pose_lost and float(live_pose_meta.get("score") or 0.0) >= POSE_RECOVERY_MIN_SCORE:
+                        pose_lost = False
+                        post_recovery_strict_appends = 2
+                        lost_recovery_failures = 0
+                        print(
+                            "[wander] pose integrity RESTORED "
+                            f"(live score={float(live_pose_meta.get('score') or 0.0):.2f}); "
+                            "map writes re-enabled (strict gates for the next 2 appends)"
+                        )
                 else:
                     current_live_pose = current_solved_pose
                     live_pose_meta = {
                         **live_pose_meta,
                         "source": "rejected_live_fallback",
                     }
+                    if not pose_lost:
+                        pose_lost = True
+                        print(
+                            "[wander] pose integrity LOST (live relocalization rejected); "
+                            "map is READ-ONLY until a strong relocalization re-proves the pose"
+                        )
                     print(
                         "[wander] live relocalization fallback "
                         f"(frame_id={live_frame_id}, using last stitched pose=({float(current_live_pose.x):.3f}, "
                         f"{float(current_live_pose.y):.3f}, {float(current_live_pose.theta_deg):.1f}deg))"
                     )
+                    # Recovery search: when lost, the pose EXPECTATION is
+                    # meaningless, so the normal accept gates (which compare
+                    # against it — this failure rejected the correct
+                    # whole-map candidate for a 58deg "theta error") cannot
+                    # ever re-anchor a badly rotated robot. Search wide in
+                    # theta and judge on ABSOLUTE match quality alone.
+                    recovery_result = _estimate_pose_against_stitched_map(
+                        points_xy=live_points_xy,
+                        transformed_sets=stitch_state["transformed_sets"],
+                        initial_pose=current_solved_pose,
+                        resolution_m=float(args.stitch_resolution_m),
+                        search_xy_m=1.10,
+                        theta_window_deg=180.0,
+                        max_translation_from_initial_m=1.10,
+                        prior_translation_weight=0.03,
+                        prior_theta_weight=0.0,
+                    )
+                    if recovery_result is not None:
+                        recovery_pose, recovery_meta = recovery_result
+                        recovery_score = float(recovery_meta.get("score") or -1e9)
+                        # Re-derive the dead-reckoned heading from the gyro before
+                        # judging the recovery candidate. The gyro integrated
+                        # through every blind align/recovery turn since the anchor
+                        # was set, so this stays accurate where the lidar-only
+                        # anchor had gone stale — exactly what lets the correct
+                        # pose pass and a room-symmetric wrong mode fail.
+                        imu_theta = _imu_resolved_theta(imu_yaw, imu_dead_reck_anchor)
+                        if imu_theta is not None:
+                            dead_reck_theta_deg = imu_theta
+                            dead_reck_slack_deg = IMU_DEAD_RECK_SLACK_DEG
+                        dead_reck_err_deg: float | None = None
+                        if dead_reck_theta_deg is not None:
+                            dead_reck_err_deg = abs(
+                                _normalize_angle_deg(
+                                    float(recovery_pose.theta_deg) - float(dead_reck_theta_deg)
+                                )
+                            )
+                        if recovery_score >= POSE_RECOVERY_MIN_SCORE and (
+                            dead_reck_err_deg is None or dead_reck_err_deg <= dead_reck_slack_deg
+                        ):
+                            current_live_pose = recovery_pose
+                            live_pose_meta = {**recovery_meta, "source": "lost_recovery"}
+                            live_pose_accepted = True
+                            pose_lost = False
+                            post_recovery_strict_appends = 2
+                            lost_recovery_failures = 0
+                            dead_reck_theta_deg = float(recovery_pose.theta_deg)
+                            dead_reck_slack_deg = 15.0
+                            imu_dead_reck_anchor = _imu_anchor(imu_yaw, dead_reck_theta_deg)
+                            print(
+                                "[wander] pose integrity RESTORED via wide-theta recovery "
+                                f"(pose=({recovery_pose.x:.3f}, {recovery_pose.y:.3f}, "
+                                f"{recovery_pose.theta_deg:.1f}deg), score={recovery_score:.2f})"
+                            )
+                        elif recovery_score >= POSE_RECOVERY_MIN_SCORE:
+                            lost_recovery_failures += 1
+                            print(
+                                "[wander] wide-theta recovery REJECTED by dead reckoning "
+                                f"(candidate theta={recovery_pose.theta_deg:.1f}deg is "
+                                f"{dead_reck_err_deg:.0f}deg from the tracked heading, bound=±"
+                                f"{dead_reck_slack_deg:.0f}deg, score={recovery_score:.2f}); a "
+                                "symmetric wrong mode scores this high too — staying lost"
+                            )
+                        else:
+                            lost_recovery_failures += 1
+                            print(
+                                "[wander] wide-theta recovery inconclusive "
+                                f"(best score={recovery_score:.2f} < {POSE_RECOVERY_MIN_SCORE:.1f}); staying lost"
+                            )
+                    if (
+                        pose_lost
+                        and len(stitch_state["snapshots"]) > 1
+                        and lost_recovery_failures >= 2
+                        and lost_recovery_failures % 2 == 0
+                    ):
+                        # LOST-RETREAT: the robot got lost by driving its
+                        # view degenerate (field run 13: nose into a pocket,
+                        # usable points 200->137, every solve <= 5, recovery
+                        # capped at 7-8 forever — paralyzed until Ctrl+C).
+                        # Rotating in place cannot fix a degenerate VIEW;
+                        # backing out along the path it came in on can. The
+                        # reverse helper is live-rear-checked
+                        # (robot-relative, immune to the pose error we
+                        # necessarily have while lost).
+                        print(
+                            "[wander] lost with recovery failing; backing out of the "
+                            "degenerate viewpoint toward mapped territory"
+                        )
+                        retreat_hint = _attempt_reverse_escape_hint(
+                            current_live_pose, lost_recovery_failures >= 6
+                        )
+                        if retreat_hint is not None:
+                            pending_motion_hint = retreat_hint
+                            continue
+                    if (
+                        pose_lost
+                        and len(stitch_state["snapshots"]) <= 1
+                        and lost_recovery_failures >= 2
+                    ):
+                        # RE-FOUND: the map is only its founding snapshot — it
+                        # holds no investment worth a deadlock. Wipe it and
+                        # start mapping fresh from wherever the robot stands.
+                        print(
+                            "[wander] map has only its founding snapshot and the pose cannot be "
+                            "recovered — RE-FOUNDING the map from the current position"
+                        )
+                        _send_stop(robot)
+                        motion_hints[:] = [
+                            MotionHint(
+                                kind="start",
+                                expected_dx_local_m=0.0,
+                                expected_dy_local_m=0.0,
+                                expected_dtheta_deg=0.0,
+                                search_xy_m=float(args.drive_search_xy_m),
+                                search_theta_window_deg=float(args.turn_theta_window_deg),
+                                label=f"refound_capture_{capture_index:02d}",
+                            )
+                        ]
+                        refound_frame_id, refound_frame, _, refound_snapshot = _capture_snapshot(
+                            feed=feed,
+                            output_dir=snapshot_dir,
+                            request_index=capture_index,
+                            after_frame_id=int(live_frame_id),
+                            forward_angle_deg=float(args.forward_angle_deg),
+                            valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+                            invert_lateral_axis=bool(args.invert_lateral_axis),
+                            max_distance_m=float(args.max_distance_m),
+                            min_range_m=float(args.min_range_m),
+                            min_confidence=int(args.min_confidence),
+                            fresh_frame_timeout_s=float(args.fresh_frame_timeout_s),
+                            fresh_frame_advances=int(args.fresh_frame_advances),
+                            capture_config_extra={"motion_hint": "start"},
+                        )
+                        last_frame_id = int(refound_frame_id)
+                        last_captured_frame = refound_frame
+                        stitch_state = _append_stitch(
+                            stitch_dir=stitch_dir,
+                            snapshot_dir=snapshot_dir,
+                            stitch_state={
+                                "snapshots": [],
+                                "poses": [],
+                                "transformed_sets": [],
+                                "solve_log": [],
+                            },
+                            motion_hints=motion_hints,
+                            new_snapshot=refound_snapshot,
+                            resolution_m=float(args.stitch_resolution_m),
+                        )
+                        capture_index += 1
+                        # Everything expressed in the OLD world frame is now
+                        # fiction — wipe it all.
+                        elevated_occupied_world.clear()
+                        elevated_pending_world.clear()
+                        elevated_vantage_promotions.clear()
+                        elevated_segments_world.clear()
+                        frontier_strike_counts.clear()
+                        frontier_blacklist.clear()
+                        unreachable_targets_world.clear()
+                        active_explore_target = None
+                        active_survey_xy = None
+                        pending_motion_hint = None
+                        consecutive_append_discards = 0
+                        pose_lost = False
+                        post_recovery_strict_appends = 0
+                        lost_recovery_failures = 0
+                        dead_reck_theta_deg = float(stitch_state["poses"][-1].theta_deg)
+                        dead_reck_slack_deg = 15.0
+                        imu_dead_reck_anchor = _imu_anchor(imu_yaw, dead_reck_theta_deg)
+                        rotation_coverage_bins_seen.clear()
+                        rotation_coverage_bins_seen.add(
+                            _heading_bin_index(
+                                float(stitch_state["poses"][-1].theta_deg),
+                                bin_count=rotation_coverage_bin_count,
+                            )
+                        )
+                        rotation_coverage_complete = False
+                        bootstrap_turn_commands = 0
+                        consecutive_turn_captures = 0
+                        print(
+                            "[wander] map re-founded "
+                            f"(new founding snapshot has {len(refound_snapshot.points_xy)} points); "
+                            "bootstrap panorama restarts"
+                        )
+                        continue
             if live_pose_result is None:
                 current_live_pose = current_solved_pose
                 print(
@@ -3402,7 +4614,48 @@ def main() -> int:
                 pose=current_live_pose,
                 points_xy=live_points_xy,
                 cone_half_width_deg=float(args.valid_angle_half_width_deg),
+                body_radius_m=float(args.robot_radius_m),
             )
+            # BODY-OVERLAP EVICTION: a decayable eye cell strictly inside the
+            # robot's own body radius at a TRUSTED pose is physically
+            # disproven — the robot occupies that space and no gate reports
+            # contact. Such cells sit below the decay pass's minimum
+            # inspection range (0.35m) and would otherwise be unfalsifiable
+            # at point-blank (field 2026-07-17 run 18).
+            if live_pose_accepted and not pose_lost and elevated_cell_meta:
+                overlap_r_sq = (float(args.robot_radius_m) - 0.03) ** 2
+                overlap_cells = [
+                    c
+                    for c in elevated_cell_meta
+                    if (c[0] * 0.04 - float(current_live_pose.x)) ** 2
+                    + (c[1] * 0.04 - float(current_live_pose.y)) ** 2
+                    < overlap_r_sq
+                ]
+                for cell in overlap_cells:
+                    elevated_occupied_world.discard(cell)
+                    elevated_pending_world.pop(cell, None)
+                    elevated_points_world.pop(cell, None)
+                    elevated_cell_meta.pop(cell, None)
+                if overlap_cells:
+                    print(
+                        f"[edge-map] evicted {len(overlap_cells)} cells inside the robot's own "
+                        "body footprint (physically disproven)"
+                    )
+            # PINNED-BY-GUARD ESCAPE: the side guard halting every forward
+            # burst at the same pose is a livelock, not protection (run 18:
+            # 130+ identical replan/halt cycles). Back away from the cell.
+            if map_side_guard_state["streak"] >= 3:
+                print(
+                    "[wander] side-collision guard has pinned the robot "
+                    f"({map_side_guard_state['streak']} zero-motion halts); backing away "
+                    "from the mapped cell"
+                )
+                map_side_guard_state["streak"] = 0
+                map_side_guard_state["pose"] = None
+                pinned_retreat = _attempt_reverse_escape_hint(current_live_pose, True)
+                if pinned_retreat is not None:
+                    pending_motion_hint = pinned_retreat
+                    continue
             # Keep the Rerun camera panels live between captures. These are
             # the exact annotated frames used by the safety monitor, not a
             # second video path; viewing them cannot affect control.
@@ -3472,6 +4725,31 @@ def main() -> int:
                 pending_turn_direction_sign = float(direction_sign)
                 pending_turn_deg = float(args.turn_deg)
 
+            def _elevated_corridor_blocked(delta_deg: float, distance_m: float) -> bool:
+                """True when the straight corridor toward a live-lidar opening
+                crosses eye-mapped elevated cells. The scan sees under
+                furniture; the eyes mapped that furniture — believe the eyes
+                when choosing where to drive."""
+                if not elevated_occupied_world:
+                    return False
+                bearing = math.radians(
+                    float(current_live_pose.theta_deg) + float(delta_deg)
+                )
+                cos_b, sin_b = math.cos(bearing), math.sin(bearing)
+                corridor_len = min(float(distance_m), 1.5)
+                hits = 0
+                for cx, cy in elevated_occupied_world:
+                    dxc = cx * 0.04 - float(current_live_pose.x)
+                    dyc = cy * 0.04 - float(current_live_pose.y)
+                    along = dxc * cos_b + dyc * sin_b
+                    if not (0.10 <= along <= corridor_len):
+                        continue
+                    if abs(-dxc * sin_b + dyc * cos_b) <= 0.33:
+                        hits += 1
+                        if hits >= 2:
+                            return True
+                return False
+
             live_frontier_choice = _select_frontier_choice(
                 live_frame,
                 forward_angle_deg=float(args.forward_angle_deg),
@@ -3482,6 +4760,7 @@ def main() -> int:
                 frontier_min_distance_m=float(args.frontier_min_distance_m),
                 frontier_bin_deg=float(args.frontier_bin_deg),
                 min_gap_width_m=2.0 * (float(args.robot_radius_m) + 0.05),
+                corridor_veto=_elevated_corridor_blocked,
             )
             if live_frontier_choice is not None:
                 print(
@@ -3790,6 +5069,159 @@ def main() -> int:
                         prefer_face_xy=committed_frontier_face,
                     )
                 if (
+                    str(frontier_plan.get("status")) == "no_frontier"
+                    and active_survey_xy is None
+                    and not pose_lost
+                ):
+                    # EDGE-SURVEY phase (user strategy 2026-07-18): the
+                    # low-hanging exploration is done — before squeezing or
+                    # verification-driving through YELLOW (single-view)
+                    # cells, deliberately arc to a second angle on each
+                    # yellow cluster. Real edges re-detect at the same
+                    # world position and turn red with solid dimensions;
+                    # bleed fails to reappear and decays. Only after the
+                    # yellows are resolved does the ladder push into new
+                    # areas through what remains.
+                    edge_survey_plan = _plan_edge_survey(exploration_grid, current_live_pose)
+                    if edge_survey_plan is not None:
+                        frontier_plan = edge_survey_plan
+                if (
+                    str(frontier_plan.get("status")) == "observe"
+                    and int(frontier_plan.get("frontier_cells", 0) or 0) >= 12
+                    and active_survey_xy is None
+                    and not pose_lost
+                    and exploration_grid is not None
+                ):
+                    # OBSERVE -> SQUEEZE-THROUGH: the best plan is to peer at a
+                    # SUBSTANTIAL unreachable region from afar (the classic
+                    # doorway pinched shut at comfortable margins). The user's
+                    # read is correct — the robot "thinks it's too fat" at the
+                    # 0.29m planning radius (0.229m body + 0.06m margin) and
+                    # sits re-observing the exit instead of going through it.
+                    # Before settling for a look-from-afar, try to actually
+                    # REACH the region at squeeze margins (radius - 5cm ~=
+                    # 0.24m, ~1cm/side clearance over the true body). Only
+                    # drive through if it becomes REACHABLE (status ok); if it
+                    # is still merely observable, it is a real wall — keep the
+                    # observe. The live measured-gap gate owns the traversal.
+                    squeeze_grid = _build_exploration_grid(
+                        poses=list(stitch_state["poses"]),
+                        transformed_sets=list(stitch_state["transformed_sets"]),
+                        resolution_m=max(0.05, float(args.stitch_resolution_m)),
+                        robot_clear_radius_m=float(args.robot_radius_m),
+                        lidar_offset_forward_m=float(args.lidar_offset_forward_m),
+                        extra_occupied_xy=elevated_extra_xy,
+                    )
+                    if squeeze_grid is not None:
+                        squeeze_plan = _plan_frontier_path(
+                            grid=squeeze_grid,
+                            robot_xy=(float(current_live_pose.x), float(current_live_pose.y)),
+                            robot_radius_m=max(0.22, float(args.robot_radius_m) - 0.05),
+                            observed_from_xy=[
+                                (float(p.x), float(p.y)) for p in stitch_state["poses"]
+                            ],
+                            robot_theta_deg=float(current_live_pose.theta_deg),
+                            avoid_face_xy=_active_frontier_blacklist(),
+                            prefer_face_xy=committed_frontier_face,
+                        )
+                        if str(squeeze_plan.get("status")) == "ok":
+                            print(
+                                "[wander] OBSERVE->SQUEEZE: the unmapped region is only observable "
+                                "at comfortable margins but REACHABLE at squeeze width — driving "
+                                "through the gap instead of staring "
+                                f"(path={float(squeeze_plan.get('path_length_m', 0.0) or 0.0):.2f}m); "
+                                "the measured-gap gate owns the traversal"
+                            )
+                            frontier_plan = squeeze_plan
+                if (
+                    str(frontier_plan.get("status")) == "no_frontier"
+                    and int(frontier_plan.get("unreachable_frontier_cells", 0) or 0) >= 24
+                    and active_survey_xy is None
+                ):
+                    # SQUEEZE REPLAN: unknown space exists but every path to
+                    # it is pinched shut at COMFORTABLE margins (radius +
+                    # 6cm grid carve + radius inflation). The live safety
+                    # stack is better informed than this grid — the
+                    # measured-gap squeeze creeps through anything the body
+                    # actually fits (field run 15: a physically passable
+                    # doorway corridor, robot photographed fitting with
+                    # margin, was sealed by a table edge-bleed blob +
+                    # inflation and the mission stalled at "no_frontier").
+                    # Retry the plan at squeeze margins; the gates own the
+                    # actual traversal.
+                    tight_grid = _build_exploration_grid(
+                        poses=list(stitch_state["poses"]),
+                        transformed_sets=list(stitch_state["transformed_sets"]),
+                        resolution_m=max(0.05, float(args.stitch_resolution_m)),
+                        robot_clear_radius_m=float(args.robot_radius_m),
+                        lidar_offset_forward_m=float(args.lidar_offset_forward_m),
+                        extra_occupied_xy=elevated_extra_xy,
+                    )
+                    if tight_grid is not None:
+                        tight_plan = _plan_frontier_path(
+                            grid=tight_grid,
+                            robot_xy=(float(current_live_pose.x), float(current_live_pose.y)),
+                            robot_radius_m=max(0.22, float(args.robot_radius_m) - 0.05),
+                            observed_from_xy=[
+                                (float(p.x), float(p.y)) for p in stitch_state["poses"]
+                            ],
+                            robot_theta_deg=float(current_live_pose.theta_deg),
+                            avoid_face_xy=_active_frontier_blacklist(),
+                            prefer_face_xy=committed_frontier_face,
+                        )
+                        if str(tight_plan.get("status")) in ("ok", "observe"):
+                            print(
+                                "[wander] SQUEEZE replan: frontier unreachable at comfortable "
+                                "margins but passable at squeeze width "
+                                f"(status={tight_plan.get('status')}, "
+                                f"path={float(tight_plan.get('path_length_m', 0.0) or 0.0):.2f}m); "
+                                "proceeding — the measured-gap gate owns the traversal"
+                            )
+                            frontier_plan = tight_plan
+                        elif elevated_occupied_world:
+                            # VERIFICATION replan: even squeeze margins can't
+                            # thread the pinch — eye cells sit IN the
+                            # corridor. Eye cells are claims, not measured
+                            # lidar geometry; plan WITHOUT them (real walls
+                            # still enforced) and approach under full gate
+                            # protection. Real furniture stops the robot and
+                            # re-confirms the cells; phantom cells get
+                            # re-inspected, miss, and decay away. Either way
+                            # the ambiguity resolves instead of declaring
+                            # completion behind a possibly-false wall.
+                            verify_grid = _build_exploration_grid(
+                                poses=list(stitch_state["poses"]),
+                                transformed_sets=list(stitch_state["transformed_sets"]),
+                                resolution_m=max(0.05, float(args.stitch_resolution_m)),
+                                robot_clear_radius_m=float(args.robot_radius_m) + 0.06,
+                                lidar_offset_forward_m=float(args.lidar_offset_forward_m),
+                                extra_occupied_xy=None,
+                            )
+                            if verify_grid is not None:
+                                verify_plan = _plan_frontier_path(
+                                    grid=verify_grid,
+                                    robot_xy=(
+                                        float(current_live_pose.x),
+                                        float(current_live_pose.y),
+                                    ),
+                                    robot_radius_m=float(args.robot_radius_m),
+                                    observed_from_xy=[
+                                        (float(p.x), float(p.y)) for p in stitch_state["poses"]
+                                    ],
+                                    robot_theta_deg=float(current_live_pose.theta_deg),
+                                    avoid_face_xy=_active_frontier_blacklist(),
+                                    prefer_face_xy=committed_frontier_face,
+                                )
+                                if str(verify_plan.get("status")) in ("ok", "observe"):
+                                    print(
+                                        "[wander] VERIFICATION replan: the only route to unmapped "
+                                        "space crosses EYE-mapped cells (lidar geometry allows it); "
+                                        "approaching under full gates to confirm or decay them "
+                                        f"(status={verify_plan.get('status')}, "
+                                        f"path={float(verify_plan.get('path_length_m', 0.0) or 0.0):.2f}m)"
+                                    )
+                                    frontier_plan = verify_plan
+                if (
                     active_survey_xy is None
                     and str(frontier_plan.get("status")) == "no_frontier"
                     and survey_targets_used < 2
@@ -3834,6 +5266,10 @@ def main() -> int:
                     active_survey_xy = None
                     frontier_plan = {"status": "no_frontier"}
                 plan_status = str(frontier_plan.get("status"))
+                if plan_status != "no_frontier":
+                    # A real plan supersedes any half-finished probe episode.
+                    probe_commit_world_deg = None
+                    probe_commit_align_turns = 0
                 if plan_status in ("ok", "survey", "observe"):
                     committed_frontier_face = (
                         float(frontier_plan["face_xy"][0]),
@@ -3850,7 +5286,23 @@ def main() -> int:
                     )
                 else:
                     committed_frontier_face = None
-                    print(f"[wander] frontier plan (status={plan_status})")
+                    if plan_status == "no_frontier" and "unknown_cells" in frontier_plan:
+                        unreachable_centroid = frontier_plan.get("unreachable_centroid_xy")
+                        centroid_txt = (
+                            f", unreachable_centroid=({unreachable_centroid[0]:.2f}, "
+                            f"{unreachable_centroid[1]:.2f})"
+                            if unreachable_centroid
+                            else ""
+                        )
+                        print(
+                            "[wander] frontier plan (status=no_frontier, "
+                            f"unknown={int(frontier_plan['unknown_cells'])}, "
+                            f"reachable_frontier={int(frontier_plan['reachable_frontier_cells'])}, "
+                            f"unreachable_frontier={int(frontier_plan['unreachable_frontier_cells'])}"
+                            f"{centroid_txt})"
+                        )
+                    else:
+                        print(f"[wander] frontier plan (status={plan_status})")
 
                 # Survey arrival is a STATIONARY action (scan in place), so it
                 # must be decided before blocked handling — a vantage near
@@ -3926,6 +5378,10 @@ def main() -> int:
                     hazard_state_now = hazard_monitor.state()
                     _forward_ok, forward_denial = hazard_monitor.forward_allowed()
                     no_frontier_cycles = 0
+                    # The recovery below rotates/reverses; any committed probe
+                    # bearing is stale (and may point INTO the hazard) after it.
+                    probe_commit_world_deg = None
+                    probe_commit_align_turns = 0
                     print(
                         f"[safety] forward denied while planning ({forward_denial}, "
                         f"side={hazard_state_now.side}); recovering"
@@ -4100,26 +5556,69 @@ def main() -> int:
                     # probe drive to extend the map.
                     if live_frontier_choice is not None:
                         no_frontier_cycles = 0
-                        live_delta_deg = float(live_frontier_choice.delta_deg)
-                        if abs(live_delta_deg) > 20.0:
-                            chosen_direction_sign = 1.0 if live_delta_deg >= 0.0 else -1.0
-                            chosen_turn_deg = max(15.0, min(85.0, abs(live_delta_deg)))
+                        # Commit to ONE bearing for the whole probe episode.
+                        # The residual is measured against the committed
+                        # world bearing, never the per-cycle widest gap —
+                        # the widest gap changes with heading, which is what
+                        # caused the pirouette loop.
+                        if probe_commit_world_deg is None:
+                            probe_commit_world_deg = _normalize_angle_deg(
+                                float(current_live_pose.theta_deg)
+                                + float(live_frontier_choice.delta_deg)
+                            )
+                            probe_commit_align_turns = 0
+                        probe_residual_deg = _normalize_angle_deg(
+                            probe_commit_world_deg - float(current_live_pose.theta_deg)
+                        )
+                        if abs(probe_residual_deg) > 20.0 and probe_commit_align_turns < 2:
+                            probe_commit_align_turns += 1
+                            chosen_direction_sign = 1.0 if probe_residual_deg >= 0.0 else -1.0
+                            chosen_turn_deg = max(15.0, min(85.0, abs(probe_residual_deg)))
                             should_turn = True
                             turn_reason = "live_frontier_probe_align"
                             force_drive_after_turn = True
                             print(
                                 "[wander] map has no frontier but live lidar is open; aligning "
-                                f"{chosen_turn_deg:.1f}deg for a guarded probe"
+                                f"{chosen_turn_deg:.1f}deg toward the committed probe bearing "
+                                f"({probe_commit_align_turns}/2)"
                             )
                         else:
+                            # Aligned (or align budget spent — the drive is
+                            # safety-gated either way): take the probe now
+                            # and release the commitment.
+                            probe_commit_world_deg = None
+                            probe_commit_align_turns = 0
                             motion_hint = _live_frontier_probe_hint(
                                 current_live_pose, live_frontier_choice
                             )
                             settle_s = float(args.move_settle_s)
                     else:
+                        # The opening vanished from the live scan — the
+                        # commitment no longer refers to anything real.
+                        probe_commit_world_deg = None
+                        probe_commit_align_turns = 0
                         no_frontier_cycles += 1
                     if live_frontier_choice is None:
-                        if motion_hint is None and no_frontier_cycles >= 2:
+                        if motion_hint is None and no_frontier_cycles >= 2 and pose_lost:
+                            # A lost robot cannot certify anything about the
+                            # map — least of all that it is finished (field
+                            # 2026-07-17: "mapping complete" declared inside
+                            # a ghost-sealed grid with 14833 unknown cells).
+                            print(
+                                "[wander] map frontier exhausted but the pose is LOST — refusing to "
+                                "declare completion; continuing recovery"
+                            )
+                            no_frontier_cycles = 0
+                        elif motion_hint is None and no_frontier_cycles >= 2:
+                            unreachable_now = int(frontier_plan.get("unreachable_frontier_cells", 0) or 0)
+                            if unreachable_now >= 24:
+                                print(
+                                    "[wander] WARNING: declaring completion with "
+                                    f"{unreachable_now} UNREACHABLE frontier cells "
+                                    f"(unknown={int(frontier_plan.get('unknown_cells', 0) or 0)}) — "
+                                    "if that area should be reachable, the map is suspect "
+                                    "(ghost walls or clutter seal); inspect the overlay before trusting this map"
+                                )
                             print(
                                 "[wander] mapping complete: no reachable unmapped space remains and all "
                                 "survey vantages have been visited "
@@ -4396,6 +5895,7 @@ def main() -> int:
                                 min_range_m=float(args.min_range_m),
                                 min_confidence=int(args.min_confidence),
                                 hazard_monitor=hazard_monitor,
+                                map_side_guard=_map_side_guard,
                             )
                             drive_stopped_by_block = (
                                 bool(drive_track_meta["stopped_by_block"])
@@ -4459,11 +5959,7 @@ def main() -> int:
                                 # it re-planned the same goal and oscillated
                                 # approach/stop/reverse at the same table.
                                 _dump_stop_debug(transit_pose, "transit_hazard_stop")
-                                if (
-                                    _stamp_confirmed_edges(transit_pose, newest_only=True) == 0
-                                    and _hazard_sighted_now()
-                                ):
-                                    _stamp_synthetic_block(transit_pose)
+                                _stamp_confirmed_edges(transit_pose, newest_only=True)
                                 # A real approach toward this frontier failed on
                                 # a camera hazard: strike it (2 strikes
                                 # blacklist). Only genuine attempts count — a
@@ -4818,6 +6314,7 @@ def main() -> int:
                     f"steer_theta_vel={steer_theta_vel:.3f})"
                 )
                 drive_start_pose = current_live_pose
+                imu_yaw_before_drive = imu_yaw.deg() if imu_yaw is not None else None
                 drive_tracked_pose, drive_track_meta = _drive_with_tracking(
                     robot=robot,
                     feed=feed,
@@ -4838,6 +6335,7 @@ def main() -> int:
                     min_range_m=float(args.min_range_m),
                     min_confidence=int(args.min_confidence),
                     hazard_monitor=hazard_monitor,
+                    map_side_guard=_map_side_guard,
                 )
                 drive_stopped_by_block = (
                     bool(drive_track_meta["stopped_by_block"])
@@ -4849,11 +6347,7 @@ def main() -> int:
                     # stop pose (see transit path): every hazard stop teaches
                     # the planner the boundary, not just investigations.
                     _dump_stop_debug(drive_tracked_pose, "forward_hazard_stop")
-                    if (
-                        _stamp_confirmed_edges(drive_tracked_pose, newest_only=True) == 0
-                        and _hazard_sighted_now()
-                    ):
-                        _stamp_synthetic_block(drive_tracked_pose)
+                    _stamp_confirmed_edges(drive_tracked_pose, newest_only=True)
                     if plan_status in ("ok", "survey", "observe"):
                         _strike_frontier_if_reached(
                             frontier_plan["face_xy"], drive_tracked_pose, "hazard_stop"
@@ -4870,7 +6364,17 @@ def main() -> int:
                 drive_hint_dtheta_deg = _normalize_angle_deg(
                     float(drive_tracked_pose.theta_deg) - float(drive_start_pose.theta_deg)
                 )
-                if drive_track_meta["lock_lost"] or int(drive_track_meta["missed_updates"]) > 0:
+                drive_lock_lost = bool(drive_track_meta["lock_lost"]) or int(
+                    drive_track_meta["missed_updates"]
+                ) > 0
+                # When the drive lost lidar lock, its heading delta is unreliable;
+                # the gyro measured the (near-zero) actual yaw drift instead.
+                imu_drive_dtheta_deg: float | None = None
+                if imu_yaw is not None and imu_yaw.sign_trustworthy():
+                    imu_drive_dtheta_deg = imu_yaw.delta_since(imu_yaw_before_drive)
+                if drive_lock_lost and imu_drive_dtheta_deg is not None:
+                    drive_hint_dtheta_deg = float(imu_drive_dtheta_deg)
+                if drive_lock_lost:
                     drive_search_xy_m = 0.80
                     drive_theta_window_deg = 30.0
                 else:
@@ -4887,6 +6391,16 @@ def main() -> int:
                     f"{drive_hint_dtheta_deg:.1f}deg))"
                 )
                 force_drive_after_turn = False
+                if dead_reck_theta_deg is not None:
+                    dead_reck_theta_deg += float(drive_hint_dtheta_deg)
+                    if imu_drive_dtheta_deg is not None:
+                        # Gyro is tracking heading through the drive: keep the
+                        # anchor slack tight so the recovery tiebreaker stays sharp.
+                        dead_reck_slack_deg = max(dead_reck_slack_deg, IMU_DEAD_RECK_SLACK_DEG)
+                    else:
+                        dead_reck_slack_deg += 5.0
+                        if dead_reck_slack_deg > 100.0:
+                            dead_reck_theta_deg = None
                 drive_checkpoints_since_scan += 1
                 if (
                     bool(drive_track_meta.get("stopped_by_hazard"))
@@ -4985,14 +6499,49 @@ def main() -> int:
                 settle_s = float(args.move_settle_s)
 
             if should_turn:
+                # SIDE-COLLISION GUARD for rotation: the collision that
+                # motivated this (field 2026-07-17) was a commanded turn
+                # BESIDE a mapped table edge — "no rotation progress" while
+                # the shoulder ground along the tabletop. No live sensor
+                # covers the sides at tabletop height; the map does. Too
+                # close to a mapped cell -> don't rotate here, back off
+                # first and let the planner re-approach with clearance.
+                turn_guard_prox = _nearest_mapped_elevated_m(current_live_pose)
+                if (
+                    turn_guard_prox is not None
+                    and turn_guard_prox < float(args.robot_radius_m) + 0.04
+                ):
+                    print(
+                        f"[wander] mapped elevated cell {turn_guard_prox:.2f}m from the body — "
+                        "skipping rotation beside it and backing off first (side-collision guard)"
+                    )
+                    should_turn = False
+                    turn_guard_retreat = _attempt_reverse_escape_hint(current_live_pose, True)
+                    if turn_guard_retreat is not None:
+                        motion_hint = turn_guard_retreat
+                        settle_s = float(args.move_settle_s)
+            if should_turn:
                 turn_cap_deg = 85.0
-                if len(stitch_state["poses"]) < 2 and turn_reason != "reanchor_turn_back":
-                    # With a SINGLE capture in the map and a ~180deg FOV, an
-                    # 85deg turn leaves too little overlap to track or solve
-                    # against — lock loss at ~72deg observed in the field twice,
-                    # and the failed retry spiral poisoned the map. 55deg keeps
-                    # the first solves strong; from 2+ captures 85deg is safe.
+                if (
+                    len(stitch_state["poses"]) < 4
+                    or len(rotation_coverage_bins_seen) < rotation_coverage_bin_count
+                ) and turn_reason != "reanchor_turn_back":
+                    # Until the map covers the full rotation (all 4 coverage
+                    # BINS — not the rotation_coverage_complete flag, which
+                    # the bootstrap budget force-sets with bins at [0,1]/4;
+                    # field run 12: that lie disarmed this cap and every
+                    # 85deg face_frontier turn into unmapped bearings lost
+                    # lock), an 85deg turn can rotate the view past the
+                    # map's angular edge and overlap collapses. 55deg keeps
+                    # every solve anchored in mapped bearings; larger goals
+                    # just take an extra capture.
                     turn_cap_deg = 55.0
+                    if len(stitch_state["poses"]) < 2:
+                        # Against the founding snapshot alone, even 55deg
+                        # loses lock in sparse spots (run 11: lock lost at
+                        # 46.5deg on the very first turn). 40deg keeps
+                        # ~140deg of the founding view in frame.
+                        turn_cap_deg = 40.0
                 if float(chosen_turn_deg) > turn_cap_deg:
                     # A capture must land before the view rotates into mostly
                     # unmapped territory: with a ~180deg FOV, 55deg per capture
@@ -5020,6 +6569,7 @@ def main() -> int:
                     if (pending_motion_hint is not None and not live_pose_accepted)
                     else current_live_pose
                 )
+                imu_yaw_before_turn = imu_yaw.deg() if imu_yaw is not None else None
                 turn_meta = _turn_with_arc_tracking(
                     robot=robot,
                     feed=feed,
@@ -5042,12 +6592,65 @@ def main() -> int:
                     max_bursts=int(args.max_turn_bursts),
                     hazard_monitor=hazard_monitor,
                 )
+                tracked_turn_deg = float(turn_meta["turned_deg"])
+                turn_lock_lost = int(turn_meta["completed"]) != 1
+                # Gyro-measured rotation across the whole turn. Unlike the lidar
+                # arc tracker, the IMU still measures the rotation when scan-match
+                # lock is lost mid-turn (the exact case that used to strand the
+                # dead-reckoned heading and let a room-symmetric wrong mode win).
+                imu_turn_deg: float | None = None
+                if imu_yaw is not None:
+                    imu_turn_deg = imu_yaw.delta_since(imu_yaw_before_turn)
+                    if not turn_lock_lost:
+                        imu_yaw.note_tracked_turn(tracked_turn_deg, imu_turn_deg)
+                # Prefer the IMU measure when the lidar track is unreliable: lock
+                # was lost, or it under-counts the commanded turn by a wide margin
+                # (a symptom of the same tracking failure). Keep the lidar value
+                # when it tracked cleanly and the IMU roughly agrees.
+                measured_signed_turn_deg = tracked_turn_deg
+                turn_measure_source = "lidar"
+                if imu_turn_deg is not None and imu_yaw is not None and imu_yaw.sign_trustworthy():
+                    imu_lidar_gap_deg = abs(_normalize_angle_deg(imu_turn_deg - tracked_turn_deg))
+                    if turn_lock_lost or imu_lidar_gap_deg > 20.0:
+                        measured_signed_turn_deg = imu_turn_deg
+                        turn_measure_source = "imu"
                 print(
                     "[wander] turn complete "
-                    f"(tracked={turn_meta['turned_deg']:+.1f}deg, final_theta={turn_meta['final_theta_deg']:.1f}deg, "
+                    f"(tracked={tracked_turn_deg:+.1f}deg, "
+                    f"imu={'n/a' if imu_turn_deg is None else f'{imu_turn_deg:+.1f}deg'}, "
+                    f"used={measured_signed_turn_deg:+.1f}deg({turn_measure_source}), "
+                    f"final_theta={turn_meta['final_theta_deg']:.1f}deg, "
                     f"missed_updates={int(turn_meta['missed_updates'])}, completed={int(turn_meta['completed'])})"
                 )
-                measured_signed_turn_deg = float(turn_meta["turned_deg"])
+                if dead_reck_theta_deg is not None:
+                    dead_reck_theta_deg += measured_signed_turn_deg
+                    if turn_measure_source == "imu":
+                        # IMU measured the real rotation: pin the anchor slack
+                        # tight instead of ballooning it, so the wide-theta
+                        # recovery tiebreaker keeps its teeth through a chain of
+                        # otherwise-blind turns.
+                        dead_reck_slack_deg = max(dead_reck_slack_deg, IMU_DEAD_RECK_SLACK_DEG)
+                    else:
+                        # Lidar-only: advance by the TRACKED turn and widen the
+                        # slack by the untracked remainder plus a per-turn margin.
+                        # A chain of blind turns widens it past usefulness and
+                        # recovery falls back to score-only.
+                        dead_reck_slack_deg += 6.0 + max(
+                            0.0, float(chosen_turn_deg) - abs(measured_signed_turn_deg)
+                        )
+                        if dead_reck_slack_deg > 100.0:
+                            dead_reck_theta_deg = None
+                if int(turn_meta["completed"]) != 1:
+                    # Lock-lost turn: the robot physically rotated an UNKNOWN
+                    # amount (bursts fire whether or not the solve tracks
+                    # them). The measured hint under-counts, so every solve
+                    # anchored on it is suspect — latch lost.
+                    if not pose_lost:
+                        pose_lost = True
+                        print(
+                            "[wander] pose integrity LOST (turn ended with tracking lock lost); "
+                            "map is READ-ONLY until a strong relocalization re-proves the pose"
+                        )
                 # The capture solve only needs to confirm/refine the tracked
                 # heading; widen its window a bit for each burst the tracker
                 # could not update on.
@@ -5124,6 +6727,68 @@ def main() -> int:
                 pending_motion_hint = motion_hint
                 time.sleep(0.3)
                 continue
+
+            # REDUNDANT-VANTAGE GATE: once the map is mature, a checkpoint
+            # capture is only worth taking from a genuinely NEW viewpoint.
+            # Field 2026-07-18 run 20: 22 captures piled up inside a ~0.5m
+            # patch — every micro-transit (0.05m stop-box interruptions) and
+            # every 55deg face-turn step stopped to append another snapshot
+            # of a viewpoint the map already owned. Skip the capture, chain
+            # the tracked motion, and keep moving toward the target vantage:
+            # drive there, shoot once, plan the next vantage. Appends resume
+            # automatically the moment the robot reaches unclaimed ground
+            # (or whenever pose trust degrades — recovery needs anchors).
+            if (
+                not pose_lost
+                and rotation_coverage_complete
+                and consecutive_append_discards == 0
+                and len(stitch_state["poses"]) >= 6
+                and redundant_skip_streak < 6
+            ):
+                redundancy_hint = (
+                    motion_hint
+                    if pending_motion_hint is None
+                    else _compose_motion_hints(pending_motion_hint, motion_hint)
+                )
+                chain_translation_m = math.hypot(
+                    float(redundancy_hint.expected_dx_local_m),
+                    float(redundancy_hint.expected_dy_local_m),
+                )
+                if chain_translation_m <= 1.2 and abs(
+                    float(redundancy_hint.expected_dtheta_deg)
+                ) <= 120.0:
+                    redundancy_pose = _advance_pose(
+                        stitch_state["poses"][-1], redundancy_hint
+                    )
+                    covered_by = None
+                    for prior_index, prior_pose in enumerate(stitch_state["poses"]):
+                        if (
+                            math.hypot(
+                                float(prior_pose.x) - float(redundancy_pose.x),
+                                float(prior_pose.y) - float(redundancy_pose.y),
+                            )
+                            < 0.40
+                            and abs(
+                                _normalize_angle_deg(
+                                    float(prior_pose.theta_deg)
+                                    - float(redundancy_pose.theta_deg)
+                                )
+                            )
+                            < 60.0
+                        ):
+                            covered_by = prior_index
+                            break
+                    if covered_by is not None:
+                        redundant_skip_streak += 1
+                        print(
+                            "[wander] vantage already covered by capture "
+                            f"#{covered_by + 1} (within 0.40m/60deg); skipping the "
+                            "redundant capture and continuing toward a new viewpoint "
+                            f"({redundant_skip_streak}/6 before a forced refresh)"
+                        )
+                        pending_motion_hint = redundancy_hint
+                        continue
+            redundant_skip_streak = 0
 
             print(f"[wander] settling for {settle_s:.2f}s before capture")
             time.sleep(settle_s)
@@ -5234,6 +6899,18 @@ def main() -> int:
                         # this solve is suspect — demand a strong match (see
                         # the append-gate escalation below).
                         arc_accept_gate += 2.0
+                    if post_recovery_strict_appends > 0:
+                        arc_accept_gate += 2.0
+                    if pose_lost:
+                        # Map is read-only while lost: only an absolute-trust
+                        # match may append (field 2026-07-17: an 11.86 arc
+                        # solve with a USELESS hint — hinted=0 after lock
+                        # loss — passed the raised 9.0 gate at a wrong 90deg
+                        # symmetry mode and ghosted the whole map).
+                        arc_accept_gate = max(arc_accept_gate, POSE_LOST_APPEND_GATE)
+                        print(
+                            f"[wander] pose lost: arc append requires score>={arc_accept_gate:.1f}"
+                        )
                     if hint_discrepancy_deg > 30.0:
                         # The solver is overriding the tracked turn by a lot. In a
                         # square room the wrong 90-degree rotation mode scores
@@ -5281,6 +6958,10 @@ def main() -> int:
                             refine_gate = float(args.min_append_score) + (
                                 2.0 if consecutive_append_discards > 0 else 0.0
                             )
+                            if post_recovery_strict_appends > 0:
+                                refine_gate += 2.0
+                            if pose_lost:
+                                refine_gate = max(refine_gate, POSE_LOST_APPEND_GATE)
                             if refined_score >= refine_gate:
                                 capture_live_pose = refined_pose
                                 capture_live_meta = {**refined_meta, "source": "turn_arc_refined"}
@@ -5325,7 +7006,7 @@ def main() -> int:
                         motion_hint=motion_hint,
                         max_translation_error_m=max(0.30, 0.65 * float(motion_hint.search_xy_m)),
                         max_theta_error_deg=max(18.0, float(motion_hint.search_theta_window_deg) * 1.10),
-                        min_score=7.5,
+                        min_score=POSE_LOST_APPEND_GATE if pose_lost else 7.5,
                     ):
                         capture_live_pose = candidate_capture_pose
                         capture_live_meta = candidate_capture_meta
@@ -5392,11 +7073,28 @@ def main() -> int:
                     # visibly rotated scan into the map. Demand a STRONG match
                     # or discard again and re-anchor.
                     append_gate = max(append_gate, float(args.min_append_score) + 2.0)
+                elif append_theta_err_deg > 20.0:
+                    # Solver heading disagrees hard with burst-by-burst lidar
+                    # tracking, which rarely errs by 20deg+. A barely-above-
+                    # gate score at a rotated mode is the ghost-room
+                    # signature (field 2026-07-17: 6.92 at 30deg-off stitched
+                    # a rotated copy of the room INSIDE the map and walled
+                    # off both the table and the exit). Strong match or
+                    # discard.
+                    append_gate = max(append_gate, float(args.min_append_score) + 2.0)
                 elif append_translation_err_m <= 0.30 and append_theta_err_deg <= 10.0:
                     # Solver landed where burst-by-burst tracking said we are;
                     # mutual confirmation earns a relaxed absolute gate. (Not
                     # after a discard — a shaky expectation confirms nothing.)
                     append_gate = min(append_gate, 3.5)
+                if post_recovery_strict_appends > 0:
+                    append_gate = max(append_gate, float(args.min_append_score) + 2.0)
+                if pose_lost:
+                    # Map is read-only while lost: absolute-trust matches only.
+                    append_gate = max(append_gate, POSE_LOST_APPEND_GATE)
+                    print(
+                        f"[wander] pose lost: append requires score>={append_gate:.1f}"
+                    )
                 # The fallback used to gate on SCORE alone. Near a featureless
                 # wall a slid pose scores as well as the true one, so a capture
                 # 0.64m from its fully-locked tracked expectation got in and
@@ -5448,13 +7146,19 @@ def main() -> int:
                             max_theta_error_deg=max(
                                 35.0, float(motion_hint.search_theta_window_deg) + 10.0
                             ),
-                            min_score=7.5,
+                            min_score=POSE_LOST_APPEND_GATE if pose_lost else 7.5,
                         ):
                             capture_live_pose = rescue_pose
                             capture_live_meta = {**rescue_meta, "source": f"rescue_{rescue_meta.get('source', 'unknown')}"}
 
             if capture_live_pose is None:
                 consecutive_append_discards += 1
+                if not pose_lost:
+                    pose_lost = True
+                    print(
+                        "[wander] pose integrity LOST (capture solve discarded); "
+                        "map is READ-ONLY until a strong relocalization re-proves the pose"
+                    )
                 if consecutive_append_discards <= max(0, int(args.max_consecutive_append_discards)):
                     print(
                         "[wander] discarding capture to protect the map "
@@ -5468,36 +7172,47 @@ def main() -> int:
                     last_frame_id = int(frame_id)
                     last_captured_frame = captured_frame
                     continue
+                # Discard limit reached. NEVER force-accept into the map —
+                # a below-gate pose stitches the room's own walls back in
+                # rotated (field 2026-07-17: a force-accepted 6.63 painted a
+                # ghost room INSIDE the room, walling off the table and the
+                # exit). The MAP is sacred; the POSE is recoverable: drop
+                # this capture AND the accumulated motion chain (the chain
+                # is precisely what is untrustworthy after repeated solve
+                # failures) and let live relocalization — which keeps
+                # scoring 12-16 against the trusted map during these
+                # episodes — re-anchor on the next planning cycle.
                 force_accept_score = float((append_solver_meta or {}).get("score") or -1e9)
-                if append_solver_pose is None or force_accept_score < 3.5:
-                    # Force-accepting a sub-floor pose stitches an effectively
-                    # random scan into the map and poisons everything after it
-                    # (observed: score 0.053 accepted -> the whole run mapped a
-                    # phantom room). Keep discarding instead — the re-anchor
-                    # turn-back recovers overlap so scores climb back over the
-                    # gate on a later attempt.
-                    print(
-                        "[wander] refusing to force-accept a garbage pose "
-                        f"(capture={capture_index}, score={force_accept_score:.3f} < floor=3.50); "
-                        "continuing recovery instead"
-                    )
-                    motion_hints.pop()
-                    pending_motion_hint = motion_hint
-                    last_frame_id = int(frame_id)
-                    last_captured_frame = captured_frame
-                    continue
                 print(
-                    "[wander] WARNING: accepting low-confidence pose after "
-                    f"{consecutive_append_discards} consecutive discards "
-                    f"(capture={capture_index}, score={force_accept_score:.3f}); "
-                    "map quality may degrade"
+                    "[wander] discard limit reached; dropping the capture AND its "
+                    f"motion chain instead of force-accepting (capture={capture_index}, "
+                    f"score={force_accept_score:.3f}); live relocalization re-anchors"
                 )
-                capture_live_pose = append_solver_pose
-                capture_live_meta = append_solver_meta
+                consecutive_append_discards = 0
+                motion_hints.pop()
+                pending_motion_hint = None
+                last_frame_id = int(frame_id)
+                last_captured_frame = captured_frame
+                continue
             consecutive_append_discards = 0
             orbit_recovery_turn_attempts = 0
             orbit_recovery_turns_remaining = 0
             orbit_recovery_direction_sign = None
+            dead_reck_theta_deg = float(capture_live_pose.theta_deg)
+            dead_reck_slack_deg = 15.0
+            imu_dead_reck_anchor = _imu_anchor(imu_yaw, dead_reck_theta_deg)
+            if pose_lost:
+                # This append cleared the absolute-trust lost-gate (>=12.5):
+                # the pose is re-proven by construction.
+                pose_lost = False
+                post_recovery_strict_appends = 2
+                lost_recovery_failures = 0
+                print(
+                    "[wander] pose integrity RESTORED (append cleared the absolute-trust gate); "
+                    "map writes re-enabled (strict gates for the next 2 appends)"
+                )
+            elif post_recovery_strict_appends > 0:
+                post_recovery_strict_appends -= 1
 
             stitch_state = _append_stitch(
                 stitch_dir=stitch_dir,
@@ -5517,6 +7232,7 @@ def main() -> int:
                 poses=stitch_state["poses"],
                 solve_log=stitch_state["solve_log"],
                 cone_half_width_deg=float(args.valid_angle_half_width_deg),
+                body_radius_m=float(args.robot_radius_m),
             )
             if hazard_monitor is not None:
                 # Eye-camera panels + safety decision alongside the map, so
@@ -5540,6 +7256,7 @@ def main() -> int:
                 pose=stitch_state["poses"][-1],
                 points_xy=captured_snapshot.points_xy,
                 cone_half_width_deg=float(args.valid_angle_half_width_deg),
+                body_radius_m=float(args.robot_radius_m),
             )
             last_frame_id = int(frame_id)
             last_captured_frame = captured_frame
@@ -5649,6 +7366,8 @@ def main() -> int:
         except Exception:
             pass
         feed.stop()
+        if imu_yaw is not None:
+            imu_yaw.stop()
         if hazard_monitor is not None:
             hazard_monitor.stop()
         if hazard_subscriber is not None:

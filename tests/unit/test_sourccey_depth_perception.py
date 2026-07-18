@@ -407,6 +407,125 @@ def test_fused_mode_maps_multiple_edges_per_frame(monkeypatch) -> None:
     assert lats and min(lats) < -0.3 and max(lats) > 0.3  # both objects mapped
 
 
+def test_fused_mode_trims_lateral_edge_bleed(monkeypatch) -> None:
+    """Columns at an object's lateral corner that inherit BACKGROUND depth
+    (edge-bleed) must not publish to the map — field 2026-07-17: a doorway-
+    side table edge mapped ~0.3m into the door corridor and sealed the exit
+    in the planning grid while the corridor was photographed passable."""
+    shape = (24, 48)
+    up = np.full(shape, -0.9, dtype=np.float32)
+    x = np.zeros(shape, dtype=np.float32)
+    fwd = np.full(shape, 0.7, dtype=np.float32)
+    # Table: columns 6..20 at 1.0m, lateral +0.2.
+    up[4:20, 6:21] = -0.3
+    x[:, 6:21] = 0.2
+    fwd[:, 6:21] = 1.0
+    # Bleed tail: columns 21..24 contiguous with the table but at BACKGROUND
+    # range, projecting past the corner (lateral 0.6).
+    up[4:20, 21:25] = -0.3
+    x[:, 21:25] = 0.6
+    fwd[:, 21:25] = 1.7
+    fields = _fields_with_lateral(shape, up, x)
+    fields["fwd_unit"] = fwd
+    monkeypatch.setattr(depth_perception, "_pixel_fields", lambda *_: fields)
+    monkeypatch.setattr(depth_perception, "_floor_scale", lambda *_: 1.0)
+    model = replace(default_eye_right(), yaw_deg=0.0, forward_offset_m=0.0)
+
+    result = depth_perception.analyze_depth(
+        model, np.ones(shape, dtype=np.float32), eye="panorama",
+        frame_monotonic=1.0, require_proposal=False,
+    )
+    lats = [pl for _, pl in result.region_points_xy]
+    # Right-eye model negates x: table x=+0.2 lands at lat -0.2, the bleed
+    # tail x=+0.6 at lat -0.6.
+    assert lats and min(lats) < -0.1  # the table itself is mapped
+    assert min(lats) > -0.45  # the bleed tail past the corner is NOT
+
+
+def test_fused_mode_trims_smooth_range_ramp_bleed(monkeypatch) -> None:
+    """Depth models interpolate SMOOTHLY at object corners: bleed can be a
+    range RAMP with no median jump for the end-trim to catch (field run 19:
+    the doorway blob re-stamped every frame). The range-coherence filter
+    drops ramp columns — no other column agrees with their range."""
+    shape = (24, 48)
+    up = np.full(shape, -0.9, dtype=np.float32)
+    x = np.zeros(shape, dtype=np.float32)
+    fwd = np.full(shape, 0.7, dtype=np.float32)
+    up[4:20, 6:21] = -0.3
+    x[:, 6:21] = 0.2
+    fwd[:, 6:21] = 1.0
+    for i, col in enumerate(range(21, 29)):
+        up[4:20, col] = -0.3
+        x[:, col] = 0.4 + 0.05 * i
+        fwd[:, col] = 1.08 + 0.09 * i
+    fields = _fields_with_lateral(shape, up, x)
+    fields["fwd_unit"] = fwd
+    monkeypatch.setattr(depth_perception, "_pixel_fields", lambda *_: fields)
+    monkeypatch.setattr(depth_perception, "_floor_scale", lambda *_: 1.0)
+    model = replace(default_eye_right(), yaw_deg=0.0, forward_offset_m=0.0)
+
+    result = depth_perception.analyze_depth(
+        model, np.ones(shape, dtype=np.float32), eye="panorama",
+        frame_monotonic=1.0, require_proposal=False,
+    )
+    lats = [pl for _, pl in result.region_points_xy]
+    # Right-eye model negates x: table at lat -0.2, ramp at lat -0.4..-0.75.
+    assert lats and min(lats) < -0.1  # the table itself is mapped
+    assert min(lats) > -0.38  # the ramp past the corner is NOT
+
+
+def test_fused_mode_suppresses_wall_columns(monkeypatch) -> None:
+    """A column whose surface continues ABOVE the elevated band at similar
+    range is a wall/door frame — the lidar owns it. The fused per-column
+    path lost the legacy component path's wall check and painted door
+    frames red (field run 19 stop bundles)."""
+    shape = (24, 48)
+    up = np.full(shape, -0.9, dtype=np.float32)
+    x = np.zeros(shape, dtype=np.float32)
+    fwd = np.full(shape, 0.7, dtype=np.float32)
+    up[4:20, 6:21] = -0.3
+    x[:, 6:21] = 0.2
+    fwd[:, 6:21] = 1.0
+    # Door frame: in-band rows AND above-band rows at the SAME range.
+    up[12:20, 30:37] = -0.3
+    up[2:10, 30:37] = 0.5  # height ~1.41: above the band, below the wall cap
+    x[:, 30:37] = -0.5
+    fwd[:, 30:37] = 1.1
+    fields = _fields_with_lateral(shape, up, x)
+    fields["fwd_unit"] = fwd
+    monkeypatch.setattr(depth_perception, "_pixel_fields", lambda *_: fields)
+    monkeypatch.setattr(depth_perception, "_floor_scale", lambda *_: 1.0)
+    model = replace(default_eye_right(), yaw_deg=0.0, forward_offset_m=0.0)
+
+    result = depth_perception.analyze_depth(
+        model, np.ones(shape, dtype=np.float32), eye="panorama",
+        frame_monotonic=1.0, require_proposal=False,
+    )
+    lats = [pl for _, pl in result.region_points_xy]
+    # Right-eye model negates x: table at lat -0.2, door frame at lat +0.5.
+    assert lats and min(lats) < -0.1  # the table is mapped
+    assert max(lats) < 0.3  # the door-frame columns are NOT
+
+
+def test_edge_detection_off_tick_does_not_stale_or_crash() -> None:
+    """--edge-detection off (elevated_eye_enabled=False): tick() must NOT
+    crash on the None eye observations and must NOT report frames_stale.
+    Field 2026-07-18: render_overlay(None obs) and the deep_rows loop
+    (obs.detected on None) threw every tick; the monitor-error catch set
+    frames_stale=True and forward was denied as camera_stale_stop forever."""
+
+    class _FreshSource:
+        def latest(self, cam):
+            return (np.zeros((240, 320, 3), dtype=np.uint8), 0.02)
+
+    cfg = ElevatedSafetyConfig(elevated_eye_enabled=False)
+    monitor = ElevatedHazardMonitor(cfg, frame_source=_FreshSource())
+    state = monitor.tick()  # must not raise
+    assert not state.frames_stale
+    allowed, reason = gate_forward_allowed(state)
+    assert allowed and reason != "camera_stale_stop"
+
+
 def test_gap_clears_body_helper() -> None:
     from sourccey_elevated_safety import gap_clears_body
 
@@ -415,3 +534,30 @@ def test_gap_clears_body_helper() -> None:
     assert not gap_clears_body(-0.5, 0.2, 0.31)  # right wall too close
     assert not gap_clears_body(-0.1, 0.5, 0.31)  # left wall too close
     assert gap_clears_body(None, 0.35, 0.31)  # open left, right clears
+
+
+def test_wall_occlusion_filter_respects_overhang_rule() -> None:
+    """Map points BEHIND a contiguous lidar wall arc are impossible and get
+    dropped; points in front of the wall survive; and a point beyond an
+    ISOLATED lidar return (a table pedestal) survives — the lidar must never
+    shrink a depth-measured overhang."""
+    from sourccey_elevated_safety import points_beyond_wall_mask
+
+    # Wall arc: dense beams from -30..+30 deg at 1.5m; isolated leg at 90 deg, 0.8m.
+    wall_bearings = np.arange(-30.0, 30.5, 1.5, dtype=np.float32)
+    bearings = np.concatenate([wall_bearings, [90.0]]).astype(np.float32)
+    ranges = np.concatenate([np.full(len(wall_bearings), 1.5), [0.8]]).astype(np.float32)
+
+    behind_wall = (2.2 * np.cos(np.radians(0.0)), 2.2 * np.sin(np.radians(0.0)))  # 2.2m at 0deg
+    front_of_wall = (1.0, 0.0)  # 1.0m at 0deg
+    overhang_past_leg = (
+        1.2 * np.cos(np.radians(90.0)),
+        1.2 * np.sin(np.radians(90.0)),
+    )  # 1.2m at 90deg, beyond the 0.8m leg
+
+    mask = points_beyond_wall_mask(
+        [behind_wall, front_of_wall, overhang_past_leg], bearings, ranges
+    )
+    assert mask[0]  # impossible: behind the wall
+    assert not mask[1]  # real: in front of the wall
+    assert not mask[2]  # protected: overhang beyond an isolated leg

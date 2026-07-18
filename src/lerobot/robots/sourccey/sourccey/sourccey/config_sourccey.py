@@ -282,6 +282,21 @@ class SourcceyHostConfig:
     imu_lsm6dsox_address: int = 0x6A
     imu_lis3mdl_address: int = 0x1C
 
+    # Dedicated integrated-yaw broadcaster for lidar SLAM heading priors.
+    # The host integrates the vertical-axis gyro at the raw sample rate (no
+    # samples lost to the conflated observation stream) and publishes a running
+    # yaw on its OWN ZMQ PUB socket, decoupled from the camera/observation path
+    # so it cannot add load to the fragile USB-shared vision loop. The wander
+    # SLAM client subscribes and uses yaw DELTAS between captures to disambiguate
+    # room-symmetric scan matches (it never trusts absolute yaw, so gyro drift is
+    # irrelevant). yaw_gyro_axis selects which gyro component is vertical
+    # (0=x,1=y,2=z); sign orients +yaw to the robot's CCW (matching the SLAM
+    # theta convention).
+    imu_yaw_pub_enabled: bool = True
+    imu_yaw_pub_endpoint: str = "tcp://*:8770"
+    imu_yaw_gyro_axis: int = 2
+    imu_yaw_gyro_sign: float = 1.0
+
 
 @RobotConfig.register_subclass("sourccey_client")
 @dataclass

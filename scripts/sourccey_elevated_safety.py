@@ -37,6 +37,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -75,6 +76,21 @@ class ConfirmedEdge:
     # points instead of the p1/p2 line — the region's true shape and
     # placement, no fitted-line abstraction.
     points_robot_xy: tuple[tuple[float, float], ...] = ()
+
+
+@dataclass(frozen=True)
+class ViewReport:
+    """One analyzed fused frame: the footprint it detected (possibly EMPTY),
+    in the robot frame. The mapper uses these as NEGATIVE evidence — a
+    mapped eye-cell inside the inspected area that a fresh frame does NOT
+    re-detect counts a miss, and enough misses remove the cell. Detection
+    needs two agreeing frames to add a cell; absence symmetrically needs
+    repeated clean looks to take one back (field 2026-07-17: edge-bleed
+    cells at a doorway were permanent, unfalsifiable walls that sealed a
+    passable corridor and ended the mission with 'mapping complete')."""
+
+    monotonic: float
+    points_robot_xy: tuple[tuple[float, float], ...]
 
 
 @dataclass(frozen=True)
@@ -162,6 +178,13 @@ class ElevatedSafetyConfig:
     # (mid-range table height). Used only for display/vanish arming, not for
     # tripping the gate.
     assumed_edge_height_m: float = 0.60
+    # Master switch for CAMERA-BASED ELEVATED edge detection (the eye/depth
+    # pipeline that finds tabletops/counters/shelf lips the lidar cannot
+    # see). OFF => the eyes never produce elevated candidates, stops, holds,
+    # or edge-map cells; the bottom-camera ground gate and lidar stop box
+    # still protect. Use when elevated edges are physically at lidar height
+    # (e.g. draped solid) so the lidar itself sees them.
+    elevated_eye_enabled: bool = True
     # ---- bottom-camera ground gate -------------------------------------------
     ground_gate_enabled: bool = True
     ground_stop_distance_m: float = 0.55
@@ -292,6 +315,57 @@ class HazardState:
         if self.ground_active:
             return f"ground_stop_{self.ground_side}" if self.ground_side != "none" else "ground_stop_front"
         return "clear"
+
+
+def points_beyond_wall_mask(
+    points_xy: "list[tuple[float, float]] | tuple",
+    lidar_bearings_deg: np.ndarray,
+    lidar_ranges_m: np.ndarray,
+    *,
+    beyond_margin_m: float = 0.35,
+    arc_half_width_deg: float = 6.0,
+    arc_range_band_m: float = 0.18,
+    arc_min_beams: int = 5,
+    match_window_deg: float = 2.5,
+) -> np.ndarray:
+    """True for footprint points that lie BEYOND a wall-like lidar arc on
+    their bearing — physically impossible obstacle claims (the eyes cannot
+    see through walls; field 2026-07-17: depth-scale overshoot painted red
+    cell clusters OUTSIDE the room and a phantom barrier at the exit gap).
+
+    'Wall-like' = the beam has >= arc_min_beams neighbors within
+    +-arc_half_width_deg at similar range — a CONTIGUOUS surface. An
+    isolated table leg/pedestal is not wall-like, so a genuine overhang
+    extending beyond its leg is never suppressed (hard rule: the lidar
+    never shrinks depth-measured overhangs)."""
+    pts = np.asarray(points_xy, dtype=np.float32)
+    if pts.size == 0 or len(lidar_bearings_deg) == 0:
+        return np.zeros(len(pts), dtype=bool)
+    lb = np.asarray(lidar_bearings_deg, dtype=np.float32)
+    lr = np.asarray(lidar_ranges_m, dtype=np.float32)
+    good = (lr > 0.10) & (lr < 8.0)
+    lb, lr = lb[good], lr[good]
+    if len(lb) < arc_min_beams:
+        return np.zeros(len(pts), dtype=bool)
+    order = np.argsort(lb)
+    lb, lr = lb[order], lr[order]
+    # Wall-likeness per beam: count neighbors in the bearing window at
+    # similar range (vectorized over beams x beams is fine at ~250 beams).
+    dbear = np.abs(((lb[None, :] - lb[:, None]) + 180.0) % 360.0 - 180.0)
+    drange = np.abs(lr[None, :] - lr[:, None])
+    neighbors = (dbear <= arc_half_width_deg) & (drange <= arc_range_band_m)
+    wall_like = neighbors.sum(axis=1) >= int(arc_min_beams)
+    pt_bear = np.degrees(np.arctan2(pts[:, 1], pts[:, 0]))
+    pt_rng = np.hypot(pts[:, 0], pts[:, 1])
+    beyond = np.zeros(len(pts), dtype=bool)
+    for i in range(len(pts)):
+        window = np.abs(((lb - pt_bear[i]) + 180.0) % 360.0 - 180.0) <= match_window_deg
+        window &= wall_like
+        if not np.any(window):
+            continue
+        if float(np.min(lr[window])) < float(pt_rng[i]) - float(beyond_margin_m):
+            beyond[i] = True
+    return beyond
 
 
 def gap_clears_body(
@@ -637,6 +711,21 @@ class ElevatedHazardMonitor:
         self._lock = threading.Lock()
         self._state = HazardState(enabled=True)
         self._annotated: dict[str, np.ndarray] = {}
+        # Flight recorder: rolling ring of annotated panorama/bottom frames
+        # written to disk EVERY cycle the gate runs (~0.7s cadence, ring of
+        # 120 ≈ last 84s). Stop bundles only capture moments the gate
+        # FIRED; a missed hazard (field 2026-07-17: robot drove into a
+        # table with zero safety denials the whole run) previously left no
+        # evidence at all. Diagnostics must never take down the gate, so
+        # recorder errors print once and disable it.
+        self._recorder_dir = Path("artifacts") / "flight_recorder"
+        self._recorder_last_mono = 0.0
+        self._recorder_index = 0
+        self._recorder_failed = False
+        try:
+            self._recorder_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self._recorder_failed = True
         # Elevated-hazard hysteresis.
         self._hit_ticks = 0
         self._clean_ticks = 0
@@ -671,6 +760,18 @@ class ElevatedHazardMonitor:
         self._last_rotation_monotonic = 0.0
         # Parallax-confirmed edge measurements awaiting the map consumer.
         self._confirmed_edge_queue: list[ConfirmedEdge] = []
+        self._view_report_queue: list[ViewReport] = []
+        self._last_view_report_mono = -1.0
+        # Trailing metric-scale window for the SCALE-STABILITY publish gate:
+        # the depth net's metric scale wobbles frame to frame (field run 19
+        # stop bundles: x0.64 then x0.85 on consecutive door approaches —
+        # the same door frame landed its footprint 30% apart in world
+        # coordinates, churning a smear the decay could never out-clear).
+        # A frame whose scale strays >15% from the recent median neither
+        # stamps the map nor testifies as negative evidence. Gating is
+        # untouched — a wobbly frame may still STOP the robot.
+        self._recent_scales: deque[float] = deque(maxlen=8)
+        self._last_scale_mono = -1.0
         # One publish per analyzed FRAME per eye: the monitor ticks ~10Hz
         # while depth frames land ~0.5s apart, and re-publishing the same
         # frame with fresh tick timestamps would let the map's two-frame
@@ -753,6 +854,15 @@ class ElevatedHazardMonitor:
             evidence = list(self._floor_evidence_queue)
             self._floor_evidence_queue.clear()
         return evidence
+
+    def drain_view_reports(self) -> list[ViewReport]:
+        """One record per analyzed fused frame since the last drain — with
+        the detected footprint, EMPTY when the view was clean. Negative
+        evidence for the mapper's cell-decay pass."""
+        with self._lock:
+            reports = list(self._view_report_queue)
+            self._view_report_queue.clear()
+        return reports
 
     def report_external_stop(self, reason: str) -> None:
         """External gates (e.g. the lidar stop box) report their stops here so
@@ -941,6 +1051,25 @@ class ElevatedHazardMonitor:
                 (float(px) - advance, float(py))
                 for px, py in getattr(result, "region_points_xy", ()) or ()
             )
+            # MAP-ONLY wall-occlusion filter: drop points claiming structure
+            # BEYOND a contiguous lidar wall arc on their bearing (see
+            # points_beyond_wall_mask — impossible claims from depth-scale
+            # overshoot painted phantom barriers at the exit). Gating is
+            # untouched; isolated legs are not wall-like, so overhangs
+            # survive per the hard directive.
+            if footprint and self._lidar_ranges_fn is not None:
+                try:
+                    wall_ranges = self._lidar_ranges_fn()
+                except Exception:
+                    wall_ranges = None
+                if wall_ranges is not None and len(wall_ranges[0]):
+                    beyond = points_beyond_wall_mask(
+                        footprint, wall_ranges[0], wall_ranges[1]
+                    )
+                    if beyond.any():
+                        footprint = tuple(
+                            p for p, is_beyond in zip(footprint, beyond) if not is_beyond
+                        )
             # Depth mode publishes the thin leading boundary from ANY
             # bearing whose nearest point sits in the reliable band
             # (0.30..1.80m) — not just the forward corridor. The corridor is
@@ -953,9 +1082,53 @@ class ElevatedHazardMonitor:
             # frame-filling close-ups remain excluded by the 0.30m minimum,
             # and footprint points are already range-capped at 1.8m by the
             # perception layer.
+            # Scale-stability: only metrically consistent frames may write
+            # map evidence (positive OR negative).
+            # The wobble is BETWEEN scale sources: lidar-anchored frames
+            # (x0.85) vs floor-guess frames (x0.64) alternate, landing the
+            # same edge ~30% apart in world coordinates. A mixed-median
+            # gate is provably blind to exactly that bimodal (both modes
+            # sit at 14.1% of the midpoint — under any usable threshold)
+            # and a 2% drift flips it into permanent publish blackout.
+            # Instead: the LIDAR-anchored median is the reference — it is
+            # tied to real ranges — and every frame (any source) must
+            # agree with it within 15% to write map evidence. No lidar
+            # reference yet => pass-through (liveness preserved).
+            scale_stable = True
+            if str(eye_key) == "panorama":
+                result_scale = float(getattr(result, "scale", 1.0) or 1.0)
+                fresh_scale_frame = (
+                    float(result.frame_monotonic) != self._last_scale_mono
+                )
+                if len(self._recent_scales) >= 3:
+                    scale_ref = float(np.median(list(self._recent_scales)))
+                    if (
+                        scale_ref > 1e-6
+                        and abs(result_scale - scale_ref) / scale_ref > 0.15
+                    ):
+                        scale_stable = False
+                if fresh_scale_frame:
+                    self._last_scale_mono = float(result.frame_monotonic)
+                    if str(getattr(result, "scale_source", "raw")) == "lidar":
+                        self._recent_scales.append(result_scale)
+            # View report: EVERY fresh fused frame (footprint possibly
+            # empty) — negative evidence for the mapper's cell decay.
+            if (
+                scale_stable
+                and str(eye_key) == "panorama"
+                and float(result.frame_monotonic) >= self._last_rotation_monotonic + 0.2
+                and float(result.frame_monotonic) != self._last_view_report_mono
+            ):
+                self._last_view_report_mono = float(result.frame_monotonic)
+                with self._lock:
+                    self._view_report_queue.append(
+                        ViewReport(monotonic=now, points_robot_xy=footprint)
+                    )
+                    del self._view_report_queue[:-40]
             publish_metric = nearest if nearest is not None else gate
             if (
-                publish_metric is not None
+                scale_stable
+                and publish_metric is not None
                 and 0.30 <= publish_metric <= 1.80
                 and float(result.frame_monotonic) >= self._last_rotation_monotonic + 0.2
                 and float(result.frame_monotonic)
@@ -1204,8 +1377,21 @@ class ElevatedHazardMonitor:
         ages = [age for age in (left_age, right_age) if age is not None]
         worst_age = max(ages) if len(ages) == 2 else None
         stale = worst_age is None or worst_age > float(cfg.stale_timeout_s)
-        if stale:
-            hold, hold_reason, hold_permanent = self._update_hold(True, "camera_stale_stop")
+        # With elevated EYE detection disabled the eye cameras are unused, so
+        # their staleness must NOT deny forward motion. Field 2026-07-18:
+        # with --edge-detection off the eye stream lagged, camera_stale_stop
+        # fired every cycle, and the wander loop's reverse-escape response
+        # backed the robot into the wall behind it, wedging forever. Only the
+        # bottom-camera ground gate (which degrades gracefully when its own
+        # frame is stale) matters in this mode.
+        if bool(cfg.elevated_eye_enabled) and stale:
+            # Staleness denies forward BY ITSELF (frames_stale below) — it
+            # must NOT arm a post-stop hold. A hold's release demands
+            # physically reversing, so a slow/hiccuping sensor turned into
+            # forced retreat loops (field 2026-07-17: chronic depth_stale
+            # holds walked the robot backwards across the room). When frames
+            # freshen, driving may resume immediately.
+            hold, hold_reason, hold_permanent = self._update_hold(False, "")
             with self._lock:
                 previous = self._state
                 self._state = replace(
@@ -1242,7 +1428,13 @@ class ElevatedHazardMonitor:
         depth_results: dict[str, object] = {}
         left_obs = right_obs = None
         candidates: dict[str, tuple[str, float | None, float | None, float | None, float]] = {}
-        if self._depth_worker is not None:
+        if not bool(cfg.elevated_eye_enabled):
+            # Camera elevated detection disabled: the eyes produce NO
+            # candidates and NO stale-fail, so no elevated stops/holds/edge
+            # cells ever arise. The bottom ground gate + lidar stop box (in
+            # the wander loop) remain the only obstacle protection.
+            pass
+        elif self._depth_worker is not None:
             depth_failure = getattr(self._depth_worker, "failure", None)
             if depth_failure is None and getattr(self._depth_worker, "ready", False):
                 # The worker declares its result keys: ("panorama",) in fused
@@ -1258,7 +1450,9 @@ class ElevatedHazardMonitor:
                         depth_results[eye_key] = depth_result
             if not depth_results:
                 fail_reason = "depth_failed" if depth_failure is not None else "depth_stale"
-                hold, hold_reason, hold_permanent = self._update_hold(True, fail_reason)
+                # Same as camera staleness: deny forward while blind, but do
+                # not arm a reverse-demanding hold for a freshness problem.
+                hold, hold_reason, hold_permanent = self._update_hold(False, "")
                 with self._lock:
                     self._state = replace(
                         self._state,
@@ -1277,7 +1471,7 @@ class ElevatedHazardMonitor:
                 return self._state
             used_depth = True
             candidates = self._candidates_from_depth(depth_results)
-        if not used_depth:
+        if bool(cfg.elevated_eye_enabled) and not used_depth:
             left_obs = self._detector.detect(left_frame)
             right_obs = self._detector.detect(right_frame)
 
@@ -1413,12 +1607,14 @@ class ElevatedHazardMonitor:
             near_freeze = True
 
         # ---- blind-zone vanish latch --------------------------------------------
-        if used_depth:
+        if used_depth or not bool(cfg.elevated_eye_enabled):
             # Depth perception does not go blind close-in — a near surface is
             # a LARGE mask, not a vanished line — so the Hough-era latch is
-            # unnecessary and its row bookkeeping has no inputs here. Release
-            # any latch left over from detector-mode ticks: the depth result
-            # now owns the near field.
+            # unnecessary and its row bookkeeping has no inputs here. Also the
+            # path with edge detection OFF: left_obs/right_obs are None, so
+            # the deep_rows loop below (obs.detected) would crash — skip it.
+            # Release any latch left over from detector-mode ticks: the depth
+            # result (or the lidar, when detection is off) owns the near field.
             self._blind_latched = False
             self._vanish_armed = False
             self._vanish_hits = 0
@@ -1673,6 +1869,15 @@ class ElevatedHazardMonitor:
                 if right_result is not None and right_result.overlay_bgr is not None
                 else right_frame
             )
+        elif not bool(cfg.elevated_eye_enabled):
+            # Edge detection off: no eye obs was produced (left_obs/right_obs
+            # are None), and render_overlay dereferences obs.bbox. Pass the
+            # raw frames through as the "annotated" view. Field 2026-07-18:
+            # calling render_overlay with None obs threw every tick, the
+            # monitor-error catch set frames_stale=True, and forward was
+            # denied as camera_stale_stop forever with --edge-detection off.
+            annotated_left = left_frame
+            annotated_right = right_frame
         else:
             annotated_left = render_overlay(
                 left_frame, cfg.left_key, left_obs, state, cfg,
@@ -1692,7 +1897,48 @@ class ElevatedHazardMonitor:
                 self._annotated[cfg.bottom_key] = render_bottom_overlay(
                     bottom_frame, bottom_obstacles, state, cfg
                 )
+        self._record_flight_frames(state)
         return state
+
+    def _record_flight_frames(self, state: HazardState) -> None:
+        """Rolling on-disk ring of annotated frames (~0.7s cadence, last
+        ~84s) so MISSED hazards are diagnosable — stop bundles only exist
+        when the gate fires. Never allowed to take down the gate."""
+        if self._recorder_failed:
+            return
+        now_mono = time.monotonic()
+        if now_mono - self._recorder_last_mono < 0.7:
+            return
+        self._recorder_last_mono = now_mono
+        try:
+            ring_idx = self._recorder_index % 120
+            self._recorder_index += 1
+            stamp = time.strftime("%H:%M:%S")
+            cw = getattr(state, "clear_width_m", None)
+            label = (
+                f"{stamp} #{self._recorder_index:05d} reason={state.reason} "
+                f"active={int(state.active)} ground={int(state.ground_active)}"
+                + (f" cw={cw:.2f}" if cw is not None else "")
+            )
+            for key in ("panorama", self.config.bottom_key):
+                frame = self._annotated.get(key)
+                if frame is None:
+                    continue
+                canvas = frame.copy()
+                cv2.putText(
+                    canvas, label, (4, 14), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4, (0, 0, 0), 3, cv2.LINE_AA,
+                )
+                cv2.putText(
+                    canvas, label, (4, 14), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4, (0, 255, 255), 1, cv2.LINE_AA,
+                )
+                cv2.imwrite(
+                    str(self._recorder_dir / f"{key}_{ring_idx:03d}.jpg"), canvas
+                )
+        except Exception as exc:
+            self._recorder_failed = True
+            print(f"[safety] flight recorder disabled after error: {exc!r}")
 
 
 def render_overlay(

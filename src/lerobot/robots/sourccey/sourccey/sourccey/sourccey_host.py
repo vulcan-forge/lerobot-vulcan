@@ -13,7 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import logging
+import math
 import signal
 import subprocess
 import threading
@@ -355,9 +357,22 @@ class _IMUReporter:
         self._samples: deque[HostIMUSample] = deque(
             maxlen=max(int(config.slam_imu_max_samples_per_packet), 1) * 4
         )
+        # Integrated-yaw publisher state (see config imu_yaw_pub_*).
+        self._yaw_ctx = None
+        self._yaw_pub = None
+        self._yaw_rad = 0.0
+        self._yaw_seq = 0
+        self._yaw_last_ts_ns: int | None = None
+
+    def _yaw_pub_enabled(self) -> bool:
+        return bool(getattr(self.config, "imu_yaw_pub_enabled", False))
 
     def start(self) -> None:
-        if not self.config.imu_print_enabled and not self.config.slam_imu_enabled:
+        if (
+            not self.config.imu_print_enabled
+            and not self.config.slam_imu_enabled
+            and not self._yaw_pub_enabled()
+        ):
             return
         if self.config.imu_print_enabled and self.config.imu_print_interval_s <= 0:
             logging.warning("IMU reporter disabled: imu_print_interval_s must be > 0")
@@ -382,12 +397,29 @@ class _IMUReporter:
             self._imu = None
             return
 
+        if self._yaw_pub_enabled():
+            try:
+                self._yaw_ctx = zmq.Context.instance()
+                self._yaw_pub = self._yaw_ctx.socket(zmq.PUB)
+                self._yaw_pub.setsockopt(zmq.LINGER, 0)
+                self._yaw_pub.bind(str(self.config.imu_yaw_pub_endpoint))
+                print(
+                    "IMU yaw publisher bound "
+                    f"(endpoint={self.config.imu_yaw_pub_endpoint} "
+                    f"gyro_axis={int(self.config.imu_yaw_gyro_axis)} "
+                    f"sign={float(self.config.imu_yaw_gyro_sign):+.0f})"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logging.warning("IMU yaw publisher disabled (bind failed): %s", exc)
+                self._yaw_pub = None
+
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, daemon=True, name="sourccey_imu_reporter")
         self._thread.start()
         print(
             "IMU reporter started "
             f"(slam_imu_enabled={self.config.slam_imu_enabled} "
+            f"yaw_pub={'on' if self._yaw_pub is not None else 'off'} "
             f"sample_rate_hz={float(self.config.slam_imu_sample_rate_hz):.2f} "
             f"print_interval_s={float(self.config.imu_print_interval_s):.2f})"
         )
@@ -397,6 +429,13 @@ class _IMUReporter:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
         self._thread = None
+        if self._yaw_pub is not None:
+            try:
+                self._yaw_pub.close(0)
+            except Exception:  # noqa: BLE001
+                pass
+        self._yaw_pub = None
+        self._yaw_ctx = None
         if self._imu is not None:
             try:
                 self._imu.disconnect()
@@ -423,6 +462,7 @@ class _IMUReporter:
                 if sample.valid:
                     with self._lock:
                         self._samples.append(sample)
+                    self._integrate_and_publish_yaw(sample, fallback_dt_s=interval_s)
                     if self.config.imu_print_enabled and time.monotonic() >= next_print_ts:
                         stamp = datetime.now(timezone.utc).isoformat()
                         print(
@@ -440,6 +480,51 @@ class _IMUReporter:
                 logging.warning("IMU reporter read error: %s", exc)
 
             self._stop_event.wait(interval_s)
+
+    def _integrate_and_publish_yaw(self, sample: HostIMUSample, *, fallback_dt_s: float) -> None:
+        """Integrate the vertical gyro axis and broadcast the running yaw.
+
+        Uses the sample's own timestamp for dt (falling back to the nominal
+        loop interval if the stamp is missing or implausible), so integration
+        stays accurate even if the polling loop jitters. Only yaw DELTAS are
+        ever consumed downstream, so unbounded drift in the absolute value is
+        harmless and we never reset it.
+        """
+        if self._yaw_pub is None:
+            return
+        try:
+            axis = int(self.config.imu_yaw_gyro_axis)
+            gyro = sample.gyro_rad_s
+            if axis < 0 or axis >= len(gyro):
+                axis = 2
+            rate = float(gyro[axis]) * float(self.config.imu_yaw_gyro_sign)
+
+            ts_ns = int(sample.timestamp_ns)
+            if self._yaw_last_ts_ns is None:
+                dt_s = float(fallback_dt_s)
+            else:
+                dt_s = (ts_ns - self._yaw_last_ts_ns) / 1e9
+                if not (0.0 < dt_s < 0.5):
+                    dt_s = float(fallback_dt_s)
+            self._yaw_last_ts_ns = ts_ns
+            self._yaw_rad += rate * dt_s
+            self._yaw_seq += 1
+
+            payload = json.dumps(
+                {
+                    "yaw_rad": self._yaw_rad,
+                    "yaw_deg": math.degrees(self._yaw_rad),
+                    "rate_rad_s": rate,
+                    "ts_ns": ts_ns,
+                    "seq": self._yaw_seq,
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+            self._yaw_pub.send(payload, flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            logging.debug("IMU yaw publish skipped: %s", exc)
 
 
 @parser.wrap()

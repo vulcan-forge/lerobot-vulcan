@@ -242,6 +242,130 @@ def _score_candidate(
     return base_score * coverage_weight if base_score > 0.0 else base_score
 
 
+def _score_candidates_batch(
+    cand: np.ndarray,
+    *,
+    exact_grid: np.ndarray,
+    dilated_grid: np.ndarray,
+    known_grid: np.ndarray,
+    grid_origin_xy: np.ndarray,
+    resolution_m: float,
+    global_sampled_xy: np.ndarray,
+    use_nearest_penalty: bool = True,
+) -> np.ndarray:
+    """Vectorized replica of _score_candidate for a batch of K candidate
+    point sets. cand is K x N x 2 float32 — each row a snapshot already
+    rotated AND translated to its candidate pose (built by the callers as
+    rotated + offset in float32, matching _transform_points' in-place +=
+    on a float32 array).
+
+    NUMERICAL CONTRACT: every accept gate in the stitcher is tuned to the
+    scalar scores, so this path reproduces them bit-for-bit on the grid
+    terms — same float32 adds, same rounding into grid cells, same count
+    ratios. The batched nearest-penalty term differs from the scalar path
+    only in float summation order (~1e-6), far below gate sensitivity."""
+    n_cand = int(cand.shape[0])
+    n_pts = int(cand.shape[1]) if n_cand else 0
+    scores = np.full(n_cand, -1e9, dtype=np.float64)
+    if n_pts == 0 or n_cand == 0:
+        return scores
+    if n_cand > 8192:
+        # Bound peak memory (the K x N intermediates) on very wide searches.
+        for start in range(0, n_cand, 8192):
+            scores[start : start + 8192] = _score_candidates_batch(
+                cand[start : start + 8192],
+                exact_grid=exact_grid,
+                dilated_grid=dilated_grid,
+                known_grid=known_grid,
+                grid_origin_xy=grid_origin_xy,
+                resolution_m=resolution_m,
+                global_sampled_xy=global_sampled_xy,
+                use_nearest_penalty=use_nearest_penalty,
+            )
+        return scores
+    rel = (cand - grid_origin_xy) / resolution_m
+    ij = np.round(rel).astype(np.int32)
+    height, width = dilated_grid.shape
+    inside = (
+        (ij[..., 0] >= 0)
+        & (ij[..., 0] < width)
+        & (ij[..., 1] >= 0)
+        & (ij[..., 1] < height)
+    )
+    jj = np.clip(ij[..., 0], 0, width - 1)
+    ii = np.clip(ij[..., 1], 0, height - 1)
+    known = known_grid[ii, jj] & inside
+    matchable_count = known.sum(axis=1)
+    min_matchable = max(12, int(0.15 * n_pts))
+    ok = matchable_count >= min_matchable
+    if not np.any(ok):
+        return scores
+    exact_hits = (exact_grid[ii, jj] & known).sum(axis=1)
+    nearby_hits = (dilated_grid[ii, jj] & known).sum(axis=1)
+    inside_counts = inside.sum(axis=1)
+
+    ok_idx = np.nonzero(ok)[0]
+    m_counts = matchable_count[ok_idx].astype(np.float64)
+    exact_hit_ratio = exact_hits[ok_idx] / m_counts
+    nearby_hit_ratio = nearby_hits[ok_idx] / m_counts
+    inside_ratio = inside_counts[ok_idx] / float(n_pts)
+    miss_ratio = 1.0 - nearby_hit_ratio
+
+    nearest_mean = np.zeros(len(ok_idx), dtype=np.float64)
+    if use_nearest_penalty and len(global_sampled_xy):
+        # Fully vectorized replica of the scalar's stride-sampled nearest
+        # penalty (the per-candidate loop was the refine stage's whole
+        # cost). The scalar takes matchable = points where inside&known in
+        # original order, then matchable[::max(1, len//24)] — reproduced
+        # here via strided ordinal picks into the row-major nonzero list.
+        # Distances use the float64 |a-b|^2 identity via BLAS (chunked to
+        # bound memory); deviation from the scalar float32 sums is ~1e-6,
+        # far below any gate's sensitivity.
+        known_ok = known[ok_idx]
+        m_ok = matchable_count[ok_idx].astype(np.int64)
+        stride = np.maximum(1, m_ok // 24)
+        n_picks = (m_ok + stride - 1) // stride
+        max_picks = int(n_picks.max()) if len(n_picks) else 0
+        if max_picks > 0:
+            n_ok = len(ok_idx)
+            pick_ord = np.arange(max_picks, dtype=np.int64)[None, :] * stride[:, None]
+            pick_valid = pick_ord < m_ok[:, None]
+            _rows, matchable_cols = np.nonzero(known_ok)
+            row_start = np.zeros(n_ok, dtype=np.int64)
+            np.cumsum(m_ok[:-1], out=row_start[1:])
+            flat_idx = row_start[:, None] + np.minimum(
+                pick_ord, np.maximum(m_ok[:, None] - 1, 0)
+            )
+            pick_cols = matchable_cols[flat_idx]
+            picked = cand[ok_idx[:, None], pick_cols]
+            picked_f64 = picked.astype(np.float64)
+            g_f64 = global_sampled_xy.astype(np.float64)
+            g_norm_sq = np.sum(g_f64 * g_f64, axis=1)
+            nearest_sq = np.empty((n_ok, max_picks), dtype=np.float64)
+            chunk = max(1, 2048 // max(1, max_picks // 24))
+            for start in range(0, n_ok, chunk):
+                p = picked_f64[start : start + chunk]
+                p_norm_sq = np.sum(p * p, axis=2)
+                cross = p @ g_f64.T
+                d2 = p_norm_sq[:, :, None] + g_norm_sq[None, None, :] - 2.0 * cross
+                nearest_sq[start : start + chunk] = d2.min(axis=2)
+            nearest_sq = np.maximum(nearest_sq, 0.0)
+            sums = np.where(pick_valid, nearest_sq, 0.0).sum(axis=1)
+            nearest_mean = np.sqrt(sums / n_picks.astype(np.float64))
+
+    base_score = (
+        exact_hit_ratio * 12.0
+        + nearby_hit_ratio * 3.0
+        + inside_ratio * 1.5
+        - miss_ratio * 6.0
+        - np.minimum(nearest_mean, 0.5) * 10.0
+    )
+    coverage_ratio = m_counts / float(n_pts)
+    coverage_weight = 0.55 + 0.45 * np.minimum(1.0, coverage_ratio / 0.50)
+    scores[ok_idx] = np.where(base_score > 0.0, base_score * coverage_weight, base_score)
+    return scores
+
+
 def _evaluate_pose_score(
     *,
     snapshot_points_xy: np.ndarray,
@@ -331,43 +455,84 @@ def _refine_pose(
         offset_step_m,
         dtype=np.float32,
     )
-    for theta_deg in theta_candidates:
-        for dx in offset_candidates:
-            for dy in offset_candidates:
-                pose = Pose2D(float(seed_pose.x + dx), float(seed_pose.y + dy), float(theta_deg))
-                if (
-                    anchor_pose is not None
-                    and max_translation_m is not None
-                    and math.hypot(pose.x - anchor_pose.x, pose.y - anchor_pose.y)
-                    > float(max_translation_m)
-                ):
-                    # The caller's translation bound is a HARD promise: the
-                    # refine walk used to add its window on top of the coarse
-                    # grid, letting a wall-slide exceed the bound by ~40%
-                    # (field 2026-07-12: a 0.53m jump through a 0.35m cap
-                    # shifted the whole map half a meter).
-                    continue
-                score = _evaluate_pose_score(
-                    snapshot_points_xy=snapshot_points_xy,
-                    pose=pose,
-                    exact_grid=exact_grid,
-                    dilated_grid=dilated_grid,
-                    known_grid=known_grid,
-                    grid_origin_xy=grid_origin_xy,
-                    resolution_m=resolution_m,
-                    global_sampled_xy=global_sampled_xy,
-                    use_nearest_penalty=use_nearest_penalty,
-                )
-                score = _apply_pose_prior(
-                    score=score,
-                    pose=pose,
-                    prior_pose=prior_pose,
-                    translation_weight=float(prior_translation_weight),
-                    theta_weight=float(prior_theta_weight),
-                )
-                if score > best_score:
-                    best_score = score
-                    best_pose = pose
+    # Vectorized over the xy grid per theta (was a triple Python loop of
+    # ~3k full scoring calls — several seconds per capture). Candidate xy
+    # in float32 mirrors the scalar path's float32 arithmetic exactly;
+    # iteration order (dx-major, dy-minor, first-strictly-greater wins)
+    # is preserved by argmax over the same ordering.
+    grid_dx, grid_dy = np.meshgrid(offset_candidates, offset_candidates, indexing="ij")
+    offset_pairs = np.column_stack([grid_dx.ravel(), grid_dy.ravel()])
+    cand_x = np.float32(seed_pose.x) + offset_pairs[:, 0]
+    cand_y = np.float32(seed_pose.y) + offset_pairs[:, 1]
+    keep = np.ones(len(offset_pairs), dtype=bool)
+    if anchor_pose is not None and max_translation_m is not None:
+        # The caller's translation bound is a HARD promise: the refine walk
+        # used to add its window on top of the coarse grid, letting a
+        # wall-slide exceed the bound by ~40% (field 2026-07-12: a 0.53m
+        # jump through a 0.35m cap shifted the whole map half a meter).
+        keep = (
+            np.hypot(
+                cand_x.astype(np.float64) - float(anchor_pose.x),
+                cand_y.astype(np.float64) - float(anchor_pose.y),
+            )
+            <= float(max_translation_m)
+        )
+    if not np.any(keep):
+        return best_pose, best_score
+    candidate_xy = np.column_stack([cand_x[keep], cand_y[keep]]).astype(np.float32)
+    n_theta = len(theta_candidates)
+    n_xy = len(candidate_xy)
+    if n_theta == 0 or len(snapshot_points_xy) == 0:
+        return best_pose, best_score
+    rotated_stack = np.stack(
+        [
+            _transform_points(snapshot_points_xy, Pose2D(0.0, 0.0, float(t)))
+            for t in theta_candidates
+        ]
+    )
+    # ONE scoring call for the whole theta x xy grid (ordering: theta-major,
+    # then dx-major/dy-minor — identical to the scalar loops, so argmax's
+    # first-of-equals matches the scalar first-strictly-greater winner).
+    cand_all = (
+        rotated_stack[:, None, :, :] + candidate_xy[None, :, None, :]
+    ).reshape(n_theta * n_xy, len(snapshot_points_xy), 2)
+    scores = _score_candidates_batch(
+        cand_all,
+        exact_grid=exact_grid,
+        dilated_grid=dilated_grid,
+        known_grid=known_grid,
+        grid_origin_xy=grid_origin_xy,
+        resolution_m=resolution_m,
+        global_sampled_xy=global_sampled_xy,
+        use_nearest_penalty=use_nearest_penalty,
+    )
+    if prior_pose is not None:
+        prior_translation_err = np.hypot(
+            candidate_xy[:, 0].astype(np.float64) - float(prior_pose.x),
+            candidate_xy[:, 1].astype(np.float64) - float(prior_pose.y),
+        )
+        theta_errs = np.abs(
+            np.array(
+                [
+                    _normalize_angle_deg(float(t) - float(prior_pose.theta_deg))
+                    for t in theta_candidates
+                ],
+                dtype=np.float64,
+            )
+        )
+        scores = (
+            scores
+            - float(prior_translation_weight) * np.tile(prior_translation_err, n_theta)
+            - float(prior_theta_weight) * np.repeat(theta_errs, n_xy)
+        )
+    k = int(np.argmax(scores))
+    if float(scores[k]) > best_score:
+        best_score = float(scores[k])
+        best_pose = Pose2D(
+            float(candidate_xy[k % n_xy, 0]),
+            float(candidate_xy[k % n_xy, 1]),
+            float(theta_candidates[k // n_xy]),
+        )
     return best_pose, best_score
 
 
@@ -473,35 +638,78 @@ def _search_pose(
     coarse_offset_candidates = np.arange(-search_xy_m, search_xy_m + 1e-6, 0.05, dtype=np.float32)
 
     local_search_started = time.monotonic()
-    for theta_deg in coarse_theta_candidates:
-        for dx in coarse_offset_candidates:
-            for dy in coarse_offset_candidates:
-                if max_translation_from_initial_m is not None and math.hypot(dx, dy) > float(
-                    max_translation_from_initial_m
-                ):
-                    continue
-                pose = Pose2D(float(initial_pose.x + dx), float(initial_pose.y + dy), float(theta_deg))
-                raw_score = _evaluate_pose_score(
-                    snapshot_points_xy=snapshot_points_xy,
-                    pose=pose,
-                    exact_grid=exact_grid,
-                    dilated_grid=dilated,
-                    known_grid=known_grid,
-                    grid_origin_xy=origin,
-                    resolution_m=resolution_m,
-                    global_sampled_xy=global_sampled_xy,
-                    use_nearest_penalty=False,
+    # Vectorized over the xy grid per theta (was a triple Python loop of
+    # ~10k full scoring calls — this WAS the multi-second "stitching"
+    # cost). Same candidate values, same ordering, same scores as the
+    # scalar loops it replaces.
+    coarse_dx, coarse_dy = np.meshgrid(
+        coarse_offset_candidates, coarse_offset_candidates, indexing="ij"
+    )
+    coarse_pairs = np.column_stack([coarse_dx.ravel(), coarse_dy.ravel()])
+    coarse_keep = np.ones(len(coarse_pairs), dtype=bool)
+    if max_translation_from_initial_m is not None:
+        coarse_keep = (
+            np.hypot(
+                coarse_pairs[:, 0].astype(np.float64),
+                coarse_pairs[:, 1].astype(np.float64),
+            )
+            <= float(max_translation_from_initial_m)
+        )
+    coarse_candidate_xy = np.column_stack(
+        [
+            np.float32(initial_pose.x) + coarse_pairs[coarse_keep, 0],
+            np.float32(initial_pose.y) + coarse_pairs[coarse_keep, 1],
+        ]
+    ).astype(np.float32)
+    if len(coarse_candidate_xy) and len(coarse_theta_candidates) and len(snapshot_points_xy):
+        n_coarse_theta = len(coarse_theta_candidates)
+        n_coarse_xy = len(coarse_candidate_xy)
+        coarse_rotated = np.stack(
+            [
+                _transform_points(snapshot_points_xy, Pose2D(0.0, 0.0, float(t)))
+                for t in coarse_theta_candidates
+            ]
+        )
+        coarse_cand_all = (
+            coarse_rotated[:, None, :, :] + coarse_candidate_xy[None, :, None, :]
+        ).reshape(n_coarse_theta * n_coarse_xy, len(snapshot_points_xy), 2)
+        coarse_scores = _score_candidates_batch(
+            coarse_cand_all,
+            exact_grid=exact_grid,
+            dilated_grid=dilated,
+            known_grid=known_grid,
+            grid_origin_xy=origin,
+            resolution_m=resolution_m,
+            global_sampled_xy=global_sampled_xy,
+            use_nearest_penalty=False,
+        )
+        if prior_pose is not None:
+            coarse_prior_err = np.hypot(
+                coarse_candidate_xy[:, 0].astype(np.float64) - float(prior_pose.x),
+                coarse_candidate_xy[:, 1].astype(np.float64) - float(prior_pose.y),
+            )
+            coarse_theta_errs = np.abs(
+                np.array(
+                    [
+                        _normalize_angle_deg(float(t) - float(prior_pose.theta_deg))
+                        for t in coarse_theta_candidates
+                    ],
+                    dtype=np.float64,
                 )
-                score = _apply_pose_prior(
-                    score=raw_score,
-                    pose=pose,
-                    prior_pose=prior_pose,
-                    translation_weight=float(prior_translation_weight),
-                    theta_weight=float(prior_theta_weight),
-                )
-                if score > local_best_score:
-                    local_best_score = score
-                    local_best_pose = pose
+            )
+            coarse_scores = (
+                coarse_scores
+                - float(prior_translation_weight) * np.tile(coarse_prior_err, n_coarse_theta)
+                - float(prior_theta_weight) * np.repeat(coarse_theta_errs, n_coarse_xy)
+            )
+        k = int(np.argmax(coarse_scores))
+        if float(coarse_scores[k]) > local_best_score:
+            local_best_score = float(coarse_scores[k])
+            local_best_pose = Pose2D(
+                float(coarse_candidate_xy[k % n_coarse_xy, 0]),
+                float(coarse_candidate_xy[k % n_coarse_xy, 1]),
+                float(coarse_theta_candidates[k // n_coarse_xy]),
+            )
 
     fine_theta_half_window_deg = max(6.0, min(18.0, theta_window_deg * 0.35))
     local_best_pose, local_best_score = _refine_pose(
@@ -1071,13 +1279,33 @@ def _plan_frontier_path(
             "frontier_cells": 0,
         }
 
+    def no_frontier_diag() -> dict[str, object]:
+        """Why-no-frontier counters: 'no unknown space left' and 'unknown
+        space exists but its boundary is unreachable (corridor pinched shut
+        in the inflated grid)' print identically in the logs yet demand
+        opposite responses — the second means the map, not the room, is the
+        obstacle."""
+        unreachable = free_grid & adjacent_unknown & (dist < 0)
+        out: dict[str, object] = {
+            "unknown_cells": int(np.count_nonzero(unknown)),
+            "reachable_frontier_cells": int(np.count_nonzero(frontier_mask)),
+            "unreachable_frontier_cells": int(np.count_nonzero(unreachable)),
+        }
+        pts = np.argwhere(unreachable)
+        if len(pts):
+            out["unreachable_centroid_xy"] = (
+                float(origin_xy[0]) + float(np.mean(pts[:, 1])) * res,
+                float(origin_xy[1]) + float(np.mean(pts[:, 0])) * res,
+            )
+        return out
+
     def survey_or_no_frontier() -> dict[str, object]:
         """No frontier left: optionally propose a SURVEY vantage instead — the
         reachable cell farthest from every previous capture position. Uses the
         same BFS reachability as navigation, so a proposed vantage is
         guaranteed pathable (a separate ray heuristic can silently disagree)."""
         if not survey_from_xy:
-            return {"status": "no_frontier"}
+            return {"status": "no_frontier", **no_frontier_diag()}
         # Prefer COMFORTABLE vantages: max-distance-from-past-poses alone is
         # always won by a wall corner — the worst place to stand (blocked stop
         # box, poor visibility). Require extra obstacle clearance, falling back
@@ -1090,7 +1318,7 @@ def _plan_frontier_path(
         if len(reached_cells) == 0:
             reached_cells = np.argwhere(dist >= 0)
         if len(reached_cells) == 0:
-            return {"status": "no_frontier"}
+            return {"status": "no_frontier", **no_frontier_diag()}
         world_pts = np.column_stack(
             [
                 float(origin_xy[0]) + reached_cells[:, 1].astype(np.float32) * res,
@@ -1109,6 +1337,7 @@ def _plan_frontier_path(
             return {
                 "status": "no_frontier",
                 "best_survey_spacing_m": float(min_spacing[best_i]),
+                **no_frontier_diag(),
             }
         survey_cell = (int(reached_cells[best_i][1]), int(reached_cells[best_i][0]))
         path_cells = backtrack_path(survey_cell)

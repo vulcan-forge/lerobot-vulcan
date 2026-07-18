@@ -475,6 +475,7 @@ def _log_rerun_state(
     poses: list[Pose2D],
     solve_log: list[dict[str, object]],
     cone_half_width_deg: float,
+    body_radius_m: float = 0.45,
 ) -> None:
     rr.set_time("capture_index", sequence=int(capture_index))
     combined_points = []
@@ -497,8 +498,11 @@ def _log_rerun_state(
         )
         rr.log(f"world/poses/{idx + 1:02d}/origin", rr.Points3D(origin, colors=[color], radii=0.05))
         rr.log(f"world/poses/{idx + 1:02d}/heading", rr.Arrows3D(origins=origin, vectors=vector, colors=[color]))
-        arc = _pose_arc_points(pose, radius_m=0.45, half_width_deg=float(cone_half_width_deg))
-        rr.log(f"world/poses/{idx + 1:02d}/cone", rr.LineStrips3D([arc], colors=[color], radii=0.004))
+        # Full-circle body-footprint ring at the PLANNING collision radius:
+        # the gauge for "does the robot think it fits?" — the gap the circle
+        # must pass through is the body DIAMETER (2x this radius).
+        ring = _pose_arc_points(pose, radius_m=float(body_radius_m), half_width_deg=180.0, steps=48)
+        rr.log(f"world/poses/{idx + 1:02d}/cone", rr.LineStrips3D([ring], colors=[color], radii=0.004))
 
     if combined_points:
         combined = np.vstack(combined_points)

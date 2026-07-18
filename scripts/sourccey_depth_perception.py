@@ -36,7 +36,15 @@ from lerobot.control.sourccey.sourccey.elevated_edge_scan_live import (
     ElevatedEdgeScanConfig,
 )
 
-DEFAULT_DEPTH_MODEL = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
+# Large (335M params): benchmarked 2026-07-17 on the client PC's CUDA GPU at
+# the production 252x686 resolution — 187ms/frame vs Small's 30ms. Small
+# (25M) was the field liability: mushy depth on flat texture (missed
+# candidacy), metric scale wobble x0.65-x1.77 (false footprints, height
+# misreads), culminating in a run where the robot drove into a table with
+# ZERO gate denials. Staleness is deny-only (never holds), so the slower
+# model can delay the gate but never cause motion. Drop to
+# ...-Base-hf (97M, 66ms) if staleness churn appears in the field.
+DEFAULT_DEPTH_MODEL = "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf"
 
 ELEVATED_MIN_M = 0.30  # just above the lidar scan plane (0.28m)
 ELEVATED_MAX_M = 1.10
@@ -53,6 +61,10 @@ CORRIDOR_NARROW_HALF_WIDTH_M = 0.30
 # a table into a large solid red slab and can seal a nearby doorway.  For
 # navigation, its nearest boundary is the occupied geometry that matters.
 FOOTPRINT_BOUNDARY_DEPTH_M = 0.10
+# A footprint column-run's end columns are dropped from MAP publishing while
+# their leading range exceeds the run median by this much (lateral edge-bleed:
+# mixed object/background pixels at a corner take the background's depth).
+EDGE_BLEED_JUMP_M = 0.22
 # Fused-vision candidacy (require_proposal=False): the calibrated panorama's
 # metric 3D owns obstacle candidacy directly — a Hough line is a corroborator,
 # not a gate (the line-gate made the eyes MUTE on big low-texture furniture:
@@ -242,24 +254,27 @@ def _ground_connected_columns(
         forward range (GROUND_CONNECTED_RANGE_TOLERANCE_M).
     """
     out = np.zeros_like(elevated, dtype=bool)
+    if not np.any(elevated):
+        return out
+    h, w = elevated.shape
     lower_band = (height >= 0.02) & (height <= GROUND_CONNECTED_MAX_HEIGHT_M)
-    reaches_low = elevated & (height <= 0.35)
-    cols = np.where(elevated.any(axis=0) & reaches_low.any(axis=0))[0]
-    for col in cols:
-        rows = np.where(elevated[:, col])[0]
-        reference_forward = float(np.median(robot_forward[rows, col]))
-        below = np.zeros(elevated.shape[0], dtype=bool)
-        below[rows.max() + 1 :] = True
-        same_range_lower = (
-            lower_band[:, col]
-            & below
-            & (
-                np.abs(robot_forward[:, col] - reference_forward)
-                <= GROUND_CONNECTED_RANGE_TOLERANCE_M
-            )
-        )
-        if np.any(same_range_lower):
-            out[rows, col] = True
+    has_elevated = elevated.any(axis=0)
+    reaches_low = (elevated & (height <= 0.35)).any(axis=0)
+    # Fully vectorized (a per-column python loop here was a large share of
+    # the fused pipeline's 1.64s/frame). Reference range = the run's LOWEST
+    # elevated pixel (the face's bottom edge — where a floor-connected
+    # surface meets its floor), instead of the run median: equivalent
+    # discrimination, no loop.
+    lowest_row = (h - 1) - np.argmax(elevated[::-1, :], axis=0)
+    ref_fwd = robot_forward[lowest_row, np.arange(w)]
+    rows_grid = np.arange(h)[:, None]
+    supported = (
+        lower_band
+        & (rows_grid > lowest_row[None, :])
+        & (np.abs(robot_forward - ref_fwd[None, :]) <= GROUND_CONNECTED_RANGE_TOLERANCE_M)
+    ).any(axis=0)
+    delegate = has_elevated & reaches_low & supported
+    out[:, delegate] = elevated[:, delegate]
     return out
 
 
@@ -344,9 +359,6 @@ def _lidar_scale(
     idx = np.linspace(0, len(beams_b) - 1, min(12, len(beams_b))).astype(int)
     beams_b, beams_r = beams_b[idx], beams_r[idx]
 
-    up = fields["up_unit"]
-    fwd = fields["fwd_unit"]
-    bearing = fields["bearing_deg"]
     cam_h = float(model.height_m)
     # The lidar sits ~2-3cm from the eye cameras: treat its ranges as slant
     # ranges from the camera. Depth pixels give the forward COMPONENT along
@@ -357,23 +369,43 @@ def _lidar_scale(
     # independent scale witness — a soft prior toward it breaks the tie
     # without overriding an unambiguous lidar fit.
     floor_prior = _floor_scale(model, depth_m, fields)
+
+    # PERFORMANCE: this search dominated the whole perception cycle (96% of
+    # analyze_depth — 71 scales x 12 beams of FULL-FRAME ops, ~1.3s/frame,
+    # which chronically staled the gate in the field 2026-07-17). Same math,
+    # restructured: the plane-height test `|cam_h + s*u| - plane| <= 0.08`
+    # is a threshold on u = up*depth (scale moves the band, pixels don't),
+    # and beam windows depend only on bearings — so precompute per-beam
+    # pixel vectors ONCE (on a 2x2-downsampled grid; scale estimation needs
+    # no full resolution) and run the 71-scale loop over tiny arrays.
+    ds = 2
+    u_ds = (fields["up_unit"] * depth_m)[::ds, ::ds].ravel()
+    f_ds = (fields["fwd_unit"] * depth_m)[::ds, ::ds].ravel()
+    bearing_ds = fields["bearing_deg"][::ds, ::ds].ravel()
+    beam_data = []
+    for b, r in zip(beams_b, beams_r):
+        off_axis = math.cos(math.radians(float(b) - center_bearing))
+        if off_axis < 0.3:
+            continue
+        sel = np.abs(bearing_ds - float(b)) <= 3.0
+        if int(np.count_nonzero(sel)) < 3:
+            continue
+        beam_data.append((u_ds[sel], f_ds[sel], off_axis, float(r)))
+    if len(beam_data) < 3:
+        return None
+
+    plane = float(lidar_plane_height_m)
     best_scale, best_err = None, None
     for s in np.linspace(SCALE_MIN, SCALE_MAX, 71):
-        height = cam_h + s * up * depth_m
-        plane = np.abs(height - float(lidar_plane_height_m)) <= 0.08
-        if not np.any(plane):
-            continue
+        lo = (plane - 0.08 - cam_h) / s
+        hi = (plane + 0.08 - cam_h) / s
         errs = []
-        for b, r in zip(beams_b, beams_r):
-            beam_pixels = plane & (np.abs(bearing - b) <= 3.0)
-            if np.count_nonzero(beam_pixels) < 6:
+        for u_b, f_b, off_axis, r in beam_data:
+            in_plane = (u_b >= lo) & (u_b <= hi)
+            if int(np.count_nonzero(in_plane)) < 2:
                 continue
-            off_axis = math.cos(math.radians(float(b) - center_bearing))
-            if off_axis < 0.3:
-                continue
-            depth_fwd = float(np.median((s * fwd * depth_m)[beam_pixels]))
-            depth_slant = depth_fwd / off_axis
-            errs.append(abs(depth_slant - float(r)))
+            depth_slant = s * float(np.median(f_b[in_plane])) / off_axis
+            errs.append(abs(depth_slant - r))
         if len(errs) < 3:
             continue
         err = float(np.median(errs)) + 0.10 * abs(float(s) - float(floor_prior))
@@ -590,7 +622,19 @@ def analyze_depth(
     # beyond the claim. One corroborated column spares the whole component,
     # so a table whose thin legs the lidar clips in only one column keeps
     # everything.
-    if lidar_bearings_deg is not None and lidar_ranges_m is not None and len(lidar_bearings_deg):
+    if (
+        require_proposal
+        and lidar_bearings_deg is not None
+        and lidar_ranges_m is not None
+        and len(lidar_bearings_deg)
+    ):
+        # PER-EYE ONLY. In fused mode this veto is superseded: every floor-
+        # connected column is already delegated to the lidar by
+        # _ground_connected_columns (whether or not the lidar corroborates,
+        # the lidar OWNS floor-connected claims), and its per-component /
+        # per-column python loops on the full-frame edge-anchored mask were
+        # a large share of the 1.64s/frame that starved the gate (field
+        # 2026-07-17: chronic depth_stale).
         lb_all = np.asarray(lidar_bearings_deg, dtype=np.float32)
         lr_all = np.asarray(lidar_ranges_m, dtype=np.float32)
         good_l = (lr_all > 0.10) & (lr_all < 8.0)
@@ -657,26 +701,33 @@ def analyze_depth(
     # band is a stitch artifact — the band sits DEAD AHEAD, so trusting it
     # would phantom-stop straight-line driving. A real obstacle ahead is
     # wider than the ~28px band and survives via its out-of-band pixels.
+    # Component filters, vectorized via label histograms (bincount) — the
+    # per-component python loops were part of the fused pipeline's
+    # 1.64s/frame stall budget.
     if seam_band is not None and np.any(elevated & seam_band):
         _n_seam, seam_labels = cv2.connectedComponents(
             elevated.astype(np.uint8), connectivity=8
         )
-        for lab in range(1, _n_seam):
-            comp = seam_labels == lab
-            n_comp = int(np.count_nonzero(comp))
-            if n_comp and np.count_nonzero(comp & seam_band) / n_comp >= 0.85:
-                elevated &= ~comp
+        totals = np.bincount(seam_labels.ravel(), minlength=_n_seam).astype(np.float64)
+        in_seam = np.bincount(seam_labels[seam_band].ravel(), minlength=_n_seam)
+        kill = (in_seam / np.maximum(totals, 1.0)) >= 0.85
+        kill[0] = False
+        if kill.any():
+            elevated &= ~kill[seam_labels]
 
     if not require_proposal and np.any(elevated):
         # No line gate: speckle suppression by component size instead. Tiny
         # blobs are depth noise unless a detected line corroborates them.
         _n_sz, sz_labels = cv2.connectedComponents(elevated.astype(np.uint8), connectivity=8)
-        for lab in range(1, _n_sz):
-            comp = sz_labels == lab
-            if int(np.count_nonzero(comp)) < MIN_COMPONENT_PX and not np.any(
-                comp & proposal_mask
-            ):
-                elevated &= ~comp
+        sizes = np.bincount(sz_labels.ravel(), minlength=_n_sz)
+        if np.any(proposal_mask):
+            line_hits = np.bincount(sz_labels[proposal_mask].ravel(), minlength=_n_sz)
+        else:
+            line_hits = np.zeros(_n_sz, dtype=np.int64)
+        kill = (sizes < MIN_COMPONENT_PX) & (line_hits == 0)
+        kill[0] = False
+        if kill.any():
+            elevated &= ~kill[sz_labels]
     elevated_ratio = float(np.mean(elevated))
 
     # Measured forward passability: the actual gap straddling the robot's
@@ -859,8 +910,73 @@ def analyze_depth(
             # separate objects across open floor). This supersedes the
             # single-component region above (kept for the segment fit).
             col_nearest = np.where(footprint, robot_forward, big).min(axis=0)
-            boundary = footprint & (
-                robot_forward <= col_nearest[None, :] + FOOTPRINT_BOUNDARY_DEPTH_M
+            has_col = footprint.any(axis=0)
+            # WALL-COLUMN SUPPRESSION (fused path; map publishing only).
+            # A column whose surface CONTINUES above the elevated band at
+            # similar range is a wall / door frame — the lidar owns those
+            # (hard directive). The legacy component path had this check;
+            # the fused per-column path lost it and painted door frames red
+            # (field 2026-07-17 run 19: stop-bundle panoramas show red
+            # strips on the doorframe verticals feeding the doorway blob).
+            above_band_px = (
+                (height > ELEVATED_MAX_M)
+                & (height <= ELEVATED_MAX_M + 0.6)
+                & (fwd_cam > 0.05)
+            )
+            wall_cols = (
+                above_band_px & (np.abs(robot_forward - col_nearest[None, :]) <= 0.45)
+            ).any(axis=0)
+            has_col &= ~wall_cols
+            # LATERAL EDGE-BLEED TRIM (map publishing only; gating distances
+            # are computed above and untouched). At an object's lateral
+            # corner, mixed object/background pixels inherit the BACKGROUND
+            # depth and project past the corner into open floor — field
+            # 2026-07-17: a doorway-side table edge mapped ~0.2-0.4m into
+            # the door corridor and sealed the exit in the planning grid
+            # (the very first field complaint, "edge stretched toward the
+            # door", was this same artifact). Bleed columns self-qualify in
+            # the per-column band (their own nearest IS the bleed), so trim
+            # each contiguous column-run's ENDS while their leading range
+            # sits far beyond the run median.
+            run_cols = np.where(has_col)[0]
+            if len(run_cols):
+                run_splits = np.where(np.diff(run_cols) > 1)[0] + 1
+                for run in np.split(run_cols, run_splits):
+                    if len(run) < 3:
+                        continue
+                    run_median = float(np.median(col_nearest[run]))
+                    i = 0
+                    while i < len(run) and float(col_nearest[run[i]]) > run_median + EDGE_BLEED_JUMP_M:
+                        has_col[run[i]] = False
+                        i += 1
+                    j = len(run) - 1
+                    while j > i and float(col_nearest[run[j]]) > run_median + EDGE_BLEED_JUMP_M:
+                        has_col[run[j]] = False
+                        j -= 1
+            # RANGE-COHERENCE FILTER: depth models interpolate SMOOTHLY at
+            # object boundaries, so bleed often forms a range RAMP (no
+            # median jump for the end-trim to catch — field run 19: the
+            # doorway blob re-stamped every frame). A real physical edge is
+            # locally range-coherent: keep only columns with >= 2 other
+            # columns within +-6 columns whose leading range agrees within
+            # 0.07m. Ramp columns (mixing slope ~0.1-0.3m/col) have none.
+            coh_cols = np.where(has_col)[0]
+            if len(coh_cols) >= 3:
+                coh_ranges = col_nearest[coh_cols]
+                col_close = (
+                    np.abs(coh_cols[:, None] - coh_cols[None, :]) <= 6
+                )
+                range_close = (
+                    np.abs(coh_ranges[:, None] - coh_ranges[None, :]) <= 0.07
+                )
+                support = (col_close & range_close).sum(axis=1) - 1
+                has_col[coh_cols[support < 2]] = False
+            elif len(coh_cols):
+                has_col[coh_cols] = False
+            boundary = (
+                footprint
+                & has_col[None, :]
+                & (robot_forward <= col_nearest[None, :] + FOOTPRINT_BOUNDARY_DEPTH_M)
             )
             if np.count_nonzero(boundary) >= 8:
                 region_points = _decimate_xy(
@@ -960,10 +1076,21 @@ def analyze_depth(
 
 
 class DepthEstimator:
-    """Lazy wrapper around the Depth-Anything-V2 metric pipeline."""
+    """Lazy wrapper around the Depth-Anything-V2 metric pipeline.
 
-    def __init__(self, model_name: str = DEFAULT_DEPTH_MODEL) -> None:
+    fixed_size (h, w): pin the processor's internal inference resolution.
+    The default DPT processor scales WIDTH to 518 keeping aspect, so the
+    2.7:1 fused mosaic runs at only 196px tall internally — half the
+    vertical detail of the per-eye path (392px), which measurably mushed the
+    depth. Pinning to ~(252, 686) restores vertical detail at similar
+    compute to the proven per-eye configuration. Values must be multiples
+    of 14 (ViT patch size)."""
+
+    def __init__(
+        self, model_name: str = DEFAULT_DEPTH_MODEL, fixed_size: tuple[int, int] | None = None
+    ) -> None:
         self.model_name = str(model_name)
+        self._fixed_size = fixed_size
         self._pipe = None
         self.device = "cpu"
 
@@ -974,6 +1101,12 @@ class DepthEstimator:
         device = 0 if torch.cuda.is_available() else -1
         self.device = "cuda" if device == 0 else "cpu"
         self._pipe = hf_pipeline("depth-estimation", model=self.model_name, device=device)
+        if self._fixed_size is not None:
+            processor = self._pipe.image_processor
+            h, w = self._fixed_size
+            processor.size = {"height": int(h), "width": int(w)}
+            if hasattr(processor, "keep_aspect_ratio"):
+                processor.keep_aspect_ratio = False
 
     def infer(self, frame_bgr: np.ndarray) -> np.ndarray:
         """BGR frame -> metric depth map (meters), same HxW as the frame."""
@@ -1025,7 +1158,11 @@ class DepthWorker:
         self._proposal_detector = ElevatedEdgeDetector(
             edge_detector_config or ElevatedEdgeScanConfig()
         )
-        self._estimator = DepthEstimator(model_name)
+        # Fused mode pins the inference resolution (see DepthEstimator): the
+        # wide mosaic otherwise runs at half the per-eye vertical detail.
+        self._estimator = DepthEstimator(
+            model_name, fixed_size=(252, 686) if mosaic is not None else None
+        )
         self._max_frame_age_s = float(max_frame_age_s)
         # PerceptionMosaic (sourccey_eye_panorama) or None for per-eye mode.
         self._mosaic = mosaic
