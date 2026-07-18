@@ -61,6 +61,7 @@ from .vla_jepa.configuration_vla_jepa import VLAJEPAConfig
 from .vqbet.configuration_vqbet import VQBeTConfig
 from .wall_x.configuration_wall_x import WallXConfig
 from .xvla.configuration_xvla import XVLAConfig
+from .xvla_light.configuration_xvla_light import XVLALightConfig
 
 
 def _reconnect_relative_absolute_steps(
@@ -146,6 +147,10 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from .xvla.modeling_xvla import XVLAPolicy
 
         return XVLAPolicy
+    elif name == "xvla_light":
+        from .xvla_light.modeling_xvla_light import XVLALightPolicy
+
+        return XVLALightPolicy
     elif name == "wall_x":
         from .wall_x.modeling_wall_x import WallXPolicy
 
@@ -210,6 +215,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return GrootConfig(**kwargs)
     elif policy_type == "xvla":
         return XVLAConfig(**kwargs)
+    elif policy_type == "xvla_light":
+        return XVLALightConfig(**kwargs)
     elif policy_type == "wall_x":
         return WallXConfig(**kwargs)
     elif policy_type == "eo1":
