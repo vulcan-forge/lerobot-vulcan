@@ -112,10 +112,29 @@ class ImuYawClient:
         import zmq
 
         first = True
+        ever_received = False
+        # RCVTIMEO is 200ms, so 25 empty polls ~= 5s. Warn LOUDLY and repeatedly
+        # when the prior is enabled but nothing is arriving — a silent IMU means
+        # the loop is running blind (the exact room-symmetry death spiral the
+        # prior exists to prevent), and that must not pass unnoticed for a whole
+        # run again. Almost always: the robot host was not restarted with the
+        # yaw publisher, so nothing is bound on this port.
+        empty_polls = 0
+        warn_every = 25
         while not self._stop.is_set():
             try:
                 msg = self._sock.recv()
             except zmq.Again:
+                if not ever_received:
+                    empty_polls += 1
+                    if empty_polls % warn_every == 0:
+                        print(
+                            f"[wander] WARNING: no IMU yaw samples on {self._endpoint} after "
+                            f"~{empty_polls // 5}s — the heading prior is NOT active and the "
+                            "loop is running lidar-only (will get lost in symmetric views). "
+                            "Restart the ROBOT host (sourccey_host.py) on the Pi with the new "
+                            "code; it must print 'IMU yaw publisher bound'."
+                        )
                 continue
             except Exception:  # noqa: BLE001
                 continue
@@ -124,6 +143,7 @@ class ImuYawClient:
                 yaw_deg = float(data["yaw_deg"]) * self._sign
             except Exception:  # noqa: BLE001
                 continue
+            ever_received = True
             with self._lock:
                 self._yaw_deg = yaw_deg
                 self._last_rx_monotonic = time.monotonic()
@@ -2852,6 +2872,13 @@ def main() -> int:
     # permanently hide real space.
     frontier_strike_counts: dict[tuple[int, int], int] = {}
     frontier_blacklist: list[dict[str, float]] = []
+    # Anti-fixation: if the SAME frontier is targeted across many consecutive
+    # planning cycles while the robot stays pose-lost (never localizing a capture
+    # there to strike it the normal way), abandon it and force exploration
+    # elsewhere. Without this the robot re-drives the same phantom corner forever
+    # — the rest of the room stays "already mapped" in its frozen belief.
+    stuck_frontier_face: tuple[float, float] | None = None
+    stuck_frontier_lost_cycles = 0
     # Goal commitment: the frontier face chosen last cycle keeps priority in
     # the planner until consumed or blacklisted, so the target cannot flip
     # sides every capture (turn-thrash).
@@ -5275,6 +5302,22 @@ def main() -> int:
                         float(frontier_plan["face_xy"][0]),
                         float(frontier_plan["face_xy"][1]),
                     )
+                    # Anti-fixation: count consecutive pose-lost cycles that keep
+                    # re-targeting this same face. A healthy cycle (localized)
+                    # resets it; a run of lost cycles on one phantom frontier
+                    # blacklists it so the planner is forced to the rest of the room.
+                    if pose_lost:
+                        if stuck_frontier_face is not None and math.hypot(
+                            committed_frontier_face[0] - stuck_frontier_face[0],
+                            committed_frontier_face[1] - stuck_frontier_face[1],
+                        ) <= 0.4:
+                            stuck_frontier_lost_cycles += 1
+                        else:
+                            stuck_frontier_face = committed_frontier_face
+                            stuck_frontier_lost_cycles = 1
+                    else:
+                        stuck_frontier_face = None
+                        stuck_frontier_lost_cycles = 0
                     print(
                         "[wander] frontier plan "
                         f"(status={plan_status}, "
@@ -5284,6 +5327,21 @@ def main() -> int:
                         f"path={float(frontier_plan['path_length_m']):.2f}m, "
                         f"frontier_cells={int(frontier_plan['frontier_cells'])})"
                     )
+                    if stuck_frontier_lost_cycles >= 3:
+                        print(
+                            "[wander] ABANDONING frontier "
+                            f"({committed_frontier_face[0]:.2f}, {committed_frontier_face[1]:.2f}): "
+                            f"targeted it for {stuck_frontier_lost_cycles} straight cycles while "
+                            "pose-lost without ever localizing there — blacklisting it and "
+                            "exploring the rest of the room instead"
+                        )
+                        _strike_frontier(
+                            committed_frontier_face,
+                            "repeated pose-loss targeting this frontier",
+                            force=True,
+                        )
+                        stuck_frontier_face = None
+                        stuck_frontier_lost_cycles = 0
                 else:
                     committed_frontier_face = None
                     if plan_status == "no_frontier" and "unknown_cells" in frontier_plan:
