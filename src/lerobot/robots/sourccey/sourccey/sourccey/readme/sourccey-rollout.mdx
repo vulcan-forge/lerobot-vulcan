@@ -23,6 +23,20 @@ uv run lerobot-rollout \
   --fps=30
 ```
 
+#Variable
+
+```bash
+uv run lerobot-rollout \
+  --strategy.type=base \
+  --policy.path="outputs/converted/xvla-light-sourccey-shirt-fold-c-009/checkpoints/1000000/pretrained_model" \
+  --robot.type=sourccey_client \
+  --robot.remote_ip=192.168.1.212 \
+  --task="Fold the shirt" \
+  --display_data=true \
+  --duration=3600 \
+  --fps=30
+```
+
 Notes:
 - For XVLA on Sourccey, use `--policy.n_action_steps=8` for sync rollout. The checkpoint default is often `32`, which at `30 FPS` means the robot executes about `1.07s` of open-loop actions before replanning, causing a visible once-per-second snap/jump.
 - `8` steps at `30 FPS` replans about every `0.27s`, which is much smoother on the real robot.

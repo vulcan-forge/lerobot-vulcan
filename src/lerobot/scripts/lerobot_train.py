@@ -291,6 +291,14 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     accelerator.wait_for_everyone()
 
     active_cfg = cfg.trainable_config
+    if getattr(active_cfg, "cache_florence_features", False):
+        if cfg.dataset.image_transforms.enable:
+            raise ValueError(
+                "Florence feature caching requires `dataset.image_transforms.enable=false`; "
+                "a single cached feature cannot preserve random image augmentation."
+            )
+        if cfg.dataset.streaming:
+            raise ValueError("Florence feature caching is not supported for streaming datasets.")
     processor_pretrained_path = active_cfg.pretrained_path
 
     processor_kwargs = {}

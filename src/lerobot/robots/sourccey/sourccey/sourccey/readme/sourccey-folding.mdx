@@ -146,20 +146,48 @@ CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
 # Restart FAST
 
 ```
-CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train_retry.py \
+CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --max-attempts=30 \
   --retry-delay-seconds=20 \
   --dataset.repo_id="Combination/sourccey-shirt-fold-c-009" \
-  --output_dir="outputs/train/xvla_s_sourccey-shirt-fold-c-009-test-fast" \
-  --job_name="xvla_s_sourccey-shirt-fold-c-009-test-fast" \
-  --policy.path="lerobot/xvla-base" \
+  --output_dir="outputs/train/xvla_light_sourccey-shirt-fold-c-009" \
+  --job_name="xvla_light_sourccey-shirt-fold-c-009" \
+  --policy.path="outputs/converted/xvla-light-sourccey-shirt-fold-c-009/checkpoints/1000000/pretrained_model" \
   --policy.dtype=bfloat16 \
   --policy.action_mode=auto \
   --policy.max_action_dim=20 \
   --policy.device=cuda \
   --policy.push_to_hub=false \
   --policy.input_features=null \
-  --policy.scheduler_warmup_steps=5000 \
+  --policy.scheduler_warmup_steps=10000 \
+  --policy.scheduler_decay_steps=1000000 \
+  --policy.scheduler_decay_lr=5e-06 \
+  --steps=1000000 \
+  --save_freq=100000 \
+  --batch_size=8 \
+  --wandb.enable=false \
+  --policy.resize_imgs_with_padding='[160,160]' \
+  --policy.freeze_vision_encoder=true \
+  --policy.freeze_language_encoder=true
+```
+
+# Restart FAST CACHE
+```
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-train-retry \
+  --max-attempts=30 \
+  --retry-delay-seconds=20 \
+  --dataset.repo_id="Combination/sourccey-shirt-fold-c-009" \
+  --dataset.image_transforms.enable=false \
+  --output_dir="outputs/train/xvla_light_sourccey-shirt-fold-c-009-cached" \
+  --job_name="xvla_light_sourccey-shirt-fold-c-009-cached" \
+  --policy.path="outputs/converted/xvla-light-sourccey-shirt-fold-c-009/checkpoints/1000000/pretrained_model" \
+  --policy.dtype=bfloat16 \
+  --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --policy.input_features=null \
+  --policy.scheduler_warmup_steps=10000 \
   --policy.scheduler_decay_steps=1000000 \
   --policy.scheduler_decay_lr=5e-06 \
   --steps=1000000 \
@@ -169,19 +197,10 @@ CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/lerobot_train_retry.py \
   --policy.resize_imgs_with_padding='[160,160]' \
   --policy.freeze_vision_encoder=true \
   --policy.freeze_language_encoder=true \
-  --policy.hidden_size=1024 \
-  --policy.depth=24 \
-  --policy.num_heads=16 \
-  --policy.mlp_ratio=4 \
-  --policy.len_soft_prompts=8 
+  --policy.cache_florence_features=true \
+  --policy.florence_cache_path="outputs/cache/xvla-light-c-009-florence.sqlite"
 
 ```
-
-
-
-  --policy.tokenizer_max_length=16 \
-  --policy.chunk_size=16 \
-  --policy.n_action_steps=16
 
 
 # Resume
@@ -211,4 +230,13 @@ CUDA_VISIBLE_DEVICES=1 uv run lerobot-train \
  --steps=20000 \
  --wandb.enable=false \
  --reward_model.push_to_hub=false
+```
+
+
+# Convert model architecture:
+
+```
+uv run lerobot-convert-xvla-light \
+  --source="outputs/train/xvla_s_sourccey-shirt-fold-c-009/checkpoints/1000000/pretrained_model" \
+  --output-dir="outputs/converted/xvla-light-sourccey-shirt-fold-c-009"
 ```
