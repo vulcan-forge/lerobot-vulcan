@@ -32,6 +32,7 @@ from .utils import make_robot_action, prepare_observation_for_inference
 from .vqbet.configuration_vqbet import VQBeTConfig as VQBeTConfig
 from .wall_x.configuration_wall_x import WallXConfig as WallXConfig
 from .xvla.configuration_xvla import XVLAConfig as XVLAConfig
+from .xvla_extra_light.configuration_xvla_extra_light import XVLAExtraLightConfig as XVLAExtraLightConfig
 from .xvla_light.configuration_xvla_light import XVLALightConfig as XVLALightConfig
 
 # NOTE: Policy modeling classes (e.g., GaussianActorPolicy) are intentionally NOT re-exported here.
@@ -55,6 +56,7 @@ __all__ = [
     "VQBeTConfig",
     "WallXConfig",
     "XVLAConfig",
+    "XVLAExtraLightConfig",
     "XVLALightConfig",
     # Base class
     "PreTrainedPolicy",
