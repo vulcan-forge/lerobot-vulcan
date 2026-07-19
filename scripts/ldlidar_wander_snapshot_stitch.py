@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import socket
@@ -68,7 +69,14 @@ class ImuYawClient:
     consumed downstream, so unbounded gyro drift in the absolute value is fine.
     """
 
-    def __init__(self, endpoint: str, *, sign: float = 1.0, stale_after_s: float = 1.0) -> None:
+    def __init__(self, endpoint: str, *, sign: float = 1.0, stale_after_s: float = 4.0) -> None:
+        # stale_after_s is generous on purpose: the samples arrive on a background
+        # thread, but the main loop holds the GIL through the heavy stitch/solve
+        # compute (rebuilds up to ~1.5s), starving that thread. Crucially, that
+        # compute runs while the robot is STATIONARY, so a yaw sample from just
+        # before it is still valid at the next turn's start (heading unchanged).
+        # A truly dead feed is still caught — no messages at all -> stale ->
+        # clean lidar fallback.
         self._endpoint = str(endpoint)
         self._sign = float(sign)
         self._stale_after_s = float(stale_after_s)
@@ -113,27 +121,30 @@ class ImuYawClient:
 
         first = True
         ever_received = False
-        # RCVTIMEO is 200ms, so 25 empty polls ~= 5s. Warn LOUDLY and repeatedly
-        # when the prior is enabled but nothing is arriving — a silent IMU means
-        # the loop is running blind (the exact room-symmetry death spiral the
-        # prior exists to prevent), and that must not pass unnoticed for a whole
-        # run again. Almost always: the robot host was not restarted with the
-        # yaw publisher, so nothing is bound on this port.
+        # RCVTIMEO is 200ms, so 25 empty polls ~= 5s. Warn when nothing is
+        # arriving, but THROTTLED (at ~5s, ~35s, then every ~5min): the IMU is
+        # advisory-only (lidar owns mapping), so a dead feed degrades the
+        # recovery veto but must not flood the log for the whole session
+        # (field 2026-07-18: the every-5s version drowned an otherwise clean
+        # 12-capture run). Almost always: the robot host is running old code
+        # (no 'IMU yaw publisher bound' at startup) or its IMU failed to
+        # connect ('IMU reporter disabled' warning) — the host console says.
         empty_polls = 0
-        warn_every = 25
+        next_warn_at = 25
         while not self._stop.is_set():
             try:
                 msg = self._sock.recv()
             except zmq.Again:
                 if not ever_received:
                     empty_polls += 1
-                    if empty_polls % warn_every == 0:
+                    if empty_polls >= next_warn_at:
+                        next_warn_at = empty_polls + (150 if next_warn_at == 25 else 1500)
                         print(
                             f"[wander] WARNING: no IMU yaw samples on {self._endpoint} after "
-                            f"~{empty_polls // 5}s — the heading prior is NOT active and the "
-                            "loop is running lidar-only (will get lost in symmetric views). "
-                            "Restart the ROBOT host (sourccey_host.py) on the Pi with the new "
-                            "code; it must print 'IMU yaw publisher bound'."
+                            f"~{empty_polls // 5}s — the advisory heading check is inactive "
+                            "(mapping is lidar-only regardless). Check the Pi robot host "
+                            "console: it must print 'IMU yaw publisher bound' at startup; "
+                            "'IMU reporter disabled' means the IMU wiring/connection failed."
                         )
                 continue
             except Exception:  # noqa: BLE001
@@ -160,14 +171,39 @@ class ImuYawClient:
                 return None
             return float(self._yaw_deg)
 
+    def deg_fresh(self, *, wait_up_to_s: float = 0.4, max_age_s: float = 0.3) -> float | None:
+        """Yaw from a sample received within ``max_age_s``, waiting up to
+        ``wait_up_to_s`` for one. Use this to BRACKET a maneuver: a sample that
+        is merely "not too stale" (``deg()``'s 4s window) but was captured
+        mid-turn under-reports the rotation. Call it at a moment the robot is
+        stationary (just before a turn / after it settles) — the short sleep
+        yields the GIL so the background receiver catches up if heavy main-loop
+        compute starved it. Returns None only if the feed delivers nothing fresh
+        in time (genuinely dead)."""
+        deadline = time.monotonic() + max(0.0, float(wait_up_to_s))
+        while True:
+            with self._lock:
+                yaw = self._yaw_deg
+                rx = self._last_rx_monotonic
+            now = time.monotonic()
+            if yaw is not None and rx is not None and (now - rx) <= float(max_age_s):
+                return float(yaw)
+            if now >= deadline:
+                return None
+            time.sleep(0.02)
+
     def delta_since(self, yaw_before: float | None) -> float | None:
-        """Normalized yaw change since ``yaw_before`` (both sign-corrected), or None."""
+        """RAW yaw change since ``yaw_before`` (both sign-corrected), or None.
+
+        Raw, never normalized: the published yaw integrates continuously and is
+        never wrapped, so the plain difference is the exact rotation — including
+        multi-revolution accumulations that ±180 normalization would corrupt."""
         if yaw_before is None:
             return None
         now = self.deg()
         if now is None:
             return None
-        return _normalize_angle_deg(now - float(yaw_before))
+        return float(now) - float(yaw_before)
 
     def note_tracked_turn(self, tracked_deg: float, imu_delta_deg: float | None) -> None:
         """Cross-check IMU sign against a confidently lidar-tracked turn."""
@@ -209,10 +245,11 @@ class ImuYawClient:
 
 def _imu_anchor(imu: "ImuYawClient | None", theta_deg: float) -> tuple[float, float] | None:
     """Snapshot (gyro_yaw_now, dead_reck_theta) so the heading can later be
-    re-derived from the gyro. Returns None if the IMU yaw is unavailable."""
+    re-derived from the gyro. Set at stationary relocalization-accept moments, so
+    a fresh read is both safe and accurate. Returns None if the IMU is dead."""
     if imu is None:
         return None
-    yaw = imu.deg()
+    yaw = imu.deg_fresh()
     if yaw is None:
         return None
     return (float(yaw), float(theta_deg))
@@ -220,14 +257,114 @@ def _imu_anchor(imu: "ImuYawClient | None", theta_deg: float) -> tuple[float, fl
 
 def _imu_resolved_theta(imu: "ImuYawClient | None", anchor: tuple[float, float] | None) -> float | None:
     """Dead-reckoned heading propagated from ``anchor`` by the gyro delta since
-    it was set. None if the IMU is unavailable/stale. Not wrapped: pose theta in
-    this module runs unbounded, and every consumer normalizes the difference."""
+    it was set. Uses a FRESH read (the recovery tiebreaker fires right after a
+    possibly-blind turn, when a stale sample would still show the pre-turn
+    heading). None if the IMU is dead.
+
+    The delta is RAW, never ±180-normalized: the published yaw is continuous, and
+    the cumulative rotation across a long lost episode routinely exceeds 180deg —
+    wrapping it silently corrupts the recovered heading. Pose theta in this
+    module runs unbounded too; consumers normalize final comparisons."""
     if imu is None or anchor is None:
         return None
-    delta = imu.delta_since(anchor[0])
-    if delta is None:
+    now = imu.deg_fresh()
+    if now is None:
         return None
-    return float(anchor[1]) + float(delta)
+    return float(anchor[1]) + (float(now) - float(anchor[0]))
+
+
+class SelfMaskedLidarFeed(DirectLidarFeed):
+    """LiDAR feed that filters the robot's OWN returns (arms/grippers/shell in
+    the beam) out of every frame, at the single choke point all consumers
+    share (``wait_for_frame_after`` routes through ``latest``).
+
+    Field 2026-07-18 (user: "the arms are a bit in the way of the lidar"): the
+    arms put ~25 permanent points in the stop box (eating its trigger
+    headroom), cast shadows that halved some captures, and smeared noise blobs
+    into the stitched map. The mask is calibrated ONCE at startup while the
+    robot is stationary: angular bins that persistently return closer than
+    ``max_self_range_m`` are self-hits, and future points in those bins at or
+    below the observed distance (+margin) are dropped. Anything seen BEYOND
+    the arm in the same bearing still passes through.
+    """
+
+    MASK_BIN_WIDTH_DEG = 2.0
+
+    def __init__(self, host: str, port: int) -> None:
+        super().__init__(host, port)
+        self._mask_cutoffs: np.ndarray | None = None  # per-bin drop distance; NaN=open
+        self._mask_cache_id: int | None = None
+        self._mask_cache_frame = None
+
+    def calibrate_self_mask(
+        self,
+        sample_frames,
+        *,
+        max_self_range_m: float = 0.50,
+        margin_m: float = 0.20,
+    ) -> tuple[int, float]:
+        """Build the mask from stationary frames. Returns (masked_bins, masked_deg)."""
+        n_bins = int(round(360.0 / self.MASK_BIN_WIDTH_DEG))
+        per_bin: list[list[float]] = [[] for _ in range(n_bins)]
+        for frame in sample_frames:
+            for angle_deg, distance_m, _conf in frame.points:
+                d = float(distance_m)
+                if 0.0 < d < float(max_self_range_m):
+                    b = int((float(angle_deg) % 360.0) / self.MASK_BIN_WIDTH_DEG) % n_bins
+                    per_bin[b].append(d)
+        # Persistent = seen in at least half the sample frames; transient specks
+        # must not blind a bearing.
+        min_hits = max(2, len(sample_frames) // 2)
+        cutoffs = np.full(n_bins, np.nan, dtype=np.float64)
+        for b, vals in enumerate(per_bin):
+            if len(vals) >= min_hits:
+                cutoffs[b] = min(0.60, max(vals) + float(margin_m))
+        # Expand THREE bins (6deg) each side: the mask is calibrated stationary,
+        # but the passive arms SWING while driving (field 2026-07-18 run 11:
+        # calibrated mask left 6-14 jitter points leaking back per frame during
+        # motion, and with the baseline at 0 that blocked EVERY drive burst at
+        # 0.05m — the creep-and-turn doom loop). Stationary bearings +-6deg and
+        # +0.20m of range slack cover the swing envelope.
+        expanded = cutoffs.copy()
+        for b in range(n_bins):
+            if np.isnan(cutoffs[b]):
+                neighbors = [
+                    cutoffs[(b + off) % n_bins]
+                    for off in (-3, -2, -1, 1, 2, 3)
+                ]
+                neighbors = [v for v in neighbors if not np.isnan(v)]
+                if neighbors:
+                    expanded[b] = max(neighbors)
+        self._mask_cutoffs = expanded
+        masked_bins = int(np.count_nonzero(~np.isnan(expanded)))
+        return masked_bins, masked_bins * self.MASK_BIN_WIDTH_DEG
+
+    def _apply_mask(self, frame_id: int, frame):
+        if frame is None or self._mask_cutoffs is None:
+            return frame
+        if self._mask_cache_id == frame_id:
+            return self._mask_cache_frame
+        n_bins = len(self._mask_cutoffs)
+        kept = []
+        for point in frame.points:
+            cutoff = self._mask_cutoffs[
+                int((float(point[0]) % 360.0) / self.MASK_BIN_WIDTH_DEG) % n_bins
+            ]
+            if not np.isnan(cutoff) and float(point[1]) <= cutoff:
+                continue
+            kept.append(point)
+        masked = (
+            frame
+            if len(kept) == len(frame.points)
+            else dataclasses.replace(frame, points=kept)
+        )
+        self._mask_cache_id = frame_id
+        self._mask_cache_frame = masked
+        return masked
+
+    def latest(self):
+        frame_id, frame = super().latest()
+        return frame_id, self._apply_mask(frame_id, frame)
 
 
 @dataclass(slots=True)
@@ -243,9 +380,28 @@ class StopZoneConfig:
     # this baseline — otherwise a self-seeing lidar reports "blocked" at every
     # heading and the robot never drives.
     baseline_points: int = 0
+    # SQUEEZE/EXIT-RUN mode: passing a doorway inherently clips the door-frame
+    # posts into the box's lateral EDGES — field 2026-07-18: exit probes were
+    # vetoed at baseline+6..20 points that were all frame edges the body would
+    # clear, while a REAL frontal wall reads +30..60 in the box CENTER. Instead
+    # of raising the count threshold (which erodes real collision response),
+    # squeeze mode NARROWS the box laterally to just past the body's own
+    # half-width: frame posts the robot physically clears leave the count
+    # entirely, anything actually in the body's path still triggers at full
+    # sensitivity. The narrow band needs its own self-hit baseline, measured at
+    # startup alongside the full-box one.
+    squeeze_active: bool = False
+    squeeze_half_width_m: float = 0.24
+    squeeze_baseline_points: int = 0
+
+    def effective_half_width_m(self) -> float:
+        return float(
+            self.squeeze_half_width_m if self.squeeze_active else self.tripwire_half_width_m
+        )
 
     def blocked_trigger_count(self) -> int:
-        return int(self.baseline_points) + int(self.min_points_to_trigger)
+        base = self.squeeze_baseline_points if self.squeeze_active else self.baseline_points
+        return int(base) + int(self.min_points_to_trigger)
 
 
 @dataclass(slots=True)
@@ -386,7 +542,7 @@ def _point_in_stop_zone(angle_deg: float, distance_m: float, cfg: StopZoneConfig
     return (
         forward_m >= near_edge_m
         and forward_m <= far_edge_m
-        and abs(lateral_m) <= float(cfg.tripwire_half_width_m)
+        and abs(lateral_m) <= cfg.effective_half_width_m()
     )
 
 
@@ -2624,9 +2780,12 @@ def main() -> int:
         tripwire_half_width_m=float(args.tripwire_half_width_m),
         tripwire_thickness_m=float(args.tripwire_thickness_m),
         min_points_to_trigger=max(int(args.min_points), 1),
+        # Narrow squeeze band: 4cm inside the full box, floored just past the
+        # body's half-width so anything it counts is a genuine collision course.
+        squeeze_half_width_m=max(0.24, float(args.tripwire_half_width_m) - 0.04),
     )
 
-    feed = DirectLidarFeed(args.lidar_host, int(args.lidar_port))
+    feed = SelfMaskedLidarFeed(args.lidar_host, int(args.lidar_port))
     feed.start()
 
     robot = SourcceyClient(SourcceyClientConfig(id=args.robot_id, remote_ip=args.remote_ip))
@@ -3036,6 +3195,25 @@ def main() -> int:
     survey_targets_used = 0
     active_survey_xy: tuple[float, float] | None = None
     unreachable_targets_world: list[tuple[float, float]] = []
+    # EXIT RUN: once the room interior is mapped, tiny frontier slivers must not
+    # hold the robot hostage (field 2026-07-18: a 9-cell phantom beyond the left
+    # wall was re-targeted for the entire back half of a run — endless 85-150deg
+    # align spins at a room it had already finished, while the real doorway sat
+    # visible in the live scan). After enough consecutive sliver/no-frontier
+    # plans the room is declared effectively mapped and the planner is forced
+    # onto the live-opening probe path — commit to the deepest opening the lidar
+    # actually sees and DRIVE THROUGH IT. Crossing into the next room makes real
+    # frontiers appear, which clears the mode and resumes normal mapping there.
+    sliver_frontier_cycles = 0
+    exit_mode = False
+    exit_scan_turns = 0
+    # Vantage positions snapshotted when the exit run latches: completion is
+    # POSITIONAL (robot must physically leave this coverage), never inferred
+    # from frontier cells alone — cells open by merely seeing through the door.
+    exit_latch_poses: list[tuple[float, float]] = []
+    # True while the adopted plan is a squeeze-width traversal; switches the
+    # stop box to its narrow band (StopZoneConfig.squeeze_active, see there).
+    squeeze_traversal_active = False
 
     def _near_unreachable_target(x_m: float, y_m: float, radius_m: float = 0.60) -> bool:
         return any(
@@ -4210,11 +4388,69 @@ def main() -> int:
             f"(frame_id={last_frame_id}, host_rev={latest_frame.revolution_index}, viewer={viewer_url or 'local'})"
         )
 
+        # SELF-MASK calibration: while still stationary, learn which bearings
+        # the lidar sees the robot's OWN arms/shell in and drop those returns
+        # from every future frame (user 2026-07-18: "the arms are a bit in the
+        # way of the lidar"). Must run BEFORE the stop-box baseline so the
+        # baseline measures a clean view and keeps its full trigger headroom.
+        mask_sample_frames = []
+        mask_frame_id = int(last_frame_id)
+        for _mask_index in range(20):
+            mask_frame_id_new, mask_frame = feed.wait_for_frame_after(
+                after_frame_id=mask_frame_id,
+                timeout_s=1.0,
+                min_frame_advances=1,
+            )
+            if mask_frame is None:
+                break
+            mask_frame_id = int(mask_frame_id_new)
+            if len(mask_frame.points) < 150:
+                continue
+            mask_sample_frames.append(mask_frame)
+            if len(mask_sample_frames) >= 8:
+                break
+        if len(mask_sample_frames) >= 4:
+            masked_bins, masked_deg = feed.calibrate_self_mask(mask_sample_frames)
+            last_frame_id = mask_frame_id
+            if masked_bins > 0:
+                print(
+                    f"[wander] lidar self-mask ARMED: {masked_deg:.0f}deg of bearings show "
+                    "persistent close returns (robot arms/shell) — those returns are now "
+                    "filtered from mapping, stop box, and frontier detection"
+                )
+                # The mask zeroes the stop-box baseline, but arm JITTER during
+                # motion still leaks a handful of points past it (run 11: 6-14
+                # per frame — with trigger at baseline+6=6 that blocked every
+                # single drive burst at 0.05m). Floor the trigger so residual
+                # self-jitter cannot block; a thin real obstacle (~12+ pts in
+                # the box) and any wall (30-60) still stop the robot.
+                if zone_cfg.min_points_to_trigger < 12:
+                    zone_cfg.min_points_to_trigger = 12
+                    print(
+                        "[wander] stop-box trigger floored at 12 points while the self-mask "
+                        "is armed (residual arm jitter must not veto drives)"
+                    )
+            else:
+                print("[wander] lidar self-mask: no persistent self-returns found (clean view)")
+            if masked_deg > 150.0:
+                print(
+                    f"[wander] WARNING: self-mask covers {masked_deg:.0f}deg — if the robot is "
+                    "parked close to a wall, that wall just got masked and collision "
+                    "detection is blinded on those bearings. Reposition with clear space "
+                    "and restart if this is not the arms."
+                )
+        else:
+            print(
+                "[wander] lidar self-mask skipped (not enough healthy stationary revolutions); "
+                "arm returns will pollute the stop box and map"
+            )
+
         # Measure how many points the stationary lidar ALWAYS reports inside the
         # stop box (robot shell / mounts). Blocking then triggers only on points
         # above this baseline; otherwise the robot believes it is permanently
         # blocked and spends the whole run rotating in place.
         baseline_samples: list[int] = []
+        squeeze_baseline_samples: list[int] = []
         baseline_frame_id = int(last_frame_id)
         for _sample_index in range(24):
             sample_frame_id, sample_frame = feed.wait_for_frame_after(
@@ -4236,6 +4472,10 @@ def main() -> int:
                 )
                 continue
             baseline_samples.append(_blocked_points_for_frame(sample_frame, zone_cfg))
+            # Same frame, narrow squeeze band: its own self-hit baseline.
+            zone_cfg.squeeze_active = True
+            squeeze_baseline_samples.append(_blocked_points_for_frame(sample_frame, zone_cfg))
+            zone_cfg.squeeze_active = False
             if len(baseline_samples) >= 10:
                 break
         if len(baseline_samples) < 5:
@@ -4246,11 +4486,15 @@ def main() -> int:
             )
         if baseline_samples:
             zone_cfg.baseline_points = int(np.median(np.asarray(baseline_samples, dtype=np.int32)))
+            zone_cfg.squeeze_baseline_points = int(
+                np.median(np.asarray(squeeze_baseline_samples, dtype=np.int32))
+            )
             last_frame_id = baseline_frame_id
         print(
             "[wander] stop box self-hit baseline "
             f"(samples={baseline_samples}, baseline={zone_cfg.baseline_points}, "
-            f"trigger_at={zone_cfg.blocked_trigger_count()} points)"
+            f"trigger_at={zone_cfg.blocked_trigger_count()} points; squeeze band "
+            f"{zone_cfg.squeeze_half_width_m:.2f}m baseline={zone_cfg.squeeze_baseline_points})"
         )
         if zone_cfg.baseline_points >= 60:
             print(
@@ -4380,6 +4624,19 @@ def main() -> int:
                 time.sleep(2.0)
                 continue
             current_solved_pose = stitch_state["poses"][-1]
+            # The stitched pose LAGS any motion whose capture was skipped as
+            # redundant or discarded — the robot has physically moved but the
+            # map anchor hasn't. Judge the live scan against the pending-motion-
+            # advanced expectation, or a correctly-executed maneuver reads as
+            # pose error (field 2026-07-18: a clean -36deg turn before a
+            # skipped-as-redundant capture scored theta_error=36deg>24 and
+            # latched pose LOST on a CORRECT 12.6-score match — one cycle after
+            # the robot had finally driven out of the room).
+            live_expected_pose = (
+                _advance_pose(current_solved_pose, pending_motion_hint)
+                if pending_motion_hint is not None
+                else current_solved_pose
+            )
             live_points_xy = _scan_to_local_points(
                 points=live_frame.points,
                 forward_angle_deg=float(args.forward_angle_deg),
@@ -4392,7 +4649,7 @@ def main() -> int:
             live_pose_result = _estimate_pose_against_stitched_map(
                 points_xy=live_points_xy,
                 transformed_sets=stitch_state["transformed_sets"],
-                initial_pose=current_solved_pose,
+                initial_pose=live_expected_pose,
                 resolution_m=float(args.stitch_resolution_m),
                 search_xy_m=max(float(args.drive_search_xy_m), 0.55),
                 theta_window_deg=max(float(args.drive_theta_window_deg), 36.0),
@@ -4407,7 +4664,7 @@ def main() -> int:
                     label=f"live_frame_{live_frame_id}",
                     candidate_pose=candidate_live_pose,
                     score_meta=live_pose_meta,
-                    expected_pose=current_solved_pose,
+                    expected_pose=live_expected_pose,
                     motion_hint=None,
                     max_translation_error_m=max(0.45, float(args.drive_search_xy_m) + 0.20),
                     max_theta_error_deg=max(24.0, float(args.drive_theta_window_deg) * 0.85),
@@ -4444,16 +4701,31 @@ def main() -> int:
                         f"(frame_id={live_frame_id}, using last stitched pose=({float(current_live_pose.x):.3f}, "
                         f"{float(current_live_pose.y):.3f}, {float(current_live_pose.theta_deg):.1f}deg))"
                     )
+                    # Re-derive the dead-reckoned heading from the gyro BEFORE
+                    # searching. The gyro integrated through every blind align/
+                    # recovery turn since the anchor was set, so this stays
+                    # accurate where the lidar-only anchor had gone stale.
+                    imu_theta = _imu_resolved_theta(imu_yaw, imu_dead_reck_anchor)
+                    if imu_theta is not None:
+                        dead_reck_theta_deg = imu_theta
+                        dead_reck_slack_deg = IMU_DEAD_RECK_SLACK_DEG
                     # Recovery search: when lost, the pose EXPECTATION is
                     # meaningless, so the normal accept gates (which compare
                     # against it — this failure rejected the correct
                     # whole-map candidate for a 58deg "theta error") cannot
                     # ever re-anchor a badly rotated robot. Search wide in
                     # theta and judge on ABSOLUTE match quality alone.
+                    #
+                    # LIDAR-ONLY mapping: an earlier "IMU-guided" variant searched
+                    # centered on the gyro heading; it manufactured marginal
+                    # just-past-the-gate candidates (12.2 from a wedged degenerate
+                    # viewpoint), un-froze the map, and the next append ghosted
+                    # the walls. The gyro's only role here is the VETO below —
+                    # rejecting never writes, so it can't corrupt the map.
                     recovery_result = _estimate_pose_against_stitched_map(
                         points_xy=live_points_xy,
                         transformed_sets=stitch_state["transformed_sets"],
-                        initial_pose=current_solved_pose,
+                        initial_pose=live_expected_pose,
                         resolution_m=float(args.stitch_resolution_m),
                         search_xy_m=1.10,
                         theta_window_deg=180.0,
@@ -4464,16 +4736,6 @@ def main() -> int:
                     if recovery_result is not None:
                         recovery_pose, recovery_meta = recovery_result
                         recovery_score = float(recovery_meta.get("score") or -1e9)
-                        # Re-derive the dead-reckoned heading from the gyro before
-                        # judging the recovery candidate. The gyro integrated
-                        # through every blind align/recovery turn since the anchor
-                        # was set, so this stays accurate where the lidar-only
-                        # anchor had gone stale — exactly what lets the correct
-                        # pose pass and a room-symmetric wrong mode fail.
-                        imu_theta = _imu_resolved_theta(imu_yaw, imu_dead_reck_anchor)
-                        if imu_theta is not None:
-                            dead_reck_theta_deg = imu_theta
-                            dead_reck_slack_deg = IMU_DEAD_RECK_SLACK_DEG
                         dead_reck_err_deg: float | None = None
                         if dead_reck_theta_deg is not None:
                             dead_reck_err_deg = abs(
@@ -4537,6 +4799,43 @@ def main() -> int:
                         )
                         if retreat_hint is not None:
                             pending_motion_hint = retreat_hint
+                            continue
+                        # Rear blocked (map+live agree): translate toward the
+                        # deepest LIVE opening instead — robot-relative, so
+                        # immune to the pose error we necessarily carry while
+                        # lost, and TRANSLATION (not rotation) is what
+                        # un-degenerates a view (same physics as the boxed-in
+                        # escape). Field 2026-07-18 run 12: lost at the new
+                        # room's sparse edge with 0.00m behind, the
+                        # rotation-only fallback thrashed lock-lost turns
+                        # until Ctrl+C. Only when the opening is roughly
+                        # ahead — a big blind turn while lost IS the thrash
+                        # this replaces.
+                        retreat_choice = _select_frontier_choice(
+                            live_frame,
+                            forward_angle_deg=float(args.forward_angle_deg),
+                            valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+                            max_distance_m=float(args.max_distance_m),
+                            min_range_m=float(args.min_range_m),
+                            min_confidence=int(args.min_confidence),
+                            frontier_min_distance_m=1.0,
+                            frontier_bin_deg=float(args.frontier_bin_deg),
+                            min_gap_width_m=2.0 * (float(args.robot_radius_m) + 0.05),
+                            corridor_veto=None,
+                        )
+                        if (
+                            retreat_choice is not None
+                            and abs(float(retreat_choice.delta_deg)) <= 50.0
+                            and float(retreat_choice.mean_distance_m) >= 1.0
+                        ):
+                            print(
+                                "[wander] rear blocked while lost — advancing toward the live "
+                                f"opening (delta={retreat_choice.delta_deg:.1f}deg, "
+                                f"range={retreat_choice.mean_distance_m:.2f}m) to change the view"
+                            )
+                            pending_motion_hint = _live_frontier_probe_hint(
+                                current_live_pose, retreat_choice
+                            )
                             continue
                     if (
                         pose_lost
@@ -4789,6 +5088,60 @@ def main() -> int:
                 min_gap_width_m=2.0 * (float(args.robot_radius_m) + 0.05),
                 corridor_veto=_elevated_corridor_blocked,
             )
+            # EXIT-RUN HARD VETO: an already-mapped open room is ALSO a "deep
+            # opening" — from the doorway, looking back across the room clears
+            # every depth/width bar, so the per-cycle deepest-opening pick
+            # ping-ponged between the exit and the room behind it and the robot
+            # kept driving AWAY from the door it had just reached (field
+            # 2026-07-18 run 15; user: "HARDSTOP IT FROM EVER GOING BACK").
+            # While exit_mode is latched, an opening is acceptable ONLY if its
+            # far end lands OUTSIDE the pre-exit coverage — the same 0.80m
+            # test as exit completion. Openings leading back into coverage are
+            # dead, unconditionally.
+            if exit_mode and exit_latch_poses and live_frontier_choice is not None:
+                _vetoed_deltas: list[float] = []
+                for _exit_veto_round in range(24):
+                    _end_rad = math.radians(
+                        float(current_live_pose.theta_deg)
+                        + float(live_frontier_choice.delta_deg)
+                    )
+                    _end_reach = 0.85 * float(live_frontier_choice.mean_distance_m)
+                    _end_x = float(current_live_pose.x) + _end_reach * math.cos(_end_rad)
+                    _end_y = float(current_live_pose.y) + _end_reach * math.sin(_end_rad)
+                    _end_clear = min(
+                        math.hypot(_end_x - lx, _end_y - ly) for lx, ly in exit_latch_poses
+                    )
+                    if _end_clear >= 0.80:
+                        break
+                    print(
+                        "[wander] EXIT RUN: opening at delta="
+                        f"{live_frontier_choice.delta_deg:.1f}deg leads BACK into mapped "
+                        f"coverage (far end {_end_clear:.2f}m from a pre-exit vantage) — "
+                        "vetoed; going back is forbidden"
+                    )
+                    _vetoed_deltas.append(float(live_frontier_choice.delta_deg))
+                    live_frontier_choice = _select_frontier_choice(
+                        live_frame,
+                        forward_angle_deg=float(args.forward_angle_deg),
+                        valid_angle_half_width_deg=float(args.valid_angle_half_width_deg),
+                        max_distance_m=float(args.max_distance_m),
+                        min_range_m=float(args.min_range_m),
+                        min_confidence=int(args.min_confidence),
+                        frontier_min_distance_m=float(args.frontier_min_distance_m),
+                        frontier_bin_deg=float(args.frontier_bin_deg),
+                        min_gap_width_m=2.0 * (float(args.robot_radius_m) + 0.05),
+                        corridor_veto=(
+                            lambda seg_delta, seg_mean, _blocked=_elevated_corridor_blocked, _bad=tuple(_vetoed_deltas): (
+                                _blocked(seg_delta, seg_mean)
+                                or any(
+                                    abs(_normalize_angle_deg(seg_delta - b)) < 10.0
+                                    for b in _bad
+                                )
+                            )
+                        ),
+                    )
+                    if live_frontier_choice is None:
+                        break
             if live_frontier_choice is not None:
                 print(
                     "[wander] live frontier candidate "
@@ -5159,6 +5512,7 @@ def main() -> int:
                                 f"(path={float(squeeze_plan.get('path_length_m', 0.0) or 0.0):.2f}m); "
                                 "the measured-gap gate owns the traversal"
                             )
+                            squeeze_plan["squeeze"] = True
                             frontier_plan = squeeze_plan
                 if (
                     str(frontier_plan.get("status")) == "no_frontier"
@@ -5204,6 +5558,7 @@ def main() -> int:
                                 f"path={float(tight_plan.get('path_length_m', 0.0) or 0.0):.2f}m); "
                                 "proceeding — the measured-gap gate owns the traversal"
                             )
+                            tight_plan["squeeze"] = True
                             frontier_plan = tight_plan
                         elif elevated_occupied_world:
                             # VERIFICATION replan: even squeeze margins can't
@@ -5293,6 +5648,97 @@ def main() -> int:
                     active_survey_xy = None
                     frontier_plan = {"status": "no_frontier"}
                 plan_status = str(frontier_plan.get("status"))
+                squeeze_traversal_active = bool(frontier_plan.get("squeeze", False))
+                # ---- EXIT RUN ---------------------------------------------
+                # Sliver fatigue: count consecutive plans that offer no REAL new
+                # area (tiny cell counts are grid noise/phantoms, not rooms).
+                plan_cells = int(frontier_plan.get("frontier_cells", 0) or 0)
+                if not bootstrap_scan_active and len(stitch_state["poses"]) >= 5:
+                    if plan_status == "no_frontier" or (
+                        plan_status in ("ok", "observe", "survey") and plan_cells <= 10
+                    ):
+                        sliver_frontier_cycles += 1
+                    else:
+                        sliver_frontier_cycles = 0
+                        if exit_mode and plan_cells >= 30:
+                            # Completion is POSITIONAL, not visual. New frontier
+                            # cells appear the moment the robot merely LOOKS
+                            # through the doorway (field 2026-07-18 run 13: 33
+                            # cells opened, "complete" declared, robot still
+                            # standing INSIDE the room — the exit was never
+                            # traversed and the run failed its mission). The
+                            # robot is through only when its own position has
+                            # left the coverage it had when the exit run
+                            # latched.
+                            exit_clearance_m = (
+                                min(
+                                    math.hypot(
+                                        float(current_live_pose.x) - lx,
+                                        float(current_live_pose.y) - ly,
+                                    )
+                                    for lx, ly in exit_latch_poses
+                                )
+                                if exit_latch_poses
+                                else float("inf")
+                            )
+                            if exit_clearance_m >= 0.80:
+                                exit_mode = False
+                                print(
+                                    "[wander] EXIT RUN complete: robot is "
+                                    f"{exit_clearance_m:.2f}m beyond its pre-exit coverage "
+                                    f"with {plan_cells} new frontier cells — THROUGH the "
+                                    "exit; resuming normal mapping in the new space"
+                                )
+                            else:
+                                print(
+                                    "[wander] EXIT RUN: new area visible through the opening "
+                                    f"({plan_cells} cells) but the robot is still INSIDE its "
+                                    f"mapped coverage ({exit_clearance_m:.2f}m from a pre-exit "
+                                    "vantage < 0.80m) — NOT through yet; keep driving"
+                                )
+                if not exit_mode and sliver_frontier_cycles >= 4:
+                    exit_mode = True
+                    exit_latch_poses = [
+                        (float(p.x), float(p.y)) for p in stitch_state["poses"]
+                    ]
+                    print(
+                        "[wander] ROOM MAPPED (4 straight cycles with only sliver/no "
+                        "frontiers) — EXIT RUN: interior goals are DONE; committing to the "
+                        "deepest opening the live lidar sees and driving THROUGH it "
+                        f"(completion requires leaving all {len(exit_latch_poses)} current "
+                        "vantages by 0.80m)"
+                    )
+                if exit_mode and live_frontier_choice is not None:
+                    # An opening is in view again: the search-rotation budget refills.
+                    exit_scan_turns = 0
+                if (
+                    exit_mode
+                    and live_frontier_choice is not None
+                    and plan_status in ("ok", "observe", "survey")
+                    and plan_cells <= 10
+                ):
+                    # Interior sliver goals are dead: force the live-opening
+                    # probe path (commit to one world bearing, align at most
+                    # twice, then guarded forward probes). The stop box still
+                    # owns safety; crossing into the next room surfaces real
+                    # frontiers, which clears the mode above.
+                    print(
+                        f"[wander] EXIT RUN: ignoring the {plan_cells}-cell interior "
+                        "frontier; heading for the live exit opening "
+                        f"(delta={float(live_frontier_choice.delta_deg):.1f}deg, "
+                        f"distance={float(live_frontier_choice.mean_distance_m):.2f}m, "
+                        f"width={float(live_frontier_choice.width_deg):.1f}deg)"
+                    )
+                    committed_frontier_face = None
+                    frontier_plan = {"status": "no_frontier"}
+                    plan_status = "no_frontier"
+                # -----------------------------------------------------------
+                # Squeeze/exit traversals get the NARROW stop-box band for the
+                # drives executed this cycle (doorway frame posts the body
+                # clears must not veto the pass); everything else runs the full
+                # box. The value persists on zone_cfg into the next cycle's
+                # early blocked check, which is correct for multi-cycle passes.
+                zone_cfg.squeeze_active = bool(exit_mode or squeeze_traversal_active)
                 if plan_status != "no_frontier":
                     # A real plan supersedes any half-finished probe episode.
                     probe_commit_world_deg = None
@@ -5667,6 +6113,21 @@ def main() -> int:
                                 "declare completion; continuing recovery"
                             )
                             no_frontier_cycles = 0
+                        elif motion_hint is None and no_frontier_cycles >= 2 and exit_mode and exit_scan_turns < 7:
+                            # EXIT RUN with no opening visible from this heading:
+                            # do NOT declare completion — rotate and look for the
+                            # doorway. Bounded at 7 turns (~a full revolution);
+                            # only then may the normal completion path conclude.
+                            exit_scan_turns += 1
+                            no_frontier_cycles = 0
+                            chosen_direction_sign = float(direction_sign)
+                            chosen_turn_deg = 55.0
+                            should_turn = True
+                            turn_reason = "exit_scan"
+                            print(
+                                "[wander] EXIT RUN: no opening visible from this heading; "
+                                f"rotating to search for the doorway ({exit_scan_turns}/7)"
+                            )
                         elif motion_hint is None and no_frontier_cycles >= 2:
                             unreachable_now = int(frontier_plan.get("unreachable_frontier_cells", 0) or 0)
                             if unreachable_now >= 24:
@@ -6372,7 +6833,6 @@ def main() -> int:
                     f"steer_theta_vel={steer_theta_vel:.3f})"
                 )
                 drive_start_pose = current_live_pose
-                imu_yaw_before_drive = imu_yaw.deg() if imu_yaw is not None else None
                 drive_tracked_pose, drive_track_meta = _drive_with_tracking(
                     robot=robot,
                     feed=feed,
@@ -6422,16 +6882,12 @@ def main() -> int:
                 drive_hint_dtheta_deg = _normalize_angle_deg(
                     float(drive_tracked_pose.theta_deg) - float(drive_start_pose.theta_deg)
                 )
+                # LIDAR-ONLY: the tracked heading delta is the hint even after
+                # lock loss (the wider search window below owns that case). The
+                # gyro never writes into motion hints — advisory only.
                 drive_lock_lost = bool(drive_track_meta["lock_lost"]) or int(
                     drive_track_meta["missed_updates"]
                 ) > 0
-                # When the drive lost lidar lock, its heading delta is unreliable;
-                # the gyro measured the (near-zero) actual yaw drift instead.
-                imu_drive_dtheta_deg: float | None = None
-                if imu_yaw is not None and imu_yaw.sign_trustworthy():
-                    imu_drive_dtheta_deg = imu_yaw.delta_since(imu_yaw_before_drive)
-                if drive_lock_lost and imu_drive_dtheta_deg is not None:
-                    drive_hint_dtheta_deg = float(imu_drive_dtheta_deg)
                 if drive_lock_lost:
                     drive_search_xy_m = 0.80
                     drive_theta_window_deg = 30.0
@@ -6451,14 +6907,9 @@ def main() -> int:
                 force_drive_after_turn = False
                 if dead_reck_theta_deg is not None:
                     dead_reck_theta_deg += float(drive_hint_dtheta_deg)
-                    if imu_drive_dtheta_deg is not None:
-                        # Gyro is tracking heading through the drive: keep the
-                        # anchor slack tight so the recovery tiebreaker stays sharp.
-                        dead_reck_slack_deg = max(dead_reck_slack_deg, IMU_DEAD_RECK_SLACK_DEG)
-                    else:
-                        dead_reck_slack_deg += 5.0
-                        if dead_reck_slack_deg > 100.0:
-                            dead_reck_theta_deg = None
+                    dead_reck_slack_deg += 5.0
+                    if dead_reck_slack_deg > 100.0:
+                        dead_reck_theta_deg = None
                 drive_checkpoints_since_scan += 1
                 if (
                     bool(drive_track_meta.get("stopped_by_hazard"))
@@ -6627,7 +7078,7 @@ def main() -> int:
                     if (pending_motion_hint is not None and not live_pose_accepted)
                     else current_live_pose
                 )
-                imu_yaw_before_turn = imu_yaw.deg() if imu_yaw is not None else None
+                imu_yaw_before_turn = imu_yaw.deg_fresh() if imu_yaw is not None else None
                 turn_meta = _turn_with_arc_tracking(
                     robot=robot,
                     feed=feed,
@@ -6652,52 +7103,50 @@ def main() -> int:
                 )
                 tracked_turn_deg = float(turn_meta["turned_deg"])
                 turn_lock_lost = int(turn_meta["completed"]) != 1
-                # Gyro-measured rotation across the whole turn. Unlike the lidar
-                # arc tracker, the IMU still measures the rotation when scan-match
-                # lock is lost mid-turn (the exact case that used to strand the
-                # dead-reckoned heading and let a room-symmetric wrong mode win).
+                # Gyro-measured rotation across the whole turn, bracketed by FRESH
+                # samples (a mid-turn stale sample under-reports — it once read
+                # -8deg for a real -55deg turn). Unlike the lidar arc tracker, the
+                # IMU still measures the rotation when scan-match lock is lost
+                # mid-turn (the exact case that used to strand the dead-reckoned
+                # heading and let a room-symmetric wrong mode win).
                 imu_turn_deg: float | None = None
-                if imu_yaw is not None:
-                    imu_turn_deg = imu_yaw.delta_since(imu_yaw_before_turn)
+                if imu_yaw is not None and imu_yaw_before_turn is not None:
+                    imu_after = imu_yaw.deg_fresh()
+                    if imu_after is not None:
+                        # Raw difference: the published yaw is continuous, so this
+                        # is exact even for rotations beyond +-180deg.
+                        imu_turn_deg = float(imu_after) - float(imu_yaw_before_turn)
                     if not turn_lock_lost:
                         imu_yaw.note_tracked_turn(tracked_turn_deg, imu_turn_deg)
-                # Prefer the IMU measure when the lidar track is unreliable: lock
-                # was lost, or it under-counts the commanded turn by a wide margin
-                # (a symptom of the same tracking failure). Keep the lidar value
-                # when it tracked cleanly and the IMU roughly agrees.
+                # LIDAR-ONLY mapping (field 2026-07-18, run 4): the IMU is
+                # ADVISORY, never an author. An earlier version substituted the
+                # gyro delta into the motion hint on lock-lost turns; those
+                # values got composed into append chains and (via marginal
+                # guided restores) ghosted the map. The lidar's tracked value —
+                # even when it under-counts after lock loss — is what the append
+                # gates were tuned around; the gyro is only shown in the log and
+                # keeps the recovery tiebreaker's general-idea heading fresh.
                 measured_signed_turn_deg = tracked_turn_deg
-                turn_measure_source = "lidar"
-                if imu_turn_deg is not None and imu_yaw is not None and imu_yaw.sign_trustworthy():
-                    imu_lidar_gap_deg = abs(_normalize_angle_deg(imu_turn_deg - tracked_turn_deg))
-                    if turn_lock_lost or imu_lidar_gap_deg > 20.0:
-                        measured_signed_turn_deg = imu_turn_deg
-                        turn_measure_source = "imu"
                 print(
                     "[wander] turn complete "
                     f"(tracked={tracked_turn_deg:+.1f}deg, "
                     f"imu={'n/a' if imu_turn_deg is None else f'{imu_turn_deg:+.1f}deg'}, "
-                    f"used={measured_signed_turn_deg:+.1f}deg({turn_measure_source}), "
                     f"final_theta={turn_meta['final_theta_deg']:.1f}deg, "
                     f"missed_updates={int(turn_meta['missed_updates'])}, completed={int(turn_meta['completed'])})"
                 )
                 if dead_reck_theta_deg is not None:
+                    # Advance the general-idea anchor by the TRACKED turn; the
+                    # untracked remainder (plus a per-turn margin) widens the
+                    # slack. A chain of blind turns widens it past usefulness and
+                    # recovery falls back to score-only. (When the gyro feed is
+                    # live, the recovery judge re-derives this heading from the
+                    # gyro anchor anyway — this path is the lidar-only fallback.)
                     dead_reck_theta_deg += measured_signed_turn_deg
-                    if turn_measure_source == "imu":
-                        # IMU measured the real rotation: pin the anchor slack
-                        # tight instead of ballooning it, so the wide-theta
-                        # recovery tiebreaker keeps its teeth through a chain of
-                        # otherwise-blind turns.
-                        dead_reck_slack_deg = max(dead_reck_slack_deg, IMU_DEAD_RECK_SLACK_DEG)
-                    else:
-                        # Lidar-only: advance by the TRACKED turn and widen the
-                        # slack by the untracked remainder plus a per-turn margin.
-                        # A chain of blind turns widens it past usefulness and
-                        # recovery falls back to score-only.
-                        dead_reck_slack_deg += 6.0 + max(
-                            0.0, float(chosen_turn_deg) - abs(measured_signed_turn_deg)
-                        )
-                        if dead_reck_slack_deg > 100.0:
-                            dead_reck_theta_deg = None
+                    dead_reck_slack_deg += 6.0 + max(
+                        0.0, float(chosen_turn_deg) - abs(measured_signed_turn_deg)
+                    )
+                    if dead_reck_slack_deg > 100.0:
+                        dead_reck_theta_deg = None
                 if int(turn_meta["completed"]) != 1:
                     # Lock-lost turn: the robot physically rotated an UNKNOWN
                     # amount (bursts fire whether or not the solve tracks
@@ -6844,6 +7293,26 @@ def main() -> int:
                             "redundant capture and continuing toward a new viewpoint "
                             f"({redundant_skip_streak}/6 before a forced refresh)"
                         )
+                        if redundant_skip_streak == 3 and committed_frontier_face is not None:
+                            # PIROUETTE BREAKER (field 2026-07-18: "face the
+                            # unmapped area" and "forcing a turn instead of
+                            # re-scanning" alternated +-85deg for six straight
+                            # skipped captures at one frontier). Three redundant
+                            # skips while committed to one face means this
+                            # frontier CANNOT be resolved from here — observing
+                            # it again teaches nothing. Strike it so the planner
+                            # moves on instead of turning in place forever.
+                            print(
+                                "[wander] frontier at "
+                                f"({committed_frontier_face[0]:.2f}, {committed_frontier_face[1]:.2f}) "
+                                "produced 3 straight redundant captures from this vantage — "
+                                "striking it and moving on (pirouette breaker)"
+                            )
+                            _strike_frontier(
+                                committed_frontier_face,
+                                "unresolvable from this vantage (redundant captures)",
+                                force=True,
+                            )
                         pending_motion_hint = redundancy_hint
                         continue
             redundant_skip_streak = 0
