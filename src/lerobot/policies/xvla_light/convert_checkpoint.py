@@ -68,21 +68,135 @@ def _compress_soft_prompts(
     *,
     source_length: int,
     target_length: int,
-    hidden_size: int,
+    source_hidden_size: int,
+    hidden_indices: torch.Tensor,
 ) -> torch.Tensor:
     if target_length <= 0 or target_length > source_length:
         raise ValueError(f"Target soft-prompt length must be in [1, {source_length}], got {target_length}.")
-    expected_width = source_length * hidden_size
+    expected_width = source_length * source_hidden_size
     if weight.ndim != 2 or weight.shape[1] != expected_width:
         raise ValueError(
             f"Expected soft prompts shaped [num_domains, {expected_width}], got {tuple(weight.shape)}."
         )
-    if target_length == source_length:
-        return weight
+    prompts = weight.reshape(weight.shape[0], source_length, source_hidden_size)
+    if target_length != source_length:
+        prompts = prompts.transpose(1, 2)
+        prompts = F.adaptive_avg_pool1d(prompts.float(), target_length).to(weight.dtype)
+        prompts = prompts.transpose(1, 2)
+    compressed = prompts.index_select(2, hidden_indices)
+    return compressed.reshape(weight.shape[0], target_length * hidden_indices.numel())
 
-    prompts = weight.reshape(weight.shape[0], source_length, hidden_size).transpose(1, 2)
-    compressed = F.adaptive_avg_pool1d(prompts.float(), target_length).to(weight.dtype)
-    return compressed.transpose(1, 2).reshape(weight.shape[0], target_length * hidden_size)
+
+def _select_attention_heads(
+    source_state: dict[str, torch.Tensor],
+    *,
+    layer_map: list[int],
+    source_hidden_size: int,
+    target_hidden_size: int,
+    source_num_heads: int,
+    target_num_heads: int,
+) -> tuple[torch.Tensor, list[int]]:
+    """Select complete source attention heads and their residual-channel groups."""
+    if source_hidden_size % source_num_heads != 0 or target_hidden_size % target_num_heads != 0:
+        raise ValueError("Source and target hidden sizes must be divisible by their attention-head counts.")
+    source_head_dim = source_hidden_size // source_num_heads
+    target_head_dim = target_hidden_size // target_num_heads
+    if source_head_dim != target_head_dim:
+        raise ValueError(
+            "Hidden-size conversion preserves complete attention heads and therefore requires an unchanged "
+            f"head dimension, got source={source_head_dim} and target={target_head_dim}."
+        )
+    if target_num_heads > source_num_heads:
+        raise ValueError(
+            f"Target head count ({target_num_heads}) cannot exceed source head count ({source_num_heads})."
+        )
+    if target_hidden_size == source_hidden_size and target_num_heads == source_num_heads:
+        return torch.arange(source_hidden_size), list(range(source_num_heads))
+
+    importance = torch.zeros(source_num_heads, dtype=torch.float32)
+    for source_layer in layer_map:
+        prefix = f"{_BLOCK_PREFIX}{source_layer}.attn."
+        qkv = (
+            source_state[f"{prefix}qkv.weight"]
+            .float()
+            .reshape(3, source_num_heads, source_head_dim, source_hidden_size)
+        )
+        projection = (
+            source_state[f"{prefix}proj.weight"]
+            .float()
+            .reshape(source_hidden_size, source_num_heads, source_head_dim)
+        )
+        importance += qkv.square().sum(dim=(0, 2, 3)).sqrt()
+        importance += projection.square().sum(dim=(0, 2)).sqrt()
+
+    selected_heads = importance.topk(target_num_heads, largest=True, sorted=False).indices.sort().values
+    hidden_indices = torch.cat(
+        [
+            torch.arange(head * source_head_dim, (head + 1) * source_head_dim)
+            for head in selected_heads.tolist()
+        ]
+    )
+    return hidden_indices, selected_heads.tolist()
+
+
+def _convert_outer_transformer_tensors(
+    converted: dict[str, torch.Tensor],
+    source_state: dict[str, torch.Tensor],
+    *,
+    source_hidden_size: int,
+    hidden_indices: torch.Tensor,
+) -> None:
+    """Resize non-block policy-transformer tensors along the residual stream."""
+    simple_dim0_keys = (
+        "model.transformer.norm.weight",
+        "model.transformer.norm.bias",
+        "model.transformer.vlm_proj.bias",
+        "model.transformer.aux_visual_proj.bias",
+    )
+    for key in simple_dim0_keys:
+        if key in source_state:
+            converted[key] = source_state[key].index_select(0, hidden_indices)
+
+    if "model.transformer.pos_emb" in source_state:
+        converted["model.transformer.pos_emb"] = source_state["model.transformer.pos_emb"].index_select(
+            2, hidden_indices
+        )
+    for key in ("model.transformer.vlm_proj.weight", "model.transformer.aux_visual_proj.weight"):
+        if key in source_state:
+            converted[key] = source_state[key].index_select(0, hidden_indices)
+
+    # Domain-aware VLM projections store [domain, input_size * hidden_size].
+    for stem in ("model.transformer.vlm_proj", "model.transformer.aux_visual_proj"):
+        weight_key = f"{stem}.fc.weight"
+        bias_key = f"{stem}.bias.weight"
+        if weight_key in source_state:
+            weight = source_state[weight_key]
+            input_size = weight.shape[1] // source_hidden_size
+            converted[weight_key] = (
+                weight.reshape(weight.shape[0], input_size, source_hidden_size)
+                .index_select(2, hidden_indices)
+                .reshape(weight.shape[0], -1)
+            )
+            converted[bias_key] = source_state[bias_key].index_select(1, hidden_indices)
+
+    action_encoder_weight = source_state["model.transformer.action_encoder.fc.weight"]
+    action_input_size = action_encoder_weight.shape[1] // source_hidden_size
+    converted["model.transformer.action_encoder.fc.weight"] = (
+        action_encoder_weight.reshape(action_encoder_weight.shape[0], action_input_size, source_hidden_size)
+        .index_select(2, hidden_indices)
+        .reshape(action_encoder_weight.shape[0], -1)
+    )
+    converted["model.transformer.action_encoder.bias.weight"] = source_state[
+        "model.transformer.action_encoder.bias.weight"
+    ].index_select(1, hidden_indices)
+
+    action_decoder_weight = source_state["model.transformer.action_decoder.fc.weight"]
+    action_output_size = action_decoder_weight.shape[1] // source_hidden_size
+    converted["model.transformer.action_decoder.fc.weight"] = (
+        action_decoder_weight.reshape(action_decoder_weight.shape[0], source_hidden_size, action_output_size)
+        .index_select(1, hidden_indices)
+        .reshape(action_decoder_weight.shape[0], -1)
+    )
 
 
 def convert_xvla_state_dict(
@@ -91,21 +205,48 @@ def convert_xvla_state_dict(
     source_depth: int,
     target_depth: int,
     hidden_size: int,
+    target_hidden_size: int | None = None,
+    source_num_heads: int | None = None,
+    target_num_heads: int | None = None,
     source_mlp_ratio: float,
     target_mlp_ratio: float,
     source_prompt_length: int,
     target_prompt_length: int,
 ) -> tuple[dict[str, torch.Tensor], list[int]]:
     """Map an XVLA state dict to a smaller transformer without constructing either model."""
+    target_hidden_size = target_hidden_size or hidden_size
+    source_num_heads = source_num_heads or target_num_heads
+    target_num_heads = target_num_heads or source_num_heads
+    if source_num_heads is None or target_num_heads is None:
+        if target_hidden_size != hidden_size:
+            raise ValueError("Source and target head counts are required when changing hidden size.")
+        source_num_heads = target_num_heads = 1
+
     source_mlp_width = int(hidden_size * source_mlp_ratio)
-    target_mlp_width = int(hidden_size * target_mlp_ratio)
+    target_mlp_width = int(target_hidden_size * target_mlp_ratio)
     if target_mlp_width > source_mlp_width:
         raise ValueError(
             f"Target MLP width ({target_mlp_width}) cannot exceed source width ({source_mlp_width})."
         )
 
     layer_map = select_evenly_spaced_layers(source_depth, target_depth)
+    hidden_indices, _ = _select_attention_heads(
+        source_state,
+        layer_map=layer_map,
+        source_hidden_size=hidden_size,
+        target_hidden_size=target_hidden_size,
+        source_num_heads=source_num_heads,
+        target_num_heads=target_num_heads,
+    )
     converted = {key: value for key, value in source_state.items() if not key.startswith(_BLOCK_PREFIX)}
+    shrinking_hidden = target_hidden_size != hidden_size
+    if shrinking_hidden:
+        _convert_outer_transformer_tensors(
+            converted,
+            source_state,
+            source_hidden_size=hidden_size,
+            hidden_indices=hidden_indices,
+        )
 
     for target_layer, source_layer in enumerate(layer_map):
         source_prefix = f"{_BLOCK_PREFIX}{source_layer}."
@@ -114,11 +255,52 @@ def convert_xvla_state_dict(
         if not layer_keys:
             raise KeyError(f"No checkpoint tensors found for source transformer layer {source_layer}.")
 
+        transformed_suffixes = {"mlp.fc1.weight", "mlp.fc1.bias", "mlp.fc2.weight"}
+        if shrinking_hidden:
+            transformed_suffixes.update(
+                {
+                    "norm1.weight",
+                    "norm1.bias",
+                    "norm2.weight",
+                    "norm2.bias",
+                    "attn.qkv.weight",
+                    "attn.qkv.bias",
+                    "attn.proj.weight",
+                    "attn.proj.bias",
+                    "mlp.fc2.bias",
+                }
+            )
         for source_key in layer_keys:
             suffix = source_key.removeprefix(source_prefix)
-            if suffix in {"mlp.fc1.weight", "mlp.fc1.bias", "mlp.fc2.weight"}:
+            if suffix in transformed_suffixes:
                 continue
             converted[f"{target_prefix}{suffix}"] = source_state[source_key]
+
+        if shrinking_hidden:
+            for norm in ("norm1", "norm2"):
+                for parameter in ("weight", "bias"):
+                    suffix = f"{norm}.{parameter}"
+                    converted[f"{target_prefix}{suffix}"] = source_state[
+                        f"{source_prefix}{suffix}"
+                    ].index_select(0, hidden_indices)
+
+            qkv_rows = torch.cat([hidden_indices + section * hidden_size for section in range(3)])
+            converted[f"{target_prefix}attn.qkv.weight"] = (
+                source_state[f"{source_prefix}attn.qkv.weight"]
+                .index_select(0, qkv_rows)
+                .index_select(1, hidden_indices)
+            )
+            converted[f"{target_prefix}attn.qkv.bias"] = source_state[
+                f"{source_prefix}attn.qkv.bias"
+            ].index_select(0, qkv_rows)
+            converted[f"{target_prefix}attn.proj.weight"] = (
+                source_state[f"{source_prefix}attn.proj.weight"]
+                .index_select(0, hidden_indices)
+                .index_select(1, hidden_indices)
+            )
+            converted[f"{target_prefix}attn.proj.bias"] = source_state[
+                f"{source_prefix}attn.proj.bias"
+            ].index_select(0, hidden_indices)
 
         fc1_weight = source_state[f"{source_prefix}mlp.fc1.weight"]
         fc1_bias = source_state[f"{source_prefix}mlp.fc1.bias"]
@@ -129,9 +311,17 @@ def convert_xvla_state_dict(
                 f"{source_mlp_width}."
             )
         neurons = _select_mlp_neurons(fc1_weight, fc2_weight, target_mlp_width)
-        converted[f"{target_prefix}mlp.fc1.weight"] = fc1_weight.index_select(0, neurons)
+        converted[f"{target_prefix}mlp.fc1.weight"] = fc1_weight.index_select(0, neurons).index_select(
+            1, hidden_indices
+        )
         converted[f"{target_prefix}mlp.fc1.bias"] = fc1_bias.index_select(0, neurons)
-        converted[f"{target_prefix}mlp.fc2.weight"] = fc2_weight.index_select(1, neurons)
+        converted[f"{target_prefix}mlp.fc2.weight"] = fc2_weight.index_select(0, hidden_indices).index_select(
+            1, neurons
+        )
+        if shrinking_hidden:
+            converted[f"{target_prefix}mlp.fc2.bias"] = source_state[
+                f"{source_prefix}mlp.fc2.bias"
+            ].index_select(0, hidden_indices)
 
     if target_prompt_length == 0:
         converted.pop(_SOFT_PROMPT_KEY, None)
@@ -142,29 +332,41 @@ def convert_xvla_state_dict(
             source_state[_SOFT_PROMPT_KEY],
             source_length=source_prompt_length,
             target_length=target_prompt_length,
-            hidden_size=hidden_size,
+            source_hidden_size=hidden_size,
+            hidden_indices=hidden_indices,
         )
 
     return converted, layer_map
 
 
 def make_xvla_light_config(
-    source_config: dict[str, Any], *, target_depth: int, target_mlp_ratio: float, target_prompt_length: int
+    source_config: dict[str, Any],
+    *,
+    target_depth: int,
+    target_mlp_ratio: float,
+    target_prompt_length: int,
+    target_hidden_size: int | None = None,
+    target_num_heads: int | None = None,
+    target_policy_type: str = "xvla_light",
 ) -> dict[str, Any]:
     """Return the serialized config for the converted checkpoint."""
-    if source_config.get("type") not in {"xvla", "xvla_light"}:
+    if source_config.get("type") not in {"xvla", "xvla_light", "xvla_extra_light"}:
         raise ValueError(f"Expected an XVLA checkpoint, got policy type {source_config.get('type')!r}.")
 
     target_config = dict(source_config)
     target_config.update(
         {
-            "type": "xvla_light",
+            "type": target_policy_type,
             "depth": target_depth,
             "mlp_ratio": target_mlp_ratio,
             "len_soft_prompts": target_prompt_length,
             "pretrained_path": None,
         }
     )
+    if target_hidden_size is not None:
+        target_config["hidden_size"] = target_hidden_size
+    if target_num_heads is not None:
+        target_config["num_heads"] = target_num_heads
     return target_config
 
 
@@ -201,6 +403,10 @@ def convert_checkpoint(
     target_depth: int = 12,
     target_mlp_ratio: float = 2.0,
     target_prompt_length: int = 8,
+    target_hidden_size: int | None = None,
+    target_num_heads: int | None = None,
+    target_policy_type: str = "xvla_light",
+    target_model_name: str = "XVLA-light",
     revision: str | None = None,
     token: str | None = None,
 ) -> list[int]:
@@ -210,8 +416,12 @@ def convert_checkpoint(
         source_config = json.load(config_file)
 
     source_depth = int(source_config["depth"])
+    source_hidden_size = int(source_config["hidden_size"])
+    source_num_heads = int(source_config["num_heads"])
     source_mlp_ratio = float(source_config["mlp_ratio"])
     source_prompt_length = int(source_config["len_soft_prompts"])
+    target_hidden_size = target_hidden_size or source_hidden_size
+    target_num_heads = target_num_heads or source_num_heads
     if target_prompt_length > source_prompt_length:
         raise ValueError(
             f"Target soft-prompt length ({target_prompt_length}) cannot exceed source length "
@@ -219,10 +429,18 @@ def convert_checkpoint(
         )
     if (
         target_depth == source_depth
+        and target_hidden_size == source_hidden_size
+        and target_num_heads == source_num_heads
         and target_mlp_ratio == source_mlp_ratio
         and target_prompt_length == source_prompt_length
     ):
-        raise ValueError("At least one XVLA-light dimension must be smaller than the source checkpoint.")
+        raise ValueError(
+            f"At least one {target_model_name} dimension must be smaller than the source checkpoint."
+        )
+    if target_hidden_size > source_hidden_size:
+        raise ValueError(
+            f"Target hidden size ({target_hidden_size}) cannot exceed source hidden size ({source_hidden_size})."
+        )
 
     existing_files = list(output_dir.iterdir()) if output_dir.exists() else []
     if existing_files:
@@ -235,7 +453,10 @@ def convert_checkpoint(
         source_state,
         source_depth=source_depth,
         target_depth=target_depth,
-        hidden_size=int(source_config["hidden_size"]),
+        hidden_size=source_hidden_size,
+        target_hidden_size=target_hidden_size,
+        source_num_heads=source_num_heads,
+        target_num_heads=target_num_heads,
         source_mlp_ratio=source_mlp_ratio,
         target_mlp_ratio=target_mlp_ratio,
         source_prompt_length=source_prompt_length,
@@ -246,6 +467,9 @@ def convert_checkpoint(
         target_depth=target_depth,
         target_mlp_ratio=target_mlp_ratio,
         target_prompt_length=target_prompt_length,
+        target_hidden_size=target_hidden_size,
+        target_num_heads=target_num_heads,
+        target_policy_type=target_policy_type,
     )
 
     save_file(
@@ -255,6 +479,8 @@ def convert_checkpoint(
             "format": "pt",
             "source_checkpoint": source,
             "xvla_layer_map": ",".join(map(str, layer_map)),
+            "xvla_hidden_size": str(target_hidden_size),
+            "xvla_num_heads": str(target_num_heads),
         },
     )
     with (output_dir / "config.json").open("w") as config_file:
@@ -263,7 +489,7 @@ def convert_checkpoint(
     for companion in companions:
         shutil.copy2(companion, output_dir / companion.name)
 
-    logging.info("Saved XVLA-light checkpoint to %s", output_dir)
+    logging.info("Saved %s checkpoint to %s", target_model_name, output_dir)
     return layer_map
 
 

@@ -84,6 +84,7 @@ def test_convert_checkpoint_writes_light_config_weights_and_processor_files(tmp_
     source_config = {
         "type": "xvla",
         "hidden_size": 2,
+        "num_heads": 1,
         "depth": 4,
         "mlp_ratio": 2.0,
         "len_soft_prompts": 4,
@@ -108,6 +109,7 @@ def test_convert_checkpoint_writes_light_config_weights_and_processor_files(tmp_
     assert target_config | {} == {
         "type": "xvla_light",
         "hidden_size": 2,
+        "num_heads": 1,
         "depth": 2,
         "mlp_ratio": 1.0,
         "len_soft_prompts": 2,
