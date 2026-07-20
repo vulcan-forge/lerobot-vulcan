@@ -101,12 +101,25 @@ class AdafruitLSM6DSOXLIS3MDLIMU(BaseIMU):
         assert self._imu6 is not None
         assert self._mag is not None
 
-        try:
-            raw_accel = tuple(float(v) for v in self._imu6.acceleration)
-            raw_gyro = tuple(float(v) for v in self._imu6.gyro)
-            raw_mag = tuple(float(v) for v in self._mag.magnetic)
-            temp = float(self._imu6.temperature)
-        except Exception as exc:
+        # Yaw integration needs ONLY the gyro, so read it FIRST, on its own, with a
+        # few quick retries. A transient I2C timeout (Errno 110) on any of the
+        # OTHER, unused values (accel / magnetometer / temperature) must never
+        # throw away a perfectly good heading. The magnetometer especially is a
+        # SEPARATE chip (LIS3MDL @ 0x1c) sharing the bus, and is the usual flake —
+        # under the old all-or-nothing read a single mag hiccup invalidated the
+        # gyro too, which is why the yaw feed kept going n/a. Only a genuine
+        # gyro-read failure (after retries) invalidates the sample now.
+        raw_gyro: tuple[float, ...] | None = None
+        gyro_error: str | None = None
+        for _attempt in range(3):
+            try:
+                raw_gyro = tuple(float(v) for v in self._imu6.gyro)
+                gyro_error = None
+                break
+            except Exception as exc:  # noqa: BLE001
+                gyro_error = str(exc)
+                time.sleep(0.002)  # let a hung bus transaction clear before retrying
+        if raw_gyro is None:
             return IMUSample(
                 timestamp_ns=time.time_ns(),
                 accel_m_s2=(0.0, 0.0, 0.0),
@@ -114,8 +127,23 @@ class AdafruitLSM6DSOXLIS3MDLIMU(BaseIMU):
                 mag_uT=(0.0, 0.0, 0.0),
                 temperature_c=None,
                 valid=False,
-                error=str(exc),
+                error=gyro_error,
             )
+
+        # Best-effort extras: each is read independently and any failure is
+        # tolerated (falls back to a default) because none is needed for yaw.
+        try:
+            raw_accel = tuple(float(v) for v in self._imu6.acceleration)
+        except Exception:  # noqa: BLE001
+            raw_accel = (0.0, 0.0, 0.0)
+        try:
+            raw_mag = tuple(float(v) for v in self._mag.magnetic)
+        except Exception:  # noqa: BLE001
+            raw_mag = (0.0, 0.0, 0.0)
+        try:
+            temp: float | None = float(self._imu6.temperature)
+        except Exception:  # noqa: BLE001
+            temp = None
 
         accel = self.calibration.apply_accel(raw_accel)
         gyro = self.calibration.apply_gyro(raw_gyro)
