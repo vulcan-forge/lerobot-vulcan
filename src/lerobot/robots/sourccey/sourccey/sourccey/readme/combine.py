@@ -4,22 +4,38 @@ import argparse
 import csv
 import datetime as dt
 import json
+import random
 import shlex
+import shutil
 import subprocess
+import tempfile
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from lerobot.datasets.feature_utils import features_equal_for_merge
+
+# -----------------------------------------------------------------------------
+# Editable default merge configuration
+# -----------------------------------------------------------------------------
+# Every dataset listed here is included in full.
 DEFAULT_PARENTS = [
-    "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-008",
-    '/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-a/sourccey-013__shirt-fold-blue-a__set005__nickm',
-    '/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-a/sourccey-013__shirt-fold-blue-a__set006__nickm',
-    '/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-a/sourccey-013__shirt-fold-blue-a__set007__nickm',
-    '/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-011',
-    '/home/sourccey/.cache/huggingface/lerobot/sourccey-013/nickm/sourccey-013__shirt-fold-blue-c-specific/sourccey-013__shirt-fold-blue-c-specific-012'
+    "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-pile-shirt-fold-a-000",
 ]
+
+# Each entry takes a random subset from one dataset. Add more entries to sample
+# multiple datasets, or edit episode_count to change the sample size.
+DEFAULT_SAMPLES = [
+    {
+        "dataset_root": ("/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-009"),
+        "episode_count": 60,
+    },
+]
+
+DEFAULT_SAMPLE_SEED = 42
+DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-009-subset-060-pile-shirt-fold-a-000"
+
 HF_LEROBOT_HOME = Path("/home/sourccey/.cache/huggingface/lerobot")
-DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-009"
 
 
 @dataclass(frozen=True)
@@ -28,6 +44,17 @@ class DatasetCandidate:
     repo_id: str
     features: dict
     total_episodes: int
+    selected_episode_indices: tuple[int, ...] | None = None
+    merge_root: Path | None = None
+    merge_repo_id: str | None = None
+
+    @property
+    def effective_root(self) -> Path:
+        return self.merge_root or self.root
+
+    @property
+    def effective_repo_id(self) -> str:
+        return self.merge_repo_id or self.repo_id
 
 
 def is_dataset_root(path: Path) -> bool:
@@ -95,6 +122,62 @@ def build_candidates(roots: list[Path]) -> list[DatasetCandidate]:
     return candidates
 
 
+def build_sample_candidates(
+    samples: list[list[str] | dict[str, str | int]], seed: int
+) -> list[DatasetCandidate]:
+    """Build candidates containing reproducibly sampled episode indices."""
+    rng = random.Random(seed)
+    candidates: list[DatasetCandidate] = []
+    seen_roots: set[Path] = set()
+
+    for sample in samples:
+        if isinstance(sample, dict):
+            try:
+                root_raw = sample["dataset_root"]
+                episode_count_raw = sample["episode_count"]
+            except KeyError as exc:
+                raise SystemExit(
+                    f"Invalid DEFAULT_SAMPLES entry {sample!r}; expected dataset_root and episode_count"
+                ) from exc
+        else:
+            root_raw, episode_count_raw = sample
+
+        root = Path(root_raw).expanduser().resolve()
+        if root in seen_roots:
+            raise SystemExit(f"Sample dataset was provided more than once: {root}")
+        if not is_dataset_root(root):
+            raise SystemExit(f"Sample path is not a LeRobot dataset root: {root}")
+
+        try:
+            episode_count = int(episode_count_raw)
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(f"Invalid sample episode count for {root}: {episode_count_raw!r}") from exc
+
+        features, source_total_episodes = load_dataset_info(root)
+        if episode_count < 1:
+            raise SystemExit(f"Sample episode count must be at least 1 for {root}")
+        if episode_count > source_total_episodes:
+            raise SystemExit(
+                f"Cannot sample {episode_count} episodes from {root}; "
+                f"it only contains {source_total_episodes}"
+            )
+
+        # Sorting preserves the source dataset's chronological order in the materialized subset.
+        selected_episode_indices = tuple(sorted(rng.sample(range(source_total_episodes), episode_count)))
+        candidates.append(
+            DatasetCandidate(
+                root=root,
+                repo_id=root.name,
+                features=features,
+                total_episodes=episode_count,
+                selected_episode_indices=selected_episode_indices,
+            )
+        )
+        seen_roots.add(root)
+
+    return candidates
+
+
 def filter_candidates_by_feature(
     candidates: list[DatasetCandidate], require_features: list[str], exclude_features: list[str]
 ) -> tuple[list[DatasetCandidate], list[DatasetCandidate]]:
@@ -126,10 +209,18 @@ def group_candidates_by_schema(
     features_by_sig: dict[str, dict] = {}
 
     for candidate in candidates:
-        sig = feature_signature(candidate.features)
-        grouped[sig].append(candidate)
-        if sig not in features_by_sig:
+        sig = next(
+            (
+                existing_sig
+                for existing_sig, features in features_by_sig.items()
+                if features_equal_for_merge(features, candidate.features)
+            ),
+            None,
+        )
+        if sig is None:
+            sig = feature_signature(candidate.features)
             features_by_sig[sig] = candidate.features
+        grouped[sig].append(candidate)
 
     for sig in grouped:
         grouped[sig].sort(key=lambda c: str(c.root))
@@ -142,15 +233,20 @@ def schema_label(idx: int) -> str:
 
 
 def print_root_preview(candidates: list[DatasetCandidate], verbose: bool) -> None:
+    def format_candidate(candidate: DatasetCandidate) -> str:
+        if candidate.selected_episode_indices is None:
+            return str(candidate.root)
+        return f"{candidate.root} (random sample: {candidate.total_episodes} episodes)"
+
     if verbose:
         for candidate in candidates:
-            print(f"  - {candidate.root}")
+            print(f"  - {format_candidate(candidate)}")
         return
 
     preview_count = min(10, len(candidates))
     print("Preview:")
     for candidate in candidates[:preview_count]:
-        print(f"  - {candidate.root}")
+        print(f"  - {format_candidate(candidate)}")
     if len(candidates) > preview_count:
         print(f"  ... ({len(candidates) - preview_count} more; use --verbose-roots to print all)")
 
@@ -195,7 +291,10 @@ def write_episode_lineage_csv(candidates: list[DatasetCandidate], csv_path: Path
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for source_dataset_index, candidate in enumerate(candidates):
-            for source_episode_index in range(candidate.total_episodes):
+            source_episode_indices = candidate.selected_episode_indices or tuple(
+                range(candidate.total_episodes)
+            )
+            for source_episode_index in source_episode_indices:
                 writer.writerow(
                     {
                         "merged_episode_index": merged_episode_index,
@@ -216,54 +315,128 @@ def write_episode_lineage_csv(candidates: list[DatasetCandidate], csv_path: Path
     return csv_path, row_count
 
 
+def materialize_random_subsets(
+    candidates: list[DatasetCandidate],
+    temp_root: Path,
+    config_path: Path,
+    dry_run: bool,
+) -> list[DatasetCandidate]:
+    """Create temporary LeRobot datasets containing only selected episodes."""
+    prepared: list[DatasetCandidate] = []
+    sample_number = 0
+
+    for candidate in candidates:
+        if candidate.selected_episode_indices is None:
+            prepared.append(candidate)
+            continue
+
+        sample_number += 1
+        sample_base = temp_root / f"sample_{sample_number:03d}"
+        sample_root = sample_base / "selected"
+        sample_repo_id = f"{candidate.repo_id}_selected"
+        subset_config_path = config_path.with_name(
+            f"{config_path.stem}__sample_{sample_number:03d}{config_path.suffix or '.json'}"
+        )
+        subset_cfg = {
+            "repo_id": candidate.repo_id,
+            "root": str(candidate.root),
+            "new_root": str(sample_base),
+            "operation": {
+                "type": "split",
+                "splits": {"selected": list(candidate.selected_episode_indices)},
+            },
+        }
+        subset_config_path.parent.mkdir(parents=True, exist_ok=True)
+        subset_config_path.write_text(json.dumps(subset_cfg, indent=2))
+
+        indices_preview = ", ".join(str(index) for index in candidate.selected_episode_indices[:10])
+        if len(candidate.selected_episode_indices) > 10:
+            indices_preview += ", ..."
+        print(f"\nRandom subset {sample_number}: {candidate.total_episodes} episodes from {candidate.root}")
+        print(f"Selected source episode indices: {indices_preview}")
+        print(f"Wrote subset config: {subset_config_path}")
+
+        cmd = ["uv", "run", "lerobot-edit-dataset", "--config_path", str(subset_config_path)]
+        print(f"Running: {' '.join(shlex.quote(x) for x in cmd)}")
+        if dry_run:
+            print("Dry run enabled; not materializing random subset.")
+        else:
+            subprocess.run(cmd, check=True)
+
+        prepared.append(replace(candidate, merge_root=sample_root, merge_repo_id=sample_repo_id))
+
+    return prepared
+
+
 def run_merge(
-    candidates: list[DatasetCandidate], out_repo: str, out_root: Path, config_path: Path, dry_run: bool
+    candidates: list[DatasetCandidate],
+    out_repo: str,
+    out_root: Path,
+    config_path: Path,
+    dry_run: bool,
+    keep_temp_subsets: bool,
 ) -> None:
     final_lineage_path = lineage_csv_path(out_root)
-    if dry_run:
-        premerge_lineage_path = final_lineage_path
+    premerge_lineage_path = config_path.with_name(f"{config_path.stem}__episode_lineage.csv")
+
+    if not dry_run and out_root.exists():
+        raise SystemExit(
+            f"Output root already exists and merge requires a fresh directory: {out_root}\n"
+            "If this is from a prior failed run, remove it first and retry."
+        )
+
+    has_random_subsets = any(candidate.selected_episode_indices is not None for candidate in candidates)
+    created_temp_root = False
+    if has_random_subsets and not dry_run:
+        out_root.parent.mkdir(parents=True, exist_ok=True)
+        temp_root = Path(tempfile.mkdtemp(prefix=f".{out_root.name}__combine_", dir=out_root.parent))
+        created_temp_root = True
     else:
-        if out_root.exists():
-            raise SystemExit(
-                f"Output root already exists and merge requires a fresh directory: {out_root}\n"
-                "If this is from a prior failed run, remove it first and retry."
-            )
-        premerge_lineage_path = config_path.with_name(f"{config_path.stem}__episode_lineage.csv")
+        temp_root = out_root.parent / f".{out_root.name}__combine_dry_run"
 
-    lineage_path, lineage_rows = write_episode_lineage_csv(candidates, premerge_lineage_path)
+    try:
+        merge_candidates = materialize_random_subsets(
+            candidates, temp_root=temp_root, config_path=config_path, dry_run=dry_run
+        )
+        lineage_path, lineage_rows = write_episode_lineage_csv(candidates, premerge_lineage_path)
 
-    repo_ids = [candidate.repo_id for candidate in candidates]
-    cfg = {
-        "new_repo_id": out_repo,
-        "new_root": str(out_root),
-        "operation": {
-            "type": "merge",
-            "repo_ids": repo_ids,
-            "roots": [str(candidate.root) for candidate in candidates],
-        },
-    }
+        cfg = {
+            "new_repo_id": out_repo,
+            "new_root": str(out_root),
+            "operation": {
+                "type": "merge",
+                "repo_ids": [candidate.effective_repo_id for candidate in merge_candidates],
+                "roots": [str(candidate.effective_root) for candidate in merge_candidates],
+            },
+        }
 
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(cfg, indent=2))
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(cfg, indent=2))
 
-    print(f"\nWrote merge config: {config_path}")
-    print(f"Output repo_id: {out_repo}")
-    print(f"Output root: {out_root}")
-    print(f"Wrote episode lineage CSV: {lineage_path} ({lineage_rows} rows)")
+        print(f"\nWrote merge config: {config_path}")
+        print(f"Output repo_id: {out_repo}")
+        print(f"Output root: {out_root}")
+        print(f"Wrote episode lineage CSV: {lineage_path} ({lineage_rows} rows)")
 
-    cmd = ["uv", "run", "lerobot-edit-dataset", "--config_path", str(config_path)]
-    print(f"\nRunning: {' '.join(shlex.quote(x) for x in cmd)}")
+        cmd = ["uv", "run", "lerobot-edit-dataset", "--config_path", str(config_path)]
+        print(f"\nRunning: {' '.join(shlex.quote(x) for x in cmd)}")
 
-    if dry_run:
-        print("Dry run enabled; not executing merge command.")
-        return
+        if dry_run:
+            print("Dry run enabled; not executing merge command.")
+            return
 
-    subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True)
 
-    if lineage_path != final_lineage_path:
         final_lineage_path.parent.mkdir(parents=True, exist_ok=True)
         lineage_path.replace(final_lineage_path)
         print(f"Moved episode lineage CSV to: {final_lineage_path}")
+    finally:
+        if created_temp_root:
+            if keep_temp_subsets:
+                print(f"Kept temporary subset datasets at: {temp_root}")
+            else:
+                shutil.rmtree(temp_root)
+                print(f"Removed temporary subset datasets: {temp_root}")
 
 
 def default_stamp() -> str:
@@ -272,15 +445,44 @@ def default_stamp() -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Merge all LeRobot datasets found under one or more parent directories.",
+        description=(
+            "Merge full LeRobot datasets, optionally including reproducible random episode samples."
+        ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        epilog=(
+            "Example: --sample /path/to/sample-source 100 --parent /path/to/full-dataset "
+            "--sample-seed 42 --out-repo Combination/my-merged-dataset"
+        ),
     )
     parser.add_argument(
         "--parent",
         dest="parents",
         action="append",
         default=[],
-        help="Parent folder containing dataset roots. Can be repeated.",
+        help="Full dataset root or parent folder. Replaces DEFAULT_PARENTS when supplied.",
+    )
+    parser.add_argument(
+        "--sample",
+        dest="samples",
+        action="append",
+        nargs=2,
+        default=[],
+        metavar=("DATASET_ROOT", "EPISODES"),
+        help=(
+            "Take EPISODES random episodes from DATASET_ROOT. Can be repeated; sampled datasets "
+            "replace DEFAULT_SAMPLES when supplied and are added to the full datasets."
+        ),
+    )
+    parser.add_argument(
+        "--sample-seed",
+        type=int,
+        default=DEFAULT_SAMPLE_SEED,
+        help="Seed used for reproducible random episode sampling.",
+    )
+    parser.add_argument(
+        "--keep-temp-subsets",
+        action="store_true",
+        help="Keep materialized subset datasets after the merge for debugging or reuse.",
     )
     parser.add_argument(
         "--out-repo",
@@ -353,7 +555,18 @@ def main() -> int:
     )
 
     roots = discover_dataset_roots(parents)
-    candidates = build_candidates(roots)
+    full_candidates = build_candidates(roots)
+    samples_raw = args.samples if args.samples else DEFAULT_SAMPLES
+    sample_candidates = build_sample_candidates(samples_raw, seed=args.sample_seed)
+
+    full_roots = {candidate.root for candidate in full_candidates}
+    duplicated_roots = full_roots & {candidate.root for candidate in sample_candidates}
+    if duplicated_roots:
+        duplicated = "\n".join(f"  - {root}" for root in sorted(duplicated_roots))
+        raise SystemExit(f"A dataset cannot be included both in full and as a random sample:\n{duplicated}")
+
+    # Put sampled sources first so their lineage is easy to locate in the merged dataset.
+    candidates = sample_candidates + full_candidates
 
     effective_exclusions = sorted(set(args.exclude_feature))
     candidates, dropped = filter_candidates_by_feature(candidates, args.require_feature, effective_exclusions)
@@ -406,7 +619,18 @@ def main() -> int:
             print(f"  - {repo}: {len(schema_candidates)} datasets -> {group_root}")
 
         for repo, schema_candidates, group_root, group_config in merge_jobs:
-            run_merge(schema_candidates, repo, group_root, group_config, dry_run=args.dry_run)
+            run_merge(
+                schema_candidates,
+                repo,
+                group_root,
+                group_config,
+                dry_run=args.dry_run,
+                keep_temp_subsets=args.keep_temp_subsets,
+            )
+
+        if args.dry_run:
+            print("\nSchema-split dry run completed; no output datasets were created.")
+            return 0
 
         print("\nSchema-split merge completed.")
         print("Use one of these depending on training target:")
@@ -414,7 +638,18 @@ def main() -> int:
             print(f"  - repo_id={repo} root={group_root}")
         return 0
 
-    run_merge(candidates, out_repo, out_root, config_path, dry_run=args.dry_run)
+    run_merge(
+        candidates,
+        out_repo,
+        out_root,
+        config_path,
+        dry_run=args.dry_run,
+        keep_temp_subsets=args.keep_temp_subsets,
+    )
+
+    if args.dry_run:
+        print("\nDry run completed; no output dataset was created.")
+        return 0
 
     print("\nMerge completed.")
     print(f"Merged dataset written to: {out_root}")
