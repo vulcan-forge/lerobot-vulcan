@@ -23,6 +23,218 @@ from sourccey_wander.wander_types import (
     _normalize_angle_deg,
 )
 
+def _doorway_mouth_and_axis(
+    frame,
+    *,
+    forward_angle_deg: float,
+    valid_angle_half_width_deg: float,
+    max_distance_m: float,
+    min_range_m: float,
+    min_confidence: int,
+    opening_delta_deg: float,
+    opening_width_deg: float,
+    opening_depth_m: float,
+    frontier_bin_deg: float = 6.0,
+) -> dict | None:
+    """Locate the two JAMBS flanking a chosen opening and return the mouth
+    centre + hall axis, so the exit run can approach a doorway SQUARE-ON and
+    CENTRED instead of blind-probing on a single bearing (field 2026-07-20: the
+    robot reached the hallway mouth off to one side, the bearing probe aimed
+    diagonally, it clipped/stalled and never entered).
+
+    Geometry is returned in the robot-LOCAL polar convention the rest of the
+    planner uses (bearing measured the same way as ``FrontierChoice.delta_deg``
+    — world bearing = ``pose.theta_deg + delta``, so the caller converts with a
+    plain addition):
+      {
+        'mouth_delta_deg', 'mouth_range_m',   # polar to the gap centre
+        'axis_delta_deg',                     # local bearing pointing INTO the hall
+        'gap_width_m',
+        'jamb_left_xy', 'jamb_right_xy',      # local (x fwd, y lateral), for tests
+      }
+    A jamb is the nearest wall return just OUTSIDE each edge of the open gap.
+    Returns None if either jamb cannot be found (open on that side / no wall)."""
+    half_width = max(10.0, float(valid_angle_half_width_deg))
+    bin_deg = max(1.0, float(frontier_bin_deg))
+    bin_count = max(9, int(math.ceil((half_width * 2.0) / bin_deg)) + 1)
+    bin_angles = np.linspace(-half_width, half_width, bin_count, dtype=np.float64)
+    nearest = np.full(bin_count, np.nan, dtype=np.float64)
+    for angle_deg, distance_m, confidence in frame.points:
+        if int(confidence) < int(min_confidence):
+            continue
+        distance_m = float(distance_m)
+        if not (float(min_range_m) <= distance_m <= float(max_distance_m)):
+            continue
+        delta_deg = _normalize_angle_deg(float(angle_deg) - float(forward_angle_deg))
+        if abs(delta_deg) > half_width:
+            continue
+        idx = int(round((delta_deg + half_width) / bin_deg))
+        idx = max(0, min(bin_count - 1, idx))
+        if math.isnan(nearest[idx]) or distance_m < nearest[idx]:
+            nearest[idx] = distance_m
+
+    # A jamb is a WALL post: a return markedly CLOSER than the depth seen
+    # through the gap. Threshold below that depth so a through-gap return (which
+    # bins near the edge can still hold) is never mistaken for the frame.
+    wall_threshold_m = max(0.20, float(opening_depth_m) * 0.70)
+    center_idx = int(round((float(opening_delta_deg) + half_width) / bin_deg))
+    center_idx = max(0, min(bin_count - 1, center_idx))
+
+    def _jamb(outward_sign: float) -> tuple[float, float] | None:
+        # Walk OUTWARD from the gap CENTRE; skip open (through-gap) bins; the
+        # first bin closer than the wall threshold is the doorframe post on this
+        # side. Returns (delta_deg, range_m).
+        for step in range(1, bin_count):
+            idx = center_idx + int(outward_sign) * step
+            if idx < 0 or idx >= bin_count:
+                return None
+            r = nearest[idx]
+            if not math.isnan(r) and float(r) < wall_threshold_m:
+                return float(bin_angles[idx]), float(r)
+        return None
+
+    left = _jamb(-1.0)
+    right = _jamb(+1.0)
+    if left is None or right is None:
+        return None
+
+    def _to_xy(delta_deg: float, range_m: float) -> tuple[float, float]:
+        a = math.radians(delta_deg)
+        return (range_m * math.cos(a), range_m * math.sin(a))
+
+    lx, ly = _to_xy(*left)
+    rx, ry = _to_xy(*right)
+    mx, my = (lx + rx) / 2.0, (ly + ry) / 2.0
+    mouth_range = math.hypot(mx, my)
+    if mouth_range < 1e-3:
+        return None
+    mouth_delta = math.degrees(math.atan2(my, mx))
+    gap_width = math.hypot(rx - lx, ry - ly)
+    # Axis = perpendicular to the jamb line, pointing AWAY from the robot (into
+    # the hall). Pick the perpendicular whose dot with the mouth-centre vector
+    # is positive.
+    jx, jy = (rx - lx), (ry - ly)
+    perp_a = (-jy, jx)
+    perp_b = (jy, -jx)
+    axis_vec = perp_a if (perp_a[0] * mx + perp_a[1] * my) >= 0.0 else perp_b
+    axis_delta = math.degrees(math.atan2(axis_vec[1], axis_vec[0]))
+    return {
+        "mouth_delta_deg": float(mouth_delta),
+        "mouth_range_m": float(mouth_range),
+        "axis_delta_deg": float(axis_delta),
+        "gap_width_m": float(gap_width),
+        "jamb_left_xy": (float(lx), float(ly)),
+        "jamb_right_xy": (float(rx), float(ry)),
+    }
+
+
+def _select_exit_doorway_choice(
+    frame,
+    *,
+    forward_angle_deg: float,
+    valid_angle_half_width_deg: float,
+    max_distance_m: float,
+    min_range_m: float,
+    min_confidence: int,
+    frontier_min_distance_m: float,
+    frontier_bin_deg: float,
+    min_gap_width_m: float = 0.50,
+    max_gap_width_m: float = 1.50,
+) -> FrontierChoice | None:
+    """Pick the best real DOORWAY (a gap flanked by two walls) from the live
+    scan — for the exit run, so it commits to an actual door instead of the
+    widest OPEN-ROOM direction (field 2026-07-20: the exit run kept probing
+    into 80-120deg-wide open floor, the new-space gate correctly rejected it as
+    'a wall inside the room, not a door', and the robot milled near the centre
+    forever instead of turning to the narrow doorway). A doorway is an open
+    angular segment whose OUTER edges both have a wall return (a jamb) and whose
+    physical gap is doorway-plausible (``min_gap_width_m``..``max_gap_width_m``).
+    Open-room directions have no flanking jambs and are rejected. Returns the
+    best doorway as a ``FrontierChoice`` (deepest / most door-like wins), or
+    None if no real door is visible from this heading — in which case the caller
+    should ROTATE to keep searching rather than drive into open floor."""
+    half_width = max(10.0, float(valid_angle_half_width_deg))
+    bin_deg = max(1.0, float(frontier_bin_deg))
+    bin_count = max(9, int(math.ceil((half_width * 2.0) / bin_deg)) + 1)
+    bin_angles = np.linspace(-half_width, half_width, bin_count, dtype=np.float64)
+    nearest_ranges = np.zeros(bin_count, dtype=np.float64)
+    hit_counts = np.zeros(bin_count, dtype=np.int32)
+    for angle_deg, distance_m, confidence in frame.points:
+        if int(confidence) < int(min_confidence):
+            continue
+        distance_m = float(distance_m)
+        if not (float(min_range_m) <= distance_m <= float(max_distance_m)):
+            continue
+        delta_deg = _normalize_angle_deg(float(angle_deg) - float(forward_angle_deg))
+        if abs(delta_deg) > half_width:
+            continue
+        idx = int(round((delta_deg + half_width) / bin_deg))
+        idx = max(0, min(bin_count - 1, idx))
+        if hit_counts[idx] == 0 or distance_m < nearest_ranges[idx]:
+            nearest_ranges[idx] = distance_m
+        hit_counts[idx] += 1
+    if not np.any(hit_counts):
+        return None
+    kernel = np.array([0.2, 0.6, 0.2], dtype=np.float64)
+    smoothed = np.convolve(nearest_ranges, kernel, mode="same")
+    open_mask = smoothed >= float(frontier_min_distance_m)
+    if not np.any(open_mask):
+        return None
+    segments: list[tuple[int, int]] = []
+    start_idx: int | None = None
+    for idx, is_open in enumerate(open_mask):
+        if is_open and start_idx is None:
+            start_idx = idx
+        elif not is_open and start_idx is not None:
+            segments.append((start_idx, idx - 1))
+            start_idx = None
+    if start_idx is not None:
+        segments.append((start_idx, bin_count - 1))
+
+    best: FrontierChoice | None = None
+    for start_idx, end_idx in segments:
+        seg_center = int((start_idx + end_idx) // 2)
+        seg_delta = float(bin_angles[seg_center])
+        seg_width = float((end_idx - start_idx + 1) * bin_deg)
+        seg_mean = float(np.mean(smoothed[start_idx : end_idx + 1]))
+        geom = _doorway_mouth_and_axis(
+            frame,
+            forward_angle_deg=forward_angle_deg,
+            valid_angle_half_width_deg=valid_angle_half_width_deg,
+            max_distance_m=max_distance_m,
+            min_range_m=min_range_m,
+            min_confidence=min_confidence,
+            opening_delta_deg=seg_delta,
+            opening_width_deg=seg_width,
+            opening_depth_m=seg_mean,
+            frontier_bin_deg=bin_deg,
+        )
+        if geom is None:
+            continue
+        gap_w = float(geom["gap_width_m"])
+        if not (float(min_gap_width_m) <= gap_w <= float(max_gap_width_m)):
+            continue
+        # Score: reward depth (a real door leads OUT to deep space) and being
+        # close to a typical door width (~0.8m); a plain forward heading is a
+        # mild tiebreak so it does not spin toward a marginally-deeper side door.
+        score = (
+            float(seg_mean)
+            + 1.5 * (1.0 - min(1.0, abs(gap_w - 0.80) / 0.80))
+            - 0.004 * abs(seg_delta)
+        )
+        candidate = FrontierChoice(
+            delta_deg=seg_delta,
+            abs_angle_deg=float(forward_angle_deg) + seg_delta,
+            mean_distance_m=seg_mean,
+            width_deg=seg_width,
+            score=float(score),
+            source="live_doorway",
+        )
+        if best is None or candidate.score > best.score:
+            best = candidate
+    return best
+
+
 def _select_frontier_choice(
     frame,
     *,
@@ -114,7 +326,6 @@ def _select_frontier_choice(
     best_choice: FrontierChoice | None = None
     for start_idx, end_idx in segments:
         seg_ranges = smoothed_ranges[start_idx : end_idx + 1]
-        seg_angles = bin_angles[start_idx : end_idx + 1]
         seg_mean = float(np.mean(seg_ranges))
         seg_width = float((end_idx - start_idx + 1) * bin_deg)
         # A narrow angular slot is not a drivable opening: a 12deg-wide gap at

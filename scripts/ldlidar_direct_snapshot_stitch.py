@@ -1150,6 +1150,30 @@ def _plan_frontier_path(
     inflated = _dilate(occupied_grid, radius_cells=max(1, int(round(float(robot_radius_m) / res))))
     traversable = free_grid & ~inflated
 
+    # CLEARANCE FIELD: for every cell, the BFS cell-distance to the nearest
+    # NON-traversable cell (wall, inflation band, or off-grid edge). The path
+    # extractor uses this to route down the MIDDLE of a corridor rather than
+    # along one edge. Field 2026-07-20: with the squeeze radius letting the
+    # planner finally route through the 0.635m exit hallway, the robot beelined
+    # the door but caught its SHOULDER on the frame because the shortest path
+    # hugged one side of the channel. Centering the path gives the shoulder the
+    # full ~0.09m/side the doorway actually offers. O(cells), computed once per
+    # plan; a multi-source BFS seeded from every blocked cell (edges count as
+    # blocked so paths do not skim the grid boundary either).
+    clearance = np.full((height, width), -1, dtype=np.int32)
+    clearance_q: deque[tuple[int, int]] = deque()
+    blocked_ys, blocked_xs = np.where(~traversable)
+    for _by, _bx in zip(blocked_ys.tolist(), blocked_xs.tolist(), strict=False):
+        clearance[_by, _bx] = 0
+        clearance_q.append((_bx, _by))
+    while clearance_q:
+        cqx, cqy = clearance_q.popleft()
+        c_next = clearance[cqy, cqx] + 1
+        for nx, ny in ((cqx + 1, cqy), (cqx - 1, cqy), (cqx, cqy + 1), (cqx, cqy - 1)):
+            if 0 <= nx < width and 0 <= ny < height and clearance[ny, nx] < 0:
+                clearance[ny, nx] = c_next
+                clearance_q.append((nx, ny))
+
     def to_cell(x: float, y: float) -> tuple[int, int]:
         return (
             int(round((float(x) - float(origin_xy[0])) / res)),
@@ -1236,13 +1260,22 @@ def _plan_frontier_path(
         px, py = from_cell
         while dist[py, px] > 0:
             d_here = dist[py, px]
+            # Among the predecessors on a shortest path (dist == d_here - 1),
+            # step to the one with the MOST clearance. This keeps the path the
+            # same length but bows it toward the center of any corridor instead
+            # of skimming a wall — so a shoulder does not clip the doorframe
+            # (field 2026-07-20). Falls back to the first valid predecessor when
+            # clearances tie.
+            best: tuple[int, int, int] | None = None  # (clearance, nx, ny)
             for nx, ny in ((px + 1, py), (px - 1, py), (px, py + 1), (px, py - 1)):
                 if 0 <= nx < width and 0 <= ny < height and dist[ny, nx] == d_here - 1:
-                    px, py = nx, ny
-                    path.append((px, py))
-                    break
-            else:
+                    c_here = int(clearance[ny, nx])
+                    if best is None or c_here > best[0]:
+                        best = (c_here, nx, ny)
+            if best is None:
                 break
+            px, py = best[1], best[2]
+            path.append((px, py))
         path.reverse()  # robot -> destination
         return path
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import time
+import traceback
 
 import numpy as np
 
@@ -36,6 +37,19 @@ from sourccey_wander.wander_types import (
     _normalize_angle_deg,
     _poll_remote_base_state,
 )
+
+def _record_turn_exception(tb_text: str) -> None:
+    """Append a turn-loop traceback to a durable file so an intermittent
+    hardware exception is diagnosable even when the terminal buffer truncates
+    it (field 2026-07-20). Best-effort: never raises."""
+    import os
+
+    path = os.path.join("artifacts", "wander_snapshot_stitch", "turn_crash_traceback.txt")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(tb_text)
+        handle.write("\n" + "=" * 70 + "\n")
+
 
 def _drive_forward_burst(
     *,
@@ -316,18 +330,42 @@ def _turn_with_arc_tracking(
                     f"hazard; ending turn at tracked={abs(turned_deg):.1f}deg"
                 )
                 break
-        _execute_turn_burst(
-            robot=robot,
-            direction_sign=float(direction_sign),
-            turn_speed=float(turn_speed) * float(speed_scale),
-            turn_burst_s=float(turn_burst_s),
-            turn_settle_s=float(turn_settle_s),
-        )
-        frame_id, frame = feed.wait_for_frame_after(
-            after_frame_id=int(last_frame_id),
-            timeout_s=float(frame_wait_timeout_s),
-            min_frame_advances=1,
-        )
+        try:
+            _execute_turn_burst(
+                robot=robot,
+                direction_sign=float(direction_sign),
+                turn_speed=float(turn_speed) * float(speed_scale),
+                turn_burst_s=float(turn_burst_s),
+                turn_settle_s=float(turn_settle_s),
+            )
+            frame_id, frame = feed.wait_for_frame_after(
+                after_frame_id=int(last_frame_id),
+                timeout_s=float(frame_wait_timeout_s),
+                min_frame_advances=1,
+            )
+        except Exception as exc:
+            # An intermittent robot-comms or feed exception mid-turn must NOT
+            # crash the whole run (field 2026-07-20: a hardware exception inside
+            # the burst's send_action loop hard-crashed after ~2000 frames).
+            # Stop the base, end the turn as lock-lost with the tracked progress
+            # so the caller relocalizes/captures, and record the traceback for
+            # diagnosis instead of dying.
+            lock_lost = True
+            missed_updates += 1
+            print(
+                f"[turn] burst={burst_index:02d} EXCEPTION during turn I/O "
+                f"({type(exc).__name__}: {exc}); stopping the base and ending the "
+                f"turn at tracked={abs(turned_deg):.1f}deg instead of crashing"
+            )
+            try:
+                _record_turn_exception(traceback.format_exc())
+            except Exception:
+                pass
+            try:
+                _send_stop(robot)
+            except Exception:
+                pass
+            break
         if frame is None or int(frame_id) == int(last_frame_id):
             consecutive_timeouts += 1
             print(f"[turn] burst={burst_index:02d} timed out waiting for a fresh revolution")
@@ -516,6 +554,9 @@ def _drive_with_tracking(
     hazard_monitor=None,
     map_side_guard=None,
     forward_guard=None,
+    blind_forward_scale: float = 0.0,
+    pose_trusted: bool = True,
+    frame_recorder=None,
 ) -> tuple[Pose2D, dict[str, object]]:
     """Drive forward burst-by-burst while tracking the pose with the lidar
     after every burst. The drive stops when blocked, when the plan completes,
@@ -528,6 +569,29 @@ def _drive_with_tracking(
     passes under tabletops, the bottom camera watches the floor), but the
     map remembers where they are. A non-None reason halts the drive like a
     hazard stop."""
+    if not bool(pose_trusted):
+        # HARD SAFETY RULE (field 2026-07-20: robot drove into a table and fell
+        # over during a pose-lost recovery thrash). A robot that does not know
+        # where it is must NOT drive FORWARD — a forward command on a lost pose
+        # is a blind lunge, and the map-based guards below cannot be trusted
+        # either. Recovery must be rotation-in-place or a mapped reverse only
+        # (both handled by other code paths). Refuse the drive outright.
+        print(
+            "[drive] REFUSED: pose is LOST — no forward driving while unlocalized "
+            "(rotate/reverse recovery only); the robot will not lunge blind"
+        )
+        return start_pose, {
+            "bursts_completed": 0,
+            "elapsed_s": 0.0,
+            "stopped_by_block": True,
+            "blocked_points": 0,
+            "lock_lost": True,
+            "stopped_by_hazard": False,
+            "hazard_reason": "pose_lost_no_forward",
+            "missed_updates": 0,
+            "blind_forward_m": 0.0,
+        }
+
     non_empty_sets = [points for points in transformed_sets if len(points)]
     global_points_xy = np.concatenate(non_empty_sets, axis=0) if non_empty_sets else np.zeros((0, 2), np.float32)
     grids = _build_score_grids(global_points_xy, resolution_m=float(resolution_m), padding_m=1.4)
@@ -543,9 +607,24 @@ def _drive_with_tracking(
     last_blocked_points = 0
     last_frame_id = -1
     elapsed_total_s = 0.0
+    # Calibrated dead-reckon of forward motion the lidar could NOT track. Each
+    # burst physically drives ~this far; when the solve is held (blind), the
+    # tracked pose misses it, so with a calibration scale we estimate it instead
+    # of counting zero. Consumed by the exit-run door-crossing odometry so a blind
+    # creep THROUGH the doorway still registers as progress.
+    blind_forward_m = 0.0
+    nominal_burst_forward_m = float(forward_speed) * float(burst_s) * float(blind_forward_scale)
     frame_wait_timeout_s = max(2.0, float(burst_s) + 1.5)
 
     for burst_index in range(max(1, int(burst_count))):
+        if frame_recorder is not None:
+            # Capture what the eyes see DURING the approach — this is when the
+            # robot reaches a table edge (the main loop is blocked in here, so
+            # without this the critical frames are never recorded).
+            try:
+                frame_recorder()
+            except Exception:
+                pass
         if map_side_guard is not None:
             guard_reason = map_side_guard(current_pose)
             if guard_reason:
@@ -588,6 +667,8 @@ def _drive_with_tracking(
         if frame is None:
             missed_updates += 1
             consecutive_held += 1
+            if not burst_meta.stopped_by_hazard and blind_forward_scale > 0.0:
+                blind_forward_m += nominal_burst_forward_m   # drove but couldn't see it -> estimate
             print(f"[drive] burst={burst_index + 1:02d} no fresh revolution to track against")
         else:
             last_frame_id = int(frame_id)
@@ -617,6 +698,8 @@ def _drive_with_tracking(
             else:
                 missed_updates += 1
                 consecutive_held += 1
+                if not burst_meta.stopped_by_hazard and blind_forward_scale > 0.0:
+                    blind_forward_m += nominal_burst_forward_m   # drove but couldn't solve it -> estimate
                 print(
                     f"[drive] burst={burst_index + 1:02d} solve held "
                     f"(score={solved_score:.3f}); not updating pose"
@@ -655,6 +738,7 @@ def _drive_with_tracking(
         "stopped_by_hazard": bool(stopped_by_hazard),
         "hazard_reason": str(hazard_reason),
         "missed_updates": int(missed_updates),
+        "blind_forward_m": float(blind_forward_m),
     }
 
 

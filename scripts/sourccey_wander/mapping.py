@@ -28,6 +28,14 @@ from ldlidar_direct_snapshot_stitch import (
     _transform_points,
 )
 
+
+class LidarBoxedInError(RuntimeError):
+    """The lidar feed is healthy but almost every return is within the near-cutoff
+    (the robot is nose-against a wall / surrounded). This is RECOVERABLE — the
+    caller should back out / rotate to open space and retry, NEVER crash. Distinct
+    from a degraded feed (a genuine host problem)."""
+
+
 def _capture_snapshot(
     *,
     feed: DirectLidarFeed,
@@ -128,12 +136,10 @@ def _capture_snapshot(
         time.sleep(0.4)
     if frame is None or local_points_xy is None:
         if last_raw >= MIN_HEALTHY_RAW_POINTS:
-            raise RuntimeError(
-                f"The lidar feed is HEALTHY (~{last_raw} points/revolution) but only ~{last_usable} "
-                f"survive the {float(min_range_m):.2f}m near-cutoff — the rest are self-hits / near "
-                "returns. The robot is physically BOXED IN, or something (e.g. draped material) is "
-                f"within ~{float(min_range_m):.2f}m of the lidar. Reposition it with clear space "
-                "around the lidar. This is NOT a host/feed problem."
+            raise LidarBoxedInError(
+                f"lidar HEALTHY (~{last_raw} pts/rev) but only ~{last_usable} beyond "
+                f"{float(min_range_m):.2f}m — the robot is BOXED IN (nose against a wall / "
+                "surrounded / draped material)"
             )
         raise RuntimeError(
             f"LiDAR feed is delivering PARTIAL revolutions (raw ~{last_raw}, far below the ~240 "

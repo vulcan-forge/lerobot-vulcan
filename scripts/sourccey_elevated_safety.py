@@ -696,7 +696,12 @@ class ElevatedHazardMonitor:
     """
 
     def __init__(
-        self, config: ElevatedSafetyConfig, frame_source, lidar_ranges_fn=None, depth_worker=None
+        self,
+        config: ElevatedSafetyConfig,
+        frame_source,
+        lidar_ranges_fn=None,
+        depth_worker=None,
+        semantic_worker=None,
     ) -> None:
         self.config = config
         self._source = frame_source
@@ -706,6 +711,11 @@ class ElevatedHazardMonitor:
         # metric 3D instead of the Hough detector; when absent/stale/failed,
         # the classic detector path below runs unchanged (fail-soft).
         self._depth_worker = depth_worker
+        # Optional SECOND perception leg: an open-vocab detector (YOLO-World)
+        # that recognizes furniture edges SEMANTICALLY where monocular depth
+        # fails (white/textureless table lips). Its block is OR-ed into the
+        # forward gate — stop if EITHER depth OR the detector fires.
+        self._semantic_worker = semantic_worker
         self._detector = ElevatedEdgeDetector(config.detector_config())
         self._bottom_detector = BottomFloorDetector(config.bottom_model, config)
         self._lock = threading.Lock()
@@ -832,7 +842,21 @@ class ElevatedHazardMonitor:
             return self._state
 
     def forward_allowed(self) -> tuple[bool, str]:
-        return gate_forward_allowed(self.state())
+        allowed, reason = gate_forward_allowed(self.state())
+        if not allowed:
+            return allowed, reason
+        # SECOND LEG: the semantic detector can veto forward even when the depth
+        # gate is clear (a white table edge depth read as "far"). Fail-soft:
+        # latest() returns non-blocking when the detector is off/failed/stale.
+        if self._semantic_worker is not None:
+            sem = self._semantic_worker.latest()
+            if getattr(sem, "blocking", False):
+                bearing = getattr(sem, "bearing_deg", None)
+                side = "front"
+                if bearing is not None:
+                    side = "left" if float(bearing) > 12.0 else ("right" if float(bearing) < -12.0 else "front")
+                return False, f"semantic_edge_stop_{side}({getattr(sem, 'label', '')})"
+        return True, reason
 
     def turn_allowed(self) -> tuple[bool, str]:
         return gate_turn_allowed(self.state())

@@ -496,7 +496,18 @@ def _log_rerun_state(
             [[0.30 * math.cos(math.radians(pose.theta_deg)), 0.30 * math.sin(math.radians(pose.theta_deg)), 0.0]],
             dtype=np.float32,
         )
-        rr.log(f"world/poses/{idx + 1:02d}/origin", rr.Points3D(origin, colors=[color], radii=0.05))
+        # Label the pose dot with its snapshot number so the map position can be
+        # tied back to the "[snapshot] saved #N" / "[map] snapshot #N ..." logs
+        # (field 2026-07-20: user needs to pinpoint WHICH capture the robot was
+        # on when it failed at the doorway). show_labels forces the text on
+        # (not hover-only); guarded so an older rerun without the kwarg still runs.
+        try:
+            origin_pts = rr.Points3D(
+                origin, colors=[color], radii=0.05, labels=[f"#{idx + 1}"], show_labels=True
+            )
+        except TypeError:
+            origin_pts = rr.Points3D(origin, colors=[color], radii=0.05, labels=[f"#{idx + 1}"])
+        rr.log(f"world/poses/{idx + 1:02d}/origin", origin_pts)
         rr.log(f"world/poses/{idx + 1:02d}/heading", rr.Arrows3D(origins=origin, vectors=vector, colors=[color]))
         # Full-circle body-footprint ring at the PLANNING collision radius:
         # the gauge for "does the robot think it fits?" — the gap the circle
@@ -509,6 +520,17 @@ def _log_rerun_state(
         rr.log("world/stitched_map", rr.Points3D(combined, colors=[200, 220, 255], radii=0.01))
 
     rr.log("world/status/capture_count", rr.Scalars(float(capture_index)))
+
+    # Log-side correlation: print the NEWEST snapshot's number and world pose so
+    # the terminal ties directly to the "#N" label now drawn on the rerun map.
+    if poses:
+        _newest = len(poses)
+        _np = poses[-1]
+        print(
+            f"[map] snapshot #{_newest} placed at world "
+            f"({float(_np.x):.2f}, {float(_np.y):.2f}, {float(_np.theta_deg):.0f}deg) "
+            f"— labeled #{_newest} on the rerun map"
+        )
 
 
 def main() -> int:
