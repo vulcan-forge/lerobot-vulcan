@@ -397,7 +397,25 @@ class Sourccey(Robot):
             base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
             base_goal_pos = {k: v for k, v in action.items() if k.endswith(".pos")}
 
-            if (left_action or right_action) and not self._arms_connected:
+            # Proto3 cannot mark arm targets as ABSENT — every command arrives with
+            # all 12 joints present, defaulting to exactly 0.0. Forwarding such an
+            # all-zero block DRIVES the arms to the zero pose (the servos move on
+            # any goal write; field 2026-07-21: repeated zero-pose slams during
+            # connect, one cracked arm). No real command targets exactly 0.0 on
+            # every joint of an arm, so an all-zero block means "no arm command".
+            if left_action and not any(abs(float(v)) > 1e-9 for v in left_action.values()):
+                left_action = {}
+            if right_action and not any(abs(float(v)) > 1e-9 for v in right_action.values()):
+                right_action = {}
+
+            # Lazy connect: real arm targets OR an explicit untorque=False request
+            # bring the arms online (a torque request with no targets must still
+            # connect them so they start reporting — with nothing forwarded below,
+            # connecting cannot move them).
+            wants_arms = bool(left_action or right_action) or not (
+                bool(action.get("untorque_left", True)) and bool(action.get("untorque_right", True))
+            )
+            if wants_arms and not self._arms_connected:
                 self._connect_arms(calibrate=False)
 
             prefixed_send_action_left = {}

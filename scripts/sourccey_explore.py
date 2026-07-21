@@ -136,6 +136,7 @@ class Analysis:
     free: np.ndarray          # (H, W) bool — ray-cast observed empty space
     traversable: np.ndarray   # (H, W) bool — free minus robot-radius inflation
     clusters: list[FrontierCluster] = field(default_factory=list)
+    frontier_cells: np.ndarray | None = None   # (n,2) ALL raw frontier cells, for display
 
     def to_cell(self, xy) -> tuple[int, int]:
         i = int((float(xy[1]) - self.origin_xy[1]) / self.res_m)
@@ -176,6 +177,7 @@ def analyze_map(
     robot_radius_m: float,
     min_frontier_span_m: float,
     min_frontier_cells: int,
+    self_clear_m: float = 0.30,
 ) -> Analysis:
     """Classify the world and extract significant frontiers.
 
@@ -228,25 +230,56 @@ def analyze_map(
         free[ii[ok], jj[ok]] = True
     free &= ~occupied
 
+    # The robot's own footprint is FREE, always: clear a disk around every sensor
+    # origin (and force it not-occupied). Without this, the no-return dead zone
+    # right around the robot reads as 'unknown' and the surrounding free space
+    # rings it as a false frontier centred on the robot (the red circle) — and any
+    # stray self-return there becomes a phantom wall. Nothing real is inside the
+    # body radius, so this is safe.
+    clear_off = _disk_offsets(max(1, int(math.ceil(self_clear_m / res_m))))
+    for origin_xy, _w in scan_rays:
+        ci = int((origin_xy[1] - origin[1]) / res_m)
+        cj = int((origin_xy[0] - origin[0]) / res_m)
+        ii = ci + clear_off[:, 0]
+        jj = cj + clear_off[:, 1]
+        ok = (ii >= 0) & (ii < h) & (jj >= 0) & (jj < w)
+        occupied[ii[ok], jj[ok]] = False
+        free[ii[ok], jj[ok]] = True
+
+    # UNKNOWN: not-observed space. The raycast stops ~2.5 cells short of each wall,
+    # leaving a thin not-free/not-occupied ring hugging the walls; raw, that ring
+    # makes the free edge look adjacent to 'unknown' ALL along the walls (false
+    # frontiers). Fix it precisely: exclude cells NEAR a wall from unknown (that
+    # is the shadow/ring, effectively observed) while leaving genuine unobserved
+    # space at real openings intact — an opening's unknown cone sits between the
+    # gap posts, away from any wall.
+    ring = _inflate(occupied, 3)
+    unknown = ~free & ~occupied & ~ring
+
     inflated = _inflate(occupied, int(math.ceil(robot_radius_m / res_m)))
     traversable = free & ~inflated
-    unknown = ~free & ~occupied
 
-    # Frontier: traversable AND 4-adjacent to unknown. Traversability is what
-    # kills the wall-hugging slivers — a real opening has robot-sized clearance.
+    # Frontier = FREE space 4-adjacent to unknown (the edge of what was seen). We do
+    # NOT require the frontier cell to be robot-traversable — that would erase a
+    # doorway once robot-radius inflation narrows it. Reachability is checked later
+    # in _pick_target, which A*'s to a viewpoint pulled back into open space.
     near_unknown = np.zeros((h, w), dtype=bool)
     near_unknown[1:, :] |= unknown[:-1, :]
     near_unknown[:-1, :] |= unknown[1:, :]
     near_unknown[:, 1:] |= unknown[:, :-1]
     near_unknown[:, :-1] |= unknown[:, 1:]
-    frontier = traversable & near_unknown
+    frontier = free & near_unknown
 
+    fcells = np.column_stack(np.nonzero(frontier)).astype(np.int64)
     analysis = Analysis(origin_xy=origin, res_m=res_m, occupied=occupied,
-                        free=free, traversable=traversable)
+                        free=free, traversable=traversable,
+                        frontier_cells=fcells if len(fcells) else None)
 
     # Cluster frontier cells (8-connectivity BFS) and keep the significant ones.
     remaining = frontier.copy()
     fi, fj = np.nonzero(remaining)
+    raw_clusters = 0
+    biggest_raw = 0.0
     for si, sj in zip(fi.tolist(), fj.tolist()):
         if not remaining[si, sj]:
             continue
@@ -267,6 +300,8 @@ def analyze_map(
             (arr[:, 0].max() - arr[:, 0].min()) * res_m,
             (arr[:, 1].max() - arr[:, 1].min()) * res_m,
         ))
+        raw_clusters += 1
+        biggest_raw = max(biggest_raw, span)
         if len(arr) >= min_frontier_cells and span >= min_frontier_span_m:
             centroid = np.array([
                 origin[0] + (arr[:, 1].mean() + 0.5) * res_m,
@@ -276,6 +311,11 @@ def analyze_map(
                 FrontierCluster(cells_ij=arr, centroid_xy=centroid, span_m=span, size=len(arr))
             )
     analysis.clusters.sort(key=lambda c: -c.span_m)
+    print(f"[analyze] free={int(free.sum())} unknown={int(unknown.sum())} "
+          f"traversable={int(traversable.sum())} frontier_cells={len(fcells)} | "
+          f"raw_clusters={raw_clusters} (biggest {biggest_raw:.2f}m) -> "
+          f"significant={len(analysis.clusters)} "
+          f"(need span>={min_frontier_span_m:.2f}m & >={min_frontier_cells} cells)")
     return analysis
 
 
@@ -396,9 +436,16 @@ def _pick_target(
                         found = (dd, ni, nj)
             if found is None:
                 continue
+            goal_cand = analysis.to_world((found[1], found[2]))
+            # A viewpoint that snapped far from the frontier is NOT a visit — it
+            # once degenerated to where the robot already stood, 'reached' itself
+            # instantly, and falsely credited the frontier (field 2026-07-21:
+            # 'map complete' with 3 frontiers left). Near the frontier or nothing.
+            if float(np.hypot(*(goal_cand - cluster.centroid_xy))) > pull + 0.55:
+                continue
             path = _astar(analysis.traversable, (si, sj), (found[1], found[2]))
             if path is not None:
-                goal_xy = analysis.to_world((found[1], found[2]))
+                goal_xy = goal_cand
                 break
         if path is None or goal_xy is None:
             continue
@@ -455,22 +502,33 @@ def _localize(
 
 
 # ---------------------------------------------------------------------------
-# Base controller: a background thread streams the current velocity command so
-# the base never stalls (it has a command watchdog) while the main loop plans and
-# scan-matches at its own slower rate — the standard decoupling of control from
-# SLAM that lets the robot drive CONTINUOUSLY instead of in stop-start bursts.
+# Base controller: the FAST inner control loop.
 #
-# ``hold`` is the arm-stow fragment (12 joint targets + untorque False) merged
-# into every command, so the parked arms keep their out-of-the-beam pose while
-# the base drives. See sourccey_arm_pose.py.
+# Field 2026-07-21: steering computed in the main loop zigzagged badly — each
+# main-loop pass blocks ~0.3s on a scan-match (+ rendering), so heading errors
+# were up to ~1s stale while the base executed them at 25Hz; rotating ~50deg/s
+# on a 1s-old error overshoots by 25-50deg every decision → bang-bang switchbacks
+# that also wrecked the pose. The professional structure separates the loops:
+# this thread closes the HEADING loop on the gyro directly — every tick reads
+# the IMU fresh and servos theta.vel toward a target IMU heading — while the
+# slow SLAM loop only updates the TARGET (which waypoint, what bearing) at its
+# own pace. The gyro heading is continuous/unwrapped, so targets carry no wrap
+# issues. ``hold`` is the arm-stow fragment merged into every command.
 # ---------------------------------------------------------------------------
 
 class BaseController:
-    def __init__(self, robot, hold: dict, rate_hz: float = 25.0) -> None:
+    def __init__(self, robot, hold: dict, imu, rate_hz: float = 25.0, *,
+                 turn_speed: float = 0.9, hold_gain: float = 4.5,
+                 hold_max: float = 0.6) -> None:
         self.robot = robot
         self.hold = dict(hold)
+        self.imu = imu
+        self.turn_sign = 1.0            # set after the anchor spin measures it
+        self.turn_speed = float(turn_speed)
+        self.hold_gain = float(hold_gain)
+        self.hold_max = float(hold_max)
         self.dt = 1.0 / float(rate_hz)
-        self._cmd = (0.0, 0.0, 0.0)     # (x.vel, y.vel, theta.vel)
+        self._mode: tuple[str, float, float] = ("halt", 0.0, 0.0)  # (kind, x_vel, target_imu_deg)
         self._lock = threading.Lock()
         self._run = False
         self._thread: threading.Thread | None = None
@@ -485,23 +543,49 @@ class BaseController:
     def _loop(self) -> None:
         while self._run:
             with self._lock:
-                x, y, th = self._cmd
+                kind, x_vel, target = self._mode
+            x = th = 0.0
+            if kind != "halt":
+                yaw = None
+                try:
+                    yaw = self.imu.deg()
+                except Exception:
+                    pass
+                if yaw is None:
+                    x = th = 0.0          # no gyro this tick -> fail safe, stop
+                else:
+                    err_deg = target - float(yaw)
+                    if kind == "rotate":
+                        # Closed-loop pivot: fresh gyro every tick means no
+                        # overshoot; stiction floor so it always actually turns.
+                        if abs(err_deg) > 2.5:
+                            mag = min(self.turn_speed, max(0.80, 0.035 * abs(err_deg)))
+                            th = self.turn_sign * math.copysign(mag, err_deg)
+                    else:                  # "drive"
+                        x = float(x_vel)
+                        corr = self.hold_gain * math.radians(err_deg)
+                        th = self.turn_sign * max(-self.hold_max, min(self.hold_max, corr))
             try:
                 self.robot.send_action({
-                    "x.vel": x, "y.vel": y, "theta.vel": th,
+                    "x.vel": x, "y.vel": 0.0, "theta.vel": th,
                     "z.pos": getattr(self.robot, "_z_pos_cmd", 100.0),
-                    **self.hold,     # arm stow pose (or legacy untorque) every tick
+                    **self.hold,     # arm stow pose every tick
                 })
             except Exception:
                 pass
             time.sleep(self.dt)
 
-    def set(self, x_vel: float, y_vel: float, theta_vel: float) -> None:
+    def rotate_to(self, target_imu_deg: float) -> None:
         with self._lock:
-            self._cmd = (float(x_vel), float(y_vel), float(theta_vel))
+            self._mode = ("rotate", 0.0, float(target_imu_deg))
+
+    def drive_toward(self, x_vel: float, target_imu_deg: float) -> None:
+        with self._lock:
+            self._mode = ("drive", float(x_vel), float(target_imu_deg))
 
     def halt(self) -> None:
-        self.set(0.0, 0.0, 0.0)
+        with self._lock:
+            self._mode = ("halt", 0.0, 0.0)
 
     def shutdown(self) -> None:
         self.halt()
@@ -571,6 +655,17 @@ def _log_world(rr, world_map: WorldMap, args, robot_centre, trail: list[np.ndarr
         xyz = np.column_stack([pts[:, 0], pts[:, 1], np.zeros(len(pts), dtype=np.float32)])
         colors = _MAP_PALETTE[ids % len(_MAP_PALETTE)]
         rr.log("world/lidar_map", rr.Points3D(xyz.astype(np.float32), colors=colors, radii=0.02))
+    # ALL raw frontier candidates dim (so we can see near-misses), significant
+    # clusters bright red on top.
+    if analysis is not None and analysis.frontier_cells is not None:
+        rc = analysis.frontier_cells
+        rx = analysis.origin_xy[0] + (rc[:, 1] + 0.5) * analysis.res_m
+        ry = analysis.origin_xy[1] + (rc[:, 0] + 0.5) * analysis.res_m
+        rxyz = np.column_stack([rx, ry, np.zeros(len(rc))]).astype(np.float32)
+        rr.log("world/frontier_candidates",
+               rr.Points3D(rxyz, colors=[[130, 60, 60]] * len(rc), radii=0.015))
+    else:
+        rr.log("world/frontier_candidates", rr.Points3D(np.zeros((0, 3), dtype=np.float32)))
     if analysis is not None and analysis.clusters:
         f_all = np.concatenate([c.cells_ij for c in analysis.clusters], axis=0)
         fx = analysis.origin_xy[0] + (f_all[:, 1] + 0.5) * analysis.res_m
@@ -642,10 +737,14 @@ def main() -> int:
                         help="Maximum viewpoints to drive to and snapshot.")
     parser.add_argument("--frontier-res-m", type=float, default=0.05,
                         help="Occupancy-analysis grid resolution.")
-    parser.add_argument("--min-frontier-span-m", type=float, default=0.55,
-                        help="Smallest frontier opening worth visiting (~a doorway); anything "
-                             "smaller is an insignificant crevice.")
-    parser.add_argument("--min-frontier-cells", type=int, default=10)
+    parser.add_argument("--min-frontier-span-m", type=float, default=0.40,
+                        help="Smallest frontier opening worth visiting; anything smaller is an "
+                             "insignificant crevice. Lowered since robot-radius inflation already "
+                             "narrows a real opening before it is measured.")
+    parser.add_argument("--min-frontier-cells", type=int, default=6)
+    parser.add_argument("--self-clear-m", type=float, default=0.30,
+                        help="Radius around the robot's own positions asserted as free space, so the "
+                             "no-return dead zone under the robot is not a false frontier.")
     parser.add_argument("--viewpoint-pullback-m", type=float, default=0.70,
                         help="How far back from the frontier the snapshot viewpoint sits "
                              "(inside known-free space, looking out).")
@@ -666,18 +765,34 @@ def main() -> int:
     parser.add_argument("--track-search-xy-m", type=float, default=0.22,
                         help="Translation search window for each continuous tracking match — covers how "
                              "far the base rolls between matches.")
+    parser.add_argument("--max-speed-mps", type=float, default=0.45,
+                        help="Physical top speed of the base. Bounds every tracking/relock search "
+                             "window (the truth cannot be farther than v_max * elapsed), which is what "
+                             "stops the matcher from 'teleporting' the pose along a wall.")
     parser.add_argument("--track-theta-window-deg", type=float, default=8.0,
                         help="Heading search window for the tracking match (gyro seeds it to ~0.5deg).")
-    parser.add_argument("--aim-tolerance-deg", type=float, default=18.0,
-                        help="Rotate toward the heading until within this, then drive forward.")
-    # Arm stow: hold the arms in a saved out-of-the-beam pose (replaces LiDAR arm
-    # masking). Capture the pose with scripts/sourccey_capture_arm_pose.py.
+    parser.add_argument("--aim-tolerance-deg", type=float, default=10.0,
+                        help="Start driving forward once the heading error is within this.")
+    parser.add_argument("--drive-exit-tol-deg", type=float, default=30.0,
+                        help="While driving, fall back to pivoting only past this heading error "
+                             "(hysteresis so the two modes never ping-pong).")
+    parser.add_argument("--heading-hold-gain", type=float, default=4.5,
+                        help="Proportional gain (per radian of heading error) holding the drive "
+                             "heading. High, to counter the mecanum base's curve-while-straight.")
+    parser.add_argument("--heading-hold-max", type=float, default=0.6,
+                        help="Cap on the heading-hold theta.vel while driving forward.")
+    parser.add_argument("--viewpoint-settle-s", type=float, default=0.5,
+                        help="Pause at a reached viewpoint before integrating clean stationary scans.")
+    # Arms are QUARANTINED by default (hardware damage 2026-07-21): no torque, no
+    # targets, ever — unless --arm-stow explicitly opts in.
+    parser.add_argument("--arm-stow", action="store_true", default=False,
+                        help="OPT IN to driving the arms to the saved stow pose at startup. Off by "
+                             "default after the arm-flip incident; leave off until the arm read/write "
+                             "scale is verified on hardware.")
     parser.add_argument("--arm-stow-pose", default=str(DEFAULT_POSE_PATH),
-                        help="Path to the saved arm stow pose JSON.")
+                        help="Path to the saved arm stow pose JSON (used only with --arm-stow).")
     parser.add_argument("--arm-settle-s", type=float, default=3.0,
                         help="Seconds to hold the stow command so the arms reach the pose before spinning.")
-    parser.add_argument("--no-arm-stow", action="store_true", default=False,
-                        help="Skip arm stow entirely and leave the arms untorqued (legacy).")
     # Forward collider box (local costmap): the ONLY thing that stops the drive.
     parser.add_argument("--box-near-m", type=float, default=0.10,
                         help="Near edge of the collider box ahead of the LiDAR.")
@@ -694,6 +809,9 @@ def main() -> int:
                              "guards against localization error into a mapped wall.")
     parser.add_argument("--obstacle-wait-s", type=float, default=4.0,
                         help="How long to stop and watch a novel obstacle before replanning around it.")
+    parser.add_argument("--obstacle-ttl-s", type=float, default=45.0,
+                        help="Blocked dynamic-obstacle points expire after this long, so a person who "
+                             "walked away stops blocking the planner forever.")
     parser.add_argument("--waypoint-tol-m", type=float, default=0.18)
     parser.add_argument("--max-leg-seconds", type=float, default=35.0,
                         help="Give up on a single waypoint leg after this long (something is wedged).")
@@ -739,22 +857,23 @@ def main() -> int:
     _send_stop(robot)
     print(f"[explore] robot connected ({args.remote_ip}).")
 
-    # ---- Arm stow: move the arms to the saved out-of-the-beam pose and hold it
-    # for the whole run (this replaces all the LiDAR arm-masking). `hold` is merged
-    # into every base command so the torqued arms keep that pose while driving.
-    stow_pose = None if bool(args.no_arm_stow) else load_pose(args.arm_stow_pose)
+    # ---- Arms: QUARANTINED (2026-07-21 — a commanded "hold current position"
+    # physically flipped and cracked the left arm; the read-back scale is not
+    # trusted against the write path until verified on the hardware). Default is
+    # to NEVER torque or target the arms; --arm-stow is an explicit opt-in.
+    stow_pose = load_pose(args.arm_stow_pose) if bool(args.arm_stow) else None
     if stow_pose is not None:
-        print(f"[explore] stowing arms to saved pose ({args.arm_stow_pose}) ...")
+        print(f"[explore] --arm-stow OPT-IN: moving arms to {args.arm_stow_pose} ...")
         apply_pose_blocking(robot, stow_pose, settle_s=float(args.arm_settle_s))
         hold = hold_action(stow_pose)
-        print("[explore] arms stowed and held.")
+        print("[explore] arms stowed and held for the run.")
     else:
         hold = limp_action()
-        if bool(args.no_arm_stow):
-            print("[explore] --no-arm-stow: arms left untorqued.")
+        if bool(args.arm_stow):
+            print(f"[explore] WARNING: --arm-stow set but no pose at {args.arm_stow_pose}; "
+                  "arms left untorqued.")
         else:
-            print(f"[explore] WARNING: no stow pose at {args.arm_stow_pose} — run "
-                  "sourccey_capture_arm_pose.py first. Leaving arms untorqued for now.")
+            print("[explore] arms left untorqued (arm motion is quarantined; --arm-stow to opt in).")
 
     # ---- Rerun ----
     grpc_port, web_port = _pick_free_ports(int(args.rerun_grpc_port), int(args.rerun_web_port))
@@ -801,10 +920,26 @@ def main() -> int:
 
     world_map = WorldMap()
     mission_t0 = time.monotonic()
-    controller = BaseController(robot, hold, rate_hz=float(args.control_rate_hz))
-    # Novel obstacles the robot met en route (a person, a moved chair) that persisted;
-    # fed into the planner as occupied so replanning routes AROUND them.
-    dynamic_occupied: list[np.ndarray] = []
+    controller = BaseController(robot, hold, imu, rate_hz=float(args.control_rate_hz),
+                                turn_speed=float(args.turn_speed),
+                                hold_gain=float(args.heading_hold_gain),
+                                hold_max=float(args.heading_hold_max))
+    # Novel obstacles the robot met en route (a person, a moved chair) that
+    # persisted; fed into the planner as occupied so replanning routes AROUND
+    # them. Entries carry a timestamp and EXPIRE after --obstacle-ttl-s: a person
+    # who walked away must not block the map forever (field 2026-07-21: blocked
+    # blobs + inflation permanently ate the corridor to the exit, traversable
+    # 955->725, and reachability collapsed).
+    dynamic_occupied: list[tuple[float, np.ndarray]] = []
+    dyn_gen = [0]                      # bumped on every add/prune (cache key)
+
+    def _dyn_arrays() -> list[np.ndarray]:
+        now = time.monotonic()
+        keep = [(t, a) for t, a in dynamic_occupied if now - t < float(args.obstacle_ttl_s)]
+        if len(keep) != len(dynamic_occupied):
+            dynamic_occupied[:] = keep
+            dyn_gen[0] += 1
+        return [a for _t, a in dynamic_occupied]
 
     # ================= PHASE 1: the anchor spin =================
     print(f"\n[explore] PHASE 1 — one continuous {float(args.spin_degrees):.0f}deg anchor spin ...")
@@ -881,6 +1016,7 @@ def main() -> int:
     # gyro. This is the rotation calibration, taken for free from the spin.
     net_spin = revolutions[-1][1] if revolutions else 0.0
     turn_sign = 1.0 if net_spin >= 0.0 else -1.0
+    controller.turn_sign = float(turn_sign)
     print(f"[explore] drive frame recovered (no nudge): physical forward = map heading "
           f"{forward_offset:+.0f}deg; +theta.vel {'raises' if turn_sign > 0 else 'lowers'} IMU "
           f"(net spin {net_spin:+.0f}deg).")
@@ -893,17 +1029,17 @@ def main() -> int:
         return np.array([float(pose.x) - lever_m * math.cos(tr),
                          float(pose.y) - lever_m * math.sin(tr)])
 
-    def _track(prev_imu_deg: float | None) -> tuple[float, np.ndarray]:
-        """One continuous scan-to-map tracking step — the core of professional 2D
-        SLAM, and the same loop that makes the anchor spin crisp.
+    def _track(prev_imu_deg: float | None, *, integrate: bool = True,
+               search_xy_m: float | None = None) -> tuple[float, np.ndarray]:
+        """One scan-to-map tracking step: match the latest revolution against the
+        WHOLE map (seeded by the previous solved pose + gyro delta) and update the
+        pose. ``integrate`` controls whether the scan is ALSO added to the map.
 
-        Grab the latest LiDAR revolution, seed its pose from the last solved pose
-        rotated by the gyro delta, and match it against the WHOLE accumulated map —
-        so drift is bounded by the map, not by frame-to-frame error. On a good
-        match the pose is updated AND the scan integrated, growing the map as the
-        robot moves. A weak match keeps the gyro dead-reckoned rotation but does
-        NOT poison the map with a bad scan. Returns (score, the local scan) so the
-        caller can reuse the same scan for the collider box without re-extracting."""
+        While DRIVING we localize with integrate=False: a revolution captured in
+        motion is smeared (the LiDAR sweeps as the base moves), so folding it into
+        the map smudges walls and fills in doorways (they then read as walls). We
+        only add scans when stopped (at a viewpoint), where they are clean. Returns
+        (score, local scan) so the caller can reuse it for the collider box."""
         nonlocal cur_pose
         empty = np.zeros((0, 2), dtype=np.float32)
         _fid, frame = feed.latest()
@@ -922,80 +1058,194 @@ def main() -> int:
         sr = math.radians(theta_seed)
         seed = Pose2D(x=centre[0] + lever_m * math.cos(sr),
                       y=centre[1] + lever_m * math.sin(sr), theta_deg=theta_seed)
-        solved, score = _localize(local, world_map, seed, args,
-                                  float(args.track_search_xy_m), float(args.track_theta_window_deg))
+        window = float(search_xy_m) if search_xy_m is not None else float(args.track_search_xy_m)
+        # THRESHOLD-SAFE matching: at a doorway much of the scan looks into
+        # unmapped space and matches nothing, cratering the score even when the
+        # pose is perfect (field: 15.5 -> 4.3 arriving centred at the exit ->
+        # "tracking lost" -> the robot turned away from the opening it came for).
+        # Solve on the map-SUPPORTED subset; the unsupported remainder is new
+        # territory — integrated below so the map grows through the opening.
+        sup = _support_mask(_transform_points(local, seed))
+        match_local = local[sup] if int(sup.sum()) >= 60 else local
+        solved, score = _localize(match_local, world_map, seed, args,
+                                  window, float(args.track_theta_window_deg))
         if score >= float(args.min_match_score):
-            cur_pose = solved
-            world_map.add(local, solved)
+            if integrate:
+                cur_pose = solved          # stationary: full re-anchor (clean scan)
+                world_map.add(local, solved)
+            else:
+                # IN MOTION: match owns POSITION, gyro owns ROTATION. A moving
+                # scan is smeared, so its solved theta wobbles a few degrees per
+                # match — feeding that into the pose made the heading target
+                # noisy and the servo faithfully chased the noise (the residual
+                # squiggle). The gyro's relative yaw is ~0.5deg-accurate over a
+                # whole leg, so keep the gyro-propagated theta and re-anchor
+                # rotation only from clean stationary scans at viewpoints.
+                cur_pose = Pose2D(x=float(solved.x), y=float(solved.y), theta_deg=theta_seed)
         else:
             cur_pose = seed        # trust the gyro rotation; integrate nothing bad
         return score, local
 
+    def _integrate_at_viewpoint() -> int:
+        """Stop, settle, and map the new area with CLEAN stationary scans. Uses a
+        WIDER match window than in-motion tracking, to recover any pose drift that
+        built up during the drive, and prints the score so a failure is visible
+        (a silent failure here is why the map wasn't growing). Returns scans added."""
+        nonlocal cur_pose
+        controller.halt()
+        time.sleep(float(args.viewpoint_settle_s))
+        after = feed.latest()[0]
+        added = 0
+        last_score = 0.0
+        for _ in range(4):
+            fid, frame = feed.wait_for_frame_after(after_frame_id=after, timeout_s=1.0,
+                                                   min_frame_advances=1)
+            if frame is None:
+                continue
+            after = int(fid)
+            local = _scan_local(frame, args)
+            if len(local) < 12:
+                continue
+            # Solve on the map-supported subset (the viewpoint faces unmapped
+            # space by design!), then integrate the FULL scan — that is exactly
+            # how the map grows through the opening.
+            sup_v = _support_mask(_transform_points(local, cur_pose))
+            match_v = local[sup_v] if int(sup_v.sum()) >= 60 else local
+            solved, last_score = _localize(match_v, world_map, cur_pose, args,
+                                           max(0.40, float(args.track_search_xy_m)), 15.0)
+            if last_score >= float(args.min_match_score):
+                cur_pose = solved
+                world_map.add(local, solved)
+                added += 1
+        if added == 0:
+            # The drive drifted the pose past even the wide window (field: viewpoint
+            # match 2.6). We are STATIONARY, so a bounded relocalization is safe:
+            # sweep wider until the room snaps back in, then map from the fixed pose.
+            print(f"[explore]   viewpoint match weak ({last_score:.1f}) — stationary relocalization ...")
+            fid2, frame2 = feed.wait_for_frame_after(after_frame_id=after, timeout_s=1.5,
+                                                     min_frame_advances=1)
+            if frame2 is not None:
+                local2 = _scan_local(frame2, args)
+                if len(local2) >= 12:
+                    sup2 = _support_mask(_transform_points(local2, cur_pose))
+                    match2 = local2[sup2] if int(sup2.sum()) >= 60 else local2
+                    solved2, sc2 = _localize(match2, world_map, cur_pose, args, 0.60, 12.0)
+                    if sc2 >= float(args.min_match_score):
+                        cur_pose = solved2
+                        world_map.add(local2, solved2)
+                        added += 1
+                        last_score = sc2
+        print(f"[explore]   mapped viewpoint: +{added} scans (match {last_score:.1f})")
+        return added
+
     trail: list[np.ndarray] = [_robot_centre(cur_pose)]
     visited: list[np.ndarray] = []
+    obstacle_strikes: dict[tuple[int, int], int] = {}   # frontier -> times obstacle-blocked
+    lost_strikes: dict[tuple[int, int], int] = {}       # frontier -> times tracking-lost
     viewpoints_reached = 0
     spin_scan_count = len(world_map.scans)
     frontiers_left = 0
 
     def _analysis_now() -> Analysis:
         pts, _ids = world_map.render_points(float(args.grid_res_m), int(args.grid_min_hits))
-        if dynamic_occupied:
-            pts = np.concatenate([pts] + dynamic_occupied, axis=0)
+        dyn = _dyn_arrays()
+        if dyn:
+            pts = np.concatenate([pts] + dyn, axis=0)
         rays = [(np.array([float(s.pose.x), float(s.pose.y)]), s.world_xy)
                 for s in world_map.scans]
         return analyze_map(rays, pts, float(args.frontier_res_m), float(args.robot_radius_m),
-                           float(args.min_frontier_span_m), int(args.min_frontier_cells))
+                           float(args.min_frontier_span_m), int(args.min_frontier_cells),
+                           self_clear_m=float(args.self_clear_m))
 
-    def _novel_from(local: np.ndarray) -> tuple[bool, np.ndarray | None]:
-        """Given the scan at the CURRENT pose, return whether a NOVEL
-        obstacle (not on the map) sits in the forward collider box, and its world
-        points. Static mapped walls are excluded — only things the map does not
-        already explain (a person, a moved chair) count."""
+    _novel_cache: list = [None, None]     # [key, occupied-cell set]
+
+    def _support_mask(world_pts: np.ndarray) -> np.ndarray:
+        """Which world points are EXPLAINED by the map (a map or flagged-dynamic
+        point within ~3 cells of --novel-res-m). Two consumers:
+        * novelty: an in-box point that is NOT supported is a novel obstacle;
+        * threshold-safe matching: at a doorway much of the scan looks into
+          UNMAPPED space and matches nothing, cratering the score even when the
+          pose is perfect — so the matcher solves on the SUPPORTED subset only."""
+        res = float(args.novel_res_m)
+        dyn = _dyn_arrays()
+        key = (len(world_map.scans), dyn_gen[0])
+        if _novel_cache[0] != key:
+            occ_set = set()
+            for arr in [world_map.reference(60000)] + dyn:
+                if len(arr):
+                    for cx, cy in np.round(np.asarray(arr, dtype=np.float64) / res).astype(np.int64):
+                        occ_set.add((int(cx), int(cy)))
+            _novel_cache[0] = key
+            _novel_cache[1] = occ_set
+        occupied = _novel_cache[1]
+        out = np.empty(len(world_pts), dtype=bool)
+        for i in range(len(world_pts)):
+            ci = int(round(float(world_pts[i, 0]) / res))
+            cj = int(round(float(world_pts[i, 1]) / res))
+            out[i] = any((ci + di, cj + dj) in occupied
+                         for di in (-1, 0, 1) for dj in (-1, 0, 1))
+        return out
+
+    def _novel_from(local: np.ndarray) -> tuple[bool, np.ndarray | None, np.ndarray | None]:
+        """Given the scan at the CURRENT pose, return (is_novel, world_pts,
+        body_frame_pts) for any NOVEL obstacle in the forward collider box.
+
+        'Novel' = not explained by the map NOR by already-flagged dynamic
+        obstacles — the latter is essential: without it, a persisted obstacle
+        re-triggered as 'novel' on every subsequent leg forever (field
+        2026-07-21: the same ~32 points marked blocked ~30 times, robot never
+        moved). body_frame_pts (physical-forward frame) are returned for the
+        self-return diagnostic: something novel at the SAME body position at
+        every heading is attached to the robot, not in the room."""
         if local is None or len(local) == 0:
-            return False, None
+            return False, None, None
         ff = _to_forward_frame(local, forward_offset)
         inbox = ((ff[:, 0] > float(args.box_near_m)) & (ff[:, 0] < float(args.box_depth_m))
                  & (np.abs(ff[:, 1]) < float(args.box_half_width_m)))
         box_local = local[inbox]
         if len(box_local) < int(args.box_min_points):
-            return False, None
+            return False, None, None
         world = _transform_points(box_local, cur_pose)
-        res = float(args.novel_res_m)
-        ref = world_map.reference(4000)
-        occupied = set()
-        if len(ref):
-            for cx, cy in np.round(ref / res).astype(np.int64):
-                occupied.add((int(cx), int(cy)))
-        novel_pts = []
-        for wx, wy in world:
-            ci, cj = int(round(wx / res)), int(round(wy / res))
-            if not any((ci + di, cj + dj) in occupied for di in (-1, 0, 1) for dj in (-1, 0, 1)):
-                novel_pts.append((wx, wy))
-        if len(novel_pts) < int(args.box_min_points):
-            return False, None
-        return True, np.array(novel_pts, dtype=np.float32)
+        novel_mask = ~_support_mask(world)
+        if int(novel_mask.sum()) < int(args.box_min_points):
+            return False, None, None
+        return True, world[novel_mask].astype(np.float32), ff[inbox][novel_mask]
 
     def _handle_obstacle() -> str:
         """A novel obstacle is in the box. Stop and watch: if it clears within the
         wait window, resume; if it persists, add it to the planner's occupancy so
-        the next plan routes AROUND it, and ask for a replan."""
+        the next plan routes AROUND it, and ask for a replan. Prints the obstacle's
+        BODY-FRAME location — the self-return discriminator: an 'obstacle' at the
+        same body position at every heading is attached to the robot (arm in the
+        scan plane), not something in the room."""
         controller.halt()
         print("[explore] novel obstacle in the path — stopping to observe ...")
         deadline = time.monotonic() + float(args.obstacle_wait_s)
         last_novel = None
+        last_body = None
         while time.monotonic() < deadline:
             _fid, frame = feed.latest()
             if frame is not None:
                 local = _scan_local(frame, args)
-                is_novel, novel = _novel_from(local)
+                is_novel, novel, body = _novel_from(local)
                 if not is_novel:
                     print("[explore] path cleared — resuming.")
                     return "clear"
-                last_novel = novel
+                last_novel, last_body = novel, body
             time.sleep(0.25)
         if last_novel is not None and len(last_novel):
-            dynamic_occupied.append(last_novel)
-            print(f"[explore] obstacle persisted; marked {len(last_novel)} pts blocked, replanning around it.")
+            dynamic_occupied.append((time.monotonic(), last_novel))
+            dyn_gen[0] += 1
+            fwd = float(np.mean(last_body[:, 0]))
+            lat = float(np.mean(last_body[:, 1]))
+            rng = float(np.min(np.hypot(last_body[:, 0], last_body[:, 1])))
+            print(f"[explore] obstacle persisted; marked {len(last_novel)} pts blocked "
+                  f"(BODY frame: fwd {fwd:+.2f}m lat {lat:+.2f}m nearest {rng:.2f}m — if these "
+                  "numbers repeat at every heading, it is attached to the robot: check the arm "
+                  "stow height vs the 0.28m scan plane). Replanning around it.")
+            xyz = np.column_stack([last_novel[:, 0], last_novel[:, 1], np.zeros(len(last_novel))])
+            rr.log("world/obstacle", rr.Points3D(xyz.astype(np.float32),
+                                                 colors=[[255, 255, 255]] * len(xyz), radii=0.03))
         return "replan"
 
     def _drive_leg(waypoints, goal_xy, analysis) -> str:
@@ -1009,8 +1259,24 @@ def main() -> int:
         Returns '' on arrival, else a failure reason."""
         nonlocal cur_pose
         prev_imu = imu.deg()
+        last_render = 0.0
+        last_sent: tuple[bool, float] | None = None    # (driving, target_imu)
+        # Tracking-health state. The search window is bounded by PHYSICS: the base
+        # cannot exceed --max-speed-mps, so the true position always lies within
+        # v_max * (time since the last good fix). Wider windows are not "safer" —
+        # in a near-rectangular room a 0.5m slide along a wall keeps a high match
+        # score, so unbounded windows let the matcher TELEPORT the pose (field
+        # 2026-07-21: wide relocks 'succeeded' 0.5-1m apart, v_est read 1.18m/s,
+        # bearing recomputed wildly, robot zigzagged to nonsense).
+        v_max = float(args.max_speed_mps)
+        last_good_t = time.monotonic()
+        n_weak = 0
+        last_diag = 0.0
+        novel_hist: list[tuple[np.ndarray, np.ndarray]] = []   # (obstacle world centroid, robot centre)
+        phantom_warned = False
         for wp in waypoints:
             leg_t0 = time.monotonic()
+            driving = False
             while True:
                 if time.monotonic() - mission_t0 > float(args.max_mission_seconds):
                     controller.halt()
@@ -1022,42 +1288,156 @@ def main() -> int:
                 vec = wp - centre
                 if float(np.hypot(*vec)) <= float(args.waypoint_tol_m):
                     break
-                # Continuous localize + map-grow; reuse its scan for the box check.
-                score, local = _track(prev_imu)
-                prev_imu = imu.deg()
-                # Last-resort collision guard (localization error toward a mapped
-                # wall): halt if anything is right on the nose.
-                if len(local):
-                    ff = _to_forward_frame(local, forward_offset)
-                    lane = (ff[:, 0] > 0.02) & (np.abs(ff[:, 1]) < float(args.box_half_width_m))
-                    if np.any(lane) and float(ff[lane, 0].min()) < float(args.hard_stop_m):
-                        controller.halt()
-                        return "hard stop (obstacle on the nose)"
-                # Novel obstacle in the box?
-                is_novel, _n = _novel_from(local)
-                if is_novel:
-                    if _handle_obstacle() == "replan":
-                        controller.halt()
-                        return "obstacle - replan"
-                    prev_imu = imu.deg()
-                    continue
-                # Steer: aim the PHYSICAL front (map heading theta+offset) at the
-                # waypoint. err drives theta toward (alpha - offset).
+                # Heading to the waypoint, from the current estimate.
                 alpha = math.degrees(math.atan2(vec[1], vec[0]))
-                desired = alpha - forward_offset
-                err = ((desired - float(cur_pose.theta_deg) + 180.0) % 360.0) - 180.0
-                if abs(err) > float(args.aim_tolerance_deg):
-                    # Rotate toward the heading (continuous; stiction floor on rate).
-                    mag = min(float(args.turn_speed), max(0.80, 0.02 * abs(err)))
-                    controller.set(0.0, 0.0, float(turn_sign) * math.copysign(mag, err))
+                desired_map = alpha - forward_offset
+                err_map = ((desired_map - float(cur_pose.theta_deg) + 180.0) % 360.0) - 180.0
+                yaw_now = imu.deg()
+                if yaw_now is None:
+                    controller.halt()
+                    time.sleep(0.1)
+                    continue
+                # Mode hysteresis: pivot for big errors, drive for small.
+                if driving and abs(err_map) > float(args.drive_exit_tol_deg):
+                    driving = False
+                    last_sent = None
+                elif not driving and abs(err_map) <= float(args.aim_tolerance_deg):
+                    driving = True
+                    last_sent = None
+                target_imu = float(yaw_now) + err_map
+
+                if not driving:
+                    # PIVOT phase: NO scan-matching. During fast rotation the scan
+                    # was captured ~0.1-0.2s before the IMU read that seeds the
+                    # match — a 5-10deg heading lie at pivot speed, outside the
+                    # search window (field: score 14.9 stationary -> 2.1 the moment
+                    # the pivot began). The gyro alone owns the pose here: rotation
+                    # is gyro-tracked exactly, position does not change in a pivot
+                    # (the small mecanum pivot-wander is inside the next drive
+                    # window). The 25Hz servo does the actual turning.
+                    if last_sent is None or abs(target_imu - last_sent[1]) > 4.0:
+                        controller.rotate_to(target_imu)
+                        last_sent = (False, target_imu)
+                    if prev_imu is not None:
+                        cur_pose = Pose2D(x=float(cur_pose.x), y=float(cur_pose.y),
+                                          theta_deg=float(cur_pose.theta_deg) + (float(yaw_now) - float(prev_imu)))
+                    prev_imu = yaw_now
+                    time.sleep(0.05)
                 else:
-                    theta_corr = max(-0.35, min(0.35, float(turn_sign) * 0.03 * err))
-                    controller.set(float(args.drive_speed), 0.0, theta_corr)
+                    # DRIVE phase: scan-to-map tracking with a PHYSICS-BOUNDED
+                    # window — the base cannot outrun v_max, so no match may claim
+                    # a bigger displacement, whatever its score. While driving
+                    # straight the yaw-hold keeps rotation slow, so scan/IMU time
+                    # skew is harmless here.
+                    t_now = time.monotonic()
+                    window = min(0.45, v_max * (t_now - last_good_t) + 0.10)
+                    score, local = _track(prev_imu, integrate=False, search_xy_m=window)
+                    prev_imu = imu.deg()
+                    if score >= float(args.min_match_score):
+                        last_good_t = t_now
+                        n_weak = 0
+                    else:
+                        n_weak += 1
+                        if n_weak >= 2:
+                            # Lost while moving: stop; relock STATIONARY with a
+                            # window still bounded by how far we could physically
+                            # have gone since the last good fix, and a tight theta
+                            # (the gyro is right). No teleport license.
+                            controller.halt()
+                            time.sleep(0.35)
+                            win_r = min(0.60, v_max * (time.monotonic() - last_good_t) + 0.20)
+                            relocked = False
+                            after_r = feed.latest()[0]
+                            for _attempt in range(3):     # patience: fresh frame each try
+                                fid_r, frame_r = feed.wait_for_frame_after(
+                                    after_frame_id=after_r, timeout_s=1.5, min_frame_advances=2)
+                                if frame_r is None:
+                                    continue
+                                after_r = int(fid_r)
+                                local_r = _scan_local(frame_r, args)
+                                if len(local_r) < 12:
+                                    continue
+                                sup_r = _support_mask(_transform_points(local_r, cur_pose))
+                                match_r = local_r[sup_r] if int(sup_r.sum()) >= 60 else local_r
+                                solved_r, sc_r = _localize(match_r, world_map, cur_pose, args,
+                                                           win_r, 10.0)
+                                if sc_r >= float(args.min_match_score):
+                                    cur_pose = solved_r
+                                    relocked = True
+                                    print(f"[drive] tracking slipped — re-locked stationary "
+                                          f"(match {sc_r:.1f}, window {win_r:.2f}m).")
+                                    break
+                            if not relocked:
+                                controller.halt()
+                                return "tracking lost"
+                            n_weak = 0
+                            last_good_t = time.monotonic()
+                            last_sent = None
+                            driving = False       # re-aim from the corrected pose
+                            prev_imu = imu.deg()
+                            continue
+                    if t_now - last_diag >= 2.0:
+                        last_diag = t_now
+                        c_dbg = _robot_centre(cur_pose)
+                        print(f"[drive] score {score:4.1f} window {window:.2f}m "
+                              f"pos ({c_dbg[0]:+.2f},{c_dbg[1]:+.2f}) dist {float(np.hypot(*vec)):.2f}m")
+                    # Last-resort collision guard: halt if anything is on the nose.
+                    if len(local):
+                        ff = _to_forward_frame(local, forward_offset)
+                        lane = (ff[:, 0] > 0.02) & (np.abs(ff[:, 1]) < float(args.box_half_width_m))
+                        if np.any(lane) and float(ff[lane, 0].min()) < float(args.hard_stop_m):
+                            controller.halt()
+                            return "hard stop (obstacle on the nose)"
+                    # Novel returns in the box? Do NOT stop yet — first apply the
+                    # physical discriminator, which only works WHILE MOVING:
+                    # a REAL object stays fixed in the world as the robot
+                    # approaches; a PHANTOM attached to the robot (arm flex, near-
+                    # field vibration artifact) travels along with it. The parked
+                    # observe-window can never tell these apart (both look static
+                    # when the robot is still) — which is how a self-artifact
+                    # blocked the exit twice (field: user confirmed nothing there).
+                    # The 0.25m hard-stop above still guards during confirmation.
+                    is_novel, novel_w, _b = _novel_from(local)
+                    if is_novel and novel_w is not None:
+                        novel_hist.append((np.mean(novel_w, axis=0), _robot_centre(cur_pose)))
+                        if len(novel_hist) > 4:
+                            novel_hist.pop(0)
+                        if len(novel_hist) >= 3:
+                            robot_moved = float(np.hypot(*(novel_hist[-1][1] - novel_hist[0][1])))
+                            if robot_moved >= 0.08:
+                                obs_moved = float(np.hypot(*(novel_hist[-1][0] - novel_hist[0][0])))
+                                if obs_moved < max(0.12, 0.5 * robot_moved):
+                                    # World-fixed while we approached: REAL.
+                                    novel_hist.clear()
+                                    if _handle_obstacle() == "replan":
+                                        controller.halt()
+                                        return "obstacle - replan"
+                                    prev_imu = imu.deg()
+                                    driving = False
+                                    last_sent = None
+                                    continue
+                                if not phantom_warned:
+                                    phantom_warned = True
+                                    print("[explore] near-field returns MOVE WITH the robot — "
+                                          "self-artifact (arm flex / vibration), ignoring; "
+                                          "not a world obstacle.")
+                                # Phantom: keep driving.
+                    else:
+                        novel_hist.clear()
+                    # Refresh the servo target (deadbanded — estimate noise must
+                    # not steer the base).
+                    if last_sent is None or abs(target_imu - last_sent[1]) > 4.0:
+                        controller.drive_toward(float(args.drive_speed), target_imu)
+                        last_sent = (True, target_imu)
                 trail.append(_robot_centre(cur_pose))
-                _log_panorama()
-                _log_world(rr, world_map, args, trail[-1], trail, analysis, goal_xy, waypoints)
-                _ = score
-        controller.halt()
+                # Throttle rendering — it is expensive and adds steering latency.
+                now = time.monotonic()
+                if now - last_render >= 0.5:
+                    last_render = now
+                    _log_panorama()
+                    _log_world(rr, world_map, args, trail[-1], trail, analysis, goal_xy, waypoints)
+        # Arrived: stop, settle, then map here with CLEAN stationary scans.
+        _integrate_at_viewpoint()
         return ""
 
     # ================= PHASE 2..N: explore the frontiers =================
@@ -1084,18 +1464,55 @@ def main() -> int:
         print(f"[explore] target frontier: span {cluster.span_m:.2f}m at "
               f"({cluster.centroid_xy[0]:+.2f}, {cluster.centroid_xy[1]:+.2f}), "
               f"viewpoint ({goal_xy[0]:+.2f}, {goal_xy[1]:+.2f}), {len(waypoints)} waypoint(s).")
+        # PLANNED path, logged ONCE per plan as a static green polyline — compare it
+        # against the orange executed trail to see intent vs reality.
+        plan_line = [[float(centre[0]), float(centre[1]), 0.0]] + [
+            [float(p[0]), float(p[1]), 0.0] for p in waypoints
+        ]
+        rr.log("world/plan", rr.LineStrips3D([plan_line], colors=[[70, 230, 100]], radii=0.014))
         _log_world(rr, world_map, args, centre, trail, analysis, goal_xy, waypoints,
                    note=f"driving to frontier (span {cluster.span_m:.2f}m)")
 
         leg_failed = _drive_leg(waypoints, goal_xy, analysis)
-        if leg_failed in ("mission time budget spent", "hard stop (obstacle on the nose)"):
+        if leg_failed == "mission time budget spent":
             aborted = leg_failed
             break
         if leg_failed == "obstacle - replan":
-            # The obstacle is now in dynamic_occupied; re-plan WITHOUT marking the
-            # frontier visited so the planner routes around it (or gives up if the
-            # only path is blocked). Whatever was mapped en route is kept.
-            print("[explore] re-planning around the obstacle ...")
+            # The obstacle is now in dynamic_occupied (and excluded from future
+            # novelty checks); re-plan around it. Progress guarantee: if the SAME
+            # frontier gets obstacle-blocked twice, give up on it — endless
+            # replan-loops against one target are how the mission dies in place.
+            fkey = (int(round(cluster.centroid_xy[0] / 0.3)), int(round(cluster.centroid_xy[1] / 0.3)))
+            obstacle_strikes[fkey] = obstacle_strikes.get(fkey, 0) + 1
+            if obstacle_strikes[fkey] >= 2:
+                print("[explore] frontier blocked twice — giving up on it, trying the next.")
+                visited.append(cluster.centroid_xy)
+            else:
+                print("[explore] re-planning around the obstacle ...")
+            continue
+        if leg_failed.startswith("hard stop"):
+            # Something (usually a wall corner + pose error) ended up on the nose.
+            # Not a mission-ender: back straight off, drop this frontier, replan.
+            print("[explore] hard stop — backing off and re-planning.")
+            yaw_now = imu.deg()
+            if yaw_now is not None:
+                controller.drive_toward(-float(args.drive_speed), float(yaw_now))
+                time.sleep(0.6)
+            controller.halt()
+            visited.append(cluster.centroid_xy)
+            continue
+        if leg_failed == "tracking lost":
+            # Localization hiccup, NOT a bad target — don't blacklist the exit for
+            # it (field: robot reached the doorway, confidence dipped, and the old
+            # policy marked THE EXIT visited and turned away). Retry once; only a
+            # second loss on the same frontier gives up on it.
+            fkey = (int(round(cluster.centroid_xy[0] / 0.3)), int(round(cluster.centroid_xy[1] / 0.3)))
+            lost_strikes[fkey] = lost_strikes.get(fkey, 0) + 1
+            if lost_strikes[fkey] >= 2:
+                print("[explore] tracking lost twice on this frontier — giving up on it.")
+                visited.append(cluster.centroid_xy)
+            else:
+                print("[explore] tracking lost — re-anchoring and retrying the same frontier.")
             continue
         if leg_failed:
             # Other failure (leg budget): drop this frontier and let the map re-decide.
@@ -1125,7 +1542,8 @@ def main() -> int:
     print(f"  viewpoints reached: {viewpoints_reached}.")
     print(f"  significant frontiers remaining: {len(final_analysis.clusters)} "
           f"(was {frontiers_left} at first analysis).")
-    print("  Map = world/lidar_map; frontiers red, target green, path yellow, trail orange.")
+    print("  Map = world/lidar_map; frontiers red, target green sphere, PLANNED path "
+          "green line (world/plan), executed trail orange (world/trail).")
     print("  Leave running to keep the viewer up; Ctrl+C to exit.")
     print("========================================")
 
