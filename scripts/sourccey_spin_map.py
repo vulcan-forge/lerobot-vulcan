@@ -137,33 +137,42 @@ def _scan_local(frame, args, heading_change_deg: float = 0.0, reverse_sweep: boo
     return np.column_stack([fwd, lat]).astype(np.float32)
 
 
-def _occupancy_grid_points(pts_xy: np.ndarray, res_m: float, min_hits: int) -> tuple[np.ndarray, np.ndarray]:
-    """Vote every point into a grid and keep only well-supported cells — the way
-    real SLAM maps stay crisp. A true wall is seen by nearly every scan, so its
-    cell racks up a huge count; the misalignment scatter around it only gets a few
-    votes and is dropped. Returns (cell_centres_xy, hit_counts) for the kept cells."""
+# Bright per-scan palette, matching the OLD wander map's look (field 2026-07-20,
+# user: "the edges were bright and colorful"). Each scan is drawn in its own hue
+# from this cycle at FULL brightness — the multicolour spray is what reads as
+# "detailed and alive" instead of the dim single-blue occupancy render.
+_MAP_PALETTE = np.array([
+    [106, 180, 255],   # #6ab4ff light blue
+    [255, 209, 102],   # #ffd166 yellow
+    [124, 242, 154],   # #7cf29a green
+    [255, 124, 229],   # #ff7ce5 pink
+    [255, 141, 106],   # #ff8d6a orange
+    [194, 153, 255],   # #c299ff purple
+], dtype=np.uint8)
+
+
+def _grid_filtered_points(pts_xy: np.ndarray, res_m: float, min_hits: int) -> np.ndarray:
+    """Grid-FILTER mask: vote every point into a grid, then return a boolean mask
+    of the RAW points that fall in well-supported cells. The grid does the
+    denoising (a true wall's cell is hit by nearly every scan; misalignment
+    scatter gets few votes and is dropped) — but the rendered detail stays
+    sub-cell, because the caller keeps the original points, not the 3cm cell
+    centres. Returns a boolean keep-mask over the input points."""
     if len(pts_xy) == 0:
-        return np.zeros((0, 2), dtype=np.float32), np.zeros((0,), dtype=np.int64)
+        return np.zeros((0,), dtype=bool)
     cells = np.round(np.asarray(pts_xy, dtype=np.float64) / float(res_m)).astype(np.int64)
-    uniq, counts = np.unique(cells, axis=0, return_counts=True)
-    keep = counts >= int(min_hits)
-    centres = (uniq[keep].astype(np.float32) * float(res_m))
-    return centres, counts[keep]
+    _uniq, inverse, counts = np.unique(cells, axis=0, return_inverse=True, return_counts=True)
+    return counts[inverse] >= int(min_hits)
 
 
-def _log_occupancy(rr, pts_xy: np.ndarray, counts: np.ndarray, heading_deg: float) -> None:
-    """Render the occupancy grid: kept cells, brighter where more scans agree."""
+def _log_occupancy(rr, pts_xy: np.ndarray, scan_ids: np.ndarray, heading_deg: float) -> None:
+    """Render the filtered map points, each coloured by its source scan (bright,
+    colourful — the old wander map's look)."""
     if len(pts_xy):
         xyz = np.column_stack(
             [pts_xy[:, 0], pts_xy[:, 1], np.zeros(len(pts_xy), dtype=np.float32)]
         ).astype(np.float32)
-        # Brightness by vote strength (well-supported walls glow).
-        strength = np.clip(counts / max(1.0, float(np.percentile(counts, 90))), 0.25, 1.0)
-        colors = np.column_stack([
-            (90 * strength).astype(np.uint8),
-            (190 * strength).astype(np.uint8),
-            (255 * strength).astype(np.uint8),
-        ])
+        colors = _MAP_PALETTE[np.asarray(scan_ids, dtype=np.int64) % len(_MAP_PALETTE)]
         rr.log("world/lidar_map", rr.Points3D(xyz, colors=colors, radii=0.02))
     rr.log("world/robot", rr.Points3D([[0.0, 0.0, 0.0]], colors=[[255, 130, 60]], radii=0.06))
     rr.log("spin/progress", rr.TextLog(f"spun {heading_deg:+.0f} deg"))
@@ -198,18 +207,18 @@ def main() -> int:
     # Spin.
     parser.add_argument("--spin-degrees", type=float, default=360.0,
                         help="How far to spin, measured by the IMU (one continuous turn).")
-    parser.add_argument("--spin-speed", type=float, default=0.7,
-                        help="Rotation rate command (rad/s). The IMU, not this value, decides when "
-                             "the spin is complete, so it only needs to be smooth. Lower it if the "
-                             "map smears; raise it to spin faster.")
+    parser.add_argument("--spin-speed", type=float, default=0.9,
+                        help="Rotation rate command (rad/s). The IMU, not this value, decides when the "
+                             "spin is complete. Slower = less motion-warp inside each scan and more "
+                             "scans recorded = more detail; still one continuous motion.")
     parser.add_argument("--max-spin-seconds", type=float, default=60.0,
                         help="Safety cap: stop spinning after this long even if the IMU never reaches "
                              "the target (a stalled base / dead gyro).")
-    parser.add_argument("--snapshots", type=int, default=120,
+    parser.add_argument("--snapshots", type=int, default=240,
                         help="Maximum scans to align (evenly strided from every revolution recorded "
                              "during the spin). Consecutive scans overlap almost entirely, so each "
-                             "aligns tightly against the growing map — more scans = smoother tracking "
-                             "of the base's wander; fewer = faster post-processing.")
+                             "aligns tightly against the growing map — more scans = denser walls and "
+                             "smoother tracking of the base's wander; fewer = faster post-processing.")
     parser.add_argument("--settle-ms", type=float, default=0.0,
                         help="At each snapshot, briefly STOP and settle this long before grabbing the "
                              "scan (0 = never stop, keep spinning). Motion de-skew makes stopping "
@@ -247,10 +256,10 @@ def main() -> int:
     # translational wander during the spin instead of assuming a perfect pivot.
     parser.add_argument("--stitch-resolution-m", type=float, default=0.03,
                         help="Score-grid resolution for scan-matching.")
-    parser.add_argument("--search-xy-m", type=float, default=0.22,
+    parser.add_argument("--search-xy-m", type=float, default=0.18,
                         help="Translation search radius around the seeded guess (tracks the base's "
                              "wander between consecutive scans; keep tight).")
-    parser.add_argument("--theta-window-deg", type=float, default=10.0,
+    parser.add_argument("--theta-window-deg", type=float, default=8.0,
                         help="Heading search window around the gyro-seeded guess (the gyro delta "
                              "between consecutive scans is ~0.5deg-accurate; keep tight).")
     parser.add_argument("--min-match-score", type=float, default=6.0,
@@ -479,7 +488,7 @@ def main() -> int:
     # time the spin returns to the start heading, the reference map already
     # contains the start-of-spin walls, so the final scans re-attach to them.
     n_rev = len(revolutions)
-    stride = max(1, n_rev // max(1, int(args.snapshots)))
+    stride = max(1, math.ceil(n_rev / max(1, int(args.snapshots))))
     picked = revolutions[::stride]
 
     aligned: list[np.ndarray] = []
@@ -517,7 +526,7 @@ def main() -> int:
                 resolution_m=float(args.stitch_resolution_m),
                 search_xy_m=float(args.search_xy_m),
                 coarse_angle_step_deg=2.0,
-                fine_angle_step_deg=0.5,
+                fine_angle_step_deg=0.35,
                 theta_window_deg=float(args.theta_window_deg),
                 # Keep even the weak-score fallback sweep NEAR the seed — a wide
                 # whole-map sweep is how a scan snaps to a rotational alias.
@@ -551,18 +560,24 @@ def main() -> int:
           f"{n_matched} matched (mean score {mean_score:.1f}), {n_deadreck} dead-reckoned.")
 
     all_pts = np.concatenate(aligned, axis=0) if aligned else np.zeros((0, 2), dtype=np.float32)
+    # Per-point source-scan index, so each scan can be drawn in its own colour.
+    scan_ids = (
+        np.concatenate([np.full(len(a), i, dtype=np.int64) for i, a in enumerate(aligned)])
+        if aligned else np.zeros((0,), dtype=np.int64)
+    )
 
-    # ---- Render: occupancy grid (crisp) or raw aligned points ----
+    # ---- Render: grid-filtered raw points (crisp + detailed) or raw overlay ----
     n_map = 0
     num_scans = len(aligned)
     if len(all_pts) and str(args.map_mode) == "grid":
         min_hits = (
             int(args.grid_min_hits) if int(args.grid_min_hits) > 0 else max(2, int(0.15 * num_scans))
         )
-        centres, counts = _occupancy_grid_points(all_pts, float(args.grid_res_m), min_hits)
-        n_map = len(centres)
-        print(f"[spin] occupancy grid: kept {n_map} cells (>= {min_hits} of {num_scans} scans agreed).")
-        _log_occupancy(rr, centres, counts, heading_for_log)
+        keep = _grid_filtered_points(all_pts, float(args.grid_res_m), min_hits)
+        n_map = int(keep.sum())
+        print(f"[spin] grid filter: kept {n_map}/{len(all_pts)} points "
+              f"(cells with >= {min_hits} of {num_scans} scans agreeing).")
+        _log_occupancy(rr, all_pts[keep], scan_ids[keep], heading_for_log)
     elif len(all_pts):
         n_map = len(all_pts)
         _log_map(rr, [all_pts], [], heading_for_log)
@@ -571,8 +586,7 @@ def main() -> int:
     print(f"  {'full turn' if completed else 'PARTIAL turn'}: "
           f"IMU measured {final_deg:+.0f}deg" if final_deg is not None else "  IMU reading unavailable")
     print(f"  {num_scans} scans aligned scan-to-map ({n_matched} matched, mean score {mean_score:.1f}, "
-          f"{n_deadreck} dead-reckoned) -> {str(args.map_mode)} map "
-          f"({n_map} {'cells' if args.map_mode == 'grid' else 'points'}).")
+          f"{n_deadreck} dead-reckoned) -> {str(args.map_mode)} map ({n_map} points).")
     print("  Map = world/lidar_map. Leave running to keep the viewer up; Ctrl+C to exit.")
     print("=========================================")
 
@@ -582,18 +596,20 @@ def main() -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        _send_stop(robot)
-        imu.stop()
-        feed.stop()
-        if cam_sub is not None:
+        # Best-effort teardown. Guard every step against BaseException: a second
+        # Ctrl+C during a thread join otherwise dumps an ugly traceback (field
+        # 2026-07-20) — the run is over either way, exit quietly.
+        for _cleanup in (
+            lambda: _send_stop(robot),
+            imu.stop,
+            feed.stop,
+            (cam_sub.stop if cam_sub is not None else (lambda: None)),
+            robot.disconnect,
+        ):
             try:
-                cam_sub.stop()
-            except Exception:
+                _cleanup()
+            except BaseException:
                 pass
-        try:
-            robot.disconnect()
-        except Exception:
-            pass
     return 0
 
 
