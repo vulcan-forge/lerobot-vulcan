@@ -61,6 +61,10 @@ def _drive_forward_burst(
     steer_theta_vel: float,
     min_effective_move_speed: float,
     hazard_monitor=None,
+    imu_yaw_fn=None,
+    yaw_ref_deg: float | None = None,
+    yaw_hold_gain: float = 0.0,
+    yaw_hold_max: float = 0.0,
 ) -> DriveBurstMeta:
     """Drive forward for ONE short timed burst, stopping instantly on a hazard.
 
@@ -129,11 +133,32 @@ def _drive_forward_burst(
                         "[safety] passable gap beside furniture: creeping through "
                         f"at minimum speed (squeeze; {width_note})"
                     )
+        # IMU YAW-HOLD (field 2026-07-20, user): mecanum bases curve when driving
+        # "straight" — a pure-forward command produced up to ~40deg of unwanted yaw
+        # and 25cm of lateral drift over a single leg, walking the robot into
+        # furniture. The calibration proved the gyro tracks RELATIVE rotation to
+        # ~0.5deg, so hold the leg's start heading in real time: each tick, command
+        # a corrective theta.vel that counters however far the yaw has drifted from
+        # the reference captured when the leg began. Uses only the CHANGE in yaw
+        # (never an absolute frame), and falls back to the caller's lidar-derived
+        # steer when the IMU is absent/stale/sign-untrustworthy (yaw_fn returns
+        # None). The lidar remains the source of truth for POSITION between bursts.
+        theta_cmd = float(steer_theta_vel)
+        if (
+            imu_yaw_fn is not None
+            and yaw_ref_deg is not None
+            and float(yaw_hold_gain) > 0.0
+        ):
+            yaw_now = imu_yaw_fn()
+            if yaw_now is not None:
+                drift_deg = float(yaw_now) - float(yaw_ref_deg)
+                correction = -float(yaw_hold_gain) * drift_deg
+                theta_cmd = max(-float(yaw_hold_max), min(float(yaw_hold_max), correction))
         robot.send_action(
             {
                 "x.vel": float(commanded_forward_speed),
                 "y.vel": 0.0,
-                "theta.vel": float(steer_theta_vel),
+                "theta.vel": float(theta_cmd),
                 "z.pos": getattr(robot, "_z_pos_cmd", 100.0),
                 "untorque_left": True,
                 "untorque_right": True,
@@ -557,6 +582,9 @@ def _drive_with_tracking(
     blind_forward_scale: float = 0.0,
     pose_trusted: bool = True,
     frame_recorder=None,
+    imu_yaw_fn=None,
+    yaw_hold_gain: float = 0.0,
+    yaw_hold_max: float = 0.0,
 ) -> tuple[Pose2D, dict[str, object]]:
     """Drive forward burst-by-burst while tracking the pose with the lidar
     after every burst. The drive stops when blocked, when the plan completes,
@@ -615,6 +643,11 @@ def _drive_with_tracking(
     blind_forward_m = 0.0
     nominal_burst_forward_m = float(forward_speed) * float(burst_s) * float(blind_forward_scale)
     frame_wait_timeout_s = max(2.0, float(burst_s) + 1.5)
+    # IMU yaw-hold reference: the heading the leg starts on, captured ONCE so every
+    # burst holds the SAME straight line (re-reading it per burst would let an
+    # accumulating drift redefine "straight" and bake the curve in). None when the
+    # IMU is unusable — the bursts then fall back to the lidar-derived steer.
+    yaw_ref_deg = imu_yaw_fn() if imu_yaw_fn is not None and float(yaw_hold_gain) > 0.0 else None
 
     for burst_index in range(max(1, int(burst_count))):
         if frame_recorder is not None:
@@ -652,6 +685,10 @@ def _drive_with_tracking(
             steer_theta_vel=float(steer_theta_vel),
             min_effective_move_speed=float(min_effective_move_speed),
             hazard_monitor=hazard_monitor,
+            imu_yaw_fn=imu_yaw_fn,
+            yaw_ref_deg=yaw_ref_deg,
+            yaw_hold_gain=float(yaw_hold_gain),
+            yaw_hold_max=float(yaw_hold_max),
         )
         bursts_completed += 1
         elapsed_total_s += float(burst_meta.elapsed_s)

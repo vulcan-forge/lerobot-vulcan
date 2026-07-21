@@ -28,6 +28,12 @@ class MotionCalibration:
 
     translation_scale: float = 1.0   # real forward distance / commanded distance
     rotation_scale: float = 1.0      # real turn angle / commanded turn angle
+    # Systematic mecanum drift of a "straight" drive, per metre of real forward
+    # travel (LiDAR-measured). 0.0 = no measured drift. The wander loop's IMU
+    # yaw-hold corrects drift in a CLOSED loop and does not require these; they are
+    # a measured record and an optional feed-forward term.
+    forward_yaw_drift_deg_per_m: float = 0.0
+    forward_lateral_drift_m_per_m: float = 0.0
     source: str = "identity (uncalibrated)"
 
     @classmethod
@@ -59,11 +65,22 @@ class MotionCalibration:
                 return None
             return f if (lo <= f <= hi) else None
 
+        def _num(value, lo: float, hi: float) -> float | None:
+            try:
+                f = float(value)
+            except (TypeError, ValueError):
+                return None
+            return f if (lo <= f <= hi) else None
+
         trans = _sane(data.get("translation_scale"))
         rot = _sane(data.get("rotation_scale_wheel"))
+        yaw_drift = _num(data.get("forward_yaw_drift_deg_per_m"), -180.0, 180.0)
+        lat_drift = _num(data.get("forward_lateral_drift_m_per_m"), -5.0, 5.0)
         cal = cls(
             translation_scale=trans if trans is not None else 1.0,
             rotation_scale=rot if rot is not None else 1.0,
+            forward_yaw_drift_deg_per_m=yaw_drift if yaw_drift is not None else 0.0,
+            forward_lateral_drift_m_per_m=lat_drift if lat_drift is not None else 0.0,
             source=str(p),
         )
         print(

@@ -245,6 +245,27 @@ def main() -> int:
         help="Maximum residual yaw rate applied while driving toward a frontier.",
     )
     parser.add_argument(
+        "--drive-yaw-hold",
+        choices=["on", "off"],
+        default="on",
+        help="Hold heading straight during forward drives using the IMU gyro (corrects mecanum drift "
+        "that curves the robot into furniture). Uses RELATIVE yaw only; falls back to lidar steer if "
+        "the IMU is absent/stale/sign-untrustworthy.",
+    )
+    parser.add_argument(
+        "--drive-yaw-hold-gain",
+        type=float,
+        default=0.010,
+        help="Yaw-hold proportional gain: theta.vel (rad/s) commanded per degree the heading has "
+        "drifted from the leg's start heading.",
+    )
+    parser.add_argument(
+        "--drive-yaw-hold-max",
+        type=float,
+        default=0.35,
+        help="Maximum corrective yaw rate (rad/s) the IMU yaw-hold may command during a forward drive.",
+    )
+    parser.add_argument(
         "--drive-steer-deadband-deg",
         type=float,
         default=10.0,
@@ -572,6 +593,27 @@ def main() -> int:
     else:
         print("[wander] IMU heading prior OFF (--use-imu-heading off); heading is lidar-only")
 
+    def _drive_hold_yaw_deg() -> float | None:
+        """Current gyro yaw (deg) for the forward-drive heading hold, or None when
+        the IMU is off/absent/stale or its sign has proven untrustworthy against
+        lidar turns — in which case the drive falls back to the lidar-derived
+        steer. The hold consumes only the CHANGE in this value since a leg began
+        (never an absolute frame), so it needs no shared zero with the lidar pose;
+        the calibration measured the gyro tracks relative rotation to ~0.5deg."""
+        if imu_yaw is None or not imu_yaw.sign_trustworthy():
+            return None
+        return imu_yaw.deg()
+
+    _drive_yaw_hold_gain = (
+        float(args.drive_yaw_hold_gain) if str(args.drive_yaw_hold) == "on" else 0.0
+    )
+    if str(args.drive_yaw_hold) == "on":
+        print(
+            f"[wander] forward-drive IMU yaw-hold ENABLED (gain={float(args.drive_yaw_hold_gain):.3f} "
+            f"rad/s per deg, max={float(args.drive_yaw_hold_max):.2f} rad/s) — holds each drive leg's "
+            "start heading to counter mecanum curve; lidar still owns position"
+        )
+
     # Optional camera-based elevated obstacle gate. The lidar map stays the
     # map owner; the eye cameras only VETO unsafe motion (forward on any
     # active hazard, rotation too in the near tier; reverse always allowed).
@@ -812,6 +854,45 @@ def main() -> int:
     # unfalsifiable walls that sealed a passable corridor).
     elevated_cell_meta: dict[tuple[int, int], list] = {}
     elevated_occupied_world: set[tuple[int, int]] = set()
+    # PERMANENT no-go cells (0.04m grid, NEVER decay): where a camera-confirmed
+    # elevated obstacle actually STOPPED the robot from driving. Field 2026-07-20
+    # (user): the lidar sees a "doorway" THROUGH a desk, the robot approaches, the
+    # cameras refuse to ram it, and it re-commits to the SAME phantom doorway
+    # forever because the lidar still sees the gap. Unlike elevated_occupied_world
+    # (which decays as the lidar "sees through" furniture), these are stamped from
+    # an actual forward-block event and stay put, so the opening picker permanently
+    # routes AROUND the furniture and re-plans toward a genuinely clear opening.
+    camera_blocked_world: set[tuple[int, int]] = set()
+
+    def _stamp_camera_block(pose) -> None:
+        """Stamp an elevated obstacle's footprint ~0.3-0.7m ahead of ``pose`` (a
+        small patch across the body width) into the PERMANENT camera-blocked set,
+        so the opening picker routes around it and re-plans. Called whenever a
+        CAMERA gate actually stops forward motion (the robot is nose-to-furniture
+        the lidar sees under)."""
+        before = len(camera_blocked_world)
+        th = math.radians(float(pose.theta_deg))
+        cth, sth = math.cos(th), math.sin(th)
+        for fwd in (0.30, 0.42, 0.54, 0.66):
+            for lat in (-0.16, 0.0, 0.16):
+                wx = float(pose.x) + cth * fwd - sth * lat
+                wy = float(pose.y) + sth * fwd + cth * lat
+                camera_blocked_world.add((int(round(wx / 0.04)), int(round(wy / 0.04))))
+        if len(camera_blocked_world) > before:
+            print(
+                "[wander] camera-confirmed furniture marked as a PERMANENT no-go "
+                f"ahead ({len(camera_blocked_world)} cells total) — the opening picker "
+                "will route around it and re-plan, not re-commit to this bearing"
+            )
+
+    def _denial_is_camera_obstacle(reason: str) -> bool:
+        """True when a forward-denial reason is a CAMERA-confirmed elevated edge
+        (not the stop box, not a stale frame) — the case to stamp and re-plan."""
+        return any(
+            k in str(reason)
+            for k in ("elevated", "semantic_edge_stop", "depth_elevated",
+                      "vanished_near", "line_edge")
+        )
     # Single-vantage promotion budget: a wedged/held robot re-observes its
     # own systematic depth artifacts from the SAME pose every cycle, so the
     # two-frame persistence gate confirms them forever (field 2026-07-17:
@@ -1048,6 +1129,32 @@ def main() -> int:
     exit_stall_cycles = 0
     EXIT_STALL_RADIUS_M = 0.7
     EXIT_STALL_CYCLE_LIMIT = 10
+    # HARD anti-spin terminal (field 2026-07-20 user: "the endless rotate loop you
+    # can't seem to stop it from ever doing"). Beyond the soft stall limit above,
+    # if the robot sits inside EXIT_STALL_RADIUS_M for even LONGER it is spinning in
+    # a dead-end pocket with no way onward. FIRST force a reverse-out the way it
+    # came (it beelined IN, so behind it is open); if that still never frees it,
+    # HALT to idle rather than rotate forever. These take priority over every other
+    # motion decision.
+    EXIT_STALL_ESCAPE_LIMIT = 10
+    EXIT_STALL_STOP_LIMIT = 30
+    # When STUCK and boxed (can't drive forward from THIS heading, can't reverse),
+    # SCAN AROUND for a heading the body can drive before ever declaring defeat —
+    # up to one full revolution. Field 2026-07-20: a "hold 4 cycles then halt" gave
+    # up while facing a desk and NEVER turned to see the wide-open area right beside
+    # it (the whole upper-left of the room went unexplored). Only halt after a full
+    # circle finds nothing drivable = genuinely walled in on all sides. The watchdog
+    # also DEFERS entirely to the planner whenever forward is drivable, so the
+    # instant a scan-turn faces an opening the robot drives it instead of spinning.
+    stuck_scan_rotations = 0
+    STUCK_SCAN_ROTATIONS_HALT = 7   # ~7 x 55deg ~= a full 360 look-around
+    # Cap on consecutive reverse-outs while stalled. Field 2026-07-20: at a doorway
+    # with a desk in the mouth the robot oscillated approach->desk-blocks->reverse
+    # forever, because a reverse ALWAYS succeeds there (room behind) so the watchdog
+    # never escalated. After this many reverses without escaping the stall radius,
+    # stop reversing (it isn't helping) and fall through to scan-around / halt.
+    stuck_reverse_count = 0
+    STUCK_REVERSE_CAP = 3
     exit_mode = False
     exit_scan_turns = 0
     # Consecutive exit-run probes that were BLOCKED (barely advanced). Unlike
@@ -2953,16 +3060,41 @@ def main() -> int:
                 min_confidence=int(args.min_confidence),
                 min_range_m=float(args.min_range_m),
             )
+            # IMU HEADING ANCHOR (field 2026-07-20, user: "we have an IMU and a
+            # lidar ... why can't it know where it is on the map it just built").
+            # The gyro tracks heading to ~0.5deg (calibration-proven) and keeps
+            # tracking THROUGH a lock-lost turn, so it is the trustworthy heading
+            # exactly when the lidar dead-reckon has DRIFTED. Anchor BOTH the search
+            # centre AND the accept-gate reference to the IMU heading: the lidar then
+            # only has to solve POSITION (a robust, unambiguous 2-D search), a
+            # correct fix is no longer thrown out for disagreeing with a drifted
+            # lidar guess, and the room's 90/180deg rotational aliases fall outside
+            # the tightened heading window by construction. Falls back to the old
+            # lidar-only behaviour when the IMU is absent/stale/sign-untrustworthy.
+            live_solve_pose = live_expected_pose
+            imu_theta_live = (
+                _imu_resolved_theta(imu_yaw, imu_dead_reck_anchor)
+                if (imu_yaw is not None and imu_yaw.sign_trustworthy())
+                else None
+            )
+            if imu_theta_live is not None:
+                live_solve_pose = dataclasses.replace(
+                    live_expected_pose, theta_deg=float(imu_theta_live)
+                )
             live_pose_result = _estimate_pose_against_stitched_map(
                 points_xy=live_points_xy,
                 transformed_sets=stitch_state["transformed_sets"],
-                initial_pose=live_expected_pose,
+                initial_pose=live_solve_pose,
                 resolution_m=float(args.stitch_resolution_m),
                 search_xy_m=max(float(args.drive_search_xy_m), 0.55),
-                theta_window_deg=max(float(args.drive_theta_window_deg), 36.0),
+                theta_window_deg=(
+                    24.0
+                    if imu_theta_live is not None
+                    else max(float(args.drive_theta_window_deg), 36.0)
+                ),
                 max_translation_from_initial_m=max(0.45, float(args.drive_search_xy_m) + 0.20),
                 prior_translation_weight=0.20,
-                prior_theta_weight=0.08,
+                prior_theta_weight=0.25 if imu_theta_live is not None else 0.08,
             )
             live_pose_accepted = False
             if live_pose_result is not None:
@@ -2971,7 +3103,7 @@ def main() -> int:
                     label=f"live_frame_{live_frame_id}",
                     candidate_pose=candidate_live_pose,
                     score_meta=live_pose_meta,
-                    expected_pose=live_expected_pose,
+                    expected_pose=live_solve_pose,
                     motion_hint=None,
                     max_translation_error_m=max(0.45, float(args.drive_search_xy_m) + 0.20),
                     max_theta_error_deg=max(24.0, float(args.drive_theta_window_deg) * 0.85),
@@ -3488,19 +3620,51 @@ def main() -> int:
                 )
                 cos_b, sin_b = math.cos(bearing), math.sin(bearing)
                 corridor_len = min(float(distance_m), 1.5)
-                hits = 0
+                # Two ways to veto the corridor:
+                #   red_hits   >= 2  — CONFIRMED (cross-angle) furniture, trusted fast.
+                #   total_hits >= 6  — a DENSE cluster of mapped edge cells (red OR
+                #                      yellow). Field 2026-07-20: the robot fixated on
+                #                      a live-lidar "opening" (delta=-36deg, 2m) that
+                #                      was really a DESK — the scan saw under it — and
+                #                      drove into it every cycle, wedged, and could not
+                #                      leave. The desk WAS mapped (dozens of cells) but
+                #                      stayed YELLOW (no cross-angle view from the pin),
+                #                      so the red-only veto never fired. A real object
+                #                      packs many cells into the corridor; a stray
+                #                      phantom (the reason yellow is normally distrusted)
+                #                      is 1-2 cells and never reaches 6 — so this
+                #                      believes a dense obstacle without letting a
+                #                      phantom delete a real doorway.
+                red_hits = 0
+                total_hits = 0
                 for cx, cy in elevated_occupied_world:
-                    cell_meta = elevated_cell_meta.get((cx, cy))
-                    if cell_meta is None or len(cell_meta) < 3 or not cell_meta[2]:
-                        continue
                     dxc = cx * 0.04 - float(current_live_pose.x)
                     dyc = cy * 0.04 - float(current_live_pose.y)
                     along = dxc * cos_b + dyc * sin_b
                     if not (0.10 <= along <= corridor_len):
                         continue
                     if abs(-dxc * sin_b + dyc * cos_b) <= 0.33:
-                        hits += 1
-                        if hits >= 2:
+                        total_hits += 1
+                        cell_meta = elevated_cell_meta.get((cx, cy))
+                        if cell_meta is not None and len(cell_meta) >= 3 and cell_meta[2]:
+                            red_hits += 1
+                        if red_hits >= 2 or total_hits >= 6:
+                            return True
+                # PERMANENT camera-confirmed blocks (never decay). The cameras
+                # already STOPPED the robot driving this way once (a desk it saw
+                # under). Two such cells in the corridor veto the opening for good,
+                # so the picker re-plans toward a different opening instead of
+                # re-committing to the phantom doorway (user 2026-07-20).
+                cam_hits = 0
+                for cx, cy in camera_blocked_world:
+                    dxc = cx * 0.04 - float(current_live_pose.x)
+                    dyc = cy * 0.04 - float(current_live_pose.y)
+                    along = dxc * cos_b + dyc * sin_b
+                    if not (0.10 <= along <= corridor_len):
+                        continue
+                    if abs(-dxc * sin_b + dyc * cos_b) <= 0.33:
+                        cam_hits += 1
+                        if cam_hits >= 2:
                             return True
                 return False
 
@@ -4174,20 +4338,48 @@ def main() -> int:
                 else:
                     exit_stall_pos = _robot_xy   # moved to fresh ground -> reset
                     exit_stall_cycles = 0
+                    stuck_scan_rotations = 0
+                    stuck_reverse_count = 0
                 _explore_stalled = exit_stall_cycles >= EXIT_STALL_CYCLE_LIMIT
                 if not bootstrap_scan_active and len(stitch_state["poses"]) >= 5:
+                    # A wide, DEEP opening the robot has not driven to yet is real
+                    # unexplored space — field 2026-07-20: the robot spun near its
+                    # start, the BFS returned only a handful of frontier cells (the
+                    # MAP was still tiny, not the ROOM explored), it hit plan_cells<=10,
+                    # counted 4 "sliver" cycles and declared ROOM MAPPED after barely
+                    # translating, then rotated forever in the exit run. A low map
+                    # frontier count with a big live opening present means "keep
+                    # exploring," NOT "done." Do not count completion while such an
+                    # opening exists — unless the robot has genuinely milled in place
+                    # unable to reach it (the explore-stall backstop still ends it).
+                    strong_live_opening = (
+                        live_frontier_choice is not None
+                        and float(live_frontier_choice.mean_distance_m) >= 1.5
+                        and float(live_frontier_choice.width_deg) >= 48.0
+                    )
                     if plan_status == "no_frontier" or (
                         plan_status in ("ok", "observe", "survey")
                         and (plan_cells <= 10 or _explore_stalled)
                     ):
-                        if _explore_stalled and plan_cells > 10:
+                        if strong_live_opening and not _explore_stalled:
+                            if sliver_frontier_cycles != 0:
+                                sliver_frontier_cycles = 0
                             print(
-                                f"[wander] explore STALL: milled within {EXIT_STALL_RADIUS_M:.1f}m for "
-                                f"{exit_stall_cycles} cycles without reaching new ground — the "
-                                "reachable room is mapped; treating this frontier as EXHAUSTED so "
-                                "the exit run can trigger"
+                                "[wander] NOT declaring the room mapped: a wide/deep live opening "
+                                f"(delta={float(live_frontier_choice.delta_deg):+.0f}deg, "
+                                f"{float(live_frontier_choice.mean_distance_m):.1f}m, "
+                                f"{float(live_frontier_choice.width_deg):.0f}deg wide) is still "
+                                "unexplored — keep exploring toward it, not quitting"
                             )
-                        sliver_frontier_cycles += 1
+                        else:
+                            if _explore_stalled and plan_cells > 10:
+                                print(
+                                    f"[wander] explore STALL: milled within {EXIT_STALL_RADIUS_M:.1f}m for "
+                                    f"{exit_stall_cycles} cycles without reaching new ground — the "
+                                    "reachable room is mapped; treating this frontier as EXHAUSTED so "
+                                    "the exit run can trigger"
+                                )
+                            sliver_frontier_cycles += 1
                     else:
                         sliver_frontier_cycles = 0
                         if exit_mode and plan_cells >= 30:
@@ -4496,7 +4688,82 @@ def main() -> int:
                     survey_arrived = survey_goal_distance_m <= max(
                         0.45, float(args.frontier_goal_reached_m)
                     )
-                if bootstrap_scan_active:
+                # Is forward genuinely undrivable from THIS heading right now (stop
+                # box occupied OR the camera gate denying)? Only then does the
+                # anti-stuck watchdog take over — the instant a scan-turn faces a
+                # drivable opening this is False and control falls through to the
+                # normal planner, which drives it (so the watchdog can never trap a
+                # robot that has somewhere to go).
+                _fwd_ok_now, _fwd_denial_now = (
+                    hazard_monitor.forward_allowed()
+                    if hazard_monitor is not None
+                    else (True, "")
+                )
+                _watchdog_forward_blocked = bool(blocked) or not bool(_fwd_ok_now)
+                # STAMP camera-confirmed furniture the instant it blocks forward, in
+                # ANY branch/cycle (the stuck-watchdog reverse-escape pre-empts the
+                # planning-denial recovery, so stamping only there would miss the
+                # desk-in-the-doorway case). Permanent no-go -> the opening picker
+                # re-plans around it next cycle instead of re-committing.
+                if (
+                    not bool(_fwd_ok_now)
+                    and hazard_monitor is not None
+                    and not bool(hazard_monitor.state().frames_stale)
+                    and _denial_is_camera_obstacle(_fwd_denial_now)
+                ):
+                    _stamp_camera_block(current_live_pose)
+                if (
+                    not bootstrap_scan_active
+                    and exit_stall_cycles >= EXIT_STALL_ESCAPE_LIMIT
+                    and _watchdog_forward_blocked
+                ):
+                    # STUCK and cannot drive forward from this heading. Escape ladder:
+                    # (1) reverse OUT the way it came (it drove IN, so back is open);
+                    # (2) if it can't reverse, SCAN AROUND — turn to look for a heading
+                    # the body CAN drive, up to a full revolution — before giving up;
+                    # (3) only halt after a full circle finds nothing drivable and no
+                    # room to reverse = genuinely walled in. This pre-empts the other
+                    # rotate paths so it can't spin forever, but never quits while a
+                    # drivable direction it hasn't faced yet might exist.
+                    stuck_reverse = _attempt_reverse_escape_hint(current_live_pose, False)
+                    if stuck_reverse is not None and stuck_reverse_count < STUCK_REVERSE_CAP:
+                        stuck_reverse_count += 1
+                        print(
+                            f"[wander] STUCK ({exit_stall_cycles} cycles pinned): reversing OUT "
+                            f"the way it came ({stuck_reverse_count}/{STUCK_REVERSE_CAP}) instead of "
+                            "rotating again"
+                        )
+                        motion_hint = stuck_reverse
+                        settle_s = float(args.move_settle_s)
+                    elif (
+                        stuck_scan_rotations < STUCK_SCAN_ROTATIONS_HALT
+                        and exit_stall_cycles < EXIT_STALL_STOP_LIMIT
+                    ):
+                        # Can't forward, can't reverse — but a DIFFERENT heading may be
+                        # open. Turn to look (the robot must never halt facing a desk
+                        # while the rest of the room is wide open behind it).
+                        stuck_scan_rotations += 1
+                        chosen_direction_sign = float(direction_sign)
+                        chosen_turn_deg = 55.0
+                        should_turn = True
+                        turn_reason = "stuck_scan"
+                        print(
+                            f"[wander] STUCK ({exit_stall_cycles} cycles) — can't go forward or "
+                            "reverse from this heading; TURNING to look for a way out "
+                            f"({stuck_scan_rotations}/{STUCK_SCAN_ROTATIONS_HALT} before giving up)"
+                        )
+                    else:
+                        # Turned a full circle (or hit the hard stall cap) and no
+                        # heading is drivable, no room to reverse = genuinely BOXED IN.
+                        print(
+                            "[wander] BOXED IN: turned a full circle and no heading the body fits is "
+                            f"drivable, and no room to reverse (stalled {exit_stall_cycles}) — there is "
+                            "no way onward from this spot. HALTING to idle (reposition the robot or "
+                            "clear the exit)."
+                        )
+                        _send_stop(robot)
+                        break
+                elif bootstrap_scan_active:
                     # Panorama is deliberately finite and monotonic: four
                     # same-direction views, then translation. Do not chase a
                     # missing heading bin forever when turn tracking is weak.
@@ -4564,6 +4831,18 @@ def main() -> int:
                         f"[safety] forward denied while planning ({forward_denial}, "
                         f"side={hazard_state_now.side}); recovering"
                     )
+                    # RE-PLAN AROUND CAMERA-CONFIRMED FURNITURE (user 2026-07-20:
+                    # "re-plan the path when it encounters this"). When a CAMERA gate
+                    # (depth/semantic elevated edge) — not the stop box, not a stale
+                    # frame — refuses forward motion, the robot is nose-to-furniture
+                    # the lidar sees UNDER (the desk-in-the-doorway case). Stamp that
+                    # obstacle's footprint as a PERMANENT no-go so the opening picker
+                    # vetoes this bearing and re-plans toward a genuinely clear
+                    # opening, instead of re-committing to the phantom doorway forever.
+                    if not hazard_state_now.frames_stale and _denial_is_camera_obstacle(
+                        forward_denial
+                    ):
+                        _stamp_camera_block(current_live_pose)
                     if hazard_state_now.frames_stale:
                         # FRESHNESS, not a physical obstacle: the camera/depth
                         # frame is stale (a slow or hiccuping sensor), so the eyes
@@ -5329,6 +5608,9 @@ def main() -> int:
                                 forward_guard=_exit_ratchet_guard,
                                 pose_trusted=not pose_lost,
                                 frame_recorder=_record_eye_frames,
+                                imu_yaw_fn=_drive_hold_yaw_deg,
+                                yaw_hold_gain=_drive_yaw_hold_gain,
+                                yaw_hold_max=float(args.drive_yaw_hold_max),
                             )
                             drive_stopped_by_block = (
                                 bool(drive_track_meta["stopped_by_block"])
@@ -5771,6 +6053,9 @@ def main() -> int:
                     forward_guard=_exit_ratchet_guard,
                     pose_trusted=not pose_lost,
                     frame_recorder=_record_eye_frames,
+                    imu_yaw_fn=_drive_hold_yaw_deg,
+                    yaw_hold_gain=_drive_yaw_hold_gain,
+                    yaw_hold_max=float(args.drive_yaw_hold_max),
                 )
                 drive_stopped_by_block = (
                     bool(drive_track_meta["stopped_by_block"])

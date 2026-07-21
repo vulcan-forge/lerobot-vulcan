@@ -239,6 +239,263 @@ def _build_reference_map(feed, robot, args, last_frame_id: int):
     return map_sets, current, last_frame_id
 
 
+def _cone_clearance_m(frame, args, center_deg: float, cone_half_deg: float = 18.0) -> float:
+    """Nearest LiDAR return within +-cone_half_deg of ``center_deg`` (an absolute
+    scan bearing), or max_distance if that cone is empty. This is the number that
+    STOPS an open-loop drive before it burrows — call it with the FORWARD bearing
+    for a forward drive, or forward+180 for a reverse."""
+    best = float(args.max_distance_m)
+    for angle_deg, distance_m, confidence in frame.points:
+        if int(confidence) < int(args.min_confidence):
+            continue
+        d = float(distance_m)
+        if not (float(args.min_range_m) <= d <= float(args.max_distance_m)):
+            continue
+        if abs(_normalize_angle_deg(float(angle_deg) - float(center_deg))) <= float(cone_half_deg):
+            best = min(best, d)
+    return best
+
+
+def _deepest_open_bearing_deg(frame, args):
+    """Bearing (relative to forward, in the TURN-command sign convention) of the
+    DEEPEST clear direction, plus its range. Bins the full surroundings, records
+    each bin's NEAREST return, smooths, and returns the bin whose nearest return is
+    FARTHEST — i.e. the direction with the most room to drive. Empty bins count as
+    0 (not open) so a self-masked/no-data bearing is never mistaken for a corridor.
+    Returns (delta_deg, range_m) or (None, 0.0) if the scan is empty. Unlike the
+    wander loop's WIDEST-gap selector, this prefers DEPTH — the calibration needs a
+    long clear run, not a wide shallow one."""
+    half = 170.0
+    bin_deg = 6.0
+    n = max(9, int((half * 2.0) / bin_deg) + 1)
+    edges = [-half + i * (2.0 * half) / (n - 1) for i in range(n)]
+    nearest = [0.0] * n
+    hits = [0] * n
+    for angle_deg, distance_m, confidence in frame.points:
+        if int(confidence) < int(args.min_confidence):
+            continue
+        d = float(distance_m)
+        if not (float(args.min_range_m) <= d <= float(args.max_distance_m)):
+            continue
+        delta = _normalize_angle_deg(float(angle_deg) - float(args.forward_angle_deg))
+        if abs(delta) > half:
+            continue
+        idx = int(round((delta + half) / bin_deg))
+        idx = max(0, min(n - 1, idx))
+        if hits[idx] == 0 or d < nearest[idx]:
+            nearest[idx] = d
+        hits[idx] += 1
+    if not any(hits):
+        return None, 0.0
+    # Light smoothing so one noisy return does not decide the heading.
+    smoothed = list(nearest)
+    for i in range(n):
+        lo = nearest[i - 1] if i > 0 else nearest[i]
+        hi = nearest[i + 1] if i < n - 1 else nearest[i]
+        smoothed[i] = 0.2 * lo + 0.6 * nearest[i] + 0.2 * hi
+    best = max(range(n), key=lambda i: smoothed[i])
+    return float(edges[best]), float(smoothed[best])
+
+
+def _drive_gated(
+    robot, feed, args, *, signed_speed: float, nominal_distance_m: float, cone_center_deg: float,
+    stop_clearance_m: float = 0.55,
+) -> float:
+    """Open-loop drive (forward OR reverse) that STOPS the instant the LiDAR sees an
+    obstacle within ``stop_clearance_m`` in the travel direction — so neither a
+    drift drive nor its return can ever burrow into a wall. ``cone_center_deg`` is
+    the scan bearing to watch (forward for a forward drive, forward+180 for a
+    reverse). Returns the nominal commanded distance; the REAL distance is measured
+    afterward by the map localization."""
+    speed = abs(float(signed_speed))
+    if speed < 1e-6:
+        return 0.0
+    duration_s = float(nominal_distance_m) / speed
+    deadline = time.monotonic() + duration_s
+    stopped_early = False
+    while time.monotonic() < deadline:
+        _, frame = feed.latest()
+        if frame is not None and _cone_clearance_m(frame, args, float(cone_center_deg)) < float(stop_clearance_m):
+            stopped_early = True
+            break
+        robot.send_action(
+            {
+                "x.vel": float(signed_speed),
+                "y.vel": 0.0,
+                "theta.vel": 0.0,
+                "z.pos": getattr(robot, "_z_pos_cmd", 100.0),
+                "untorque_left": True,
+                "untorque_right": True,
+            }
+        )
+        time.sleep(0.04)
+    _send_stop(robot)
+    time.sleep(0.6)
+    if stopped_early:
+        direction = "ahead" if float(signed_speed) >= 0.0 else "behind"
+        print(f"[calib]   (drive stopped early — LiDAR saw a wall {direction}; measuring what it covered)")
+    return float(nominal_distance_m)
+
+
+def _face_open_corridor(feed, robot, args, map_sets, current_pose, last_frame_id):
+    """Rotate to face the LONGEST OPEN corridor before any forward driving, so the
+    forward/drift drives are not shoved into a wall the robot happens to face
+    (operator 2026-07-20 — a run measured only 0.44m of a 2m drive because it was
+    nose-to-wall). Reuses the SAME live-scan gap selector the wander loop drives
+    by, so the bearing sign already matches the turn command. The open-loop turn
+    slips to ~0.6x the command, so re-localize against the reference map afterward
+    to keep the tracked pose honest. Returns (current_pose, last_frame_id)."""
+    frame_id, frame = feed.wait_for_frame_after(
+        after_frame_id=int(last_frame_id),
+        timeout_s=float(args.fresh_frame_timeout_s),
+        min_frame_advances=1,
+        armed_wall_ts=time.time(),
+    )
+    if frame is None:
+        _abort("LiDAR feed delivered no fresh revolution while choosing the open corridor.")
+    last_frame_id = int(frame_id)
+    delta, clear_m = _deepest_open_bearing_deg(frame, args)
+    if delta is None:
+        print("[calib] no returns in the scan; keeping the current heading for the forward drives.")
+        return current_pose, last_frame_id
+    if clear_m < 1.2:
+        print(
+            f"[calib] WARNING: the deepest clear direction only opens ~{clear_m:.1f}m "
+            f"(delta={delta:+.0f}deg) — this spot is too tight for a full drift measurement. "
+            "The gated drive will stop short (no burrowing); move the robot to a more open "
+            "spot for a clean drift number."
+        )
+    if abs(delta) < 15.0:
+        print(
+            f"[calib] already facing the deepest direction (delta={delta:+.0f}deg, "
+            f"{clear_m:.1f}m clear); no pre-turn needed."
+        )
+        return current_pose, last_frame_id
+    print(
+        f"[calib] facing the deepest open direction before driving: turning {delta:+.0f}deg toward "
+        f"{clear_m:.1f}m of clear space (so the forward drives have room)."
+    )
+    nominal_turn = _rotate(robot, args, signed_angle_deg=delta)
+    # Re-anchor: seed at the ~0.6x-slip estimate, with a window that brackets the
+    # slip range but stays clear of the room's 90deg rotational alias.
+    guess = _advance_in_place_turn(
+        current_pose, dtheta_deg=nominal_turn * 0.61, lidar_offset_forward_m=float(args.lidar_offset_forward_m)
+    )
+    last_frame_id, pts = _capture_points(feed, args, last_frame_id)
+    loc = _localize(
+        pts, map_sets, guess,
+        resolution_m=float(args.stitch_resolution_m),
+        search_xy_m=abs(float(args.lidar_offset_forward_m)) * 2.0 + 0.40, theta_window_deg=35.0,
+    )
+    if loc is not None and loc[1] >= float(args.min_match_score):
+        current_pose = loc[0]
+    else:
+        current_pose = guess
+        print("[calib]   (could not re-localize precisely after the corridor turn; using dead-reckon seed).")
+    return current_pose, last_frame_id
+
+
+def _measure_forward_drift(feed, robot, args, map_sets, current_pose, last_frame_id, imu):
+    """Measure how a mecanum base curves when told to drive STRAIGHT (field
+    2026-07-20, user). The magnitude calibration above uses short bursts where the
+    curve is invisible; here we drive a LONG open-loop straight line (theta.vel=0)
+    and decompose the LiDAR-measured displacement in the START-heading frame:
+
+        forward_m  = how far it actually advanced along its start heading
+        lateral_m  = how far it slid sideways (the drift we care about)
+        yaw_deg    = how much its heading rotated (the other drift)
+
+    Reported PER METRE of real forward travel, so the numbers feed a straight-line
+    correction regardless of the speed/scale. The IMU yaw delta is recorded beside
+    the LiDAR yaw so the operator can SEE the gyro agreement over a long drive (the
+    turn samples already showed ~0.5deg agreement; this confirms it holds over
+    distance). LiDAR stays the sole source of truth; the IMU is logged only.
+    """
+    drift_samples = []
+    reps = max(1, int(args.drift_reps))
+    print(
+        f"\n[calib] MEASURING forward drift: {reps} long straight drives "
+        f"(~{float(args.drift_nominal_m):.1f}m nominal each, open-loop / no steering)."
+    )
+    for rep in range(reps):
+        last_frame_id, before_pts = _capture_points(feed, args, last_frame_id)
+        imu_before = _read_imu_observe(imu)
+        before_loc = _localize(
+            before_pts, map_sets, current_pose,
+            resolution_m=float(args.stitch_resolution_m), search_xy_m=0.45, theta_window_deg=25.0,
+        )
+        if before_loc is None or before_loc[1] < float(args.min_match_score):
+            print(f"[calib]   drift {rep + 1}/{reps}: SKIP (could not localize BEFORE).")
+            continue
+        pose_before = before_loc[0]
+
+        nominal_cmd = _drive_gated(
+            robot, feed, args, signed_speed=float(args.move_speed),
+            nominal_distance_m=float(args.drift_nominal_m),
+            cone_center_deg=float(args.forward_angle_deg),
+        )
+        # Wide-ish search: the drive may curve tens of degrees and slide sideways,
+        # but stays well inside the room's 90deg alias, so a 55deg window is safe.
+        guess_after = _advance_forward(pose_before, distance_m=float(nominal_cmd))
+        last_frame_id, after_pts = _capture_points(feed, args, last_frame_id)
+        imu_after = _read_imu_observe(imu)
+        after_loc = _localize(
+            after_pts, map_sets, guess_after,
+            resolution_m=float(args.stitch_resolution_m),
+            search_xy_m=abs(float(nominal_cmd)) + 0.7, theta_window_deg=55.0,
+        )
+        if after_loc is None or after_loc[1] < float(args.min_match_score):
+            print(f"[calib]   drift {rep + 1}/{reps}: SKIP (could not localize AFTER).")
+            continue
+        pose_after, after_score = after_loc
+
+        th0 = math.radians(float(pose_before.theta_deg))
+        dx = float(pose_after.x) - float(pose_before.x)
+        dy = float(pose_after.y) - float(pose_before.y)
+        forward_m = dx * math.cos(th0) + dy * math.sin(th0)
+        lateral_m = -dx * math.sin(th0) + dy * math.cos(th0)
+        yaw_deg = _normalize_angle_deg(float(pose_after.theta_deg) - float(pose_before.theta_deg))
+        current_pose = pose_after
+        imu_delta = (
+            float(imu_after) - float(imu_before) if (imu_before is not None and imu_after is not None) else None
+        )
+        if abs(forward_m) < 0.15:
+            print(
+                f"[calib]   drift {rep + 1}/{reps}: only {forward_m:.2f}m forward — too short to measure "
+                "drift reliably; skipping (increase --drift-nominal-m or check for an obstacle)."
+            )
+            continue
+        drift_samples.append(
+            {
+                "forward_m": float(forward_m),
+                "lateral_m": float(lateral_m),
+                "yaw_deg": float(yaw_deg),
+                "yaw_per_m_deg": float(yaw_deg / forward_m),
+                "lateral_per_m": float(lateral_m / forward_m),
+                "imu_yaw_delta_deg": (None if imu_delta is None else float(imu_delta)),
+                "match_score": float(after_score),
+            }
+        )
+        imu_str = "n/a" if imu_delta is None else f"{imu_delta:+.1f}deg"
+        print(
+            f"[calib]   drift {rep + 1}/{reps}: forward {forward_m:.2f}m, lateral {lateral_m:+.2f}m, "
+            f"yaw {yaw_deg:+.1f}deg  ->  {yaw_deg / forward_m:+.1f}deg/m, {lateral_m / forward_m:+.2f}m/m  "
+            f"(LiDAR yaw vs IMU obs {imu_str})"
+        )
+        # Reverse back toward the start so the next rep does not MARCH the robot
+        # forward across the room (into a wall, or out of the reference map where
+        # it can no longer localize). Open-loop reverse of the same commanded
+        # distance returns it roughly to where this rep began; the next rep
+        # re-localizes exactly before measuring, so residual error is harmless.
+        if rep < reps - 1:
+            _drive_gated(
+                robot, feed, args, signed_speed=-float(args.move_speed),
+                nominal_distance_m=float(nominal_cmd),
+                cone_center_deg=float(args.forward_angle_deg) + 180.0,
+            )
+    return drift_samples, current_pose, last_frame_id
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--remote-ip", required=True, help="Robot host IP.")
@@ -268,6 +525,20 @@ def main() -> int:
     parser.add_argument("--forward-nominal-m", type=float, default=0.6)
     parser.add_argument("--turn-nominal-deg", type=float, default=60.0)
     parser.add_argument("--reps", type=int, default=3, help="Repetitions of each move.")
+    parser.add_argument(
+        "--drift-nominal-m",
+        type=float,
+        default=2.0,
+        help="Nominal distance for the LONG open-loop straight drive that measures mecanum drift. Must "
+        "be long enough that the curve accumulates (short bursts hide it). Real distance is measured by "
+        "lidar; drift is reported PER METRE so the exact scale does not matter.",
+    )
+    parser.add_argument(
+        "--drift-reps",
+        type=int,
+        default=3,
+        help="Repetitions of the long straight drift-measurement drive.",
+    )
     parser.add_argument("--output", default="artifacts/sourccey_motion_calibration.json")
     args = parser.parse_args()
 
@@ -325,18 +596,30 @@ def main() -> int:
     map_sets, current_pose, last_frame_id = _build_reference_map(feed, robot, args, last_frame_id)
 
     # ---- Build the move plan ----
-    moves = []
+    # FORWARD MOTION FIRST, TURNS LAST (operator directive 2026-07-20: never turn
+    # toward a wall and THEN drive forward into it). The straight moves — including
+    # the long drift drives — all run while the robot still faces the clear
+    # direction the operator set it up in; the in-place turns come afterward.
+    forward_moves = []
     for _ in range(max(1, int(args.reps))):
-        moves.append(("forward", +float(args.move_speed), float(args.forward_nominal_m)))
-        moves.append(("back", -float(args.move_speed), float(args.forward_nominal_m)))
+        forward_moves.append(("forward", +float(args.move_speed), float(args.forward_nominal_m)))
+        forward_moves.append(("back", -float(args.move_speed), float(args.forward_nominal_m)))
+    turn_moves = []
     for _ in range(max(1, int(args.reps))):
-        moves.append(("turn_ccw", 0.0, +float(args.turn_nominal_deg)))
-        moves.append(("turn_cw", 0.0, -float(args.turn_nominal_deg)))
+        turn_moves.append(("turn_ccw", 0.0, +float(args.turn_nominal_deg)))
+        turn_moves.append(("turn_cw", 0.0, -float(args.turn_nominal_deg)))
+    total_moves = len(forward_moves) + len(turn_moves)
 
     samples = []
-    try:
-        for move_index, (kind, signed_speed, nominal) in enumerate(moves):
-            print(f"\n[calib] move {move_index + 1}/{len(moves)}: {kind} (nominal={nominal:+.2f})")
+    drift_samples = []
+
+    def _run_moves(move_list, index_offset: int) -> None:
+        """Execute one phase of the move plan, appending a sample per move. Mutates
+        the outer tracked pose / frame cursor (nonlocal) so phases chain."""
+        nonlocal current_pose, last_frame_id
+        for i, (kind, signed_speed, nominal) in enumerate(move_list):
+            move_index = index_offset + i
+            print(f"\n[calib] move {move_index + 1}/{total_moves}: {kind} (nominal={nominal:+.2f})")
 
             # --- BEFORE: localize the current scan in the reference MAP (LiDAR truth) ---
             last_frame_id, before_pts = _capture_points(feed, args, last_frame_id)
@@ -407,6 +690,21 @@ def main() -> int:
             else:
                 print(f"[calib]   commanded {nominal_cmd:+.1f}deg -> LiDAR measured {actual_dtheta_deg:+.1f}deg "
                       f"(map score {after_score:.1f})  [imu obs only: {imu_str}]")
+
+    try:
+        # 0) Point down the longest open corridor so the forward drives are not
+        #    shoved into a wall (operator 2026-07-20). Uses the map already built.
+        current_pose, last_frame_id = _face_open_corridor(
+            feed, robot, args, map_sets, current_pose, last_frame_id
+        )
+        # 1) All FORWARD motion first (short magnitude bursts, then the long drift
+        #    drives) — the robot stays pointed the clear way the operator set it up.
+        _run_moves(forward_moves, 0)
+        drift_samples, current_pose, last_frame_id = _measure_forward_drift(
+            feed, robot, args, map_sets, current_pose, last_frame_id, imu
+        )
+        # 2) Only THEN the in-place turns.
+        _run_moves(turn_moves, len(forward_moves))
     finally:
         _send_stop(robot)
 
@@ -433,18 +731,35 @@ def main() -> int:
     imu_turn_gap_mean = _mean(imu_turn_gaps)
     imu_drift_mean = _mean(abs(s["imu_delta_deg"]) for s in trans if s["imu_delta_deg"] is not None)
 
+    # LONG-DRIVE DRIFT (LiDAR-measured): the systematic curve of a "straight" drive,
+    # reported per metre of real forward travel. The wander loop's IMU yaw-hold is a
+    # CLOSED loop and does not require these numbers, but they quantify the problem,
+    # confirm the gyro tracks yaw over distance, and provide a feed-forward term.
+    drift_yaw_per_m_mean = _mean(s["yaw_per_m_deg"] for s in drift_samples)
+    drift_lateral_per_m_mean = _mean(s["lateral_per_m"] for s in drift_samples)
+    drift_imu_gaps = [
+        abs(s["yaw_deg"] - s["imu_yaw_delta_deg"]) for s in drift_samples if s["imu_yaw_delta_deg"] is not None
+    ]
+    drift_imu_yaw_gap_mean = _mean(drift_imu_gaps)
+
     calibration = {
-        "schema": "sourccey.motion_calibration.v3",
+        "schema": "sourccey.motion_calibration.v4",
         "source_of_truth": "lidar_map",
         "imu_trusted": False,
         "translation_scale": translation_scale,        # multiply a commanded distance by this to get the real one
         "rotation_scale_wheel": rotation_scale_wheel,   # multiply a commanded turn by this to get the real one
         "n_translation_samples": len(trans),
         "n_rotation_samples": len(rots),
+        # forward-drive drift (LiDAR-measured, per metre of real forward travel):
+        "forward_yaw_drift_deg_per_m": drift_yaw_per_m_mean,
+        "forward_lateral_drift_m_per_m": drift_lateral_per_m_mean,
+        "n_drift_samples": len(drift_samples),
         # observations only — the IMU is not part of the calibration:
         "imu_observed_turn_gap_deg_mean": imu_turn_gap_mean,
         "imu_observed_straight_drift_deg_mean": imu_drift_mean,
+        "imu_observed_longdrive_yaw_gap_deg_mean": drift_imu_yaw_gap_mean,
         "samples": samples,
+        "drift_samples": drift_samples,
     }
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -466,10 +781,23 @@ def main() -> int:
     else:
         print("  Rotation: NO reliable samples — the LiDAR could not localize the turns against the map "
               "(too little structure, or the map was too weak; try a more feature-rich spot).")
+    if drift_yaw_per_m_mean is not None or drift_lateral_per_m_mean is not None:
+        yaw_s = "n/a" if drift_yaw_per_m_mean is None else f"{drift_yaw_per_m_mean:+.1f}deg/m of yaw"
+        lat_s = "n/a" if drift_lateral_per_m_mean is None else f"{drift_lateral_per_m_mean:+.2f}m/m sideways"
+        print(f"  Forward drift (straight-drive curve, LiDAR): {yaw_s}, {lat_s} "
+              f"({len(drift_samples)} long drives). The wander loop's IMU yaw-hold corrects this live.")
+    else:
+        print("  Forward drift: NO reliable long-drive samples (drive was too short or un-localizable; "
+              "increase --drift-nominal-m or use a more feature-rich spot).")
     if imu_turn_gap_mean is not None or imu_drift_mean is not None:
         gap_str = "n/a" if imu_turn_gap_mean is None else f"~{imu_turn_gap_mean:.1f}deg off the LiDAR on turns"
         drift_str = "n/a" if imu_drift_mean is None else f"~{imu_drift_mean:.1f}deg drift on straight moves"
-        print(f"  IMU (observed, NOT trusted / NOT used): {gap_str}; {drift_str}.")
+        longgap_str = (
+            "" if drift_imu_yaw_gap_mean is None
+            else f"; ~{drift_imu_yaw_gap_mean:.1f}deg off the LiDAR yaw over the LONG drives"
+        )
+        print(f"  IMU (observed): {gap_str}; {drift_str}{longgap_str}. "
+              "(Relative yaw is now USED for the drive heading-hold — see the wander loop.)")
     print(f"  Written: {out_path}")
     print("============================================================")
 
