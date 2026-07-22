@@ -14,7 +14,7 @@ Assumptions:
 ```bash
 uv run lerobot-rollout \
   --strategy.type=base \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-009/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-009-subset-215-pile-shirt-fold-a-001/checkpoints/0250000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --task="Fold the shirt" \
@@ -28,7 +28,7 @@ uv run lerobot-rollout \
 ```bash
 uv run lerobot-rollout \
   --strategy.type=base \
-  --policy.path="outputs/train/xvla_light_sourccey-shirt-fold-c-009-cached-001/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-009-subset-060-pile-shirt-fold-a-000/checkpoints/0350000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --task="Fold the shirt" \

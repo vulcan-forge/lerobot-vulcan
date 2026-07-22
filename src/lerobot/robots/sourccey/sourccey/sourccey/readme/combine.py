@@ -13,6 +13,9 @@ from collections import defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 from lerobot.datasets.feature_utils import features_equal_for_merge
 
 # -----------------------------------------------------------------------------
@@ -20,20 +23,20 @@ from lerobot.datasets.feature_utils import features_equal_for_merge
 # -----------------------------------------------------------------------------
 # Every dataset listed here is included in full.
 DEFAULT_PARENTS = [
-    "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-pile-shirt-fold-a-000",
+    "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-pile-shirt-fold-a-001",
 ]
 
 # Each entry takes a random subset from one dataset. Add more entries to sample
 # multiple datasets, or edit episode_count to change the sample size.
 DEFAULT_SAMPLES = [
     {
-        "dataset_root": ("/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-009"),
-        "episode_count": 60,
+        "dataset_root": "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-009",
+        "episode_count": 215,
     },
 ]
 
 DEFAULT_SAMPLE_SEED = 42
-DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-009-subset-060-pile-shirt-fold-a-000"
+DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-009-subset-215-pile-shirt-fold-a-001"
 
 HF_LEROBOT_HOME = Path("/home/sourccey/.cache/huggingface/lerobot")
 
@@ -45,6 +48,7 @@ class DatasetCandidate:
     features: dict
     total_episodes: int
     selected_episode_indices: tuple[int, ...] | None = None
+    video_span_repair_episode_indices: tuple[int, ...] = ()
     merge_root: Path | None = None
     merge_repo_id: str | None = None
 
@@ -83,7 +87,7 @@ def discover_dataset_roots(parents: list[Path]) -> list[Path]:
     return sorted(dict.fromkeys(roots))
 
 
-def load_dataset_info(path: Path) -> tuple[dict, int]:
+def load_dataset_info(path: Path) -> tuple[dict, int, float]:
     info_path = path / "meta" / "info.json"
     try:
         info = json.loads(info_path.read_text())
@@ -100,7 +104,87 @@ def load_dataset_info(path: Path) -> tuple[dict, int]:
             f"Invalid total_episodes in {info_path}: expected non-negative int, got {total_episodes!r}"
         )
 
-    return features, total_episodes
+    fps = info.get("fps")
+    if not isinstance(fps, int | float) or isinstance(fps, bool) or fps <= 0:
+        raise SystemExit(f"Invalid fps in {info_path}: expected positive number, got {fps!r}")
+
+    return features, total_episodes, float(fps)
+
+
+def find_split_compatible_episode_indices(
+    root: Path, features: dict, total_episodes: int, fps: float
+) -> tuple[list[int], list[int], list[int]]:
+    """Classify exact, safely trimmable, and unrepairable episode video spans."""
+    video_keys = [key for key, feature in features.items() if feature.get("dtype") == "video"]
+    if not video_keys:
+        return list(range(total_episodes)), [], []
+
+    columns = ["episode_index", "length"]
+    for video_key in video_keys:
+        columns.extend(
+            [
+                f"videos/{video_key}/from_timestamp",
+                f"videos/{video_key}/to_timestamp",
+            ]
+        )
+
+    episode_paths = sorted((root / "meta" / "episodes").rglob("*.parquet"))
+    if not episode_paths:
+        raise SystemExit(f"Missing episode metadata parquet files for sampled dataset: {root}")
+
+    rows_by_index: dict[int, dict] = {}
+    for episode_path in episode_paths:
+        try:
+            rows = pq.read_table(episode_path, columns=columns).to_pylist()
+        except (KeyError, OSError) as exc:
+            raise SystemExit(f"Cannot validate video spans in {episode_path}: {exc}") from exc
+        for row in rows:
+            episode_index = row["episode_index"]
+            if not isinstance(episode_index, int) or episode_index in rows_by_index:
+                raise SystemExit(f"Invalid or duplicate episode_index {episode_index!r} in {episode_path}")
+            rows_by_index[episode_index] = row
+
+    expected_indices = set(range(total_episodes))
+    actual_indices = set(rows_by_index)
+    if actual_indices != expected_indices:
+        missing = sorted(expected_indices - actual_indices)
+        unexpected = sorted(actual_indices - expected_indices)
+        raise SystemExit(
+            f"Episode metadata indices do not match total_episodes for {root}; "
+            f"missing={missing[:10]}, unexpected={unexpected[:10]}"
+        )
+
+    compatible: list[int] = []
+    repairable: list[int] = []
+    unrepairable: list[int] = []
+    for episode_index in range(total_episodes):
+        row = rows_by_index[episode_index]
+        episode_length = row["length"]
+        spans_match = isinstance(episode_length, int)
+        spans_can_be_trimmed = spans_match
+        for video_key in video_keys:
+            from_timestamp = row[f"videos/{video_key}/from_timestamp"]
+            to_timestamp = row[f"videos/{video_key}/to_timestamp"]
+            if not isinstance(from_timestamp, int | float) or not isinstance(to_timestamp, int | float):
+                spans_match = False
+                spans_can_be_trimmed = False
+                break
+            from_frame = round(from_timestamp * fps)
+            to_frame = round(to_timestamp * fps)
+            video_span_length = to_frame - from_frame
+            if episode_length != video_span_length:
+                spans_match = False
+            if not isinstance(episode_length, int) or video_span_length < episode_length:
+                spans_can_be_trimmed = False
+
+        if spans_match:
+            compatible.append(episode_index)
+        elif spans_can_be_trimmed:
+            repairable.append(episode_index)
+        else:
+            unrepairable.append(episode_index)
+
+    return compatible, repairable, unrepairable
 
 
 def feature_signature(features: dict) -> str:
@@ -110,7 +194,7 @@ def feature_signature(features: dict) -> str:
 def build_candidates(roots: list[Path]) -> list[DatasetCandidate]:
     candidates: list[DatasetCandidate] = []
     for root in roots:
-        features, total_episodes = load_dataset_info(root)
+        features, total_episodes, _ = load_dataset_info(root)
         candidates.append(
             DatasetCandidate(
                 root=root,
@@ -153,17 +237,52 @@ def build_sample_candidates(
         except (TypeError, ValueError) as exc:
             raise SystemExit(f"Invalid sample episode count for {root}: {episode_count_raw!r}") from exc
 
-        features, source_total_episodes = load_dataset_info(root)
+        features, source_total_episodes, fps = load_dataset_info(root)
         if episode_count < 1:
             raise SystemExit(f"Sample episode count must be at least 1 for {root}")
+        compatible_indices, repairable_indices, unrepairable_indices = (
+            find_split_compatible_episode_indices(root, features, source_total_episodes, fps)
+        )
+        sample_pool = sorted(compatible_indices + repairable_indices)
+        if unrepairable_indices:
+            preview = ", ".join(str(index) for index in unrepairable_indices[:20])
+            if len(unrepairable_indices) > 20:
+                preview += ", ..."
+            print(
+                f"Excluded {len(unrepairable_indices)} episodes whose video spans are shorter than "
+                f"their data and cannot be repaired by trimming in {root}: {preview}"
+            )
         if episode_count > source_total_episodes:
             raise SystemExit(
                 f"Cannot sample {episode_count} episodes from {root}; "
                 f"it only contains {source_total_episodes}"
             )
+        if episode_count > len(sample_pool):
+            raise SystemExit(
+                f"Cannot sample {episode_count} episodes from {root}; only {len(sample_pool)} of "
+                f"{source_total_episodes} are split-compatible or safely trimmable"
+            )
 
         # Sorting preserves the source dataset's chronological order in the materialized subset.
-        selected_episode_indices = tuple(sorted(rng.sample(range(source_total_episodes), episode_count)))
+        selected_episode_indices = tuple(sorted(rng.sample(sample_pool, episode_count)))
+        repairable_set = set(repairable_indices)
+        repair_episode_indices = tuple(
+            index for index in selected_episode_indices if index in repairable_set
+        )
+        if repairable_indices:
+            preview = ", ".join(str(index) for index in repairable_indices[:20])
+            if len(repairable_indices) > 20:
+                preview += ", ..."
+            print(
+                f"Detected {len(repairable_indices)} episodes with excess trailing video frames "
+                f"in {root}: {preview}"
+            )
+        if repair_episode_indices:
+            print(
+                f"The random sample selected {len(repair_episode_indices)} of them; their temporary "
+                "subset clips will be trimmed to episode.length frames."
+            )
+
         candidates.append(
             DatasetCandidate(
                 root=root,
@@ -171,6 +290,7 @@ def build_sample_candidates(
                 features=features,
                 total_episodes=episode_count,
                 selected_episode_indices=selected_episode_indices,
+                video_span_repair_episode_indices=repair_episode_indices,
             )
         )
         seen_roots.add(root)
@@ -315,6 +435,71 @@ def write_episode_lineage_csv(candidates: list[DatasetCandidate], csv_path: Path
     return csv_path, row_count
 
 
+def create_repaired_sample_source(candidate: DatasetCandidate, repaired_root: Path) -> Path:
+    """Create a temporary source view with selected video spans trimmed to data length."""
+    repair_indices = set(candidate.video_span_repair_episode_indices)
+    if not repair_indices:
+        return candidate.root
+
+    _, _, fps = load_dataset_info(candidate.root)
+    video_keys = [
+        key for key, feature in candidate.features.items() if feature.get("dtype") == "video"
+    ]
+    if not video_keys:
+        raise SystemExit(f"Cannot repair video spans in dataset without video features: {candidate.root}")
+
+    shutil.copytree(candidate.root / "meta", repaired_root / "meta")
+    (repaired_root / "data").symlink_to(candidate.root / "data", target_is_directory=True)
+    if (candidate.root / "videos").is_dir():
+        (repaired_root / "videos").symlink_to(candidate.root / "videos", target_is_directory=True)
+
+    repaired_indices: set[int] = set()
+    for episode_path in sorted((repaired_root / "meta" / "episodes").rglob("*.parquet")):
+        table = pq.read_table(episode_path)
+        episode_indices = table["episode_index"].to_pylist()
+        row_positions = {
+            row_position
+            for row_position, episode_index in enumerate(episode_indices)
+            if episode_index in repair_indices
+        }
+        if not row_positions:
+            continue
+
+        lengths = table["length"].to_pylist()
+        for video_key in video_keys:
+            from_column_name = f"videos/{video_key}/from_timestamp"
+            to_column_name = f"videos/{video_key}/to_timestamp"
+            from_timestamps = table[from_column_name].to_pylist()
+            to_timestamps = table[to_column_name].to_pylist()
+            for row_position in row_positions:
+                from_frame = round(from_timestamps[row_position] * fps)
+                to_timestamps[row_position] = (from_frame + lengths[row_position]) / fps
+
+            column_index = table.schema.get_field_index(to_column_name)
+            table = table.set_column(
+                column_index,
+                to_column_name,
+                pa.array(to_timestamps, type=table.schema.field(column_index).type),
+            )
+
+        pq.write_table(table, episode_path)
+        repaired_indices.update(episode_indices[row_position] for row_position in row_positions)
+
+    if repaired_indices != repair_indices:
+        missing = sorted(repair_indices - repaired_indices)
+        raise SystemExit(f"Could not locate selected episodes for temporary video-span repair: {missing}")
+
+    compatible, repairable, unrepairable = find_split_compatible_episode_indices(
+        repaired_root, candidate.features, load_dataset_info(candidate.root)[1], fps
+    )
+    del compatible
+    still_incompatible = sorted(repair_indices & (set(repairable) | set(unrepairable)))
+    if still_incompatible:
+        raise SystemExit(f"Temporary video-span repair failed for episodes: {still_incompatible}")
+
+    return repaired_root
+
+
 def materialize_random_subsets(
     candidates: list[DatasetCandidate],
     temp_root: Path,
@@ -334,12 +519,28 @@ def materialize_random_subsets(
         sample_base = temp_root / f"sample_{sample_number:03d}"
         sample_root = sample_base / "selected"
         sample_repo_id = f"{candidate.repo_id}_selected"
+        subset_source_root = candidate.root
+        repair_indices = candidate.video_span_repair_episode_indices
+        if repair_indices:
+            repaired_source_root = temp_root / f"sample_{sample_number:03d}_repaired_source"
+            repair_preview = ", ".join(str(index) for index in repair_indices)
+            print(
+                f"\nRepairing {len(repair_indices)} selected episode video spans in a temporary "
+                f"source view: {repair_preview}"
+            )
+            if dry_run:
+                subset_source_root = repaired_source_root
+                print(f"Dry run enabled; not creating temporary repaired source: {repaired_source_root}")
+            else:
+                subset_source_root = create_repaired_sample_source(candidate, repaired_source_root)
+                print(f"Created temporary repaired source: {subset_source_root}")
+
         subset_config_path = config_path.with_name(
             f"{config_path.stem}__sample_{sample_number:03d}{config_path.suffix or '.json'}"
         )
         subset_cfg = {
             "repo_id": candidate.repo_id,
-            "root": str(candidate.root),
+            "root": str(subset_source_root),
             "new_root": str(sample_base),
             "operation": {
                 "type": "split",
