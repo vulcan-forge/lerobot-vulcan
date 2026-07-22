@@ -75,6 +75,8 @@ class SourcceyLeader(Teleoperator):
         # Track last warning time for throttling
         self._last_warning_time = 0.0
         self._warning_throttle_interval = 60.0  # seconds
+        self._last_disconnected_warning_time = 0.0
+        self._disconnected_warning_throttle_interval = 5.0  # seconds
 
     def _load_default_action(self) -> dict[str, float]:
         """Load default action from JSON file."""
@@ -200,6 +202,8 @@ class SourcceyLeader(Teleoperator):
 
     def get_action(self) -> dict[str, float]:
         if not self.is_connected:
+            if self.using_arm:
+                self._log_disconnected_warning_throttled()
             return self._default_active_action if self.using_arm else self._default_action
 
         try:
@@ -216,3 +220,24 @@ class SourcceyLeader(Teleoperator):
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
         raise NotImplementedError
+
+    def _log_disconnected_warning_throttled(self) -> None:
+        current_time = time.monotonic()
+        if (
+            current_time - self._last_disconnected_warning_time
+            < self._disconnected_warning_throttle_interval
+        ):
+            return
+
+        disconnected_components = []
+        if not self.bus.is_connected:
+            disconnected_components.append(f"motor bus on port '{self.config.port}'")
+        if not self.leader_connected:
+            disconnected_components.append("leader connection state")
+
+        logger.warning(
+            "%s Sourccey leader is disconnected (%s). Returning default active action.",
+            self.config.orientation.capitalize(),
+            ", ".join(disconnected_components),
+        )
+        self._last_disconnected_warning_time = current_time
