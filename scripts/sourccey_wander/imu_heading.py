@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections import deque
 
 # is supplying yaw. Tight (the gyro is accurate over the few seconds of a turn),
 # so the wide-theta recovery tiebreaker can reject a room-symmetric wrong mode
@@ -55,6 +56,11 @@ class ImuYawClient:
         self._lock = threading.Lock()
         self._yaw_deg: float | None = None
         self._last_rx_monotonic: float | None = None
+        # Host-time history lets LiDAR consumers ask for the yaw that belonged
+        # to a completed revolution instead of pairing an old scan with the yaw
+        # at some later point in a slow scan-match. Both publishers use the Pi's
+        # wall clock, so their timestamps are directly comparable.
+        self._history: deque[tuple[float, float]] = deque(maxlen=2048)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._sock = None
@@ -142,12 +148,18 @@ class ImuYawClient:
             try:
                 data = json.loads(msg.decode("utf-8"))
                 yaw_deg = float(data["yaw_deg"]) * self._sign
+                host_ts_s = float(data["ts_ns"]) / 1e9 if data.get("ts_ns") is not None else None
             except Exception:  # noqa: BLE001
                 continue
             ever_received = True
             with self._lock:
                 self._yaw_deg = yaw_deg
                 self._last_rx_monotonic = time.monotonic()
+                if host_ts_s is not None:
+                    if self._history and host_ts_s < self._history[-1][0]:
+                        # Do not interpolate across a host restart/clock correction.
+                        self._history.clear()
+                    self._history.append((host_ts_s, yaw_deg))
             if first:
                 first = False
                 print("[wander] IMU yaw feed live (heading prior active)")
@@ -160,6 +172,40 @@ class ImuYawClient:
             if (time.monotonic() - self._last_rx_monotonic) > self._stale_after_s:
                 return None
             return float(self._yaw_deg)
+
+    def deg_at_wall_time(self, host_wall_ts_s: float, *, max_gap_s: float = 0.20) -> float | None:
+        """Interpolate continuous yaw at a Pi-host wall-clock timestamp.
+
+        This fuses with ``ScanFrame`` revolution timestamps. It refuses to
+        bridge a large sample gap and returns ``None`` for older host streams
+        without timestamps, so callers can safely fall back to :meth:`deg`.
+        """
+        target = float(host_wall_ts_s)
+        with self._lock:
+            samples = tuple(self._history)
+        if not samples:
+            return None
+        gap = float(max_gap_s)
+        if target <= samples[0][0]:
+            return float(samples[0][1]) if samples[0][0] - target <= gap else None
+        if target >= samples[-1][0]:
+            return float(samples[-1][1]) if target - samples[-1][0] <= gap else None
+
+        lo = 0
+        hi = len(samples) - 1
+        while lo + 1 < hi:
+            mid = (lo + hi) // 2
+            if samples[mid][0] <= target:
+                lo = mid
+            else:
+                hi = mid
+        t0, y0 = samples[lo]
+        t1, y1 = samples[hi]
+        if target - t0 > gap or t1 - target > gap or t1 <= t0:
+            return None
+        fraction = (target - t0) / (t1 - t0)
+        # Yaw is continuous/unwrapped, so ordinary interpolation is correct.
+        return float(y0 + fraction * (y1 - y0))
 
     def deg_fresh(self, *, wait_up_to_s: float = 0.4, max_age_s: float = 0.3) -> float | None:
         """Yaw from a sample received within ``max_age_s``, waiting up to
@@ -267,4 +313,3 @@ def _imu_resolved_theta(imu: "ImuYawClient | None", anchor: tuple[float, float] 
     if now is None:
         return None
     return float(anchor[1]) + (float(now) - float(anchor[0]))
-

@@ -10,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 HTML_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -484,28 +483,26 @@ def _refine_pose(
     n_xy = len(candidate_xy)
     if n_theta == 0 or len(snapshot_points_xy) == 0:
         return best_pose, best_score
-    rotated_stack = np.stack(
-        [
-            _transform_points(snapshot_points_xy, Pose2D(0.0, 0.0, float(t)))
-            for t in theta_candidates
-        ]
-    )
-    # ONE scoring call for the whole theta x xy grid (ordering: theta-major,
-    # then dx-major/dy-minor — identical to the scalar loops, so argmax's
-    # first-of-equals matches the scalar first-strictly-greater winner).
-    cand_all = (
-        rotated_stack[:, None, :, :] + candidate_xy[None, :, None, :]
-    ).reshape(n_theta * n_xy, len(snapshot_points_xy), 2)
-    scores = _score_candidates_batch(
-        cand_all,
-        exact_grid=exact_grid,
-        dilated_grid=dilated_grid,
-        known_grid=known_grid,
-        grid_origin_xy=grid_origin_xy,
-        resolution_m=resolution_m,
-        global_sampled_xy=global_sampled_xy,
-        use_nearest_penalty=use_nearest_penalty,
-    )
+    # Score one theta slab at a time. Building theta x xy x points all at once
+    # made recovery panoramas allocate hundreds of MB before the scorer's own
+    # batching could help. Flattened theta-major ordering is unchanged.
+    scores = np.empty(n_theta * n_xy, dtype=np.float64)
+    for theta_index, theta in enumerate(theta_candidates):
+        rotated = _transform_points(
+            snapshot_points_xy, Pose2D(0.0, 0.0, float(theta))
+        )
+        candidates = rotated[None, :, :] + candidate_xy[:, None, :]
+        start = theta_index * n_xy
+        scores[start : start + n_xy] = _score_candidates_batch(
+            candidates,
+            exact_grid=exact_grid,
+            dilated_grid=dilated_grid,
+            known_grid=known_grid,
+            grid_origin_xy=grid_origin_xy,
+            resolution_m=resolution_m,
+            global_sampled_xy=global_sampled_xy,
+            use_nearest_penalty=use_nearest_penalty,
+        )
     if prior_pose is not None:
         prior_translation_err = np.hypot(
             candidate_xy[:, 0].astype(np.float64) - float(prior_pose.x),
@@ -664,25 +661,23 @@ def _search_pose(
     if len(coarse_candidate_xy) and len(coarse_theta_candidates) and len(snapshot_points_xy):
         n_coarse_theta = len(coarse_theta_candidates)
         n_coarse_xy = len(coarse_candidate_xy)
-        coarse_rotated = np.stack(
-            [
-                _transform_points(snapshot_points_xy, Pose2D(0.0, 0.0, float(t)))
-                for t in coarse_theta_candidates
-            ]
-        )
-        coarse_cand_all = (
-            coarse_rotated[:, None, :, :] + coarse_candidate_xy[None, :, None, :]
-        ).reshape(n_coarse_theta * n_coarse_xy, len(snapshot_points_xy), 2)
-        coarse_scores = _score_candidates_batch(
-            coarse_cand_all,
-            exact_grid=exact_grid,
-            dilated_grid=dilated,
-            known_grid=known_grid,
-            grid_origin_xy=origin,
-            resolution_m=resolution_m,
-            global_sampled_xy=global_sampled_xy,
-            use_nearest_penalty=False,
-        )
+        coarse_scores = np.empty(n_coarse_theta * n_coarse_xy, dtype=np.float64)
+        for theta_index, theta in enumerate(coarse_theta_candidates):
+            rotated = _transform_points(
+                snapshot_points_xy, Pose2D(0.0, 0.0, float(theta))
+            )
+            candidates = rotated[None, :, :] + coarse_candidate_xy[:, None, :]
+            start = theta_index * n_coarse_xy
+            coarse_scores[start : start + n_coarse_xy] = _score_candidates_batch(
+                candidates,
+                exact_grid=exact_grid,
+                dilated_grid=dilated,
+                known_grid=known_grid,
+                grid_origin_xy=origin,
+                resolution_m=resolution_m,
+                global_sampled_xy=global_sampled_xy,
+                use_nearest_penalty=False,
+            )
         if prior_pose is not None:
             coarse_prior_err = np.hypot(
                 coarse_candidate_xy[:, 0].astype(np.float64) - float(prior_pose.x),
