@@ -1,0 +1,26 @@
+# Start a new supervised fine-tuning run from pretrained weights. This is not
+# a resume of the original pretraining optimizer state.
+policy:
+  path: outputs/train/base/checkpoints/last/pretrained_model
+  push_to_hub: false
+
+dataset:
+  normalization: checkpoint
+  sources:
+    - repo_id: your-org/original-demonstrations
+      weight: 0.7
+    - repo_id: your-org/corner-case-corrections
+      weight: 0.3
+
+# Policy preset parameter groups are retained while their base learning rate
+# is reduced by this factor for fine-tuning.
+policy_preset_lr_scale: 0.1
+output_dir: outputs/sft/corner-case-v1
+steps: 10000
+batch_size: 16
+eval_freq: 0
+save_freq: 1000
+log_freq: 100
+
+wandb:
+  enable: false
