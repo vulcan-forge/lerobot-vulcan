@@ -43,6 +43,11 @@ from ldlidar_auto_snapshot_stitch import _init_rerun, _send_stop
 from ldlidar_direct_snapshot_client import DirectLidarFeed
 from ldlidar_direct_snapshot_stitch import Pose2D, _search_pose, _transform_points
 from sourccey_arm_pose import DEFAULT_POSE_PATH, apply_pose_blocking, hold_action, limp_action, load_pose
+from sourccey_collision_box import (
+    DEFAULT_COLLISION_BOX_PATH,
+    collision_box_violation as _collision_box_violation,
+    load_collision_box as _load_collision_box,
+)
 from sourccey_spin_map import (
     _MAP_PALETTE,
     _abort,
@@ -584,20 +589,6 @@ def _astar(traversable: np.ndarray, start: tuple[int, int], goal: tuple[int, int
     return None
 
 
-def _decimate_path(path: list[tuple[int, int]], every: int = 3) -> list[tuple[int, int]]:
-    """Thin a dense A* cell path WITHOUT cutting corners: keep every Nth cell plus
-    the endpoints. Unlike LOS chord-simplification, this preserves the planner's
-    centred contour — chords were re-cutting the corners the cost gradient had
-    deliberately rounded, dragging the robot back toward the walls."""
-    if len(path) <= 2:
-        return path
-    out = path[:-1:every]
-    if out[0] != path[0]:
-        out.insert(0, path[0])
-    out.append(path[-1])
-    return out
-
-
 def _line_free(traversable: np.ndarray, a: tuple[int, int], b: tuple[int, int]) -> bool:
     n = int(max(abs(b[0] - a[0]), abs(b[1] - a[1]))) * 2 + 1
     for t in np.linspace(0.0, 1.0, n):
@@ -608,21 +599,61 @@ def _line_free(traversable: np.ndarray, a: tuple[int, int], b: tuple[int, int]) 
     return True
 
 
-def _simplify_path(traversable: np.ndarray, path: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Greedy line-of-sight shortcutting: keep only the corners that matter."""
+def _straight_segment_path(
+    traversable: np.ndarray,
+    path: list[tuple[int, int]],
+    max_deviation_cells: float = 1.5,
+) -> list[tuple[int, int]]:
+    """Compress A* into collision-free straight runs without cutting its contour.
+
+    A chord is accepted only when every sampled cell is traversable *and* the
+    original cost-aware A* path stays close to it. Long corridor runs collapse
+    to one segment, while real corners remain explicit pivot points.
+    """
     if len(path) <= 2:
         return path
+
+    def _deviation(a_idx: int, b_idx: int) -> float:
+        a = np.asarray(path[a_idx], dtype=np.float64)
+        b = np.asarray(path[b_idx], dtype=np.float64)
+        ab = b - a
+        length = float(np.hypot(*ab))
+        if length < 1e-9:
+            return 0.0
+        points = np.asarray(path[a_idx : b_idx + 1], dtype=np.float64)
+        rel = points - a
+        return float(np.max(np.abs(rel[:, 0] * ab[1] - rel[:, 1] * ab[0]) / length))
+
     out = [path[0]]
-    k = 0
-    while k < len(path) - 1:
-        far = k + 1
-        for m in range(len(path) - 1, k, -1):
-            if _line_free(traversable, path[k], path[m]):
-                far = m
+    start = 0
+    while start < len(path) - 1:
+        far = start + 1
+        for candidate in range(len(path) - 1, start, -1):
+            if (
+                _line_free(traversable, path[start], path[candidate])
+                and _deviation(start, candidate) <= float(max_deviation_cells)
+            ):
+                far = candidate
                 break
         out.append(path[far])
-        k = far
+        start = far
     return out
+
+
+def _segment_complete(
+    position_xy: np.ndarray,
+    segment_start_xy: np.ndarray,
+    segment_end_xy: np.ndarray,
+    tolerance_m: float,
+) -> bool:
+    """A segment ends on proximity or once localization places us past its end."""
+    position = np.asarray(position_xy, dtype=np.float64)
+    start = np.asarray(segment_start_xy, dtype=np.float64)
+    end = np.asarray(segment_end_xy, dtype=np.float64)
+    if float(np.hypot(*(end - position))) <= float(tolerance_m):
+        return True
+    direction = end - start
+    return float(direction @ direction) > 1e-9 and float((position - end) @ direction) >= 0.0
 
 
 def _match_active_frontier(
@@ -756,7 +787,12 @@ def _pick_target(
     if best is None:
         return None
     _utility, cluster, goal_xy, path, observe_xy, expected_gain = best
-    waypoints = [analysis.to_world(ij) for ij in _decimate_path(path)[1:]]
+    segment_path = _straight_segment_path(
+        analysis.traversable,
+        path,
+        max_deviation_cells=max(1.0, 0.08 / analysis.res_m),
+    )
+    waypoints = [analysis.to_world(ij) for ij in segment_path[1:]]
     if not waypoints or np.hypot(*(waypoints[-1] - goal_xy)) > 0.05:
         waypoints.append(goal_xy)
     close_look = float(np.hypot(*(goal_xy - observe_xy))) <= 0.9
@@ -810,43 +846,16 @@ def _plan_waypoints(analysis: Analysis, start_xy: np.ndarray, goal_xy: np.ndarra
         # first segment, so A* planned from a fictitious safe cell while the
         # guard evaluated from the real pose and rejected every command.
         waypoints.append(start_w)
-    waypoints.extend(analysis.to_world(ij) for ij in _decimate_path(path)[1:])
+    segment_path = _straight_segment_path(
+        analysis.traversable,
+        path,
+        max_deviation_cells=max(1.0, 0.08 / analysis.res_m),
+    )
+    waypoints.extend(analysis.to_world(ij) for ij in segment_path[1:])
     goal_w = analysis.to_world(goal)
     if not waypoints or np.hypot(*(waypoints[-1] - goal_w)) > 0.05:
         waypoints.append(goal_w)
     return waypoints
-
-
-def _carrot_on(polyline: np.ndarray, pos: np.ndarray, lookahead_m: float) -> np.ndarray:
-    """Pure-pursuit carrot: the point ``lookahead_m`` AHEAD ALONG THE PATH of the
-    robot's closest point on it. Steering at the carrot makes the robot TRACE the
-    planned contour (left, forward, right around a table) instead of beelining at
-    the next corner from wherever it drifted — beelining is how a planned detour
-    still drove the robot straight into the table it detoured around."""
-    best = (float("inf"), 0, polyline[0])
-    for i in range(len(polyline) - 1):
-        a, b = polyline[i], polyline[i + 1]
-        ab = b - a
-        L2 = float(ab @ ab)
-        t = 0.0 if L2 < 1e-12 else float(np.clip(((pos - a) @ ab) / L2, 0.0, 1.0))
-        proj = a + t * ab
-        d = float(np.hypot(*(pos - proj)))
-        if d < best[0]:
-            best = (d, i, proj)
-    _d, idx, cur = best
-    rem = float(lookahead_m)
-    while idx < len(polyline) - 1:
-        seg_rest = float(np.hypot(*(polyline[idx + 1] - cur)))
-        if rem <= seg_rest:
-            if seg_rest < 1e-9:
-                idx += 1
-                cur = polyline[idx] if idx < len(polyline) else polyline[-1]
-                continue
-            return cur + (polyline[idx + 1] - cur) * (rem / seg_rest)
-        rem -= seg_rest
-        idx += 1
-        cur = polyline[idx]
-    return polyline[-1]
 
 
 # ---------------------------------------------------------------------------
@@ -899,8 +908,8 @@ def _localize(
 
 class BaseController:
     def __init__(self, robot, hold: dict, imu, rate_hz: float = 25.0, *,
-                 turn_speed: float = 0.9, hold_gain: float = 4.5,
-                 hold_max: float = 0.6) -> None:
+                 turn_speed: float = 0.9, hold_gain: float = 2.0,
+                 hold_max: float = 0.25, hold_deadband_deg: float = 1.5) -> None:
         self.robot = robot
         self.hold = dict(hold)
         self.imu = imu
@@ -908,6 +917,7 @@ class BaseController:
         self.turn_speed = float(turn_speed)
         self.hold_gain = float(hold_gain)
         self.hold_max = float(hold_max)
+        self.hold_deadband_deg = float(hold_deadband_deg)
         self.dt = 1.0 / float(rate_hz)
         self._mode: tuple[str, float, float] = ("halt", 0.0, 0.0)  # (kind, x_vel, target_imu_deg)
         self._lock = threading.Lock()
@@ -947,8 +957,9 @@ class BaseController:
                             th = self.turn_sign * math.copysign(mag, err_deg)
                     else:                  # "drive"
                         x = float(x_vel)
-                        corr = self.hold_gain * math.radians(err_deg)
-                        th = self.turn_sign * max(-self.hold_max, min(self.hold_max, corr))
+                        if abs(err_deg) > self.hold_deadband_deg:
+                            corr = self.hold_gain * math.radians(err_deg)
+                            th = self.turn_sign * max(-self.hold_max, min(self.hold_max, corr))
             if kind == "drive" and x > 0.0 and safety_check is not None:
                 reason = None
                 try:
@@ -1235,9 +1246,9 @@ def main() -> int:
                         help="Never re-target a frontier this close to one already snapshotted.")
     parser.add_argument("--robot-radius-m", type=float, default=0.31,
                         help="Planning inflation radius (body half-width 0.28 + margin).")
-    # Navigation — continuous gyro-held drive. Localization corrects the pose in
-    # the slow loop while an independent 25Hz controller checks live LiDAR and
-    # mapped full-body clearance before every forward command.
+    # Navigation — pivot at verified path corners, then drive each straight run
+    # on one fixed gyro heading. Localization corrects position without steering;
+    # an independent 25Hz controller checks clearance before every command.
     parser.add_argument("--drive-speed", type=float, default=0.80,
                         help="Forward velocity command while driving (must clear wheel stiction ~0.78).")
     parser.add_argument("--turn-speed", type=float, default=0.9,
@@ -1247,8 +1258,7 @@ def main() -> int:
     parser.add_argument("--drive-burst-s", type=float, default=0.28,
                         help="Deprecated compatibility option; continuous drive no longer uses bursts.")
     parser.add_argument("--drive-settle-s", type=float, default=0.12,
-                        help="Stationary settling time after each drive burst before accepting a "
-                             "fresh LiDAR revolution for localization.")
+                        help="Stationary settling time after each pivot before driving straight.")
     parser.add_argument("--track-search-xy-m", type=float, default=0.22,
                         help="Translation search window for each continuous tracking match — covers how "
                              "far the base rolls between matches.")
@@ -1264,20 +1274,18 @@ def main() -> int:
                              "stops the matcher from 'teleporting' the pose along a wall.")
     parser.add_argument("--track-theta-window-deg", type=float, default=8.0,
                         help="Heading search window for the tracking match (gyro seeds it to ~0.5deg).")
-    parser.add_argument("--aim-tolerance-deg", type=float, default=10.0,
+    parser.add_argument("--aim-tolerance-deg", type=float, default=3.0,
                         help="Start driving forward once the heading error is within this.")
     parser.add_argument("--lookahead-m", type=float, default=0.20,
-                        help="Pure-pursuit carrot distance along the planned path. Smaller = hugs "
-                             "corners tighter; larger = smoother but cuts corners more.")
+                        help="Deprecated compatibility option; segmented driving has no carrot.")
     parser.add_argument("--drive-exit-tol-deg", type=float, default=18.0,
-                        help="While driving, fall back to a full pivot only past this heading error — "
-                             "below it the heading servo corrects WHILE ROLLING. Kept tight so the "
-                             "base aligns with doorway segments instead of curving into a jamb.")
-    parser.add_argument("--heading-hold-gain", type=float, default=4.5,
-                        help="Proportional gain (per radian of heading error) holding the drive "
-                             "heading. High, to counter the mecanum base's curve-while-straight.")
-    parser.add_argument("--heading-hold-max", type=float, default=0.6,
+                        help="Deprecated compatibility option; segment headings never retarget in motion.")
+    parser.add_argument("--heading-hold-gain", type=float, default=2.0,
+                        help="Gentle proportional gain holding one fixed straight-segment heading.")
+    parser.add_argument("--heading-hold-max", type=float, default=0.25,
                         help="Cap on the heading-hold theta.vel while driving forward.")
+    parser.add_argument("--heading-hold-deadband-deg", type=float, default=1.5,
+                        help="Do not steer inside this IMU error band; prevents left/right hunting.")
     parser.add_argument("--viewpoint-settle-s", type=float, default=0.5,
                         help="Pause at a reached viewpoint before integrating clean stationary scans.")
     # Arms are QUARANTINED by default (hardware damage 2026-07-21): no torque, no
@@ -1308,6 +1316,17 @@ def main() -> int:
                         help="Live forward lane half-width. This must cover the measured 0.28m body "
                              "half-width; mapped shoulder clearance is enforced separately using "
                              "the full --robot-radius-m swept footprint.")
+    parser.add_argument(
+        "--collision-box-file",
+        default=str(DEFAULT_COLLISION_BOX_PATH),
+        help="Saved full-angle LiDAR collision-envelope calibration.",
+    )
+    parser.add_argument(
+        "--collision-box-mode",
+        choices=("auto", "off", "required"),
+        default="auto",
+        help="auto loads a calibration when present; required refuses to explore without one.",
+    )
     parser.add_argument("--swept-guard-lookahead-m", type=float, default=0.12,
                         help="How far ahead to project the full robot-radius footprint on the map. "
                              "A mapped shoulder collision stops/replans; unknown space stops for a "
@@ -1390,6 +1409,24 @@ def main() -> int:
         else:
             print("[explore] arms left untorqued (arm motion is quarantined; --arm-stow to opt in).")
 
+    collision_profile: dict | None = None
+    if str(args.collision_box_mode) != "off":
+        try:
+            collision_profile = _load_collision_box(args.collision_box_file)
+        except (OSError, ValueError, TypeError) as exc:
+            if str(args.collision_box_mode) == "required":
+                _abort(f"Invalid collision-box calibration: {exc}")
+            print(f"[explore] WARNING: collision-box calibration ignored: {exc}")
+        if collision_profile is None and str(args.collision_box_mode) == "required":
+            _abort(f"Collision-box calibration required but not found: {args.collision_box_file}")
+        if collision_profile is not None:
+            learned = collision_profile["ranges_m"]
+            print(f"[explore] calibrated collision box ENABLED "
+                  f"({sum(v is not None for v in learned)}/{len(learned)} angular bins; "
+                  "side intrusions are single-bin hard stops).")
+        else:
+            print("[explore] no collision-box calibration; using legacy forward stop lane.")
+
     # ---- Rerun ----
     grpc_port, web_port = _pick_free_ports(int(args.rerun_grpc_port), int(args.rerun_web_port))
     rr, _viewer_url = _init_rerun(session_name="sourccey_explore", mode=args.rerun_mode,
@@ -1448,7 +1485,8 @@ def main() -> int:
     controller = BaseController(robot, hold, imu, rate_hz=float(args.control_rate_hz),
                                 turn_speed=float(args.turn_speed),
                                 hold_gain=float(args.heading_hold_gain),
-                                hold_max=float(args.heading_hold_max))
+                                hold_max=float(args.heading_hold_max),
+                                hold_deadband_deg=float(args.heading_hold_deadband_deg))
     odom = OdometryFeed(robot)
     odom_scale = [float(args.odom_scale)]   # metres per x.vel-unit; calibrated online
 
@@ -1935,17 +1973,14 @@ def main() -> int:
         return "replan"
 
     def _drive_leg(waypoints, goal_xy, analysis, face_xy=None) -> str:
-        """Drive the leg CONTINUOUSLY along the planned path (pure pursuit).
+        """Execute a path as PIVOT -> STRAIGHT -> PIVOT -> STRAIGHT segments.
 
-        Steering aims at a CARROT that slides along the planned polyline
-        ~--lookahead-m ahead of the robot's closest point on it, so the robot
-        TRACES the planned contour (left, forward, right around a table) instead
-        of beelining at the next corner from wherever it drifted — beelining is
-        how a planned detour still drove it straight into the table (field
-        2026-07-21). Forward motion is continuous, but the controller independently
-        checks live LiDAR and mapped full-body clearance at 25Hz; a stop is latched
-        until the mission loop explicitly replans. Returns '' on arrival."""
+        Each straight run holds one immutable IMU heading. Scan matching corrects
+        position but never retargets steering mid-segment, eliminating the
+        pure-pursuit micro-adjustment zig-zags. Safety remains live at 25Hz.
+        """
         nonlocal cur_pose
+        pending_collision_local: list[np.ndarray | None] = [None]
 
         def _fast_safety_check() -> str | None:
             pose = cur_pose
@@ -1958,7 +1993,12 @@ def main() -> int:
             )
             if state == "unknown":
                 return f"map edge {distance:.2f}m ahead"
-            if state == "blocked":
+            # With a calibrated envelope, the raw LiDAR is the immediate
+            # physical-clearance authority. Inflated-map corrections can put the
+            # estimated centre a few centimetres inside its own wall and caused
+            # the old guard to stop repeatedly at 0.00-0.10m. The map still owns
+            # unknown-space stopping and global path planning.
+            if state == "blocked" and collision_profile is None:
                 return f"mapped full-body clearance {distance:.2f}m ahead"
             _fid, frame = feed.latest()
             if frame is None:
@@ -1967,6 +2007,14 @@ def main() -> int:
             if not len(local):
                 return None
             ff = _to_forward_frame(local, forward_offset)
+            calibrated_hit = _collision_box_violation(ff, collision_profile)
+            if calibrated_hit is not None:
+                mask, sector, angle, hit_range, limit = calibrated_hit
+                pending_collision_local[0] = local[mask].copy()
+                return (f"calibrated collision box {sector}: {hit_range:.2f}m "
+                        f"at {angle:+.0f}deg (limit {limit:.2f}m)")
+            if collision_profile is not None:
+                return None
             lane = ((ff[:, 0] > 0.02)
                     & (ff[:, 0] < float(args.hard_stop_m))
                     & (np.abs(ff[:, 1]) < float(args.hard_stop_half_width_m)))
@@ -1997,10 +2045,14 @@ def main() -> int:
         goal = np.asarray(goal_xy, dtype=np.float64)
         leg_t0 = time.monotonic()
         driving = False
+        segment_index = 0
+        segment_start = _robot_centre(cur_pose).copy()
+        segment_target_imu: float | None = None
         replans = 0
 
         def _replan_same_frontier(reason: str) -> bool:
-            nonlocal analysis, waypoints, polyline, driving, last_sent, n_weak, last_good_t, replans
+            nonlocal analysis, waypoints, polyline, driving, last_sent, n_weak
+            nonlocal last_good_t, replans, segment_index, segment_start, segment_target_imu
             controller.halt()
             controller.clear_safety_latch()
             replans += 1
@@ -2020,6 +2072,9 @@ def main() -> int:
             ))
             driving = False
             last_sent = None
+            segment_index = 0
+            segment_start = _robot_centre(cur_pose).copy()
+            segment_target_imu = None
             n_weak = 0
             last_good_t = time.monotonic()
             print(f"[drive] {reason} — replanned toward the SAME frontier "
@@ -2035,6 +2090,13 @@ def main() -> int:
                         print(f"[drive] {safety_reason} — stopping to map before continuing.")
                         controller.clear_safety_latch()
                         break
+                    if safety_reason.startswith("calibrated collision box"):
+                        offenders = pending_collision_local[0]
+                        pending_collision_local[0] = None
+                        if offenders is not None and len(offenders):
+                            world_map.grid.mark_hits(
+                                _transform_points(offenders, cur_pose), amount=2.0
+                            )
                     if _replan_same_frontier(f"safety stop: {safety_reason}"):
                         continue
                     print(f"[drive] safety stop persisted after same-frontier replans: {safety_reason}.")
@@ -2061,65 +2123,71 @@ def main() -> int:
                     prop_info = (od, math.cos(obr), math.sin(obr),
                                  float(cur_pose.x), float(cur_pose.y))
                 centre = _robot_centre(cur_pose)
-                if float(np.hypot(*(goal - centre))) <= float(args.waypoint_tol_m):
+                while segment_index < len(waypoints):
+                    segment_end = np.asarray(waypoints[segment_index], dtype=np.float64)
+                    if not _segment_complete(
+                        centre,
+                        segment_start,
+                        segment_end,
+                        float(args.waypoint_tol_m),
+                    ):
+                        break
+                    controller.halt()
+                    segment_index += 1
+                    segment_start = centre.copy()
+                    segment_target_imu = None
+                    driving = False
+                    last_sent = None
+                if segment_index >= len(waypoints):
                     break
-                centre_cell = analysis.to_cell(centre)
-                ch, cw = analysis.traversable.shape
-                centre_is_traversable = (
-                    0 <= centre_cell[0] < ch
-                    and 0 <= centre_cell[1] < cw
-                    and bool(analysis.traversable[centre_cell])
-                )
-                # When a correction places the centre just inside inflation,
-                # use a short carrot so the commanded heading follows the local
-                # escape segment instead of looking 45cm ahead around a corner.
-                pursuit_lookahead = (
-                    float(args.lookahead_m)
-                    if centre_is_traversable
-                    else min(0.12, float(args.lookahead_m))
-                )
-                carrot = _carrot_on(polyline, centre, pursuit_lookahead)
-                vec = carrot - centre
-                # Heading to the carrot, from the current estimate.
-                alpha = math.degrees(math.atan2(vec[1], vec[0]))
-                desired_map = alpha - forward_offset
-                err_map = ((desired_map - float(cur_pose.theta_deg) + 180.0) % 360.0) - 180.0
+
+                segment_end = np.asarray(waypoints[segment_index], dtype=np.float64)
+                vec = segment_end - centre
                 yaw_now = imu.deg()
                 if yaw_now is None:
                     controller.halt()
                     time.sleep(0.1)
                     continue
-                # Mode hysteresis: pivot for big errors, drive for small.
-                if driving and abs(err_map) > float(args.drive_exit_tol_deg):
-                    driving = False
-                    last_sent = None
-                elif not driving and abs(err_map) <= float(args.aim_tolerance_deg):
-                    driving = True
-                    last_sent = None
-                    # Do not feed the tracker the last revolution captured
-                    # during the pivot. Halt, carry the final gyro motion into
-                    # the LiDAR lever pose, and wait for a stationary scan.
-                    controller.halt()
-                    halt_frame_id = feed.latest()[0]
-                    time.sleep(max(0.0, float(args.drive_settle_s)))
-                    feed.wait_for_frame_after(
-                        after_frame_id=halt_frame_id,
-                        timeout_s=0.8,
-                        min_frame_advances=1,
-                    )
-                    yaw_settled = imu.deg()
-                    if yaw_settled is not None and prev_imu is not None:
-                        cur_pose = _rotate_lidar_pose_about_robot_centre(
-                            cur_pose,
-                            float(yaw_settled) - float(prev_imu),
-                            lever_m,
-                            forward_offset,
-                        )
-                    prev_imu = yaw_settled
-                    continue
-                target_imu = float(yaw_now) + err_map
 
                 if not driving:
+                    # Aim once at this segment endpoint. During the subsequent
+                    # translation this target is frozen; localization corrections
+                    # are deliberately forbidden from steering the base.
+                    alpha = math.degrees(math.atan2(vec[1], vec[0]))
+                    desired_map = alpha - forward_offset
+                    err_map = (
+                        (desired_map - float(cur_pose.theta_deg) + 180.0) % 360.0
+                    ) - 180.0
+                    target_imu = float(yaw_now) + err_map
+                    if abs(err_map) <= float(args.aim_tolerance_deg):
+                        last_sent = None
+                        segment_target_imu = target_imu
+                        print(
+                            f"[drive] segment {segment_index + 1}/{len(waypoints)} aligned — "
+                            f"straight {float(np.hypot(*vec)):.2f}m."
+                        )
+                        driving = True
+                        # Do not feed the tracker the last revolution captured
+                        # during the pivot. Halt, carry the final gyro motion into
+                        # the LiDAR lever pose, and wait for a stationary scan.
+                        controller.halt()
+                        halt_frame_id = feed.latest()[0]
+                        time.sleep(max(0.0, float(args.drive_settle_s)))
+                        feed.wait_for_frame_after(
+                            after_frame_id=halt_frame_id,
+                            timeout_s=0.8,
+                            min_frame_advances=1,
+                        )
+                        yaw_settled = imu.deg()
+                        if yaw_settled is not None and prev_imu is not None:
+                            cur_pose = _rotate_lidar_pose_about_robot_centre(
+                                cur_pose,
+                                float(yaw_settled) - float(prev_imu),
+                                lever_m,
+                                forward_offset,
+                            )
+                        prev_imu = yaw_settled
+                        continue
                     # PIVOT phase: NO scan-matching. During fast rotation the scan
                     # was captured ~0.1-0.2s before the IMU read that seeds the
                     # match — a 5-10deg heading lie at pivot speed, outside the
@@ -2142,6 +2210,9 @@ def main() -> int:
                     prev_imu = yaw_now
                     time.sleep(0.05)
                 else:
+                    assert segment_target_imu is not None
+                    target_imu = float(segment_target_imu)
+                    err_map = target_imu - float(yaw_now)
                     # DRIVE phase: scan-to-map tracking with a PHYSICS-BOUNDED
                     # window — the base cannot outrun v_max, so no match may claim
                     # a bigger displacement, whatever its score. While driving
@@ -2174,7 +2245,7 @@ def main() -> int:
                             "stopping to map before continuing."
                         )
                         break
-                    if sweep_state == "blocked":
+                    if sweep_state == "blocked" and collision_profile is None:
                         controller.halt()
                         reason = f"full-body clearance blocked {sweep_distance:.2f}m ahead"
                         if _replan_same_frontier(reason):
@@ -2182,8 +2253,25 @@ def main() -> int:
                         return "hard stop (mapped shoulder clearance)"
                     if len(local):
                         ff = _to_forward_frame(local, forward_offset)
-                        lane = ((ff[:, 0] > 0.02)
-                                & (np.abs(ff[:, 1]) < float(args.hard_stop_half_width_m)))
+                        calibrated_hit = _collision_box_violation(ff, collision_profile)
+                        if calibrated_hit is not None:
+                            mask, sector, angle, hit_range, limit = calibrated_hit
+                            controller.halt()
+                            offenders = local[mask]
+                            if len(offenders):
+                                world_map.grid.mark_hits(
+                                    _transform_points(offenders, cur_pose), amount=2.0
+                                )
+                            reason = (f"calibrated collision box {sector}: {hit_range:.2f}m "
+                                      f"at {angle:+.0f}deg (limit {limit:.2f}m)")
+                            if _replan_same_frontier(reason):
+                                continue
+                            return f"hard stop (calibrated {sector} clearance)"
+                        if collision_profile is not None:
+                            lane = np.zeros(len(ff), dtype=bool)
+                        else:
+                            lane = ((ff[:, 0] > 0.02)
+                                    & (np.abs(ff[:, 1]) < float(args.hard_stop_half_width_m)))
                         if np.any(lane) and float(ff[lane, 0].min()) < float(args.hard_stop_m):
                             controller.halt()
                             offenders = local[lane & (ff[:, 0] < float(args.hard_stop_m) + 0.25)]
@@ -2263,6 +2351,8 @@ def main() -> int:
                             last_good_t = time.monotonic()
                             last_sent = None
                             driving = False       # re-aim from the corrected pose
+                            segment_start = _robot_centre(cur_pose).copy()
+                            segment_target_imu = None
                             prev_imu = imu.deg()
                             continue
                     if t_now - last_diag >= 2.0:
@@ -2298,6 +2388,8 @@ def main() -> int:
                                     prev_imu = imu.deg()
                                     driving = False
                                     last_sent = None
+                                    segment_start = _robot_centre(cur_pose).copy()
+                                    segment_target_imu = None
                                     continue
                                 if not phantom_warned:
                                     phantom_warned = True
@@ -2307,10 +2399,10 @@ def main() -> int:
                                 # Phantom: keep driving.
                     else:
                         novel_hist.clear()
-                    # Continuous drive: the fast controller keeps streaming and
-                    # holding IMU yaw while its independent safety callback runs
-                    # before every command. The slow loop only refreshes the
-                    # pursuit target and corrects pose from moving LiDAR scans.
+                    # Straight drive: the fast controller keeps streaming and
+                    # holding this segment's IMMUTABLE IMU yaw while safety runs
+                    # before every command. SLAM position corrections cannot
+                    # change the heading until the next explicit pivot.
                     if last_sent is None or abs(target_imu - last_sent[1]) > 4.0:
                         controller.drive_toward(float(args.drive_speed), target_imu)
                         last_sent = (True, target_imu)

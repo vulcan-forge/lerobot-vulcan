@@ -16,6 +16,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import sourccey_explore as explore  # noqa: E402
 from ldlidar_direct_snapshot_stitch import Pose2D, _search_pose, _transform_points  # noqa: E402
+from sourccey_collision_box import calibrate_collision_box, collision_box_violation  # noqa: E402
 from sourccey_wander.imu_heading import ImuYawClient  # noqa: E402
 
 
@@ -168,6 +169,88 @@ def test_replan_exposes_real_to_snapped_start_escape_segment() -> None:
     assert state == "clear"
 
 
+def test_straight_segment_path_collapses_grid_staircase_but_keeps_corner() -> None:
+    traversable = np.ones((20, 20), dtype=bool)
+    staircase = [
+        (0, 0), (0, 1), (1, 1), (1, 2), (2, 2),
+        (2, 3), (3, 3), (3, 4), (4, 4), (4, 5), (5, 5),
+    ]
+    assert explore._straight_segment_path(traversable, staircase, 1.0) == [
+        staircase[0], staircase[-1]
+    ]
+
+    corner = [(10, j) for j in range(2, 11)] + [(i, 10) for i in range(9, 1, -1)]
+    segmented = explore._straight_segment_path(traversable, corner, 1.0)
+    assert segmented[0] == corner[0]
+    assert segmented[-1] == corner[-1]
+    assert len(segmented) >= 3
+    assert all(
+        explore._line_free(traversable, start, end)
+        for start, end in zip(segmented[:-1], segmented[1:], strict=True)
+    )
+
+
+def test_segment_completion_accepts_endpoint_or_passed_endpoint() -> None:
+    start = np.array([0.0, 0.0])
+    end = np.array([1.0, 0.0])
+
+    assert explore._segment_complete(np.array([0.92, 0.02]), start, end, 0.10)
+    assert explore._segment_complete(np.array([1.05, 0.20]), start, end, 0.10)
+    assert not explore._segment_complete(np.array([0.70, 0.20]), start, end, 0.10)
+
+
+def test_collision_calibration_learns_full_angle_box_envelope() -> None:
+    angles = np.radians(np.arange(-178.0, 180.0, 4.0))
+    c = np.cos(angles)
+    s = np.sin(angles)
+    # Ray intersection with a 1.0m-long x 0.70m-wide calibration rectangle.
+    ranges = np.minimum(
+        0.50 / np.maximum(np.abs(c), 1e-9),
+        0.35 / np.maximum(np.abs(s), 1e-9),
+    )
+    base = np.column_stack([ranges * c, ranges * s])
+    scans = [base * (1.0 + 0.002 * ((i % 3) - 1)) for i in range(12)]
+
+    profile = calibrate_collision_box(
+        scans, bin_size_deg=4.0, min_scans_per_bin=8, max_boundary_m=1.0
+    )
+
+    learned = profile["ranges_m"]
+    assert sum(value is not None for value in learned) >= 88
+    front_idx = int((0.0 + 180.0) // 4.0)
+    left_idx = int((90.0 + 180.0) // 4.0)
+    assert learned[front_idx] == pytest.approx(0.50, abs=0.03)
+    assert learned[left_idx] == pytest.approx(0.35, abs=0.03)
+
+
+def test_collision_box_prioritizes_single_bin_side_intrusion() -> None:
+    profile = {
+        "version": 1,
+        "frame": "physical_forward_xy",
+        "bin_size_deg": 4.0,
+        "ranges_m": [0.50] * 90,
+        "noise_tolerance_m": 0.02,
+        "min_violation_bins": 2,
+        "side_min_violation_bins": 1,
+    }
+
+    assert collision_box_violation(np.array([[0.55, 0.0]]), profile) is None
+    side_hit = collision_box_violation(np.array([[0.0, 0.40]]), profile)
+    assert side_hit is not None
+    mask, sector, angle, hit_range, limit = side_hit
+    assert mask.tolist() == [True]
+    assert sector == "left side"
+    assert angle == pytest.approx(90.0)
+    assert hit_range == pytest.approx(0.40)
+    assert limit == pytest.approx(0.48)
+
+    # A lone front speck is rejected, but adjacent front bins form a stop.
+    assert collision_box_violation(np.array([[0.40, 0.0]]), profile) is None
+    front = np.radians(np.array([0.0, 5.0]))
+    front_points = np.column_stack([0.40 * np.cos(front), 0.40 * np.sin(front)])
+    assert collision_box_violation(front_points, profile)[1] == "front"
+
+
 def test_swept_footprint_reports_mapped_shoulder_clearance() -> None:
     analysis = _open_analysis()
     # A centre position 10cm ahead is inside the obstacle-inflation layer,
@@ -265,3 +348,31 @@ def test_fast_controller_latches_safety_before_forward_command() -> None:
     assert controller.safety_latched_reason() == "mapped full-body clearance"
     assert robot.actions
     assert all(float(action["x.vel"]) <= 0.0 for action in robot.actions)
+
+
+def test_heading_hold_deadband_does_not_hunt_small_imu_error() -> None:
+    class FakeRobot:
+        _z_pos_cmd = 100.0
+
+        def __init__(self) -> None:
+            self.actions: list[dict[str, float]] = []
+
+        def send_action(self, action) -> None:
+            self.actions.append(dict(action))
+
+    class FakeImu:
+        def deg(self) -> float:
+            return 1.0
+
+    robot = FakeRobot()
+    controller = explore.BaseController(
+        robot, {}, FakeImu(), rate_hz=100.0, hold_deadband_deg=1.5
+    )
+    controller.start()
+    controller.drive_toward(0.8, 0.0)
+    time.sleep(0.06)
+    controller.shutdown()
+
+    moving = [action for action in robot.actions if float(action["x.vel"]) > 0.0]
+    assert moving
+    assert all(float(action["theta.vel"]) == 0.0 for action in moving)
