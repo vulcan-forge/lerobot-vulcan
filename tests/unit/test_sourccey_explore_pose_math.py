@@ -434,6 +434,75 @@ def test_collision_box_dimensions_expand_live_envelope() -> None:
     assert expanded[45] == pytest.approx(base_ranges[45], rel=0.01)  # approximately front
 
 
+def test_completed_collision_box_fills_rear_bins_and_detects_rear_intrusion() -> None:
+    profile = {
+        "version": 1,
+        "frame": "physical_forward_xy",
+        "bin_size_deg": 4.0,
+        "ranges_m": [0.50 if 22 <= idx <= 67 else None for idx in range(90)],
+        "complete_box": True,
+        "width_m": 1.0,
+        "length_m": 0.8,
+        "corner_radius_m": 0.10,
+        "noise_tolerance_m": 0.0,
+        "safety_margin_m": 0.0,
+        "min_violation_bins": 2,
+        "min_violation_points": 3,
+    }
+
+    completed = effective_ranges(profile)
+
+    assert np.all(np.isfinite(completed))
+    assert completed[45] == pytest.approx(0.40, abs=0.02)  # front
+    assert completed[0] == pytest.approx(0.40, abs=0.02)  # rear
+    rear_angles = np.radians(np.array([176.0, 179.0, -176.0]))
+    rear_points = np.column_stack([
+        0.30 * np.cos(rear_angles),
+        0.30 * np.sin(rear_angles),
+    ])
+    hit = collision_box_violation(rear_points, profile)
+    assert hit is not None
+    assert hit[1] == "rear"
+
+
+def test_completed_collision_box_corner_radius_rounds_square_corners() -> None:
+    profile = {
+        "bin_size_deg": 4.0,
+        "ranges_m": [0.50] * 90,
+        "complete_box": True,
+        "width_m": 1.0,
+        "length_m": 1.0,
+        "corner_radius_m": 0.0,
+    }
+    square = effective_ranges(profile)
+    profile["corner_radius_m"] = 0.20
+    rounded = effective_ranges(profile)
+
+    diagonal_bin = 56  # approximately +46 degrees
+    assert rounded[diagonal_bin] < square[diagonal_bin]
+    assert rounded[45] == pytest.approx(square[45], abs=0.01)
+
+
+def test_completed_collision_box_keeps_separate_dimensions_from_learned_box() -> None:
+    profile = {
+        "bin_size_deg": 4.0,
+        "ranges_m": [0.50] * 90,
+        "complete_box": True,
+        "width_m": 0.50,
+        "length_m": 0.40,
+        "completed_width_m": 0.80,
+        "completed_length_m": 1.00,
+        "corner_radius_m": 0.0,
+    }
+
+    completed = effective_ranges(profile)
+    assert completed[45] == pytest.approx(0.50, abs=0.02)  # completed front
+    assert completed[67] == pytest.approx(0.40, abs=0.02)  # completed side
+
+    profile["complete_box"] = False
+    assert collision_box_dimensions(profile) == pytest.approx((0.50, 0.40))
+
+
 def test_swept_footprint_reports_mapped_shoulder_clearance() -> None:
     analysis = _open_analysis()
     # A centre position 10cm ahead is inside the obstacle-inflation layer,

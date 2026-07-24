@@ -94,6 +94,49 @@ def load_collision_box(path: str | Path = DEFAULT_COLLISION_BOX_PATH) -> dict | 
     return data
 
 
+def _completed_rounded_box_ranges(
+    *,
+    count: int,
+    bin_size_deg: float,
+    width_m: float,
+    length_m: float,
+    corner_radius_m: float,
+) -> np.ndarray:
+    """Radial boundary of a rounded rectangle centred on the LiDAR."""
+    half_x = 0.5 * max(0.001, float(length_m))
+    half_y = 0.5 * max(0.001, float(width_m))
+    radius = min(
+        max(0.0, float(corner_radius_m)),
+        half_x,
+        half_y,
+    )
+    angles = np.radians(
+        -180.0 + (np.arange(int(count)) + 0.5) * float(bin_size_deg)
+    )
+    directions = np.column_stack([np.cos(angles), np.sin(angles)])
+
+    def inside(distance: np.ndarray) -> np.ndarray:
+        points = directions * distance[:, None]
+        qx = np.abs(points[:, 0]) - (half_x - radius)
+        qy = np.abs(points[:, 1]) - (half_y - radius)
+        outside = np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0))
+        signed = outside + np.minimum(np.maximum(qx, qy), 0.0) - radius
+        return signed <= 0.0
+
+    low = np.zeros(int(count), dtype=np.float64)
+    high = np.full(
+        int(count),
+        math.hypot(half_x, half_y) + max(0.01, radius),
+        dtype=np.float64,
+    )
+    for _ in range(40):
+        middle = 0.5 * (low + high)
+        within = inside(middle)
+        low[within] = middle[within]
+        high[~within] = middle[~within]
+    return low
+
+
 def effective_ranges(profile: dict) -> np.ndarray:
     """Return the envelope ranges after applying UI width/length adjustments."""
     raw = np.array([
@@ -102,6 +145,28 @@ def effective_ranges(profile: dict) -> np.ndarray:
     if not len(raw):
         return raw
     bin_size = float(profile["bin_size_deg"])
+    if bool(profile.get("complete_box", False)):
+        base_width, base_length = collision_box_dimensions({
+            **profile,
+            "complete_box": False,
+        })
+        width = float(
+            profile.get("completed_width_m", profile.get("width_m", base_width))
+        )
+        length = float(
+            profile.get(
+                "completed_length_m",
+                profile.get("length_m", max(base_length, width)),
+            )
+        )
+        default_radius = 0.20 * min(width, length)
+        return _completed_rounded_box_ranges(
+            count=len(raw),
+            bin_size_deg=bin_size,
+            width_m=width,
+            length_m=length,
+            corner_radius_m=float(profile.get("corner_radius_m", default_radius)),
+        )
     angles = np.radians(-180.0 + (np.arange(len(raw)) + 0.5) * bin_size)
     x = raw * np.cos(angles)
     y = raw * np.sin(angles)

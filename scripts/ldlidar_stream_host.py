@@ -13,7 +13,6 @@ import cv2
 import numpy as np
 import serial
 
-
 POINTS_PER_PACKET = 12
 PACKET_LEN = 47
 HEADER_BYTE = 0x54
@@ -71,9 +70,6 @@ def _parse_packet(packet: bytes) -> tuple[float, float, list[ScanPoint]]:
         offset = 6 + idx * 3
         distance_mm = _u16(packet[offset], packet[offset + 1])
         confidence = int(packet[offset + 2])
-        if distance_mm <= 0:
-            continue
-
         if POINTS_PER_PACKET == 1:
             angle_deg = start_angle_deg
         else:
