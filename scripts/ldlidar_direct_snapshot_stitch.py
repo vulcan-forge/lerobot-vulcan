@@ -62,6 +62,37 @@ HTML_TEMPLATE = """<!doctype html>
 
 COLORS = ["#6ab4ff", "#ffd166", "#7cf29a", "#ff7ce5", "#ff8d6a", "#c299ff"]
 
+_CANDIDATE_SCORING_DEVICE = "cpu"
+_CUDA_SCORING_CACHE = None
+_CUDA_FALLBACK_WARNED = False
+
+
+def configure_candidate_scoring_device(requested: str = "auto") -> str:
+    """Select CPU or CUDA for batched pose-candidate scoring."""
+    global _CANDIDATE_SCORING_DEVICE, _CUDA_SCORING_CACHE
+    choice = str(requested).lower()
+    if choice not in {"auto", "cpu", "cuda"}:
+        raise ValueError(f"Unsupported matcher device: {requested}")
+    available = False
+    if choice != "cpu":
+        try:
+            import torch
+
+            available = bool(torch.cuda.is_available())
+        except Exception:
+            available = False
+    if choice == "cuda" and not available:
+        raise RuntimeError("--matcher-device cuda requested, but PyTorch CUDA is unavailable")
+    _CANDIDATE_SCORING_DEVICE = "cuda" if available and choice != "cpu" else "cpu"
+    _CUDA_SCORING_CACHE = None
+    if _CANDIDATE_SCORING_DEVICE == "cuda":
+        import torch
+
+        print(f"[matcher] CUDA candidate scoring ENABLED ({torch.cuda.get_device_name(0)}).")
+    else:
+        print("[matcher] candidate scoring on CPU.")
+    return _CANDIDATE_SCORING_DEVICE
+
 
 @dataclass(slots=True)
 class Snapshot:
@@ -241,6 +272,128 @@ def _score_candidate(
     return base_score * coverage_weight if base_score > 0.0 else base_score
 
 
+def _score_candidates_batch_cuda(
+    cand: np.ndarray,
+    *,
+    exact_grid: np.ndarray,
+    dilated_grid: np.ndarray,
+    known_grid: np.ndarray,
+    grid_origin_xy: np.ndarray,
+    resolution_m: float,
+    global_sampled_xy: np.ndarray,
+    use_nearest_penalty: bool,
+) -> np.ndarray:
+    """CUDA implementation of the vectorized candidate scorer."""
+    global _CUDA_SCORING_CACHE
+    import torch
+
+    device = torch.device("cuda")
+    cached = _CUDA_SCORING_CACHE
+    cache_hit = (
+        cached is not None
+        and cached["exact_source"] is exact_grid
+        and cached["dilated_source"] is dilated_grid
+        and cached["known_source"] is known_grid
+        and cached["global_source"] is global_sampled_xy
+    )
+    if not cache_hit:
+        cached = {
+            # Retain source references so Python cannot recycle their ids while
+            # the corresponding CUDA tensors are cached.
+            "exact_source": exact_grid,
+            "dilated_source": dilated_grid,
+            "known_source": known_grid,
+            "global_source": global_sampled_xy,
+            "exact": torch.as_tensor(exact_grid, dtype=torch.bool, device=device),
+            "dilated": torch.as_tensor(dilated_grid, dtype=torch.bool, device=device),
+            "known": torch.as_tensor(known_grid, dtype=torch.bool, device=device),
+            "global": torch.as_tensor(global_sampled_xy, dtype=torch.float32, device=device),
+        }
+        _CUDA_SCORING_CACHE = cached
+
+    cand_t = torch.as_tensor(cand, dtype=torch.float32, device=device)
+    origin_t = torch.as_tensor(grid_origin_xy, dtype=torch.float32, device=device)
+    n_cand, n_pts = int(cand_t.shape[0]), int(cand_t.shape[1])
+    scores = torch.full((n_cand,), -1e9, dtype=torch.float64, device=device)
+    rel = (cand_t - origin_t) / float(resolution_m)
+    ij = torch.round(rel).to(torch.int64)
+    height, width = dilated_grid.shape
+    inside = (
+        (ij[..., 0] >= 0)
+        & (ij[..., 0] < width)
+        & (ij[..., 1] >= 0)
+        & (ij[..., 1] < height)
+    )
+    jj = torch.clamp(ij[..., 0], 0, width - 1)
+    ii = torch.clamp(ij[..., 1], 0, height - 1)
+    known = cached["known"][ii, jj] & inside
+    matchable_count = known.sum(dim=1)
+    ok = matchable_count >= max(12, int(0.15 * n_pts))
+    if not bool(torch.any(ok)):
+        return scores.cpu().numpy()
+
+    exact_hits = (cached["exact"][ii, jj] & known).sum(dim=1)
+    nearby_hits = (cached["dilated"][ii, jj] & known).sum(dim=1)
+    inside_counts = inside.sum(dim=1)
+    ok_idx = torch.nonzero(ok, as_tuple=False).flatten()
+    m_counts = matchable_count[ok_idx].to(torch.float64)
+    exact_hit_ratio = exact_hits[ok_idx].to(torch.float64) / m_counts
+    nearby_hit_ratio = nearby_hits[ok_idx].to(torch.float64) / m_counts
+    inside_ratio = inside_counts[ok_idx].to(torch.float64) / float(n_pts)
+    miss_ratio = 1.0 - nearby_hit_ratio
+
+    nearest_mean = torch.zeros(len(ok_idx), dtype=torch.float64, device=device)
+    global_t = cached["global"]
+    if use_nearest_penalty and len(global_sampled_xy):
+        known_ok = known[ok_idx]
+        m_ok = matchable_count[ok_idx]
+        stride = torch.clamp(torch.div(m_ok, 24, rounding_mode="floor"), min=1)
+        n_picks = torch.div(m_ok + stride - 1, stride, rounding_mode="floor")
+        max_picks = int(n_picks.max().item())
+        if max_picks:
+            pick_ord = (
+                torch.arange(max_picks, device=device, dtype=torch.int64)[None, :]
+                * stride[:, None]
+            )
+            pick_valid = pick_ord < m_ok[:, None]
+            targets = torch.minimum(pick_ord, m_ok[:, None] - 1) + 1
+            cumulative = torch.cumsum(known_ok.to(torch.int64), dim=1)
+            pick_cols = torch.argmax(
+                (cumulative[:, None, :] == targets[:, :, None]).to(torch.int8),
+                dim=2,
+            )
+            rows = torch.arange(len(ok_idx), device=device)[:, None]
+            picked = cand_t[ok_idx][rows, pick_cols]
+            nearest_sq = torch.sum(
+                (picked[:, :, None, :] - global_t[None, None, :, :]) ** 2,
+                dim=3,
+            ).amin(dim=2)
+            sums = torch.where(pick_valid, nearest_sq, 0.0).sum(dim=1)
+            nearest_mean = torch.sqrt(
+                torch.clamp(sums, min=0.0).to(torch.float64)
+                / n_picks.to(torch.float64)
+            )
+
+    base_score = (
+        exact_hit_ratio * 12.0
+        + nearby_hit_ratio * 3.0
+        + inside_ratio * 1.5
+        - miss_ratio * 6.0
+        - torch.minimum(nearest_mean, torch.tensor(0.5, device=device)) * 10.0
+    )
+    coverage_ratio = m_counts / float(n_pts)
+    coverage_weight = 0.55 + 0.45 * torch.minimum(
+        torch.ones_like(coverage_ratio),
+        coverage_ratio / 0.50,
+    )
+    scores[ok_idx] = torch.where(
+        base_score > 0.0,
+        base_score * coverage_weight,
+        base_score,
+    )
+    return scores.cpu().numpy()
+
+
 def _score_candidates_batch(
     cand: np.ndarray,
     *,
@@ -263,6 +416,7 @@ def _score_candidates_batch(
     terms — same float32 adds, same rounding into grid cells, same count
     ratios. The batched nearest-penalty term differs from the scalar path
     only in float summation order (~1e-6), far below gate sensitivity."""
+    global _CANDIDATE_SCORING_DEVICE, _CUDA_SCORING_CACHE, _CUDA_FALLBACK_WARNED
     n_cand = int(cand.shape[0])
     n_pts = int(cand.shape[1]) if n_cand else 0
     scores = np.full(n_cand, -1e9, dtype=np.float64)
@@ -282,6 +436,24 @@ def _score_candidates_batch(
                 use_nearest_penalty=use_nearest_penalty,
             )
         return scores
+    if _CANDIDATE_SCORING_DEVICE == "cuda":
+        try:
+            return _score_candidates_batch_cuda(
+                cand,
+                exact_grid=exact_grid,
+                dilated_grid=dilated_grid,
+                known_grid=known_grid,
+                grid_origin_xy=grid_origin_xy,
+                resolution_m=resolution_m,
+                global_sampled_xy=global_sampled_xy,
+                use_nearest_penalty=use_nearest_penalty,
+            )
+        except Exception as exc:
+            _CANDIDATE_SCORING_DEVICE = "cpu"
+            _CUDA_SCORING_CACHE = None
+            if not _CUDA_FALLBACK_WARNED:
+                print(f"[matcher] CUDA scoring failed ({exc}); falling back to CPU.")
+                _CUDA_FALLBACK_WARNED = True
     rel = (cand - grid_origin_xy) / resolution_m
     ij = np.round(rel).astype(np.int32)
     height, width = dilated_grid.shape
@@ -612,6 +784,7 @@ def _search_pose(
     prior_pose: Pose2D | None = None,
     prior_translation_weight: float = 0.0,
     prior_theta_weight: float = 0.0,
+    allow_whole_map_search: bool = True,
 ) -> tuple[Pose2D, dict[str, object]]:
     build_started = time.monotonic()
     exact_grid, origin = _build_occupancy(global_points_xy, resolution_m=resolution_m, padding_m=search_xy_m + 0.4)
@@ -732,7 +905,7 @@ def _search_pose(
 
     global_best_pose = local_best_pose
     global_best_score = local_best_score
-    run_whole_map_search = local_best_score < 8.0
+    run_whole_map_search = bool(allow_whole_map_search) and local_best_score < 8.0
     whole_map_search_elapsed_s = 0.0
     if run_whole_map_search:
         whole_map_started = time.monotonic()

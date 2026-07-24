@@ -190,5 +190,7 @@
   "min_violation_bins": 2,
   "side_min_violation_bins": 1,
   "calibration_scans": 40,
-  "created_unix_s": 1784749982.975734
+  "created_unix_s": 1784749982.975734,
+  "width_m": 0.508,
+  "length_m": 0.21589999999999998
 }

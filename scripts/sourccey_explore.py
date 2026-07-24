@@ -41,7 +41,12 @@ from dataclasses import dataclass, field
 import numpy as np
 from ldlidar_auto_snapshot_stitch import _init_rerun, _send_stop
 from ldlidar_direct_snapshot_client import DirectLidarFeed
-from ldlidar_direct_snapshot_stitch import Pose2D, _search_pose, _transform_points
+from ldlidar_direct_snapshot_stitch import (
+    Pose2D,
+    _search_pose,
+    _transform_points,
+    configure_candidate_scoring_device,
+)
 from sourccey_arm_pose import DEFAULT_POSE_PATH, apply_pose_blocking, hold_action, limp_action, load_pose
 from sourccey_collision_box import (
     DEFAULT_COLLISION_BOX_PATH,
@@ -111,6 +116,40 @@ def _rotate_lidar_pose_about_robot_centre(
     )
 
 
+def _stationary_pose_consensus(
+    poses: list[Pose2D],
+    reference_theta_deg: float,
+    lever_m: float,
+    forward_offset_deg: float,
+) -> tuple[Pose2D, float, float]:
+    """Fuse stationary solves into one rigid pose and report their scatter."""
+    if not poses:
+        raise ValueError("stationary pose consensus requires at least one pose")
+    centres = np.asarray([
+        _robot_centre_from_lidar_pose(pose, lever_m, forward_offset_deg)
+        for pose in poses
+    ])
+    median_centre = np.median(centres, axis=0)
+    position_scatter = float(np.max(np.hypot(
+        centres[:, 0] - median_centre[0],
+        centres[:, 1] - median_centre[1],
+    )))
+    theta_deltas = np.asarray([
+        ((float(pose.theta_deg) - float(reference_theta_deg) + 180.0) % 360.0) - 180.0
+        for pose in poses
+    ])
+    median_delta = float(np.median(theta_deltas))
+    consensus_theta = float(reference_theta_deg) + median_delta
+    heading_scatter = float(np.max(np.abs(theta_deltas - median_delta)))
+    consensus = _lidar_pose_from_robot_centre(
+        median_centre,
+        consensus_theta,
+        lever_m,
+        forward_offset_deg,
+    )
+    return consensus, position_scatter, heading_scatter
+
+
 def _imu_yaw_for_scan(imu: ImuYawClient, frame) -> float | None:
     """Yaw at scan completion, falling back for an older untimestamped host."""
     scan_ts = getattr(frame, "revolution_completed_ts", None)
@@ -126,6 +165,23 @@ def _imu_yaw_for_scan(imu: ImuYawClient, frame) -> float | None:
 def _budget_exhausted(used: float, limit: float) -> bool:
     """Positive limits are finite; zero/negative limits mean unlimited."""
     return float(limit) > 0.0 and float(used) >= float(limit)
+
+
+def _max_heading_gap_deg(headings_deg: list[float]) -> float:
+    """Largest uncovered arc in a circular set of scan headings."""
+    angles = np.sort(np.mod(np.asarray(headings_deg, dtype=np.float64), 360.0))
+    if len(angles) < 2:
+        return 360.0
+    gaps = np.diff(np.concatenate([angles, angles[:1] + 360.0]))
+    return float(np.max(gaps))
+
+
+def _p90_and_max(values: np.ndarray | list[float]) -> tuple[float, float]:
+    """Robust consensus residual plus its diagnostic worst case."""
+    array = np.asarray(values, dtype=np.float64)
+    if not len(array):
+        return float("inf"), float("inf")
+    return float(np.percentile(array, 90.0)), float(np.max(array))
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +380,32 @@ class FrontierCluster:
     centroid_xy: np.ndarray   # world coords
     span_m: float             # bbox diagonal — "how big is the opening"
     size: int
+    passable: bool = False    # wide enough for the inflated robot to cross
+
+
+def _viewpoint_completes_frontier(cluster: FrontierCluster, scans_added: int) -> bool:
+    """A successful look completes a non-crossable frontier.
+
+    The robot cannot gain a new viewing angle by repeatedly selecting the same
+    standoff in front of a gap it has already classified as too narrow to enter.
+    Passable frontiers are deliberately not completed here: their boundary is
+    expected to advance as the robot travels through it into a new room.
+    """
+    return not cluster.passable and int(scans_added) > 0
+
+
+def _behind_completed_transition(
+    point_xy: np.ndarray,
+    transitions: list[tuple[np.ndarray, np.ndarray]],
+    slack_m: float,
+) -> bool:
+    """Whether a target lies back across any completed doorway plane."""
+    point = np.asarray(point_xy, dtype=np.float64)
+    slack = max(0.0, float(slack_m))
+    return any(
+        float(np.dot(point - anchor, outward)) < -slack
+        for anchor, outward in transitions
+    )
 
 
 @dataclass(slots=True)
@@ -445,6 +527,7 @@ def analyze_grid(
     robot_radius_m: float,
     min_frontier_span_m: float,
     min_frontier_cells: int,
+    passable_opening_min_m: float = 0.90,
 ) -> Analysis:
     """Classify the world FROM the log-odds occupancy grid and extract frontiers.
 
@@ -502,6 +585,10 @@ def analyze_grid(
     fi, fj = np.nonzero(remaining)
     raw_clusters = 0
     biggest_raw = 0.0
+    required_passage_m = max(
+        float(passable_opening_min_m),
+        2.0 * float(robot_radius_m) + float(res_m),
+    )
     for si, sj in zip(fi.tolist(), fj.tolist()):
         if not remaining[si, sj]:
             continue
@@ -529,15 +616,23 @@ def analyze_grid(
                 origin[0] + (arr[:, 1].mean() + 0.5) * res_m,
                 origin[1] + (arr[:, 0].mean() + 0.5) * res_m,
             ])
-            analysis.clusters.append(
-                FrontierCluster(cells_ij=arr, centroid_xy=centroid, span_m=span, size=len(arr))
-            )
+            analysis.clusters.append(FrontierCluster(
+                cells_ij=arr,
+                centroid_xy=centroid,
+                span_m=span,
+                size=len(arr),
+                passable=span >= required_passage_m,
+            ))
     analysis.clusters.sort(key=lambda c: -c.span_m)
+    narrow_count = sum(not cluster.passable for cluster in analysis.clusters)
+    passable_count = len(analysis.clusters) - narrow_count
     print(f"[analyze] free={int(free.sum())} unknown={int(unknown.sum())} "
           f"traversable={int(traversable.sum())} frontier_cells={len(fcells)} | "
           f"raw_clusters={raw_clusters} (biggest {biggest_raw:.2f}m) -> "
           f"significant={len(analysis.clusters)} "
-          f"(need span>={min_frontier_span_m:.2f}m & >={min_frontier_cells} cells)")
+          f"(narrow-look={narrow_count}, passable={passable_count}) "
+          f"(frontier>={min_frontier_span_m:.2f}m, passage>={required_passage_m:.2f}m, "
+          f">={min_frontier_cells} cells)")
     return analysis
 
 
@@ -681,6 +776,8 @@ def _pick_target(
     visited_skip_m: float,
     preferred_frontier_xy: np.ndarray | None = None,
     sampled_viewpoints_xy: list[np.ndarray] | None = None,
+    completed_transitions: list[tuple[np.ndarray, np.ndarray]] | None = None,
+    transition_backtrack_slack_m: float = 0.25,
 ) -> tuple[FrontierCluster, np.ndarray, list[np.ndarray], bool, np.ndarray, int] | None:
     """Choose a reachable observation pose with line-of-sight to unknown space.
 
@@ -690,18 +787,37 @@ def _pick_target(
     Candidate poses therefore aim at an actual frontier cell and are ranked by
     nearby unknown cells they can reveal, then by path cost.
     """
+    transitions = completed_transitions or []
+    traversable = analysis.traversable
+    if transitions:
+        # A completed doorway is a one-way topological boundary for this
+        # mission. Mask the old-room side from A* itself, not merely from target
+        # ranking, so a path to a forward goal cannot loop back through it.
+        cell_i, cell_j = np.indices(traversable.shape)
+        cell_x = analysis.origin_xy[0] + (cell_j + 0.5) * analysis.res_m
+        cell_y = analysis.origin_xy[1] + (cell_i + 0.5) * analysis.res_m
+        allowed = np.ones_like(traversable)
+        slack = max(0.0, float(transition_backtrack_slack_m))
+        for anchor, outward in transitions:
+            progress = (
+                (cell_x - float(anchor[0])) * float(outward[0])
+                + (cell_y - float(anchor[1])) * float(outward[1])
+            )
+            allowed &= progress >= -slack
+        traversable = traversable & allowed
+
     start = analysis.to_cell(robot_centre_xy)
-    h, w = analysis.traversable.shape
+    h, w = traversable.shape
     si = min(max(start[0], 0), h - 1)
     sj = min(max(start[1], 0), w - 1)
-    if not analysis.traversable[si, sj]:
+    if not traversable[si, sj]:
         # The robot's own cell can sit inside the inflation ring (or against a
         # provisional mark after a wobbled stop); search generously — a failed
         # start snap once masqueraded as 'map complete' at 0 viewpoints.
         best = None
         for di, dj in _disk_offsets(int(0.9 / analysis.res_m)):
             ni, nj = si + di, sj + dj
-            if 0 <= ni < h and 0 <= nj < w and analysis.traversable[ni, nj]:
+            if 0 <= ni < h and 0 <= nj < w and traversable[ni, nj]:
                 d = di * di + dj * dj
                 if best is None or d < best[0]:
                     best = (d, ni, nj)
@@ -709,7 +825,27 @@ def _pick_target(
             return None
         si, sj = best[1], best[2]
 
-    trav_cells = np.column_stack(np.nonzero(analysis.traversable))
+    # Label the robot's connected free-space component once. Frontier geometry
+    # across walls or scan-matching islands can look extremely attractive but
+    # can never produce an A* path from here; previously those candidates filled
+    # the shortlist and made a healthy map report every frontier unreachable.
+    reachable = np.zeros_like(traversable)
+    reachable[si, sj] = True
+    stack = [(si, sj)]
+    while stack:
+        ci, cj = stack.pop()
+        for di, dj, _step in _NEIGHBORS:
+            ni, nj = ci + di, cj + dj
+            if (
+                0 <= ni < h
+                and 0 <= nj < w
+                and traversable[ni, nj]
+                and not reachable[ni, nj]
+            ):
+                reachable[ni, nj] = True
+                stack.append((ni, nj))
+
+    trav_cells = np.column_stack(np.nonzero(traversable))
     if len(trav_cells) == 0:
         return None
     trav_xy = np.column_stack([
@@ -727,10 +863,19 @@ def _pick_target(
     gain_radius = max(1, int(round(1.0 / analysis.res_m)))
     desired_standoff = float(np.clip(pullback_m, 0.40, 0.85))
     sampled = sampled_viewpoints_xy or []
-    geometric: list[tuple[float, FrontierCluster, int, np.ndarray, int]] = []
+    # Tier 0: narrow/non-crossable gaps. Observe these from the current room so
+    # shelves, alcoves, and occluded wall edges are completed before the robot
+    # commits through a doorway. Tier 1: passable openings into another space.
+    geometric: list[tuple[int, float, FrontierCluster, int, np.ndarray, int]] = []
 
     for cluster in candidates:
         if any(np.hypot(*(cluster.centroid_xy - v)) < visited_skip_m for v in visited_xy):
+            continue
+        if _behind_completed_transition(
+            cluster.centroid_xy,
+            transitions,
+            transition_backtrack_slack_m,
+        ):
             continue
         fcells = cluster.cells_ij
         if len(fcells) > 32:
@@ -741,7 +886,10 @@ def _pick_target(
             j0, j1 = max(0, int(fj) - gain_radius), min(w, int(fj) + gain_radius + 1)
             expected_gain = int(unknown[i0:i1, j0:j1].sum())
             d_all = np.hypot(trav_xy[:, 0] - observe_xy[0], trav_xy[:, 1] - observe_xy[1])
-            eligible = np.flatnonzero((d_all >= 0.30) & (d_all <= 1.0))
+            reachable_goals = reachable[trav_cells[:, 0], trav_cells[:, 1]]
+            eligible = np.flatnonzero(
+                (d_all >= 0.30) & (d_all <= 1.0) & reachable_goals
+            )
             if not len(eligible):
                 continue
             order = eligible[np.argsort(np.abs(d_all[eligible] - desired_standoff))[:10]]
@@ -754,41 +902,64 @@ def _pick_target(
                     (float(np.hypot(*(goal_xy - old))) for old in sampled),
                     default=999.0,
                 )
-                if repeat_d < max(0.35, float(visited_skip_m)):
-                    continue
-                # Rank cheaply first; only the strongest candidates pay for A*.
+                # Revisiting nearly the same pose is undesirable, but making it
+                # an absolute rejection caused eleven live frontiers to be
+                # reported unreachable after one large doorway scan. Penalize
+                # it instead; a reachable repeated pose beats no plan at all.
+                repeat_penalty = 350.0 if repeat_d < max(0.35, float(visited_skip_m)) else 0.0
                 geometric_score = (
                     float(expected_gain)
                     + 30.0 * float(cluster.span_m)
                     - 25.0 * abs(float(d_all[idx]) - desired_standoff)
+                    - repeat_penalty
                 )
-                geometric.append((geometric_score, cluster, int(idx), observe_xy, expected_gain))
+                geometric.append((
+                    1 if cluster.passable else 0,
+                    geometric_score,
+                    cluster,
+                    int(idx),
+                    observe_xy,
+                    expected_gain,
+                ))
                 break
 
     best = None  # (utility, cluster, goal_xy, path, observe_xy, gain)
-    for _geo, cluster, idx, observe_xy, expected_gain in sorted(
-        geometric, key=lambda item: item[0], reverse=True
-    )[:48]:
-        cell = (int(trav_cells[idx, 0]), int(trav_cells[idx, 1]))
-        path = _astar(analysis.traversable, (si, sj), cell, cost=analysis.cost)
-        if path is None:
-            continue
-        travel_m = max(analysis.res_m, (len(path) - 1) * analysis.res_m)
-        utility = float(expected_gain) / (1.0 + 0.35 * travel_m)
-        if best is None or utility > best[0]:
-            best = (
-                utility,
-                cluster,
-                trav_xy[idx].astype(np.float64),
-                path,
-                np.asarray(observe_xy, dtype=np.float64),
-                int(expected_gain),
-            )
+    selected_tier = None
+    available_tiers = sorted({item[0] for item in geometric})
+    for tier in available_tiers:
+        tier_candidates = sorted(
+            (item for item in geometric if item[0] == tier),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:48]
+        for _tier, _geo, cluster, idx, observe_xy, expected_gain in tier_candidates:
+            cell = (int(trav_cells[idx, 0]), int(trav_cells[idx, 1]))
+            path = _astar(traversable, (si, sj), cell, cost=analysis.cost)
+            if path is None:
+                continue
+            travel_m = max(analysis.res_m, (len(path) - 1) * analysis.res_m)
+            utility = float(expected_gain) / (1.0 + 0.35 * travel_m)
+            if best is None or utility > best[0]:
+                best = (
+                    utility,
+                    cluster,
+                    trav_xy[idx].astype(np.float64),
+                    path,
+                    np.asarray(observe_xy, dtype=np.float64),
+                    int(expected_gain),
+                )
+        if best is not None:
+            selected_tier = tier
+            break
     if best is None:
+        print(f"[plan] no reachable observation pose among {len(geometric)} candidates "
+              f"across {len(available_tiers)} priority tier(s).")
         return None
+    tier_name = "narrow/non-crossable" if selected_tier == 0 else "passable opening"
+    print(f"[plan] selected {tier_name} tier; lower-priority room transitions deferred.")
     _utility, cluster, goal_xy, path, observe_xy, expected_gain = best
     segment_path = _straight_segment_path(
-        analysis.traversable,
+        traversable,
         path,
         max_deviation_cells=max(1.0, 0.08 / analysis.res_m),
     )
@@ -870,10 +1041,18 @@ def _localize(
     search_xy_m: float,
     theta_window_deg: float,
     coarse_angle_step_deg: float = 2.0,
+    allow_whole_map_search: bool = False,
 ) -> tuple[Pose2D, float]:
     ref = world_map.reference()
+    # Preserve angular coverage while bounding candidate-scoring cost. The full
+    # scan is still integrated into the map after the reduced set solves its pose.
+    max_match_points = max(100, int(getattr(args, "match_max_points", 700)))
+    match_xy = np.asarray(local_xy)
+    if len(match_xy) > max_match_points:
+        indices = np.linspace(0, len(match_xy) - 1, max_match_points, dtype=np.int64)
+        match_xy = match_xy[indices]
     solved, meta = _search_pose(
-        snapshot_points_xy=local_xy,
+        snapshot_points_xy=match_xy,
         global_points_xy=ref,
         initial_pose=seed,
         resolution_m=float(args.stitch_resolution_m),
@@ -887,6 +1066,7 @@ def _localize(
         prior_pose=seed,
         prior_translation_weight=0.05,
         prior_theta_weight=0.04,
+        allow_whole_map_search=bool(allow_whole_map_search),
     )
     return solved, float(meta.get("score") or 0.0)
 
@@ -1202,18 +1382,52 @@ def main() -> int:
     parser.add_argument("--imu-yaw-sign", type=float, default=1.0)
     # Spin (same proven parameters as sourccey_spin_map).
     parser.add_argument("--spin-degrees", type=float, default=360.0)
-    parser.add_argument("--spin-speed", type=float, default=0.9)
-    parser.add_argument("--max-spin-seconds", type=float, default=60.0)
+    parser.add_argument("--spin-speed", type=float, default=0.80,
+                        help="Slow anchor-spin command; 0.80 is the measured rotation-stiction floor.")
+    parser.add_argument("--max-spin-seconds", type=float, default=75.0,
+                        help="Per-pass anchor-spin timeout.")
+    parser.add_argument("--anchor-passes", type=int, choices=(1, 2), default=2,
+                        help="Independent anchor spins. Two uses opposite directions and requires "
+                             "their maps to agree before exploration.")
+    parser.add_argument("--anchor-deskew", choices=("auto", "on", "off"), default="auto",
+                        help="In auto mode, independently build raw and timestamp-deskewed anchor "
+                             "candidates and retain the one with better scan-match consistency.")
+    parser.add_argument("--anchor-deskew-reverse", action="store_true", default=False,
+                        help="Reverse LiDAR point acquisition order for deskewing if required by "
+                             "a different host driver.")
     parser.add_argument("--snapshots", type=int, default=240)
     parser.add_argument("--stitch-resolution-m", type=float, default=0.03)
     parser.add_argument("--search-xy-m", type=float, default=0.18)
     parser.add_argument("--theta-window-deg", type=float, default=8.0)
     parser.add_argument("--min-match-score", type=float, default=6.0)
+    parser.add_argument("--match-max-points", type=int, default=700,
+                        help="Maximum evenly sampled LiDAR points used per pose solve. The full "
+                             "scan is still written to the map after localization.")
+    parser.add_argument("--matcher-device", choices=("auto", "cuda", "cpu"), default="auto",
+                        help="Pose-candidate scoring device. Auto uses CUDA when available and "
+                             "falls back safely to CPU.")
     parser.add_argument("--integrate-min-score", type=float, default=10.0,
                         help="A scan is WRITTEN INTO THE MAP only when its match scores at least this "
                              "(pose updates still accept --min-match-score). Marginal matches near "
                              "clutter are fine for localization but painting the map from them layered "
                              "ghost copies of walls at small offsets (field 2026-07-21: doubled map).")
+    parser.add_argument("--anchor-min-accept-ratio", type=float, default=0.75,
+                        help="Minimum fraction of sequential spin scans that must match. Rejected "
+                             "scans are not mapped; full angular coverage is checked separately.")
+    parser.add_argument("--anchor-max-heading-gap-deg", type=float, default=25.0,
+                        help="Abort if accepted anchor scans leave a larger uncovered heading arc.")
+    parser.add_argument("--anchor-validation-score", type=float, default=10.0,
+                        help="Score required to adopt the optional post-spin stationary relocalization. "
+                             "A weaker result is diagnostic only and never blocks exploration.")
+    parser.add_argument("--anchor-consensus-score", type=float, default=8.0,
+                        help="Minimum cross-pass match score for bidirectional anchor consensus.")
+    parser.add_argument("--anchor-consensus-ratio", type=float, default=0.75,
+                        help="Required fraction of sampled reverse-spin scans agreeing with pass one.")
+    parser.add_argument("--anchor-consensus-centre-p90-m", type=float, default=0.10,
+                        help="Maximum 90th-percentile translation residual after rigidly aligning "
+                             "the two independently built anchor passes.")
+    parser.add_argument("--anchor-consensus-heading-p90-deg", type=float, default=2.0,
+                        help="Maximum 90th-percentile heading residual between anchor passes.")
     # LiDAR extraction (same conventions as the spin mapper).
     parser.add_argument("--forward-angle-deg", type=float, default=90.0)
     parser.add_argument("--valid-angle-half-width-deg", type=float, default=180.0)
@@ -1246,6 +1460,15 @@ def main() -> int:
                         help="Never re-target a frontier this close to one already snapshotted.")
     parser.add_argument("--robot-radius-m", type=float, default=0.31,
                         help="Planning inflation radius (body half-width 0.28 + margin).")
+    parser.add_argument("--passable-opening-min-m", type=float, default=0.90,
+                        help="Minimum frontier span treated as a crossable room transition. "
+                             "Smaller gaps are mapped from this side as NARROW-LOOK targets.")
+    parser.add_argument("--doorway-ratchet-min-gain-cells", type=int, default=300,
+                        help="Newly-known cells required before a passable frontier is recorded as "
+                             "a completed room transition.")
+    parser.add_argument("--doorway-ratchet-slack-m", type=float, default=0.25,
+                        help="Distance behind a completed doorway plane still allowed for localization "
+                             "noise; farther-back targets in completed rooms are excluded.")
     # Navigation — pivot at verified path corners, then drive each straight run
     # on one fixed gyro heading. Localization corrects position without steering;
     # an independent 25Hz controller checks clearance before every command.
@@ -1288,6 +1511,11 @@ def main() -> int:
                         help="Do not steer inside this IMU error band; prevents left/right hunting.")
     parser.add_argument("--viewpoint-settle-s", type=float, default=0.5,
                         help="Pause at a reached viewpoint before integrating clean stationary scans.")
+    parser.add_argument("--viewpoint-max-position-scatter-m", type=float, default=0.08,
+                        help="Maximum robot-centre scatter across a stationary mapping batch.")
+    parser.add_argument("--viewpoint-max-heading-scatter-deg", type=float, default=8.0,
+                        help="Maximum solve-heading scatter before a stationary batch is discarded. "
+                             "Accepted scans are fused at one median pose, so this cannot smear walls.")
     # Arms are QUARANTINED by default (hardware damage 2026-07-21): no torque, no
     # targets, ever — unless --arm-stow explicitly opts in.
     parser.add_argument("--arm-stow", action="store_true", default=False,
@@ -1349,6 +1577,7 @@ def main() -> int:
     parser.add_argument("--rerun-grpc-port", type=int, default=9877)
     parser.add_argument("--rerun-web-port", type=int, default=9878)
     args = parser.parse_args()
+    configure_candidate_scoring_device(str(args.matcher_device))
 
     lidar_host = args.lidar_host or args.remote_ip
     imu_host = args.imu_host or args.remote_ip
@@ -1367,10 +1596,11 @@ def main() -> int:
     feed = DirectLidarFeed(lidar_host, int(args.lidar_port))
     feed.start()
     print(f"[explore] LiDAR feed connecting to {lidar_host}:{args.lidar_port} ...")
-    first_id, first_frame = feed.wait_for_frame_after(after_frame_id=-1, timeout_s=8.0, min_frame_advances=1)
+    _first_id, first_frame = feed.wait_for_frame_after(
+        after_frame_id=-1, timeout_s=8.0, min_frame_advances=1
+    )
     if first_frame is None:
         _abort("No LiDAR frames within 8s (feed not running?).")
-    last_frame_id = int(first_id)
 
     # ---- IMU (mandatory) ----
     imu = ImuYawClient(f"tcp://{imu_host}:{int(args.imu_yaw_port)}", sign=float(args.imu_yaw_sign))
@@ -1490,80 +1720,409 @@ def main() -> int:
     odom = OdometryFeed(robot)
     odom_scale = [float(args.odom_scale)]   # metres per x.vel-unit; calibrated online
 
-    # ================= PHASE 1: the anchor spin =================
-    print(f"\n[explore] PHASE 1 — one continuous {float(args.spin_degrees):.0f}deg anchor spin ...")
-    revolutions: list[tuple[np.ndarray, float]] = []
-    prev_id = last_frame_id
+    # ================= PHASE 1: bidirectional rigid anchor =================
+    print(f"\n[explore] PHASE 1 — {int(args.anchor_passes)} slow anchor pass(es), "
+          f"{float(args.spin_degrees):.0f}deg each ...")
     pano_interval_s = 1.0 / max(0.5, float(args.panorama_hz))
-    last_pano = 0.0
-    spin_t0 = time.monotonic()
-    try:
-        while True:
-            robot.send_action({**_spin_command(robot, float(args.spin_speed)), **hold})
-            now = time.monotonic()
-            if now - last_pano >= pano_interval_s:
-                last_pano = now
-                _log_panorama()
-            frame_id, frame = feed.latest()
-            yaw_now = imu.deg()
-            if frame is not None and int(frame_id) != prev_id and yaw_now is not None:
-                prev_id = int(frame_id)
-                local_xy = _scan_local(frame, args)
-                if len(local_xy) >= 12:
-                    yaw_scan = _imu_yaw_for_scan(imu, frame)
-                    if yaw_scan is not None:
-                        revolutions.append((local_xy, float(yaw_scan) - float(yaw0)))
-            if yaw_now is not None and abs(float(yaw_now) - float(yaw0)) >= float(args.spin_degrees):
-                break
-            if time.monotonic() - spin_t0 > float(args.max_spin_seconds):
-                print("[explore] WARNING: spin time cap hit before the IMU target.")
-                break
-            time.sleep(0.03)
-    finally:
-        # Stop turning but KEEP the arms stowed (a plain _send_stop untorques them).
-        for _ in range(3):
-            robot.send_action({"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0,
-                               "z.pos": getattr(robot, "_z_pos_cmd", 100.0), **hold})
-            time.sleep(0.04)
 
-    # Sequential scan-to-map alignment (the proven spin-map pipeline).
-    stride = max(1, math.ceil(len(revolutions) / max(1, int(args.snapshots))))
-    picked = revolutions[::stride]
-    print(f"[explore] aligning {len(picked)}/{len(revolutions)} spin scans sequentially ...")
-    prev_pose: Pose2D | None = None
-    prev_heading: float | None = None
-    n_matched = 0
-    for local_xy, h in picked:
-        if prev_pose is None:
-            pose = _lidar_pose_from_robot_centre(
-                np.zeros(2, dtype=np.float64), h, lever_m, forward_offset
+    def _capture_anchor_pass(
+        direction: float,
+        label: str,
+    ) -> tuple[list[tuple[np.ndarray, np.ndarray, float]], float, float]:
+        """Capture one continuous spin in the original yaw coordinate system."""
+        start_yaw = imu.deg_fresh(wait_up_to_s=0.8, max_age_s=0.4)
+        if start_yaw is None:
+            _abort(f"No fresh IMU yaw before anchor {label}.")
+        scans: list[tuple[np.ndarray, np.ndarray, float]] = []
+        scan_yaws: list[float] = []
+        deskew_timed = 0
+        previous_id = feed.latest()[0]
+        previous_scan_yaw: float | None = None
+        last_pano = 0.0
+        started = time.monotonic()
+        command = math.copysign(abs(float(args.spin_speed)), float(direction))
+        try:
+            while True:
+                robot.send_action({**_spin_command(robot, command), **hold})
+                now = time.monotonic()
+                if now - last_pano >= pano_interval_s:
+                    last_pano = now
+                    _log_panorama()
+                frame_id, frame = feed.latest()
+                yaw_now = imu.deg()
+                if frame is not None and int(frame_id) != int(previous_id):
+                    previous_id = int(frame_id)
+                    yaw_end = _imu_yaw_for_scan(imu, frame)
+                    if yaw_end is not None:
+                        yaw_start_scan = None
+                        timed_this_scan = False
+                        start_ts = getattr(frame, "revolution_started_ts", None)
+                        if start_ts is not None:
+                            yaw_start_scan = imu.deg_at_wall_time(float(start_ts))
+                        if yaw_start_scan is not None:
+                            heading_change = float(yaw_end) - float(yaw_start_scan)
+                            timed_this_scan = True
+                        elif previous_scan_yaw is not None:
+                            heading_change = float(yaw_end) - float(previous_scan_yaw)
+                        else:
+                            heading_change = 0.0
+                        raw_xy = _scan_local(frame, args)
+                        deskewed_xy = _scan_local(
+                            frame,
+                            args,
+                            heading_change_deg=heading_change,
+                            reverse_sweep=bool(args.anchor_deskew_reverse),
+                        )
+                        previous_scan_yaw = float(yaw_end)
+                        if len(raw_xy) >= 12 and len(deskewed_xy) >= 12:
+                            scans.append((
+                                raw_xy,
+                                deskewed_xy,
+                                float(yaw_end) - float(yaw0),
+                            ))
+                            scan_yaws.append(float(yaw_end))
+                            deskew_timed += int(timed_this_scan)
+                if yaw_now is not None and abs(float(yaw_now) - float(start_yaw)) >= float(args.spin_degrees):
+                    break
+                if time.monotonic() - started > float(args.max_spin_seconds):
+                    break
+                time.sleep(0.03)
+        finally:
+            for _ in range(3):
+                robot.send_action({
+                    "x.vel": 0.0,
+                    "y.vel": 0.0,
+                    "theta.vel": 0.0,
+                    "z.pos": getattr(robot, "_z_pos_cmd", 100.0),
+                    **hold,
+                })
+                time.sleep(0.04)
+        end_yaw = imu.deg_fresh(wait_up_to_s=0.8, max_age_s=0.4)
+        net = (float(end_yaw) - float(start_yaw)) if end_yaw is not None else 0.0
+        yaw_steps = np.diff(np.asarray(scan_yaws, dtype=np.float64))
+        directional_steps = yaw_steps[np.abs(yaw_steps) >= 0.05]
+        monotonic_ratio = (
+            float(np.mean(np.sign(directional_steps) == np.sign(net)))
+            if len(directional_steps) and abs(net) > 1.0
+            else 0.0
+        )
+        timed_ratio = float(deskew_timed) / max(1, len(scans))
+        print(
+            f"[explore]   {label}: captured {len(scans)} scans, IMU sweep {net:+.1f}deg, "
+            f"direction consistency {monotonic_ratio:.1%}, timed deskew {timed_ratio:.1%}."
+        )
+        if abs(net) < 0.95 * float(args.spin_degrees):
+            _abort(f"Anchor {label} did not complete its rotation ({net:+.1f}deg).")
+        if monotonic_ratio < 0.95:
+            _abort(
+                f"Anchor {label} IMU heading was not monotonic enough "
+                f"({monotonic_ratio:.1%}); exploration never started."
+            )
+        if str(args.anchor_deskew) == "on" and timed_ratio < 0.80:
+            _abort(
+                f"Anchor {label} had timestamped deskew for only {timed_ratio:.1%} "
+                "of scans; exploration never started."
+            )
+        time.sleep(0.40)
+        return scans, net, timed_ratio
+
+    def _build_anchor_pass(
+        scans: list[tuple[np.ndarray, np.ndarray, float]],
+        label: str,
+        *,
+        deskew: bool,
+    ) -> tuple[WorldMap, list[tuple[np.ndarray, float, Pose2D]], float, float, float]:
+        """Build one pass sequentially while gyro owns rotation.
+
+        Scan matching may move the robot centre because a mecanum base really
+        does wander during a pivot. It may not rewrite heading: the continuous
+        IMU delta owns that, preventing accumulated rotational forgetting.
+        """
+        pass_map = WorldMap(
+            grid_res_m=float(args.frontier_res_m),
+            footprint_clear_m=float(args.self_clear_m),
+            lidar_offset_m=lever_m,
+            forward_offset_deg=forward_offset,
+        )
+        stride = max(1, math.ceil(len(scans) / max(1, int(args.snapshots))))
+        selected = scans[::stride]
+        accepted: list[tuple[np.ndarray, float, Pose2D]] = []
+        matched = 0
+        rejected = 0
+        score_sum = 0.0
+        prev_pose: Pose2D | None = None
+        prev_heading: float | None = None
+        for raw_xy, deskewed_xy, heading in selected:
+            local_xy = deskewed_xy if deskew else raw_xy
+            if prev_pose is None:
+                seed = _lidar_pose_from_robot_centre(
+                    np.zeros(2, dtype=np.float64), heading, lever_m, forward_offset
+                )
+                pose = seed
+                keep = True
+            else:
+                theta_seed = float(prev_pose.theta_deg) + float(heading) - float(prev_heading)
+                previous_centre = _robot_centre_from_lidar_pose(
+                    prev_pose, lever_m, forward_offset
+                )
+                seed = _lidar_pose_from_robot_centre(
+                    previous_centre, theta_seed, lever_m, forward_offset
+                )
+                solved, score = _localize(
+                    local_xy,
+                    pass_map,
+                    seed,
+                    args,
+                    float(args.search_xy_m),
+                    min(5.0, float(args.theta_window_deg)),
+                )
+                solved_centre = _robot_centre_from_lidar_pose(
+                    solved, lever_m, forward_offset
+                )
+                centre_step = float(np.hypot(*(solved_centre - previous_centre)))
+                theta_error = abs(
+                    ((float(solved.theta_deg) - float(seed.theta_deg) + 180.0) % 360.0)
+                    - 180.0
+                )
+                keep = (
+                    score >= float(args.min_match_score)
+                    and centre_step <= float(args.search_xy_m) + 0.03
+                    and theta_error <= 5.0
+                )
+                if keep:
+                    # Translation comes from LiDAR; rotation remains the
+                    # gyro-propagated seed. This tracks real pivot drift without
+                    # letting scan matching accumulate angular deformation.
+                    pose = _lidar_pose_from_robot_centre(
+                        solved_centre, theta_seed, lever_m, forward_offset
+                    )
+                    matched += 1
+                    score_sum += float(score)
+                else:
+                    pose = seed
+            if keep:
+                pass_map.add(local_xy, pose, gold=True)
+                accepted.append((local_xy, heading, pose))
+            else:
+                rejected += 1
+            prev_pose = pose
+            prev_heading = heading
+        attempted = max(1, len(selected) - 1)
+        ratio = float(matched) / float(attempted)
+        mean_score = score_sum / max(1, matched)
+        max_heading_gap = _max_heading_gap_deg([item[1] for item in accepted])
+        mode = "deskewed" if deskew else "raw"
+        print(
+            f"[explore]   {label} {mode} candidate: accepted "
+            f"{len(accepted)}/{len(selected)} scans; rejected {rejected}, "
+            f"validation {ratio:.1%}, mean match {mean_score:.1f}, "
+            f"largest heading gap {max_heading_gap:.1f}deg."
+        )
+        return pass_map, accepted, ratio, mean_score, max_heading_gap
+
+    def _choose_anchor_pass(
+        scans: list[tuple[np.ndarray, np.ndarray, float]],
+        label: str,
+        timed_ratio: float,
+    ) -> tuple[WorldMap, list[tuple[np.ndarray, float, Pose2D]], float]:
+        mode = str(args.anchor_deskew)
+        candidates: list[
+            tuple[
+                str,
+                tuple[
+                    WorldMap,
+                    list[tuple[np.ndarray, float, Pose2D]],
+                    float,
+                    float,
+                    float,
+                ],
+            ]
+        ] = []
+        if mode in ("auto", "off"):
+            candidates.append(("raw", _build_anchor_pass(scans, label, deskew=False)))
+        if mode == "on" or (mode == "auto" and timed_ratio >= 0.80):
+            candidates.append(("deskewed", _build_anchor_pass(scans, label, deskew=True)))
+        if not candidates:
+            _abort(
+                f"Anchor {label} cannot evaluate deskew because timestamp coverage "
+                f"was only {timed_ratio:.1%}."
+            )
+        # Raw capture is the proven field behavior. Auto mode adopts deskew only
+        # for a material, unambiguous improvement rather than selecting it on
+        # one scan or a fraction of a score point.
+        chosen_mode, chosen = candidates[0]
+        if len(candidates) == 2:
+            _raw_mode, raw = candidates[0]
+            deskew_mode, deskewed = candidates[1]
+            ratio_gain = float(deskewed[2]) - float(raw[2])
+            score_gain = float(deskewed[3]) - float(raw[3])
+            if (
+                deskewed[2] >= raw[2]
+                and (
+                    (ratio_gain >= 0.03 and score_gain >= 0.0)
+                    or score_gain >= 0.75
+                )
+            ):
+                chosen_mode, chosen = deskew_mode, deskewed
+        pass_map, accepted, ratio, mean_score, max_heading_gap = chosen
+        print(
+            f"[explore]   {label}: selected {chosen_mode} candidate "
+            f"({ratio:.1%}, mean match {mean_score:.1f}, "
+            f"largest gap {max_heading_gap:.1f}deg)."
+        )
+        if (
+            len(accepted) < 40
+            or ratio < float(args.anchor_min_accept_ratio)
+            or max_heading_gap > float(args.anchor_max_heading_gap_deg)
+        ):
+            _abort(
+                f"Anchor {label} quality rejected ({len(accepted)} scans, "
+                f"{ratio:.1%} validation, largest heading gap "
+                f"{max_heading_gap:.1f}deg). Exploration never started."
+            )
+        return pass_map, accepted, ratio
+
+    # Capture both directions back-to-back. No scan matching or map construction
+    # is allowed between them: the robot stops briefly for the direction reversal,
+    # immediately performs the return sweep, and only then does CPU-heavy work.
+    first_scans, first_net_spin, first_timed_ratio = _capture_anchor_pass(+1.0, "outbound pass")
+    second_capture: tuple[
+        list[tuple[np.ndarray, np.ndarray, float]],
+        float,
+        float,
+    ] | None = None
+    if int(args.anchor_passes) == 2:
+        second_capture = _capture_anchor_pass(-1.0, "return pass")
+        if first_net_spin * second_capture[1] >= 0.0:
+            _abort(
+                "The two anchor commands produced the same IMU rotation direction; "
+                "exploration never started."
+            )
+
+    print("[explore] anchor motion complete; processing captured passes ...")
+    first_map, first_accepted, _first_ratio = _choose_anchor_pass(
+        first_scans, "outbound pass", first_timed_ratio
+    )
+    map_passes = [first_accepted]
+    latest_pass = first_accepted
+    bidirectional_verified = False
+
+    if second_capture is not None:
+        second_scans, _second_net_spin, second_timed_ratio = second_capture
+        _second_map, second_accepted, _second_ratio = _choose_anchor_pass(
+            second_scans, "return pass", second_timed_ratio
+        )
+
+        # Align the independently built reverse pass to pass one with ONE rigid
+        # correction. Per-scan corrections are forbidden: their scatter is the
+        # quality metric that protects against a smeared or rotationally lost pass.
+        sample_step = max(1, len(second_accepted) // 24)
+        source_centres: list[np.ndarray] = []
+        solved_centres: list[np.ndarray] = []
+        theta_offsets: list[float] = []
+        consensus_scores: list[float] = []
+        for local_xy, _heading, pass_pose in second_accepted[::sample_step]:
+            solved, score = _localize(
+                local_xy, first_map, pass_pose, args, 0.15, 5.0
+            )
+            if score < float(args.anchor_consensus_score):
+                continue
+            source_centres.append(
+                _robot_centre_from_lidar_pose(pass_pose, lever_m, forward_offset)
+            )
+            solved_centres.append(
+                _robot_centre_from_lidar_pose(solved, lever_m, forward_offset)
+            )
+            theta_offsets.append(
+                ((float(solved.theta_deg) - float(pass_pose.theta_deg) + 180.0) % 360.0)
+                - 180.0
+            )
+            consensus_scores.append(score)
+        sampled_count = len(second_accepted[::sample_step])
+        consensus_ratio = len(consensus_scores) / max(1, sampled_count)
+        if source_centres:
+            median_theta = float(np.median(np.asarray(theta_offsets, dtype=np.float64)))
+            theta_residuals = np.abs(
+                np.asarray(theta_offsets, dtype=np.float64) - median_theta
+            )
+            theta_p90, theta_max = _p90_and_max(theta_residuals)
+            rotation_rad = math.radians(median_theta)
+            rotation = np.array([
+                [math.cos(rotation_rad), -math.sin(rotation_rad)],
+                [math.sin(rotation_rad), math.cos(rotation_rad)],
+            ])
+            source_array = np.asarray(source_centres, dtype=np.float64)
+            solved_array = np.asarray(solved_centres, dtype=np.float64)
+            rotated_sources = source_array @ rotation.T
+            translations = solved_array - rotated_sources
+            median_translation = np.median(translations, axis=0)
+            residuals = solved_array - (rotated_sources + median_translation)
+            centre_p90, centre_max = _p90_and_max(
+                np.hypot(residuals[:, 0], residuals[:, 1])
             )
         else:
-            theta_seed = float(prev_pose.theta_deg) + (h - prev_heading)
-            centre = _robot_centre_from_lidar_pose(prev_pose, lever_m, forward_offset)
-            seed = _lidar_pose_from_robot_centre(
-                centre, theta_seed, lever_m, forward_offset
+            median_theta = 0.0
+            median_translation = np.zeros(2, dtype=np.float64)
+            rotation = np.eye(2, dtype=np.float64)
+            centre_p90 = centre_max = float("inf")
+            theta_p90 = theta_max = float("inf")
+        print(f"[explore]   bidirectional consensus: {len(consensus_scores)}/{sampled_count} "
+              f"matches ({consensus_ratio:.1%}), centre residual "
+              f"p90/max {centre_p90 * 100:.1f}/{centre_max * 100:.1f}cm, "
+              f"heading residual p90/max {theta_p90:.1f}/{theta_max:.1f}deg.")
+        if (
+            consensus_ratio < float(args.anchor_consensus_ratio)
+            or centre_p90 > float(args.anchor_consensus_centre_p90_m)
+            or theta_p90 > float(args.anchor_consensus_heading_p90_deg)
+        ):
+            _abort(
+                "Bidirectional anchor maps disagree; exploration never started "
+                f"(ratio {consensus_ratio:.1%}, p90 residual "
+                f"{centre_p90 * 100:.1f}cm/{theta_p90:.1f}deg)."
             )
-            solved, score = _localize(local_xy, world_map, seed, args,
-                                      float(args.search_xy_m), float(args.theta_window_deg))
-            dtheta = ((float(solved.theta_deg) - theta_seed + 180.0) % 360.0) - 180.0
-            jump = math.hypot(float(solved.x) - seed.x, float(solved.y) - seed.y)
-            if score >= float(args.min_match_score) and abs(dtheta) <= 12.0 and jump <= 0.35:
-                pose = solved
-                n_matched += 1
-            else:
-                pose = seed
-        world_map.add(local_xy, pose, gold=True)     # the anchor spin IS the reference
-        prev_pose = pose
-        prev_heading = h
-    print(f"[explore] anchor spin mapped: {len(picked)} scans, {n_matched} matched.")
+        aligned_second: list[tuple[np.ndarray, float, Pose2D]] = []
+        for local_xy, heading, pass_pose in second_accepted:
+            pass_centre = _robot_centre_from_lidar_pose(
+                pass_pose, lever_m, forward_offset
+            )
+            aligned_centre = rotation @ pass_centre + median_translation
+            aligned_pose = _lidar_pose_from_robot_centre(
+                aligned_centre,
+                float(pass_pose.theta_deg) + median_theta,
+                lever_m,
+                forward_offset,
+            )
+            aligned_second.append((local_xy, heading, aligned_pose))
+        # The return pass is independent evidence and supplies the robot's
+        # current pose. Do not paint its duplicate observations into an already
+        # dense outbound map: residual cross-pass error would only thicken walls.
+        latest_pass = aligned_second
+        bidirectional_verified = True
+        print("[explore] return pass verified the anchor; preserving the sharper "
+              "outbound map instead of merging duplicate scans.")
+
+    # Merge only after every independent and cross-pass quality gate succeeded.
+    world_map = WorldMap(
+        grid_res_m=float(args.frontier_res_m),
+        footprint_clear_m=float(args.self_clear_m),
+        lidar_offset_m=lever_m,
+        forward_offset_deg=forward_offset,
+    )
+    for anchor_pass in map_passes:
+        for local_xy, _heading, pose in anchor_pass:
+            world_map.add(local_xy, pose, gold=True)
+    last_pass = latest_pass
+    prev_pose = last_pass[-1][2]
+    prev_heading = last_pass[-1][1]
+    anchor_kind = "bidirectionally verified" if bidirectional_verified else "single-pass"
+    print(f"[explore] {anchor_kind} anchor accepted: {len(world_map.scans)} total scans.")
 
     # ---- Recover the drive frame from what we already have (NO nudge) ----
     # Forward offset: analytic, from the extraction conventions.
     # Turn sign: the anchor spin commanded a positive theta.vel throughout, so the
     # sign of the net IMU sweep tells us whether +theta.vel raises or lowers the
     # gyro. This is the rotation calibration, taken for free from the spin.
-    net_spin = revolutions[-1][1] if revolutions else 0.0
+    net_spin = first_net_spin
     turn_sign = 1.0 if net_spin >= 0.0 else -1.0
     controller.turn_sign = float(turn_sign)
     print(f"[explore] drive frame recovered (no nudge): physical forward = map heading "
@@ -1589,6 +2148,39 @@ def main() -> int:
             lever_m,
             forward_offset,
         )
+
+    # Independent post-spin gate: a fresh stationary revolution must recognize
+    # the rigid map before the controller is ever allowed to drive. This catches
+    # bad IMU/LiDAR timing, severe scan dropout, or a physically wandering pivot
+    # even when individual adjacent scans happened to score acceptably.
+    time.sleep(0.30)
+    validation_after = feed.latest()[0]
+    _validation_id, validation_frame = feed.wait_for_frame_after(
+        after_frame_id=validation_after,
+        timeout_s=2.0,
+        min_frame_advances=1,
+    )
+    validation_score = -1.0
+    if validation_frame is not None:
+        validation_local = _scan_local(validation_frame, args)
+        if len(validation_local) >= 12:
+            validation_pose, validation_score = _localize(
+                validation_local,
+                world_map,
+                cur_pose,
+                args,
+                0.12,
+                4.0,
+            )
+            if validation_score >= float(args.anchor_validation_score):
+                cur_pose = validation_pose
+    if validation_score >= float(args.anchor_validation_score):
+        print(f"[explore] stationary post-spin relocalization adopted "
+              f"(match {validation_score:.1f}).")
+    else:
+        print(f"[explore] stationary post-spin match was weak "
+              f"({validation_score:.1f}); retaining the bidirectionally verified pose "
+              "and continuing (non-gating diagnostic).")
 
     def _robot_centre(pose: Pose2D) -> np.ndarray:
         return _robot_centre_from_lidar_pose(pose, lever_m, forward_offset)
@@ -1685,6 +2277,7 @@ def main() -> int:
         whole; consistent ones are promoted to GOLD (the localization reference),
         which is how the reference legitimately grows into new rooms."""
         nonlocal cur_pose
+        vp_pose_ok_last[0] = False
         controller.halt()
         time.sleep(float(args.viewpoint_settle_s))
         known_before = world_map.grid.occupied() | world_map.grid.free()
@@ -1709,20 +2302,25 @@ def main() -> int:
                 batch.append((local, solved, last_score))
         added = 0
         if len(batch) >= 4:
-            px = np.array([float(p.x) for _l, p, _s in batch])
-            py = np.array([float(p.y) for _l, p, _s in batch])
-            pt = np.array([float(p.theta_deg) for _l, p, _s in batch])
-            mx, my, mt = np.median(px), np.median(py), np.median(pt)
-            scatter = float(np.max(np.hypot(px - mx, py - my)))
-            th_scatter = float(np.max(np.abs(((pt - mt + 180.0) % 360.0) - 180.0)))
+            consensus_pose, scatter, th_scatter = _stationary_pose_consensus(
+                [pose for _local, pose, _score in batch],
+                float(cur_pose.theta_deg),
+                lever_m,
+                forward_offset,
+            )
             mean_sc = float(np.mean([s for _l, _p, s in batch]))
-            if scatter <= 0.06 and th_scatter <= 4.0 and mean_sc >= float(args.integrate_min_score):
-                # Consistent: commit the whole batch as GOLD; anchor the pose to
-                # the batch member nearest the median.
-                k = int(np.argmin(np.hypot(px - mx, py - my)))
-                cur_pose = batch[k][1]
-                for local_b, pose_b, _s in batch:
-                    world_map.add(local_b, pose_b, gold=True)
+            if (
+                scatter <= float(args.viewpoint_max_position_scatter_m)
+                and th_scatter <= float(args.viewpoint_max_heading_scatter_deg)
+                and mean_sc >= float(args.min_match_score)
+            ):
+                # The base was stationary: every revolution belongs at one
+                # consensus pose. This prevents harmless solve-angle wobble
+                # from painting several rotated copies of the same walls.
+                cur_pose = consensus_pose
+                vp_pose_ok_last[0] = True
+                for local_b, _pose_b, _s in batch:
+                    world_map.add(local_b, consensus_pose, gold=True)
                 added = len(batch)
             else:
                 print(f"[explore]   viewpoint batch DISCARDED — stationary solutions scatter "
@@ -1743,6 +2341,7 @@ def main() -> int:
                     if sc2 >= float(args.min_match_score):
                         cur_pose = solved2
                         last_score = sc2
+                        vp_pose_ok_last[0] = True
         known_after = world_map.grid.occupied() | world_map.grid.free()
         if (
             known_after.shape == known_before.shape
@@ -1817,8 +2416,18 @@ def main() -> int:
             pano_pts = pano_pts[:: len(pano_pts) // 1200 + 1]
         centre = _robot_centre(cur_pose)
         seed = Pose2D(x=float(centre[0]), y=float(centre[1]), theta_deg=theta_start)
+        # At a doorway most panorama returns can belong to the new room and are
+        # absent from GOLD by definition. Match only rays that the current seed
+        # places near already-observed geometry; otherwise new information
+        # overwhelms the overlap and makes a good recovery score look terrible.
+        known_support = _match_support_mask(_transform_points(pano_pts, seed))
+        if int(known_support.sum()) >= 100:
+            print(f"[explore]   recovery using {int(known_support.sum())}/{len(pano_pts)} "
+                  "known-map panorama points; new-room returns ignored.")
+            pano_pts = pano_pts[known_support]
         solved, score = _localize(
-            pano_pts, world_map, seed, args, 1.20, 25.0, coarse_angle_step_deg=4.0
+            pano_pts, world_map, seed, args, 1.20, 25.0,
+            coarse_angle_step_deg=4.0, allow_whole_map_search=True,
         )
         if score < 12.0:
             print(f"[explore]   panorama match too weak ({score:.1f}) — recovery failed.")
@@ -1841,6 +2450,7 @@ def main() -> int:
     trail: list[np.ndarray] = [_robot_centre(cur_pose)]
     visited: list[np.ndarray] = []
     sampled_viewpoints: list[np.ndarray] = []
+    completed_transitions: list[tuple[np.ndarray, np.ndarray]] = []
     # The global planner owns exactly one frontier until it is observed away,
     # proven unreachable/blocked, or the mission is stopped. Without this state,
     # every localization hiccup re-ran global scoring and could send the robot
@@ -1848,17 +2458,20 @@ def main() -> int:
     active_frontier_xy: np.ndarray | None = None
     obstacle_strikes: dict[tuple[int, int], int] = {}   # frontier -> times obstacle-blocked
     lost_strikes: dict[tuple[int, int], int] = {}       # frontier -> times tracking-lost
+    recovery_spin_used = [False]                        # one spin for an entire objective
     viewpoints_reached = 0
     spin_scan_count = len(world_map.scans)
     frontiers_left = 0
     none_retries = 0
     vp_last: list = [None]        # last _integrate_at_viewpoint result
     vp_gain_last: list[int | None] = [None]  # actual unknown -> known cells
+    vp_pose_ok_last = [False]      # stationary batch or fallback localized successfully
     consistency_fails = 0         # consecutive discarded/empty viewpoints
 
     def _analysis_now() -> Analysis:
         return analyze_grid(world_map.grid, float(args.robot_radius_m),
-                            float(args.min_frontier_span_m), int(args.min_frontier_cells))
+                            float(args.min_frontier_span_m), int(args.min_frontier_cells),
+                            float(args.passable_opening_min_m))
 
     # --- TWO support masks, deliberately separate (field 2026-07-21): -------
     # MATCHING support comes ONLY from actually-integrated scan points, NEVER
@@ -1981,6 +2594,7 @@ def main() -> int:
         """
         nonlocal cur_pose
         pending_collision_local: list[np.ndarray | None] = [None]
+        collision_streak = {"frame_id": None, "sector": None, "count": 0}
 
         def _fast_safety_check() -> str | None:
             pose = cur_pose
@@ -2000,7 +2614,7 @@ def main() -> int:
             # unknown-space stopping and global path planning.
             if state == "blocked" and collision_profile is None:
                 return f"mapped full-body clearance {distance:.2f}m ahead"
-            _fid, frame = feed.latest()
+            frame_id, frame = feed.latest()
             if frame is None:
                 return None
             local = _scan_local(frame, args)
@@ -2010,10 +2624,24 @@ def main() -> int:
             calibrated_hit = _collision_box_violation(ff, collision_profile)
             if calibrated_hit is not None:
                 mask, sector, angle, hit_range, limit = calibrated_hit
+                # Count only fresh LiDAR revolutions. Re-reading one frame at
+                # 25Hz must not turn a single glint/self-return into a stop.
+                if frame_id != collision_streak["frame_id"]:
+                    if sector == collision_streak["sector"]:
+                        collision_streak["count"] += 1
+                    else:
+                        collision_streak["sector"] = sector
+                        collision_streak["count"] = 1
+                    collision_streak["frame_id"] = frame_id
+                required_frames = int(collision_profile.get("confirmation_frames", 2))
+                if collision_streak["count"] < required_frames:
+                    return None
                 pending_collision_local[0] = local[mask].copy()
                 return (f"calibrated collision box {sector}: {hit_range:.2f}m "
                         f"at {angle:+.0f}deg (limit {limit:.2f}m)")
             if collision_profile is not None:
+                if frame_id != collision_streak["frame_id"]:
+                    collision_streak.update(frame_id=frame_id, sector=None, count=0)
                 return None
             lane = ((ff[:, 0] > 0.02)
                     & (ff[:, 0] < float(args.hard_stop_m))
@@ -2039,7 +2667,6 @@ def main() -> int:
         last_diag = 0.0
         novel_hist: list[tuple[np.ndarray, np.ndarray]] = []   # (obstacle world centroid, robot centre)
         phantom_warned = False
-        spin_tried = False           # one recovery spin allowed after actual match failure
         polyline = np.vstack([_robot_centre(cur_pose)[None, :],
                               np.asarray(waypoints, dtype=np.float64)])
         goal = np.asarray(goal_xy, dtype=np.float64)
@@ -2253,20 +2880,6 @@ def main() -> int:
                         return "hard stop (mapped shoulder clearance)"
                     if len(local):
                         ff = _to_forward_frame(local, forward_offset)
-                        calibrated_hit = _collision_box_violation(ff, collision_profile)
-                        if calibrated_hit is not None:
-                            mask, sector, angle, hit_range, limit = calibrated_hit
-                            controller.halt()
-                            offenders = local[mask]
-                            if len(offenders):
-                                world_map.grid.mark_hits(
-                                    _transform_points(offenders, cur_pose), amount=2.0
-                                )
-                            reason = (f"calibrated collision box {sector}: {hit_range:.2f}m "
-                                      f"at {angle:+.0f}deg (limit {limit:.2f}m)")
-                            if _replan_same_frontier(reason):
-                                continue
-                            return f"hard stop (calibrated {sector} clearance)"
                         if collision_profile is not None:
                             lane = np.zeros(len(ff), dtype=bool)
                         else:
@@ -2342,10 +2955,23 @@ def main() -> int:
                                 # Single-scan relock failed — escalate to the
                                 # strongest evidence we have (once per leg).
                                 controller.halt()
-                                if not spin_tried and _recovery_spin():
-                                    spin_tried = True
+                                print("[drive] stationary relock failed; mapping this boundary "
+                                      "before considering a recovery spin.")
+                                _integrate_at_viewpoint()
+                                if vp_pose_ok_last[0]:
+                                    print("[drive] boundary map accepted; continuing the same plan.")
                                     relocked = True
+                                elif not recovery_spin_used[0]:
+                                    # Spend the objective's single spin allowance
+                                    # before starting it, even when the attempt fails.
+                                    recovery_spin_used[0] = True
+                                    if _recovery_spin():
+                                        relocked = True
+                                    else:
+                                        return "tracking lost"
                                 else:
+                                    print("[drive] recovery spin already used for this frontier; "
+                                          "remaining stationary instead of spinning again.")
                                     return "tracking lost"
                             n_weak = 0
                             last_good_t = time.monotonic()
@@ -2447,6 +3073,7 @@ def main() -> int:
 
     # ================= PHASE 2..N: explore the frontiers =================
     aborted = ""
+    localization_hold = False
     if bool(args.spin_only):
         print("[explore] --spin-only: skipping exploration; rendering the anchor spin map only.")
     else:
@@ -2462,6 +3089,17 @@ def main() -> int:
         ):
             aborted = "mission time budget spent"
             break
+        if localization_hold:
+            controller.halt()
+            print("\n[explore] localization hold; retrying a stationary boundary map "
+                  "without moving or spinning ...")
+            _integrate_at_viewpoint()
+            if vp_pose_ok_last[0]:
+                localization_hold = False
+                print("[explore] stationary localization recovered; resuming the active plan.")
+            else:
+                time.sleep(1.0)
+                continue
         print("\n[explore] analyzing the map for significant frontiers ...")
         analysis = _analysis_now()
         frontiers_left = len(analysis.clusters)
@@ -2477,16 +3115,29 @@ def main() -> int:
         picked_target = _pick_target(analysis, centre, visited,
                                      float(args.viewpoint_pullback_m), float(args.visited_skip_m),
                                      preferred_frontier_xy=active_frontier_xy,
-                                     sampled_viewpoints_xy=sampled_viewpoints)
+                                     sampled_viewpoints_xy=sampled_viewpoints,
+                                     completed_transitions=completed_transitions,
+                                     transition_backtrack_slack_m=(
+                                         float(args.doorway_ratchet_slack_m)
+                                     ))
         if picked_target is None:
             # 'No target' has TWO very different meanings, and conflating them
             # once ended a mission at 0 viewpoints with live frontiers: either
             # the map is genuinely done, or PLANNING failed from the current
             # (possibly wobbled) pose. If frontiers remain, re-anchor the pose
             # stationary and retry before ever declaring completion.
-            live = [c for c in analysis.clusters
-                    if not any(np.hypot(*(c.centroid_xy - v)) < float(args.visited_skip_m)
-                               for v in visited)]
+            live = [
+                c for c in analysis.clusters
+                if not any(
+                    np.hypot(*(c.centroid_xy - v)) < float(args.visited_skip_m)
+                    for v in visited
+                )
+                and not _behind_completed_transition(
+                    c.centroid_xy,
+                    completed_transitions,
+                    float(args.doorway_ratchet_slack_m),
+                )
+            ]
             if live and none_retries < 2:
                 none_retries += 1
                 print(f"[explore] {len(live)} live frontier(s) but planning failed from here — "
@@ -2532,11 +3183,15 @@ def main() -> int:
             break
         none_retries = 0
         cluster, goal_xy, waypoints, close_look, observe_xy, expected_gain = picked_target
+        objective_start_xy = centre.copy()
         continuing_objective = active_frontier_xy is not None
+        if not continuing_objective:
+            recovery_spin_used[0] = False
         active_frontier_xy = cluster.centroid_xy.copy()
         kind = "CLOSE LOOK at" if close_look else "ADVANCE toward"
         ownership = "continuing active" if continuing_objective else "new active"
-        print(f"[explore] {ownership} frontier: span {cluster.span_m:.2f}m at "
+        opening_kind = "PASSABLE" if cluster.passable else "NARROW-LOOK"
+        print(f"[explore] {ownership} {opening_kind} frontier: span {cluster.span_m:.2f}m at "
               f"({cluster.centroid_xy[0]:+.2f}, {cluster.centroid_xy[1]:+.2f}), "
               f"{kind} visible cell ({observe_xy[0]:+.2f}, {observe_xy[1]:+.2f}) "
               f"from ({goal_xy[0]:+.2f}, {goal_xy[1]:+.2f}), "
@@ -2550,6 +3205,8 @@ def main() -> int:
         _log_world(rr, world_map, args, centre, trail, analysis, observe_xy, waypoints,
                    note=f"driving to frontier (span {cluster.span_m:.2f}m)")
 
+        fkey = (int(round(cluster.centroid_xy[0] / 0.3)),
+                int(round(cluster.centroid_xy[1] / 0.3)))
         leg_failed = _drive_leg(waypoints, goal_xy, analysis, face_xy=observe_xy)
         if leg_failed == "mission time budget spent":
             aborted = leg_failed
@@ -2559,7 +3216,6 @@ def main() -> int:
             # novelty checks); re-plan around it. Progress guarantee: if the SAME
             # frontier gets obstacle-blocked twice, give up on it — endless
             # replan-loops against one target are how the mission dies in place.
-            fkey = (int(round(cluster.centroid_xy[0] / 0.3)), int(round(cluster.centroid_xy[1] / 0.3)))
             obstacle_strikes[fkey] = obstacle_strikes.get(fkey, 0) + 1
             if obstacle_strikes[fkey] >= 2:
                 print("[explore] frontier blocked twice — giving up on it, trying the next.")
@@ -2580,17 +3236,12 @@ def main() -> int:
         if leg_failed == "tracking lost":
             # Localization hiccup, NOT a bad target — don't blacklist the exit for
             # it (field: robot reached the doorway, confidence dipped, and the old
-            # policy marked THE EXIT visited and turned away). Retry once; only a
-            # second loss on the same frontier gives up on it.
-            fkey = (int(round(cluster.centroid_xy[0] / 0.3)), int(round(cluster.centroid_xy[1] / 0.3)))
+            # policy marked THE EXIT visited and turned away). Keep the objective
+            # and retry stationary localization without repeating recovery spins.
             lost_strikes[fkey] = lost_strikes.get(fkey, 0) + 1
-            if lost_strikes[fkey] >= 2:
-                print("[explore] tracking lost twice while pursuing the active frontier — "
-                      "stopping instead of silently choosing a different destination.")
-                aborted = "localization lost while pursuing active frontier"
-                break
-            else:
-                print("[explore] tracking lost — re-anchoring and retrying the same frontier.")
+            localization_hold = True
+            print("[explore] tracking lost; preserving the active frontier and entering "
+                  "stationary localization hold.")
             continue
         if leg_failed == "leg time budget spent":
             # A leg timer is a scheduling slice, not evidence that the frontier
@@ -2608,9 +3259,21 @@ def main() -> int:
         # Recover once against the GOLD reference; if that fails, stop honestly
         # instead of continuing to paint garbage ('once the map is lost it's
         # game over' — the user's words, and correct).
+        viewpoint_scans_added = int(vp_last[0] or 0)
         if vp_last[0] == 0:
             consistency_fails += 1
             if consistency_fails >= 2:
+                if not cluster.passable:
+                    # A failed photograph at one non-crossable target is not
+                    # evidence that the entire map or navigation pose is lost.
+                    visited.append(cluster.centroid_xy.copy())
+                    active_frontier_xy = None
+                    consistency_fails = 0
+                    vp_last[0] = None
+                    vp_gain_last[0] = None
+                    print("[explore] narrow look target produced two unusable batches - "
+                          "retiring it and continuing to the next frontier.")
+                    continue
                 print("[explore] map-consistency watchdog: two failed viewpoints — recovery spin.")
                 if _recovery_spin():
                     consistency_fails = 0
@@ -2631,6 +3294,23 @@ def main() -> int:
         actual_gain = int(vp_gain_last[0] or 0)
         vp_gain_last[0] = None
         active_frontier_xy = None
+        if _viewpoint_completes_frontier(cluster, viewpoint_scans_added):
+            visited.append(cluster.centroid_xy.copy())
+            print("[explore] narrow/non-crossable frontier observed successfully — "
+                  "retiring this look target so planning advances.")
+        elif (
+            cluster.passable
+            and viewpoint_scans_added > 0
+            and actual_gain >= int(args.doorway_ratchet_min_gain_cells)
+        ):
+            outward = np.asarray(observe_xy, dtype=np.float64) - objective_start_xy
+            outward_norm = float(np.hypot(*outward))
+            if outward_norm >= 0.30:
+                outward /= outward_norm
+                completed_transitions.append((here.copy(), outward.copy()))
+                visited.append(cluster.centroid_xy.copy())
+                print("[explore] passable frontier produced a high-gain room transition - "
+                      "doorway ratchet armed; targets back in the completed room are excluded.")
         kind_msg = "close look" if close_look else "advance"
         print(f"[explore] {kind_msg} {viewpoints_reached} done; map now {len(world_map.scans)} "
               f"scans, actual gain {actual_gain} newly-known cells; selecting next viewpoint.")

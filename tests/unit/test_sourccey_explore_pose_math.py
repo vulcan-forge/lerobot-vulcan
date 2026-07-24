@@ -6,6 +6,7 @@ import sys
 import time
 from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -14,9 +15,15 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import ldlidar_direct_snapshot_stitch as stitch  # noqa: E402
 import sourccey_explore as explore  # noqa: E402
 from ldlidar_direct_snapshot_stitch import Pose2D, _search_pose, _transform_points  # noqa: E402
-from sourccey_collision_box import calibrate_collision_box, collision_box_violation  # noqa: E402
+from sourccey_collision_box import (  # noqa: E402
+    calibrate_collision_box,
+    collision_box_dimensions,
+    collision_box_violation,
+    effective_ranges,
+)
 from sourccey_wander.imu_heading import ImuYawClient  # noqa: E402
 
 
@@ -25,6 +32,20 @@ def test_zero_exploration_budgets_are_unlimited() -> None:
     assert not explore._budget_exhausted(10_000, -1)
     assert not explore._budget_exhausted(19, 20)
     assert explore._budget_exhausted(20, 20)
+
+
+def test_anchor_heading_coverage_handles_wraparound() -> None:
+    headings = [350.0, 0.0, 10.0, 90.0, 180.0, 270.0]
+
+    assert explore._max_heading_gap_deg(headings) == 90.0
+    assert explore._max_heading_gap_deg([0.0]) == 360.0
+
+
+def test_anchor_consensus_uses_robust_p90_but_keeps_worst_case_diagnostic() -> None:
+    p90, worst = explore._p90_and_max([0.01] * 19 + [0.20])
+
+    assert p90 == pytest.approx(0.01)
+    assert worst == pytest.approx(0.20)
 
 
 def test_reflected_scan_frame_places_forward_lidar_on_negative_local_x() -> None:
@@ -49,6 +70,28 @@ def test_gyro_turn_moves_lidar_around_fixed_robot_centre() -> None:
     assert np.hypot(turned.x - centre[0], turned.y - centre[1]) == pytest.approx(0.229)
 
 
+def test_stationary_batch_fuses_heading_wobble_at_one_robot_centre() -> None:
+    centre = np.array([0.6, -0.4])
+    poses = [
+        explore._lidar_pose_from_robot_centre(centre, theta, 0.229, 180.0)
+        for theta in (358.0, 359.0, 361.0, 362.0)
+    ]
+
+    consensus, position_scatter, heading_scatter = explore._stationary_pose_consensus(
+        poses,
+        reference_theta_deg=359.0,
+        lever_m=0.229,
+        forward_offset_deg=180.0,
+    )
+
+    assert explore._robot_centre_from_lidar_pose(
+        consensus, 0.229, 180.0
+    ) == pytest.approx(centre)
+    assert consensus.theta_deg == pytest.approx(360.0)
+    assert position_scatter == pytest.approx(0.0)
+    assert heading_scatter == pytest.approx(2.0)
+
+
 def test_timestamped_imu_yaw_interpolates_unwrapped_heading() -> None:
     imu = ImuYawClient("tcp://unused")
     imu._history = deque([(100.0, 350.0), (100.1, 370.0)], maxlen=2048)
@@ -56,6 +99,31 @@ def test_timestamped_imu_yaw_interpolates_unwrapped_heading() -> None:
     assert imu.deg_at_wall_time(100.05) == pytest.approx(360.0)
     assert imu.deg_at_wall_time(99.0) is None
     assert imu.deg_at_wall_time(101.0) is None
+
+
+def test_anchor_scan_deskew_places_points_in_revolution_end_frame() -> None:
+    frame = SimpleNamespace(
+        points=[
+            (90.0, 1.0, 255),
+            (90.0, 1.0, 255),
+            (90.0, 1.0, 255),
+        ]
+    )
+    args = SimpleNamespace(
+        forward_angle_deg=90.0,
+        min_confidence=1,
+        min_range_m=0.01,
+        max_distance_m=10.0,
+        valid_angle_half_width_deg=180.0,
+        invert_lateral_axis=False,
+    )
+
+    deskewed = explore._scan_local(frame, args, heading_change_deg=10.0)
+
+    assert deskewed[0] == pytest.approx(
+        [np.cos(np.radians(10.0)), -np.sin(np.radians(10.0))]
+    )
+    assert deskewed[-1] == pytest.approx([1.0, 0.0], abs=1e-6)
 
 
 def _open_analysis() -> explore.Analysis:
@@ -69,12 +137,15 @@ def _open_analysis() -> explore.Analysis:
     )
 
 
-def _frontier(x: float, y: float, span: float = 0.6) -> explore.FrontierCluster:
+def _frontier(
+    x: float, y: float, span: float = 0.6, *, passable: bool = False
+) -> explore.FrontierCluster:
     return explore.FrontierCluster(
         cells_ij=np.array([[0, 0]], dtype=np.int64),
         centroid_xy=np.array([x, y], dtype=np.float64),
         span_m=span,
         size=8,
+        passable=passable,
     )
 
 
@@ -137,6 +208,99 @@ def test_pick_target_aims_at_visible_frontier_cell_and_predicts_gain() -> None:
     assert analysis.to_cell(observe_xy) in [tuple(cell) for cell in cells]
     assert not np.allclose(observe_xy, cluster.centroid_xy)
     assert expected_gain > 0
+
+
+def test_pick_target_prioritizes_reachable_narrow_look_before_passage() -> None:
+    analysis = _open_analysis()
+    analysis.free[:, 19:] = False
+    analysis.traversable[:, 19:] = False
+    narrow_cells = np.array([[i, 18] for i in range(5, 10)], dtype=np.int64)
+    passage_cells = np.array([[i, 18] for i in range(12, 19)], dtype=np.int64)
+    narrow = explore.FrontierCluster(
+        cells_ij=narrow_cells,
+        centroid_xy=analysis.to_world((7, 18)),
+        span_m=0.45,
+        size=len(narrow_cells),
+        passable=False,
+    )
+    passage = explore.FrontierCluster(
+        cells_ij=passage_cells,
+        centroid_xy=analysis.to_world((15, 18)),
+        span_m=1.2,
+        size=len(passage_cells),
+        passable=True,
+    )
+    analysis.clusters = [passage, narrow]
+
+    picked = explore._pick_target(
+        analysis,
+        robot_centre_xy=np.zeros(2),
+        visited_xy=[],
+        pullback_m=0.4,
+        visited_skip_m=0.55,
+    )
+
+    assert picked is not None
+    assert picked[0] is narrow
+
+
+def test_successful_narrow_viewpoint_retires_but_passable_exit_advances() -> None:
+    assert explore._viewpoint_completes_frontier(
+        _frontier(0.0, 0.0, passable=False),
+        scans_added=8,
+    )
+    assert not explore._viewpoint_completes_frontier(
+        _frontier(0.0, 0.0, passable=True),
+        scans_added=8,
+    )
+    assert not explore._viewpoint_completes_frontier(
+        _frontier(0.0, 0.0, passable=False),
+        scans_added=0,
+    )
+
+
+def test_completed_doorway_excludes_old_room_but_keeps_new_room_and_sides() -> None:
+    transitions = [
+        (
+            np.array([0.0, 0.0]),
+            np.array([0.0, -1.0]),  # new room is toward negative y
+        )
+    ]
+
+    assert explore._behind_completed_transition(
+        np.array([0.0, 0.6]), transitions, slack_m=0.25
+    )
+    assert not explore._behind_completed_transition(
+        np.array([0.0, -0.6]), transitions, slack_m=0.25
+    )
+    assert not explore._behind_completed_transition(
+        np.array([1.0, -0.05]), transitions, slack_m=0.25
+    )
+
+
+def test_sampled_viewpoint_is_penalized_but_not_made_unreachable() -> None:
+    analysis = _open_analysis()
+    analysis.free[:, 19:] = False
+    analysis.traversable[:, 19:] = False
+    cells = np.array([[i, 18] for i in range(7, 14)], dtype=np.int64)
+    cluster = explore.FrontierCluster(
+        cells_ij=cells,
+        centroid_xy=analysis.to_world((10, 18)),
+        span_m=0.5,
+        size=len(cells),
+    )
+    analysis.clusters = [cluster]
+
+    picked = explore._pick_target(
+        analysis,
+        robot_centre_xy=np.zeros(2),
+        visited_xy=[],
+        pullback_m=0.4,
+        visited_skip_m=2.0,
+        sampled_viewpoints_xy=[np.zeros(2)],
+    )
+
+    assert picked is not None
 
 
 def test_metric_inflation_does_not_round_31cm_up_to_35cm() -> None:
@@ -235,10 +399,10 @@ def test_collision_box_prioritizes_single_bin_side_intrusion() -> None:
     }
 
     assert collision_box_violation(np.array([[0.55, 0.0]]), profile) is None
-    side_hit = collision_box_violation(np.array([[0.0, 0.40]]), profile)
+    side_hit = collision_box_violation(np.array([[0.0, 0.40], [0.005, 0.41]]), profile)
     assert side_hit is not None
     mask, sector, angle, hit_range, limit = side_hit
-    assert mask.tolist() == [True]
+    assert mask.tolist() == [True, True]
     assert sector == "left side"
     assert angle == pytest.approx(90.0)
     assert hit_range == pytest.approx(0.40)
@@ -246,9 +410,26 @@ def test_collision_box_prioritizes_single_bin_side_intrusion() -> None:
 
     # A lone front speck is rejected, but adjacent front bins form a stop.
     assert collision_box_violation(np.array([[0.40, 0.0]]), profile) is None
-    front = np.radians(np.array([0.0, 5.0]))
+    front = np.radians(np.array([0.0, 2.0, 5.0]))
     front_points = np.column_stack([0.40 * np.cos(front), 0.40 * np.sin(front)])
     assert collision_box_violation(front_points, profile)[1] == "front"
+
+
+def test_collision_box_dimensions_expand_live_envelope() -> None:
+    profile = {
+        "bin_size_deg": 4.0,
+        "ranges_m": [0.50] * 90,
+    }
+    base_width, base_length = collision_box_dimensions(profile)
+    base_ranges = effective_ranges(profile)
+    profile["width_m"] = base_width + 0.0254
+    profile["length_m"] = base_length
+
+    expanded = effective_ranges(profile)
+
+    assert collision_box_dimensions(profile)[0] == pytest.approx(base_width + 0.0254)
+    assert expanded[67] > base_ranges[67]  # approximately the left side
+    assert expanded[45] == pytest.approx(base_ranges[45], rel=0.01)  # approximately front
 
 
 def test_swept_footprint_reports_mapped_shoulder_clearance() -> None:
@@ -321,6 +502,63 @@ def test_memory_bounded_matcher_keeps_theta_major_candidate_result() -> None:
     assert solved.y == pytest.approx(expected.y, abs=0.04)
     assert solved.theta_deg == pytest.approx(expected.theta_deg, abs=1.0)
     assert float(meta["score"]) > 10.0
+
+
+def test_cuda_candidate_scores_match_cpu_when_available() -> None:
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    rng = np.random.default_rng(4)
+    exact = rng.random((80, 90)) < 0.06
+    dilated = stitch._dilate(exact, radius_cells=2)
+    known = stitch._dilate(exact, radius_cells=8)
+    origin = np.array([-1.2, -1.0], dtype=np.float32)
+    occupied_ij = np.column_stack(np.nonzero(exact))
+    global_xy = np.column_stack([
+        occupied_ij[:, 1] * 0.03 + origin[0],
+        occupied_ij[:, 0] * 0.03 + origin[1],
+    ]).astype(np.float32)[::3]
+    candidates = rng.uniform(-0.9, 1.0, size=(48, 90, 2)).astype(np.float32)
+    kwargs = {
+        "exact_grid": exact,
+        "dilated_grid": dilated,
+        "known_grid": known,
+        "grid_origin_xy": origin,
+        "resolution_m": 0.03,
+        "global_sampled_xy": global_xy,
+        "use_nearest_penalty": True,
+    }
+    try:
+        stitch.configure_candidate_scoring_device("cpu")
+        cpu_scores = stitch._score_candidates_batch(candidates, **kwargs)
+        stitch.configure_candidate_scoring_device("cuda")
+        cuda_scores = stitch._score_candidates_batch(candidates, **kwargs)
+    finally:
+        stitch.configure_candidate_scoring_device("cpu")
+
+    assert cuda_scores == pytest.approx(cpu_scores, abs=2e-6)
+    assert int(np.argmax(cuda_scores)) == int(np.argmax(cpu_scores))
+
+
+def test_routine_localization_can_disable_expensive_whole_map_fallback() -> None:
+    local = np.column_stack([np.linspace(0.1, 0.8, 24), np.zeros(24)]).astype(np.float32)
+    unrelated_map = local + np.array([4.0, 4.0], dtype=np.float32)
+
+    _solved, meta = _search_pose(
+        snapshot_points_xy=local,
+        global_points_xy=unrelated_map,
+        initial_pose=Pose2D(0.0, 0.0, 0.0),
+        resolution_m=0.03,
+        search_xy_m=0.10,
+        coarse_angle_step_deg=2.0,
+        fine_angle_step_deg=0.5,
+        theta_window_deg=4.0,
+        max_translation_from_initial_m=0.20,
+        allow_whole_map_search=False,
+    )
+
+    assert float(meta["local_score"]) < 8.0
+    assert meta["whole_map_searched"] is False
 
 
 def test_fast_controller_latches_safety_before_forward_command() -> None:

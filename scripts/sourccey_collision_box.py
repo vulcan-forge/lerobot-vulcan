@@ -65,6 +65,9 @@ def calibrate_collision_box(
         "noise_tolerance_m": float(noise_tolerance_m),
         "min_violation_bins": 2,
         "side_min_violation_bins": 1,
+        "min_violation_points": 3,
+        "side_min_violation_points": 2,
+        "confirmation_frames": 2,
         "calibration_scans": len(scans_forward_xy),
         "created_unix_s": time.time(),
     }
@@ -87,6 +90,49 @@ def load_collision_box(path: str | Path = DEFAULT_COLLISION_BOX_PATH) -> dict | 
     return data
 
 
+def effective_ranges(profile: dict) -> np.ndarray:
+    """Return the envelope ranges after applying UI width/length adjustments."""
+    raw = np.array([
+        np.nan if value is None else float(value) for value in profile.get("ranges_m", [])
+    ])
+    if not len(raw):
+        return raw
+    bin_size = float(profile["bin_size_deg"])
+    angles = np.radians(-180.0 + (np.arange(len(raw)) + 0.5) * bin_size)
+    x = raw * np.cos(angles)
+    y = raw * np.sin(angles)
+    valid = np.isfinite(raw)
+    base_length = float(np.nanmax(x[valid]) - np.nanmin(x[valid]))
+    base_width = float(np.nanmax(y[valid]) - np.nanmin(y[valid]))
+    target_length = float(profile.get("length_m", base_length))
+    target_width = float(profile.get("width_m", base_width))
+    if base_length > 1e-6:
+        x *= target_length / base_length
+    if base_width > 1e-6:
+        y *= target_width / base_width
+    return np.hypot(x, y)
+
+
+def collision_box_dimensions(profile: dict) -> tuple[float, float]:
+    """Return effective (width, length) in metres."""
+    raw_profile = dict(profile)
+    raw_profile.pop("width_m", None)
+    raw_profile.pop("length_m", None)
+    ranges = effective_ranges(raw_profile)
+    angles = np.radians(
+        -180.0 + (np.arange(len(ranges)) + 0.5) * float(profile["bin_size_deg"])
+    )
+    x = ranges * np.cos(angles)
+    y = ranges * np.sin(angles)
+    valid = np.isfinite(ranges)
+    base_width = float(np.nanmax(y[valid]) - np.nanmin(y[valid]))
+    base_length = float(np.nanmax(x[valid]) - np.nanmin(x[valid]))
+    return (
+        float(profile.get("width_m", base_width)),
+        float(profile.get("length_m", base_length)),
+    )
+
+
 def collision_box_violation(
     points_forward_xy: np.ndarray,
     profile: dict | None,
@@ -101,7 +147,7 @@ def collision_box_violation(
     bin_size = float(profile.get("bin_size_deg") or 0.0)
     if not isinstance(learned, list) or not learned or bin_size <= 0.0:
         return None
-    thresholds = np.array([np.nan if value is None else float(value) for value in learned])
+    thresholds = effective_ranges(profile)
     ranges = np.hypot(points[:, 0], points[:, 1])
     angles = np.degrees(np.arctan2(points[:, 1], points[:, 0]))
     indices = np.floor((angles + 180.0) / bin_size).astype(np.int64) % len(thresholds)
@@ -113,9 +159,17 @@ def collision_box_violation(
     side = violating & (np.abs(angles) >= 45.0) & (np.abs(angles) <= 135.0)
     side_bins = np.unique(indices[side]).size
     all_bins = np.unique(indices[violating]).size
+    side_points = int(np.count_nonzero(side))
+    all_points = int(np.count_nonzero(violating))
     if (
-        side_bins < int(profile.get("side_min_violation_bins", 1))
-        and all_bins < int(profile.get("min_violation_bins", 2))
+        (
+            side_bins < int(profile.get("side_min_violation_bins", 1))
+            or side_points < int(profile.get("side_min_violation_points", 2))
+        )
+        and (
+            all_bins < int(profile.get("min_violation_bins", 2))
+            or all_points < int(profile.get("min_violation_points", 3))
+        )
     ):
         return None
 
