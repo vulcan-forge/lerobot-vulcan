@@ -406,7 +406,9 @@ def test_collision_box_prioritizes_single_bin_side_intrusion() -> None:
     assert sector == "left side"
     assert angle == pytest.approx(90.0)
     assert hit_range == pytest.approx(0.40)
-    assert limit == pytest.approx(0.48)
+    # Legacy profiles without safety_margin_m use the visible calibrated
+    # envelope as the stop line; tolerance no longer shrinks it by 2cm.
+    assert limit == pytest.approx(0.50)
 
     # A lone front speck is rejected, but adjacent front bins form a stop.
     assert collision_box_violation(np.array([[0.40, 0.0]]), profile) is None

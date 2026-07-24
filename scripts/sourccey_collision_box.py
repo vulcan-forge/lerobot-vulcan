@@ -63,6 +63,10 @@ def calibrate_collision_box(
         "ranges_m": learned,
         "samples_per_bin": counts,
         "noise_tolerance_m": float(noise_tolerance_m),
+        # Preserve the learned/displayed line as the actual stop boundary.
+        # The equal margin offsets measurement tolerance instead of silently
+        # allowing the robot to penetrate inside its calibrated envelope.
+        "safety_margin_m": float(noise_tolerance_m),
         "min_violation_bins": 2,
         "side_min_violation_bins": 1,
         "min_violation_points": 3,
@@ -151,7 +155,12 @@ def collision_box_violation(
     ranges = np.hypot(points[:, 0], points[:, 1])
     angles = np.degrees(np.arctan2(points[:, 1], points[:, 0]))
     indices = np.floor((angles + 180.0) / bin_size).astype(np.int64) % len(thresholds)
-    limits = thresholds[indices] - float(profile.get("noise_tolerance_m", 0.02))
+    noise_tolerance = float(profile.get("noise_tolerance_m", 0.02))
+    # Legacy profiles have no safety_margin_m. Default it to the tolerance so
+    # their displayed/calibrated envelope is the real trip line, rather than a
+    # hidden boundary 2cm inside it. An explicit larger margin stops earlier.
+    safety_margin = float(profile.get("safety_margin_m", noise_tolerance))
+    limits = thresholds[indices] + safety_margin - noise_tolerance
     violating = np.isfinite(limits) & np.isfinite(ranges) & (ranges >= 0.03) & (ranges < limits)
     if not np.any(violating):
         return None
