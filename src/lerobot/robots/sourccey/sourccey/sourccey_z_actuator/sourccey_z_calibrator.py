@@ -46,10 +46,9 @@ class SourcceyZCalibrator:
         self,
         actuator,  # SourcceyZActuator
         *,
-        # The actuator can pause briefly under load during a stroke. Require a
-        # longer stationary window so a mid-stroke hesitation is not mistaken
-        # for a mechanical endpoint.
-        stable_s: float = 10.0,
+        # Require continuous stability long enough to distinguish an endpoint
+        # from a brief mid-stroke hesitation without adding excessive dwell.
+        stable_s: float = 3.0,
         sample_hz: float = 30.0,
         stable_eps_pos: float = 1.0,
         stable_eps_raw: int = 2,
