@@ -32,7 +32,7 @@ implementations. Keep `sft_retry.py`: it provides the unambiguous
 
 ## Configure an SFT run
 
-Start with [`examples/training/sft_config.yaml`](../../../../../examples/training/sft_config.yaml):
+Start with [`configs/sft_recipes/example.yaml`](configs/sft_recipes/example.yaml):
 
 ```yaml
 policy:
@@ -90,14 +90,14 @@ logs remain aggregated under `local/corner-case-corrections`.
 For a normal run that exits if the process fails:
 
 ```bash
-uv run lerobot-sft --config_path=examples/training/sft_config.yaml
+uv run lerobot-sft --config_path=src/lerobot/scripts/sourccey/train/configs/sft_recipes/example.yaml
 ```
 
 CLI values can override the config when needed:
 
 ```bash
 uv run lerobot-sft \
-  --config_path=examples/training/sft_config.yaml \
+  --config_path=src/lerobot/scripts/sourccey/train/configs/sft_recipes/example.yaml \
   --steps=20000 \
   --output_dir=outputs/sft/corner-case-v2
 ```
@@ -113,7 +113,7 @@ Use this for long jobs where the process may be interrupted:
 uv run lerobot-sft-retry \
   --max-attempts=10 \
   --retry-delay-seconds=20 \
-  --config_path=examples/training/sft_config.yaml
+  --config_path=src/lerobot/scripts/sourccey/train/configs/sft_recipes/example.yaml
 ```
 
 The first attempt is the same SFT run described above. If it exits unsuccessfully,

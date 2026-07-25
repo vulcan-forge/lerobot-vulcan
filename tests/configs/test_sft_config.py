@@ -16,6 +16,7 @@ from pathlib import Path
 
 import draccus
 import pytest
+import yaml
 
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.scripts.sourccey.train.configs.sft import (
@@ -23,6 +24,18 @@ from lerobot.scripts.sourccey.train.configs.sft import (
     SFTDatasetSourceConfig,
     SFTPipelineConfig,
 )
+
+SFT_RECIPE_DIR = (
+    Path(__file__).parents[2] / "src" / "lerobot" / "scripts" / "sourccey" / "train" / "configs" / "sft_recipes"
+)
+
+
+@pytest.mark.parametrize("recipe_name", ["example.yaml", "shirt_fold_c_009.yaml"])
+def test_sft_recipes_are_valid_yaml(recipe_name: str) -> None:
+    recipe = yaml.safe_load((SFT_RECIPE_DIR / recipe_name).read_text(encoding="utf-8"))
+
+    assert recipe["policy"]["path"]
+    assert recipe["dataset"]["sources"]
 
 
 def test_sft_config_parses_weighted_sources_from_yaml(tmp_path: Path):
