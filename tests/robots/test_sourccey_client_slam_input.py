@@ -55,7 +55,7 @@ def test_z_teleop_uses_fast_rate_at_every_base_speed() -> None:
     assert [level["z"] for level in client.speed_levels] == [1.5, 1.5, 1.5]
 
 
-def test_z_teleop_freezes_target_after_one_release_sync(monkeypatch) -> None:
+def test_z_teleop_compensates_stale_observation_once_on_release(monkeypatch) -> None:
     client = _make_client()
     times = iter((10.05, 10.10, 10.15))
     client._last_cmd_t = 10.0
@@ -66,8 +66,21 @@ def test_z_teleop_freezes_target_after_one_release_sync(monkeypatch) -> None:
     idle = client._from_keyboard_to_base_action(np.array([]), z_obs_pos=0.5)
 
     assert moving["z.pos"] == pytest.approx(2.0)
-    assert released["z.pos"] == pytest.approx(1.25)
-    assert idle["z.pos"] == pytest.approx(1.25)
+    assert released["z.pos"] == pytest.approx(2.0)
+    assert idle["z.pos"] == pytest.approx(2.0)
+
+
+def test_z_release_compensation_is_bounded(monkeypatch) -> None:
+    client = _make_client()
+    client._z_pos_cmd_initialized = True
+    client._z_pos_cmd = 20.0
+    client._z_last_direction = 1.0
+    client._last_cmd_t = 10.0
+    monkeypatch.setattr(sourccey_client_module.time, "monotonic", lambda: 10.05)
+
+    action = client._from_keyboard_to_base_action(np.array([]), z_obs_pos=5.0)
+
+    assert action["z.pos"] == pytest.approx(6.0)
 
 
 def test_legacy_flat_slam_config_fields_still_work() -> None:

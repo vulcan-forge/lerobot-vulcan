@@ -187,6 +187,7 @@ class SourcceyClientConfig(RobotConfig):
     # Q/E position-target generation. Five seconds matches measured full travel.
     z_teleop_full_travel_s: float = 5.0
     z_teleop_max_target_step: float = 2.0
+    z_teleop_release_compensation: float = 1.0
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {
