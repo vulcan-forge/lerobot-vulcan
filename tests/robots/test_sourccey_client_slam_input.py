@@ -6,7 +6,9 @@ from unittest.mock import MagicMock
 
 import cv2
 import numpy as np
+import pytest
 
+import lerobot.robots.sourccey.sourccey.sourccey.sourccey_client as sourccey_client_module
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
 from lerobot.robots.sourccey.sourccey.sourccey.modules.slam.config import SlamInputConfig
 
@@ -24,6 +26,49 @@ def _make_client() -> SourcceyClient:
         ),
     )
     return SourcceyClient(config)
+
+
+def test_z_command_initializes_from_observation_instead_of_endpoint() -> None:
+    client = _make_client()
+
+    action = client._from_keyboard_to_base_action(np.array([], dtype=str), z_obs_pos=37.5)
+
+    assert client._z_pos_cmd_initialized is True
+    assert client._z_pos_cmd == 37.5
+    assert action["z.pos"] == 37.5
+
+
+def test_z_teleop_uses_precise_bounded_target_steps(monkeypatch) -> None:
+    client = _make_client()
+    client._last_cmd_t = 10.0
+    monkeypatch.setattr(sourccey_client_module.time, "monotonic", lambda: 10.25)
+
+    action = client._from_keyboard_to_base_action(np.array(["q"]), z_obs_pos=0.0)
+
+    # A delayed teleop frame is capped rather than producing a large target jump.
+    assert action["z.pos"] == pytest.approx(2.0)
+
+
+def test_z_teleop_uses_fixed_rate_at_every_base_speed() -> None:
+    client = _make_client()
+
+    assert [level["z"] for level in client.speed_levels] == [1.0, 1.0, 1.0]
+
+
+def test_z_teleop_freezes_target_on_release(monkeypatch) -> None:
+    client = _make_client()
+    times = iter((10.05, 10.10, 10.15))
+    client._last_cmd_t = 10.0
+    monkeypatch.setattr(sourccey_client_module.time, "monotonic", lambda: next(times))
+
+    moving = client._from_keyboard_to_base_action(np.array(["q"]), z_obs_pos=0.0)
+    released = client._from_keyboard_to_base_action(np.array([]), z_obs_pos=1.25)
+    idle = client._from_keyboard_to_base_action(np.array([]), z_obs_pos=0.5)
+
+    expected_step = (200.0 / 8.0) * 0.05
+    assert moving["z.pos"] == pytest.approx(expected_step)
+    assert released["z.pos"] == pytest.approx(expected_step)
+    assert idle["z.pos"] == pytest.approx(expected_step)
 
 
 def test_legacy_flat_slam_config_fields_still_work() -> None:

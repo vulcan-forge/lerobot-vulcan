@@ -1,3 +1,4 @@
+import contextlib
 import logging
 from typing import Any
 
@@ -47,22 +48,20 @@ class SourcceyProtobuf:
             base_action.theta_vel = float(action.get("theta.vel", 0.0))
             robot_action.base_target_velocity.CopyFrom(base_action)
 
-            # Missing z.pos should resolve to the lifted/default position.
-            base_pos = sourccey_pb2.BasePosition()
-            base_pos.z_pos = float(action.get("z.pos", 100.0))
-            robot_action.base_target_position.CopyFrom(base_pos)
+            # Preserve field presence: an omitted z.pos means "keep the current
+            # Z target" and must not become a numeric endpoint command.
+            if "z.pos" in action:
+                base_pos = sourccey_pb2.BasePosition()
+                base_pos.z_pos = float(action["z.pos"])
+                robot_action.base_target_position.CopyFrom(base_pos)
 
             # Per-arm flags
             if "untorque_left" in action:
-                try:
+                with contextlib.suppress(AttributeError):
                     robot_action.untorque_left = bool(action.get("untorque_left", False))
-                except AttributeError:
-                    pass
             if "untorque_right" in action:
-                try:
+                with contextlib.suppress(AttributeError):
                     robot_action.untorque_right = bool(action.get("untorque_right", False))
-                except AttributeError:
-                    pass
 
             return robot_action
 
@@ -162,8 +161,9 @@ class SourcceyProtobuf:
                 "theta.vel": base_vel.theta_vel,
             })
 
-            # Missing z.pos should resolve to the lifted/default position.
-            action["z.pos"] = action_msg.base_target_position.z_pos if action_msg.HasField("base_target_position") else 100.0
+            # Absence is meaningful: the host leaves its existing Z target alone.
+            if action_msg.HasField("base_target_position"):
+                action["z.pos"] = action_msg.base_target_position.z_pos
 
             # Per-arm flags from protobuf
             action["untorque_left"] = bool(getattr(action_msg, "untorque_left", False))

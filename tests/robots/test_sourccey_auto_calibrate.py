@@ -19,6 +19,7 @@ from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator 
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey import Sourccey
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import (
     SourcceyZActuator,
+    ZActuatorReading,
     ZSensor,
 )
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import (
@@ -42,6 +43,34 @@ class _DummyArm:
 
     def disconnect(self) -> None:
         self.is_connected = False
+
+
+def test_z_sensor_rejects_single_opposite_rail_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    sensor = ZSensor(average_samples=1, invert=False)
+    readings = iter((1023, 0, 1023))
+    monkeypatch.setattr(
+        sensor,
+        "read_raw",
+        lambda: ZActuatorReading(raw=next(readings), voltage=0.0),
+    )
+
+    assert sensor.read_position_m100_100() == pytest.approx(100.0)
+    assert sensor.read_position_m100_100() == pytest.approx(100.0)
+    assert sensor.read_position_m100_100() == pytest.approx(100.0)
+
+
+def test_z_sensor_accepts_confirmed_large_position_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    sensor = ZSensor(average_samples=1, invert=False)
+    readings = iter((1023, 0, 0))
+    monkeypatch.setattr(
+        sensor,
+        "read_raw",
+        lambda: ZActuatorReading(raw=next(readings), voltage=0.0),
+    )
+
+    assert sensor.read_position_m100_100() == pytest.approx(100.0)
+    assert sensor.read_position_m100_100() == pytest.approx(100.0)
+    assert sensor.read_position_m100_100() == pytest.approx(-100.0)
 
 
 class _DummyZCalibrator:
@@ -367,6 +396,66 @@ def test_sourccey_z_actuator_loads_valid_calibration_file(
     assert actuator.sensor.calibration_max == 876
     assert actuator.sensor.invert is False
     assert actuator.invert is False
+
+
+def test_z_controller_is_proportional_bounded_and_has_no_endpoint_boost(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setattr(z_actuator_module, "HF_LEROBOT_CALIBRATION", tmp_path)
+    actuator = SourcceyZActuator(sensor=ZSensor(), driver=_DummyDriver(), motor_invert=False)
+
+    assert actuator.compute_command(position=0.0, target=0.25) == 0.0
+    assert actuator.compute_command(position=0.0, target=2.0) == pytest.approx(0.86375)
+    assert actuator.compute_command(position=0.0, target=-2.0) == pytest.approx(-0.86375)
+    assert actuator.compute_command(position=0.0, target=100.0) == pytest.approx(1.0)
+    assert actuator.compute_command(position=95.0, target=100.0) == pytest.approx(0.96875)
+
+
+def test_z_controller_update_applies_motor_direction_inversion(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setattr(z_actuator_module, "HF_LEROBOT_CALIBRATION", tmp_path)
+    driver = _DummyDriver()
+    actuator = SourcceyZActuator(sensor=ZSensor(), driver=driver, motor_invert=True)
+    monkeypatch.setattr(actuator, "read_position", lambda: 0.0)
+    actuator.write_position(10.0)
+
+    position = actuator.update()
+
+    assert position == 0.0
+    assert driver.velocity_calls[-1] == ("linear_actuator", pytest.approx(-1.0), True, True)
+
+
+def test_z_controller_rejects_nonfinite_target(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr(z_actuator_module, "HF_LEROBOT_CALIBRATION", tmp_path)
+    actuator = SourcceyZActuator(sensor=ZSensor())
+
+    with pytest.raises(ValueError, match="must be finite"):
+        actuator.write_position(float("nan"))
+
+
+def test_z_controller_stops_after_crossing_target_until_target_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setattr(z_actuator_module, "HF_LEROBOT_CALIBRATION", tmp_path)
+    driver = _DummyDriver()
+    actuator = SourcceyZActuator(sensor=ZSensor(), driver=driver, motor_invert=False)
+    positions = iter((0.0, 11.0, 11.0, 11.0))
+    monkeypatch.setattr(actuator, "read_position", lambda: next(positions))
+    actuator.write_position(10.0)
+
+    actuator.update()
+    actuator.update()
+    actuator.update()
+
+    assert driver.velocity_calls[-3][1] > 0.0
+    assert driver.velocity_calls[-2][1] == 0.0
+    assert driver.velocity_calls[-1][1] == 0.0
+
+    actuator.write_position(-10.0)
+    actuator.update()
+
+    assert driver.velocity_calls[-1][1] < 0.0
 
 
 @pytest.mark.parametrize(

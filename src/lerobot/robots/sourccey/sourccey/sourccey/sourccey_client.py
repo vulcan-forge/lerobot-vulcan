@@ -83,9 +83,9 @@ class SourcceyClient(Robot):
 
         # Define three speed levels and a current index
         self.speed_levels = [
-            {"x": 0.8,  "y": 0.8,  "z": 1.0, "theta": 0.8},   # slow
-            {"x": 0.9, "y": 0.9, "z": 1.0, "theta": 0.9},  # medium
-            {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # fast
+            {"x": 0.8, "y": 0.8, "z": 1.0, "theta": 0.8},
+            {"x": 0.9, "y": 0.9, "z": 1.0, "theta": 0.9},
+            {"x": 1.0, "y": 1.0, "z": 1.0, "theta": 1.0},
         ]
         self.speed_index = 1  # Start at medium speed (0.9)
 
@@ -117,14 +117,17 @@ class SourcceyClient(Robot):
         self._y_cmd_smoothed = 0.0
 
         # Z Position Control
-        # You measured ~5s for z to go from +100 to -100 units (200-unit travel).
+        # Z uses a fixed 25 position units/s at every base speed level.
         self._z_min = -100.0
         self._z_max = 100.0
-        self._z_full_travel_s = 1.0
+        self._z_full_travel_s = max(0.1, float(config.z_teleop_full_travel_s))
         self._z_units_per_s = (self._z_max - self._z_min) / self._z_full_travel_s
+        self._z_max_target_step = max(0.1, float(config.z_teleop_max_target_step))
 
-        # Stored target position (what we "expect" z to be at while holding keys).
-        self._z_pos_cmd = 100.0
+        # Stored target position. It is initialized from the first remote sensor
+        # observation instead of assuming the actuator starts at +100.
+        self._z_pos_cmd = 0.0
+        self._z_pos_cmd_initialized = False
 
         # Log-throttle repeated poll timeouts to avoid terminal spam in teleop loops.
         self._no_data_log_interval_s = self.no_data_log_interval_s
@@ -587,11 +590,21 @@ class SourcceyClient(Robot):
         # If we cap dt to 1/30 while the loop runs slower (e.g., due to camera/network load),
         # z.pos changes become tiny and it can take ~seconds before the actuator deadband is exceeded.
         # We already cap dt above with `slew_time_s`, so using dt here is safe and makes Z feel immediate.
-        z_rate = float(self._z_units_per_s)
-        self._z_pos_cmd = float(np.clip(self._z_pos_cmd + (z_dir * z_rate * dt), self._z_min, self._z_max))
-
-        if z_obs_pos is not None and z_dir == 0.0:
+        valid_z_obs = (
+            z_obs_pos is not None
+            and np.isfinite(z_obs_pos)
+            and self._z_min <= float(z_obs_pos) <= self._z_max
+        )
+        if valid_z_obs and not self._z_pos_cmd_initialized:
             self._z_pos_cmd = float(z_obs_pos)
+            self._z_pos_cmd_initialized = True
+
+        if z_dir != 0.0:
+            requested_step = z_dir * float(self._z_units_per_s) * dt
+            z_step = float(np.clip(requested_step, -self._z_max_target_step, self._z_max_target_step))
+            self._z_pos_cmd = float(np.clip(self._z_pos_cmd + z_step, self._z_min, self._z_max))
+        # With neither key held, freeze the existing target. In particular, do
+        # not replace it with a delayed network observation on key release.
 
         if abs(self._x_cmd_smoothed) >= self._x_deadbane:
             # already moving -> smooth changes
