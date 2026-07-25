@@ -83,8 +83,8 @@ class SourcceyClient(Robot):
 
         # Define three speed levels and a current index
         self.speed_levels = [
-            {"x": 0.8, "y": 0.8, "z": 0.5, "theta": 0.8},  # slow
-            {"x": 0.9, "y": 0.9, "z": 1.0, "theta": 0.9},  # medium
+            {"x": 0.8, "y": 0.8, "z": 1.5, "theta": 0.8},  # slow base, fast Z
+            {"x": 0.9, "y": 0.9, "z": 1.5, "theta": 0.9},  # medium base, fast Z
             {"x": 1.0, "y": 1.0, "z": 1.5, "theta": 1.0},  # fast
         ]
         self.speed_index = 1  # Start at medium speed (0.9)
@@ -117,8 +117,8 @@ class SourcceyClient(Robot):
         self._y_cmd_smoothed = 0.0
 
         # Z Position Control
-        # Match target motion to the measured actuator travel time. At medium
-        # speed this is 40 position units/s, or roughly five seconds end-to-end.
+        # Base rate is 40 position units/s. Z uses a fixed 1.5 multiplier at
+        # every speed level, yielding 60 units/s regardless of base speed.
         self._z_min = -100.0
         self._z_max = 100.0
         self._z_full_travel_s = max(0.1, float(config.z_teleop_full_travel_s))

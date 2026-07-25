@@ -228,7 +228,7 @@ class SourcceyZActuator:
         proportional_gain: float = 0.025,
         minimum_up_command: float = 0.30,
         minimum_down_command: float = 0.30,
-        maximum_command: float = 0.85,
+        maximum_command: float = 1.0,
         position_deadband: float = 1.0,
         control_hz: float = 50.0,
     ) -> None:

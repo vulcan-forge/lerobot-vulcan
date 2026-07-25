@@ -14,7 +14,7 @@ Grab a shirt from the pile, fold it, then place the folded shirt to the side.
 uv run lerobot-teleoperate \
  --robot.type=sourccey_client \
  --robot.id="sourccey" \
- --robot.remote_ip="192.168.1.242" \
+ --robot.remote_ip="192.168.1.213" \
  --teleop.type=bi_sourccey_leader \
  --teleop.id="sourccey_leader" \
  --teleop.left_arm_port="/dev/ttyACM0" \
@@ -232,7 +232,7 @@ CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --policy.florence_cache_path="outputs/cache/xvla-light-c-009-florence.sqlite"
 ```
 
-# Resume 
+# Resume
 CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
   --max-attempts=30 \
   --retry-delay-seconds=20 \

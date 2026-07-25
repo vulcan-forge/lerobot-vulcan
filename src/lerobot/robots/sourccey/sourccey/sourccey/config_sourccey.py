@@ -117,7 +117,7 @@ class SourcceyConfig(RobotConfig):
     z_proportional_gain: float = 0.025
     z_minimum_up_command: float = 0.30
     z_minimum_down_command: float = 0.30
-    z_maximum_command: float = 0.85
+    z_maximum_command: float = 1.0
     z_position_deadband: float = 1.0
     z_control_hz: float = 50.0
 

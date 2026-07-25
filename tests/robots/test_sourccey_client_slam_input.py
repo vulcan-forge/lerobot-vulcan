@@ -49,6 +49,12 @@ def test_z_teleop_uses_precise_bounded_target_steps(monkeypatch) -> None:
     assert action["z.pos"] == pytest.approx(2.0)
 
 
+def test_z_teleop_uses_fast_rate_at_every_base_speed() -> None:
+    client = _make_client()
+
+    assert [level["z"] for level in client.speed_levels] == [1.5, 1.5, 1.5]
+
+
 def test_z_teleop_freezes_target_after_one_release_sync(monkeypatch) -> None:
     client = _make_client()
     times = iter((10.05, 10.10, 10.15))

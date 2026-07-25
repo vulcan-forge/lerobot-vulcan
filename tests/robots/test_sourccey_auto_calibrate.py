@@ -407,7 +407,7 @@ def test_z_controller_is_proportional_bounded_and_has_no_endpoint_boost(
     assert actuator.compute_command(position=0.0, target=0.5) == 0.0
     assert actuator.compute_command(position=0.0, target=2.0) == pytest.approx(0.325)
     assert actuator.compute_command(position=0.0, target=-2.0) == pytest.approx(-0.325)
-    assert actuator.compute_command(position=0.0, target=100.0) == pytest.approx(0.85)
+    assert actuator.compute_command(position=0.0, target=100.0) == pytest.approx(1.0)
     assert actuator.compute_command(position=95.0, target=100.0) == pytest.approx(0.40)
 
 
