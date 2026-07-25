@@ -226,10 +226,10 @@ class SourcceyZActuator:
         motor: str | int = "linear_actuator",
         motor_invert: bool = True,
         proportional_gain: float = 0.035,
-        minimum_up_command: float = 0.55,
-        minimum_down_command: float = 0.55,
+        minimum_up_command: float = 0.82,
+        minimum_down_command: float = 0.82,
         maximum_command: float = 1.0,
-        position_deadband: float = 0.5,
+        position_deadband: float = 0.75,
         control_hz: float = 50.0,
     ) -> None:
 

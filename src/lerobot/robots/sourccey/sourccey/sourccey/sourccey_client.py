@@ -117,7 +117,7 @@ class SourcceyClient(Robot):
         self._y_cmd_smoothed = 0.0
 
         # Z Position Control
-        # Z uses a fixed ~31 position units/s at every base speed level.
+        # Z uses a fixed 25 position units/s at every base speed level.
         self._z_min = -100.0
         self._z_max = 100.0
         self._z_full_travel_s = max(0.1, float(config.z_teleop_full_travel_s))
