@@ -163,6 +163,7 @@ def run_training(
     cfg: TrainPipelineConfig,
     accelerator: "Accelerator | None" = None,
     dataset_factory: Callable[[Any], Any] = make_dataset,
+    policy_setup: Callable[[Any, Any], Any] | None = None,
 ):
     """
     Main function to train a policy.
@@ -275,6 +276,8 @@ def run_training(
             ds_meta=dataset.meta,
             rename_map=cfg.rename_map,
         )
+        if policy_setup is not None:
+            policy = policy_setup(policy, cfg)
 
     if cfg.peft is not None:
         if cfg.is_reward_model_training:
@@ -405,8 +408,7 @@ def run_training(
     # create dataloader for offline training
     if hasattr(dataset, "make_sampler"):
         shuffle = False
-        drop_n_last_frames = getattr(active_cfg, "drop_n_last_frames", 0) or 0
-        sampler = dataset.make_sampler(drop_n_last_frames=drop_n_last_frames)
+        sampler = dataset.make_sampler()
         if is_main_process:
             normalized_weights = torch.tensor(dataset.weights, dtype=torch.float64)
             normalized_weights /= normalized_weights.sum()
@@ -687,4 +689,3 @@ def run_training(
     # Properly clean up the distributed process group
     accelerator.wait_for_everyone()
     accelerator.end_training()
-

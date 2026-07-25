@@ -11,6 +11,9 @@ dataset:
       weight: 0.7
     - repo_id: your-org/corner-case-corrections
       weight: 0.3
+      # For a local folder containing multiple LeRobot datasets, set root to
+      # the parent and uncomment the next line.
+      # subdataset_glob: "*"
 
 # Policy preset parameter groups are retained while their base learning rate
 # is reduced by this factor for fine-tuning.

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -19,9 +20,11 @@ import torch
 
 from lerobot.scripts.sourccey.train.configs.sft import SFTDatasetConfig, SFTDatasetSourceConfig
 from lerobot.scripts.sourccey.train.datasets.sft import (
+    SFT_MASK_PADDED_ACTIONS,
     SFT_SOURCE_INDEX,
     SFTMixtureDataset,
     SFTMixtureSampler,
+    _resolve_source,
 )
 
 
@@ -57,6 +60,31 @@ def test_sft_dataset_config_validates_sources():
                 SFTDatasetSourceConfig(repo_id="org/data"),
             ]
         )
+    with pytest.raises(ValueError, match="requires root"):
+        SFTDatasetSourceConfig(
+            repo_id="org/corrections",
+            subdataset_glob="*",
+        )
+
+
+def test_sft_source_discovers_local_subdatasets(tmp_path):
+    for name in ["set-b", "set-a"]:
+        (tmp_path / name / "meta").mkdir(parents=True)
+        (tmp_path / name / "meta" / "info.json").touch()
+    (tmp_path / "not-a-dataset").mkdir()
+
+    source = SFTDatasetSourceConfig(
+        repo_id="local/corrections",
+        root=str(tmp_path),
+        subdataset_glob="*",
+        weight=0.25,
+    )
+
+    resolved = _resolve_source(source, source_index=1)
+
+    assert [Path(item.root).name for item in resolved] == ["set-a", "set-b"]
+    assert [item.source_index for item in resolved] == [1, 1]
+    assert [item.weight for item in resolved] == pytest.approx([0.25, 0.25])
 
 
 def test_sft_mixture_sampler_respects_source_weights():
@@ -70,12 +98,15 @@ def test_sft_mixture_sampler_respects_source_weights():
     assert base_fraction == pytest.approx(0.7, abs=0.015)
 
 
-def test_sft_mixture_sampler_drops_episode_tails():
+def test_sft_mixture_sampler_visits_every_source_frame_before_repeating():
     torch.manual_seed(123)
-    dataset = _FakeDataset("org/base", [5, 4])
-    sampler = SFTMixtureSampler([dataset], weights=[1.0], num_samples=1_000, drop_n_last_frames=2)
+    dataset = _FakeDataset("org/corrections", [3, 2])
+    sampler = SFTMixtureSampler([dataset], weights=[1.0], num_samples=10)
 
-    assert set(sampler).issubset({0, 1, 2, 5, 6})
+    samples = list(sampler)
+
+    assert set(samples[:5]) == set(range(5))
+    assert set(samples[5:]) == set(range(5))
 
 
 def test_sft_mixture_dataset_adds_source_index():
@@ -86,3 +117,33 @@ def test_sft_mixture_dataset_adds_source_index():
     assert mixture.num_episodes == 2
     assert mixture[0][SFT_SOURCE_INDEX].item() == 0
     assert mixture[2][SFT_SOURCE_INDEX].item() == 1
+    assert mixture.weights == pytest.approx([0.8, 0.2])
+
+
+def test_sft_mixture_dataset_opt_in_adds_padding_mask_flag():
+    mixture = SFTMixtureDataset(
+        [_FakeDataset("org/base", [2])],
+        weights=[1.0],
+        mask_padded_actions=True,
+    )
+
+    assert mixture[0][SFT_MASK_PADDED_ACTIONS].item() is True
+
+
+def test_sft_mixture_dataset_aggregates_child_dataset_source_indices():
+    datasets = [
+        _FakeDataset("org/base", [2]),
+        _FakeDataset("local/corrections/a", [3]),
+        _FakeDataset("local/corrections/b", [4]),
+    ]
+    mixture = SFTMixtureDataset(
+        datasets,
+        weights=[0.75, 0.1, 0.15],
+        source_names=["org/base", "local/corrections"],
+        dataset_source_indices=[0, 1, 1],
+    )
+
+    assert mixture[0][SFT_SOURCE_INDEX].item() == 0
+    assert mixture[2][SFT_SOURCE_INDEX].item() == 1
+    assert mixture[5][SFT_SOURCE_INDEX].item() == 1
+    assert mixture.weights == pytest.approx([0.75, 0.25])
