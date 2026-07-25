@@ -32,11 +32,24 @@ def load_calibration(path: Path) -> tuple[int, int, bool]:
     return raw_min, raw_max, invert
 
 
-def classify_reading(raw: int, position: float, previous_position: float | None) -> str:
+def classify_reading(
+    raw: int,
+    position: float,
+    previous_position: float | None,
+    *,
+    calibration_min: int = 0,
+    calibration_max: int = 1023,
+) -> str:
     """Flag electrical rail readings and physically implausible one-sample jumps."""
     warnings: list[str] = []
     if raw <= 2 or raw >= 1021:
         warnings.append("ADC_RAIL")
+    calibrated_low = min(calibration_min, calibration_max)
+    calibrated_high = max(calibration_min, calibration_max)
+    if raw < calibrated_low:
+        warnings.append("BELOW_CAL_MIN")
+    elif raw > calibrated_high:
+        warnings.append("ABOVE_CAL_MAX")
     if previous_position is not None and abs(position - previous_position) > 40.0:
         warnings.append("LARGE_JUMP")
     return ",".join(warnings) if warnings else "OK"
@@ -105,11 +118,18 @@ def main() -> None:
     )
     sensor.set_calibration(raw_min=raw_min, raw_max=raw_max, invert=invert)
 
+    raw_midpoint = (raw_min + raw_max) / 2.0
+    min_position = sensor.raw_to_pos_m100_100(raw_min)
+    max_position = sensor.raw_to_pos_m100_100(raw_max)
+
     print("Sourccey Z potentiometer monitor (read-only; actuator output is not touched)")
-    print(
-        f"channel={args.channel} samples={args.samples} calibration={calibration_source} "
-        f"raw_min={raw_min} raw_max={raw_max} invert={invert}"
-    )
+    print("CALIBRATION")
+    print(f"  file:         {calibration_source}")
+    print(f"  raw min:      {raw_min:7d} -> z.pos {min_position:+7.2f}")
+    print(f"  raw midpoint: {raw_midpoint:7.1f} -> z.pos   +0.00")
+    print(f"  raw max:      {raw_max:7d} -> z.pos {max_position:+7.2f}")
+    print(f"  inverted:     {invert}")
+    print(f"ADC SETTINGS: channel={args.channel} vref={args.vref:.2f}V samples={args.samples}")
     print("time                 raw  voltage    z.pos    delta  status")
 
     previous_position: float | None = None
@@ -120,7 +140,13 @@ def main() -> None:
             reading = sensor.read_raw()
             position = sensor.raw_to_pos_m100_100(reading.raw)
             delta = math.nan if previous_position is None else position - previous_position
-            status = classify_reading(reading.raw, position, previous_position)
+            status = classify_reading(
+                reading.raw,
+                position,
+                previous_position,
+                calibration_min=raw_min,
+                calibration_max=raw_max,
+            )
             delta_text = "   ---" if math.isnan(delta) else f"{delta:+7.2f}"
             print(
                 f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {reading.raw:4d}  "

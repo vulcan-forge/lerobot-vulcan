@@ -37,3 +37,14 @@ def test_load_calibration_rejects_zero_range(tmp_path) -> None:
 )
 def test_classify_reading(raw: int, position: float, previous: float | None, expected: str) -> None:
     assert classify_reading(raw, position, previous) == expected
+
+
+def test_classify_reading_flags_values_outside_calibration() -> None:
+    assert (
+        classify_reading(2, 100.0, None, calibration_min=543, calibration_max=1021)
+        == "ADC_RAIL,BELOW_CAL_MIN"
+    )
+    assert (
+        classify_reading(1000, -90.0, None, calibration_min=543, calibration_max=900)
+        == "ABOVE_CAL_MAX"
+    )
