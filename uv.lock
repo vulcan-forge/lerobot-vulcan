@@ -2887,6 +2887,12 @@ sarm = [
 scipy-dep = [
     { name = "scipy" },
 ]
+siva = [
+    { name = "transformers" },
+]
+siva2 = [
+    { name = "transformers" },
+]
 smolvla = [
     { name = "accelerate" },
     { name = "num2words" },
@@ -3162,6 +3168,8 @@ requires-dist = [
     { name = "lerobot", extras = ["scipy-dep"], marker = "extra == 'phone'" },
     { name = "lerobot", extras = ["scipy-dep"], marker = "extra == 'pi'" },
     { name = "lerobot", extras = ["scipy-dep"], marker = "extra == 'wallx'" },
+    { name = "lerobot", extras = ["siva"], marker = "extra == 'all'" },
+    { name = "lerobot", extras = ["siva2"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["smolvla"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["sourccey"], marker = "extra == 'sourccey-desktop'" },
     { name = "lerobot", extras = ["test"], marker = "extra == 'all'" },
@@ -3178,6 +3186,8 @@ requires-dist = [
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'pi'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'robometer'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'sarm'" },
+    { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'siva'" },
+    { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'siva2'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'smolvla'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'topreward'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'vla-jepa'" },
@@ -3264,7 +3274,7 @@ requires-dist = [
     { name = "vosk", marker = "sys_platform != 'darwin' and sys_platform != 'win32' and extra == 'sourccey'", specifier = ">=0.3.45" },
     { name = "wandb", marker = "extra == 'training'", specifier = ">=0.24.0,<0.25.0" },
 ]
-provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "transformers-dep", "grpcio-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "motorbridge-dep", "motorbridge-smart-servo-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "sourccey", "sourccey-desktop", "rebot", "kinematics", "intelrealsense", "phone", "diffusion", "wallx", "pi", "molmoact2", "smolvla", "multi-task-dit", "groot", "sarm", "robometer", "topreward", "xvla", "eo1", "hilserl", "vla-jepa", "async", "peft", "dev", "notebook", "test", "video-benchmark", "mujoco-dep", "aloha", "pusht", "libero", "metaworld", "all"]
+provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "transformers-dep", "grpcio-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "motorbridge-dep", "motorbridge-smart-servo-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "sourccey", "sourccey-desktop", "rebot", "kinematics", "intelrealsense", "phone", "diffusion", "wallx", "pi", "molmoact2", "smolvla", "multi-task-dit", "groot", "sarm", "robometer", "topreward", "xvla", "siva", "siva2", "eo1", "hilserl", "vla-jepa", "async", "peft", "dev", "notebook", "test", "video-benchmark", "mujoco-dep", "aloha", "pusht", "libero", "metaworld", "all"]
 
 [[package]]
 name = "lgpio"

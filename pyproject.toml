@@ -260,6 +260,8 @@ sarm = ["lerobot[transformers-dep]", "pydantic>=2.0.0,<3.0.0", "faker>=33.0.0,<3
 robometer = ["lerobot[transformers-dep]", "lerobot[qwen-vl-utils-dep]", "lerobot[peft-dep]"]
 topreward = ["lerobot[transformers-dep]"]
 xvla = ["lerobot[transformers-dep]"]
+siva = ["lerobot[transformers-dep]"]
+siva2 = ["lerobot[transformers-dep]"]
 eo1 = ["lerobot[transformers-dep]", "lerobot[qwen-vl-utils-dep]"]
 hilserl = ["lerobot[transformers-dep]", "lerobot[dataset]", "gym-hil>=0.1.13,<0.2.0", "lerobot[grpcio-dep]", "lerobot[placo-dep]", "lerobot[mujoco-dep]"]
 vla_jepa = ["lerobot[transformers-dep]", "lerobot[diffusers-dep]", "lerobot[qwen-vl-utils-dep]"]
@@ -328,6 +330,8 @@ all = [
     "lerobot[smolvla]",
     # "lerobot[groot]", TODO(Steven): Gr00t requires specific installation instructions for flash-attn
     "lerobot[xvla]",
+    "lerobot[siva]",
+    "lerobot[siva2]",
     "lerobot[hilserl]",
     "lerobot[vla_jepa]",
     "lerobot[async]",
@@ -364,6 +368,8 @@ lerobot-sft-retry="lerobot.scripts.sourccey.train.sft_retry:main"
 sourccey-pretrain="lerobot.scripts.sourccey.train.pretrain:main"
 lerobot-convert-xvla-light="lerobot.policies.xvla_light.convert_checkpoint:main"
 lerobot-convert-xvla-extra-light="lerobot.policies.xvla_extra_light.convert_checkpoint:main"
+lerobot-convert-xvla-to-siva="lerobot.policies.siva.convert_checkpoint:main"
+lerobot-convert-xvla-to-siva2="lerobot.policies.siva2.convert_checkpoint:main"
 lerobot-train-tokenizer="lerobot.scripts.lerobot_train_tokenizer:main"
 lerobot-dataset-viz="lerobot.scripts.lerobot_dataset_viz:main"
 lerobot-info="lerobot.scripts.lerobot_info:main"

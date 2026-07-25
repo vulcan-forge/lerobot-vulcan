@@ -54,6 +54,8 @@ from .multi_task_dit.configuration_multi_task_dit import MultiTaskDiTConfig
 from .pi0.configuration_pi0 import PI0Config
 from .pi05.configuration_pi05 import PI05Config
 from .pretrained import PreTrainedPolicy
+from .siva.configuration_siva import SIVAConfig
+from .siva2.configuration_siva2 import SIVA2Config
 from .smolvla.configuration_smolvla import SmolVLAConfig
 from .tdmpc.configuration_tdmpc import TDMPCConfig
 from .utils import validate_visual_features_consistency
@@ -92,8 +94,8 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
 
     Args:
         name: The name of the policy. Supported names are "tdmpc", "diffusion", "act",
-            "multi_task_dit", "vqbet", "pi0", "pi05", "gaussian_actor", "smolvla", "wall_x",
-            "molmoact2".
+            "multi_task_dit", "vqbet", "pi0", "pi05", "gaussian_actor", "siva", "siva2", "smolvla",
+            "wall_x", "molmoact2".
     Returns:
         The policy class corresponding to the given name.
 
@@ -144,6 +146,14 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from .groot.modeling_groot import GrootPolicy
 
         return GrootPolicy
+    elif name == "siva":
+        from .siva.modeling_siva import SIVAPolicy
+
+        return SIVAPolicy
+    elif name == "siva2":
+        from .siva2.modeling_siva2 import SIVA2Policy
+
+        return SIVA2Policy
     elif name == "xvla":
         from .xvla.modeling_xvla import XVLAPolicy
 
@@ -189,7 +199,7 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
     Args:
         policy_type: The type of the policy. Supported types include "tdmpc",
                      "multi_task_dit", "diffusion", "act", "vqbet", "pi0", "pi05", "gaussian_actor",
-                     "smolvla", "wall_x", "molmoact2".
+                     "siva", "siva2", "smolvla", "wall_x", "molmoact2".
         **kwargs: Keyword arguments to be passed to the configuration class constructor.
 
     Returns:
@@ -218,6 +228,10 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return SmolVLAConfig(**kwargs)
     elif policy_type == "groot":
         return GrootConfig(**kwargs)
+    elif policy_type == "siva":
+        return SIVAConfig(**kwargs)
+    elif policy_type == "siva2":
+        return SIVA2Config(**kwargs)
     elif policy_type == "xvla":
         return XVLAConfig(**kwargs)
     elif policy_type == "xvla_light":
@@ -419,6 +433,22 @@ def make_pre_post_processors(
         from .groot.processor_groot import make_groot_pre_post_processors
 
         processors = make_groot_pre_post_processors(
+            config=policy_cfg,
+            dataset_stats=kwargs.get("dataset_stats"),
+        )
+
+    elif isinstance(policy_cfg, SIVA2Config):
+        from .siva2.processor_siva2 import make_siva2_pre_post_processors
+
+        processors = make_siva2_pre_post_processors(
+            config=policy_cfg,
+            dataset_stats=kwargs.get("dataset_stats"),
+        )
+
+    elif isinstance(policy_cfg, SIVAConfig):
+        from .siva.processor_siva import make_siva_pre_post_processors
+
+        processors = make_siva_pre_post_processors(
             config=policy_cfg,
             dataset_stats=kwargs.get("dataset_stats"),
         )
