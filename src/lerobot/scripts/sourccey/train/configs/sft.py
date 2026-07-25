@@ -14,6 +14,7 @@
 
 """Configuration for supervised fine-tuning from a pretrained policy."""
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,14 +30,27 @@ class SFTDatasetSourceConfig:
     repo_id: str
     weight: float = 1.0
     root: str | None = None
+    subdataset_glob: str | None = None
     episodes: list[int] | None = None
     revision: str | None = None
 
     def __post_init__(self) -> None:
         if not self.repo_id:
             raise ValueError("SFT dataset repo_id must not be empty.")
-        if self.weight <= 0:
+        if not math.isfinite(self.weight) or self.weight <= 0:
             raise ValueError(f"SFT dataset weight must be > 0, got {self.weight} for {self.repo_id}.")
+        if self.subdataset_glob is not None:
+            if not self.subdataset_glob:
+                raise ValueError("subdataset_glob must not be empty when provided.")
+            if self.root is None:
+                raise ValueError(f"SFT source {self.repo_id} requires root when subdataset_glob is provided.")
+            if Path(self.subdataset_glob).is_absolute():
+                raise ValueError("subdataset_glob must be relative to the source root.")
+            if self.episodes is not None:
+                raise ValueError(
+                    f"SFT source {self.repo_id} cannot select episodes across subdatasets. "
+                    "List the subdatasets as individual sources when episode filtering is required."
+                )
         if self.episodes is not None:
             if any(episode < 0 for episode in self.episodes):
                 raise ValueError(f"Episode indices must be non-negative, got {self.episodes}.")
@@ -53,6 +67,7 @@ class SFTDatasetConfig:
     image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)
     video_backend: str = field(default_factory=get_safe_default_video_backend)
     samples_per_epoch: int | None = None
+    mask_padded_actions: bool = False
     streaming: bool = False
 
     def __post_init__(self) -> None:

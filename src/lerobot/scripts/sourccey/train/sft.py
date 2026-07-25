@@ -26,13 +26,19 @@ from lerobot.utils.import_utils import register_third_party_plugins
 
 from .configs.sft import SFTPipelineConfig
 from .datasets.sft import make_sft_dataset
+from .sft_xvla import enable_sft_xvla_padding_mask
 from .trainer import run_training
 
 
 @parser.wrap()
 def sft(cfg: SFTPipelineConfig, accelerator: "Accelerator | None" = None):
     """Run behavior-cloning SFT with fresh optimizer state from a pretrained policy."""
-    return run_training(cfg, accelerator=accelerator, dataset_factory=make_sft_dataset)
+    return run_training(
+        cfg,
+        accelerator=accelerator,
+        dataset_factory=make_sft_dataset,
+        policy_setup=enable_sft_xvla_padding_mask,
+    )
 
 
 def main():

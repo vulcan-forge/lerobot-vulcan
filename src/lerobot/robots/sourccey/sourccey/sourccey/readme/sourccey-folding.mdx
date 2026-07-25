@@ -14,11 +14,11 @@ Grab a shirt from the pile, fold it, then place the folded shirt to the side.
 uv run lerobot-teleoperate \
  --robot.type=sourccey_client \
  --robot.id="sourccey" \
- --robot.remote_ip="192.168.1.95" \
+ --robot.remote_ip="192.168.1.242" \
  --teleop.type=bi_sourccey_leader \
  --teleop.id="sourccey_leader" \
- --teleop.left_arm_port="COM4" \
- --teleop.right_arm_port="COM3" \
+ --teleop.left_arm_port="/dev/ttyACM0" \
+ --teleop.right_arm_port="/dev/ttyACM1" \
  --teleop_keyboard.type=keyboard \
  --teleop_keyboard.id="sourccey_keyboard" \
  --fps=30 \
@@ -36,11 +36,11 @@ uv run lerobot-record \
  --teleop.right_arm_port="/dev/ttyACM1" \
  --teleop_keyboard.type=keyboard \
  --teleop_keyboard.id="sourccey_keyboard" \
- --dataset.repo_id="sourccey-013/nickm/sourccey-013__pile-shirt-fold-a/sourccey-013__pile-shirt-fold-a__red__set040__nickm" \
- --dataset.num_episodes=5 \
+ --dataset.repo_id="sourccey-013/nickm/sourccey-013__shirt-fold-c-sft-001/sourccey-013__shirt-fold-c-sft__set012__nickm" \
+ --dataset.num_episodes=50 \
  --dataset.episode_time_s=300 \
- --dataset.reset_time_s=5 \
- --dataset.single_task="Grab a shirt from the pile, fold it, then place the folded shirt to the side." \
+ --dataset.reset_time_s=15 \
+ --dataset.single_task="Fold the shirt" \
  --dataset.fps=30 \
  --display_data=true \
  --dataset.push_to_hub=false

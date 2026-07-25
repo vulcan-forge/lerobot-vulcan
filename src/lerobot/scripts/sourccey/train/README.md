@@ -70,6 +70,21 @@ weights only need to be positive; the sampler normalizes them.
 Each source may also specify `root`, `revision`, or an `episodes` list. Set
 `dataset.samples_per_epoch` when you want an explicit mixture epoch size.
 
+When one local directory contains multiple separately recorded LeRobot
+datasets, point `root` at the parent and set `subdataset_glob`:
+
+```yaml
+- repo_id: local/corner-case-corrections
+  root: /path/to/correction-datasets
+  subdataset_glob: "*"
+  weight: 0.3
+```
+
+Every matching child with `meta/info.json` is loaded. The source's total
+sampling share is divided among children in proportion to their frame counts,
+so the result is uniform frame sampling across the collection. Source-fraction
+logs remain aggregated under `local/corner-case-corrections`.
+
 ## Run SFT
 
 For a normal run that exits if the process fails:

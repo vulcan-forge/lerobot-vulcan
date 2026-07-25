@@ -17,6 +17,8 @@
 import logging
 from bisect import bisect_right
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -25,13 +27,87 @@ from torch.utils.data import Dataset, Sampler
 from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 from lerobot.datasets.factory import resolve_delta_timestamps
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.scripts.sourccey.train.configs.sft import SFTPipelineConfig
+from lerobot.scripts.sourccey.train.configs.sft import SFTDatasetSourceConfig, SFTPipelineConfig
 from lerobot.transforms import ImageTransforms
 from lerobot.utils.constants import ACTION, OBS_PREFIX
 
 logger = logging.getLogger(__name__)
 
 SFT_SOURCE_INDEX = "sft_source_index"
+SFT_MASK_PADDED_ACTIONS = "sft_mask_padded_actions"
+
+
+@dataclass(frozen=True)
+class _ResolvedSFTSource:
+    """One concrete LeRobot dataset belonging to a configured logical source."""
+
+    source_index: int
+    source_name: str
+    repo_id: str
+    weight: float
+    root: str | None
+    episodes: list[int] | None
+    revision: str | None
+
+
+def _resolve_source(
+    source: SFTDatasetSourceConfig,
+    source_index: int,
+) -> list[_ResolvedSFTSource]:
+    if source.subdataset_glob is None:
+        return [
+            _ResolvedSFTSource(
+                source_index=source_index,
+                source_name=source.repo_id,
+                repo_id=source.repo_id,
+                weight=source.weight,
+                root=source.root,
+                episodes=source.episodes,
+                revision=source.revision,
+            )
+        ]
+
+    root = Path(source.root).expanduser()  # type: ignore[arg-type]
+    if not root.is_dir():
+        raise FileNotFoundError(f"SFT subdataset root does not exist or is not a directory: {root}")
+
+    child_roots = sorted(
+        path
+        for path in root.glob(source.subdataset_glob)
+        if path.is_dir() and (path / "meta" / "info.json").is_file()
+    )
+    if not child_roots:
+        raise FileNotFoundError(
+            f"SFT source {source.repo_id} found no LeRobot datasets under {root} "
+            f"matching {source.subdataset_glob!r}."
+        )
+
+    logger.info(
+        "Discovered %d LeRobot subdatasets for SFT source %s under %s.",
+        len(child_roots),
+        source.repo_id,
+        root,
+    )
+    return [
+        _ResolvedSFTSource(
+            source_index=source_index,
+            source_name=source.repo_id,
+            repo_id=f"{source.repo_id}/{child_root.relative_to(root).as_posix()}",
+            weight=source.weight,
+            root=str(child_root),
+            episodes=None,
+            revision=source.revision,
+        )
+        for child_root in child_roots
+    ]
+
+
+def _resolve_sources(cfg: SFTPipelineConfig) -> list[_ResolvedSFTSource]:
+    return [
+        resolved
+        for source_index, source in enumerate(cfg.dataset.sources)
+        for resolved in _resolve_source(source, source_index)
+    ]
 
 
 def _feature_signature(feature: dict[str, Any]) -> tuple[Any, ...]:
@@ -75,79 +151,90 @@ def _validate_compatible_metadata(metadata: Sequence[LeRobotDatasetMetadata]) ->
             )
 
 
-def _eligible_local_indices(dataset: LeRobotDataset, drop_n_last_frames: int) -> torch.Tensor:
-    episodes = dataset.episodes
-    if episodes is None:
-        episodes = list(range(dataset.meta.total_episodes))
-
-    indices: list[int] = []
-    local_start = 0
-    for episode_index in episodes:
-        episode = dataset.meta.episodes[episode_index]
-        episode_length = episode["dataset_to_index"] - episode["dataset_from_index"]
-        usable_length = episode_length - drop_n_last_frames
-        if usable_length > 0:
-            indices.extend(range(local_start, local_start + usable_length))
-        else:
-            logger.warning(
-                "Skipping SFT episode %s from %s because drop_n_last_frames=%s removes all %s frames.",
-                episode_index,
-                dataset.repo_id,
-                drop_n_last_frames,
-                episode_length,
-            )
-        local_start += episode_length
-
-    if not indices:
-        raise ValueError(
-            f"No valid frames remain in {dataset.repo_id} after dropping {drop_n_last_frames} trailing frames."
-        )
-    return torch.tensor(indices, dtype=torch.int64)
-
-
 class SFTMixtureSampler(Sampler[int]):
-    """Sample a dataset by configured probability, then a frame uniformly within it."""
+    """Sample logical sources by weight and cycle through their shuffled frames."""
 
     def __init__(
         self,
         datasets: Sequence[LeRobotDataset],
         weights: Sequence[float],
         num_samples: int,
-        drop_n_last_frames: int = 0,
+        dataset_source_indices: Sequence[int] | None = None,
     ) -> None:
         if len(datasets) != len(weights) or not datasets:
             raise ValueError("datasets and weights must have the same non-zero length.")
         if num_samples <= 0:
             raise ValueError("num_samples must be > 0.")
-        if drop_n_last_frames < 0:
-            raise ValueError("drop_n_last_frames must be >= 0.")
-
-        self.weights = torch.tensor(weights, dtype=torch.float64)
-        if not torch.isfinite(self.weights).all() or (self.weights <= 0).any():
+        dataset_weights = torch.tensor(weights, dtype=torch.float64)
+        if not torch.isfinite(dataset_weights).all() or (dataset_weights <= 0).any():
             raise ValueError("All SFT dataset weights must be finite and > 0.")
+        if dataset_source_indices is None:
+            dataset_source_indices = list(range(len(datasets)))
+        if len(dataset_source_indices) != len(datasets):
+            raise ValueError("dataset_source_indices must contain one entry per dataset.")
+        if any(source_index < 0 for source_index in dataset_source_indices):
+            raise ValueError("dataset_source_indices must be non-negative.")
+
+        num_sources = max(dataset_source_indices) + 1
+        if set(dataset_source_indices) != set(range(num_sources)):
+            raise ValueError("dataset_source_indices must form a contiguous range starting at zero.")
+
+        self.weights = torch.zeros(num_sources, dtype=torch.float64)
+        self.weights.scatter_add_(
+            0,
+            torch.tensor(dataset_source_indices, dtype=torch.int64),
+            dataset_weights,
+        )
         self.weights /= self.weights.sum()
         self.num_samples = num_samples
-        self.offsets: list[int] = []
+        source_eligible_indices: list[list[torch.Tensor]] = [[] for _ in range(num_sources)]
         offset = 0
-        self.eligible_indices: list[torch.Tensor] = []
-        for dataset in datasets:
-            self.offsets.append(offset)
-            self.eligible_indices.append(_eligible_local_indices(dataset, drop_n_last_frames))
+        for dataset, source_index in zip(datasets, dataset_source_indices, strict=True):
+            eligible = torch.arange(len(dataset))
+            source_eligible_indices[source_index].append(eligible + offset)
             offset += len(dataset)
+        self.eligible_indices = [
+            torch.cat(indices) if len(indices) > 1 else indices[0] for indices in source_eligible_indices
+        ]
 
     def __iter__(self) -> Iterator[int]:
+        # Each logical source gets an independently shuffled frame pool. A pool
+        # is exhausted before it is reshuffled, so sufficiently long SFT runs
+        # see every correction frame instead of repeatedly missing random ones.
+        shuffled_indices = [eligible[torch.randperm(len(eligible))] for eligible in self.eligible_indices]
+        cursors = [0] * len(self.eligible_indices)
+
+        def draw_from_source(source_index: int, count: int) -> torch.Tensor:
+            draws = torch.empty(count, dtype=torch.int64)
+            draw_offset = 0
+            while draw_offset < count:
+                shuffled = shuffled_indices[source_index]
+                cursor = cursors[source_index]
+                available = len(shuffled) - cursor
+                take = min(count - draw_offset, available)
+                draws[draw_offset : draw_offset + take] = shuffled[cursor : cursor + take]
+                draw_offset += take
+                cursor += take
+                if cursor == len(shuffled):
+                    shuffled = self.eligible_indices[source_index][
+                        torch.randperm(len(self.eligible_indices[source_index]))
+                    ]
+                    shuffled_indices[source_index] = shuffled
+                    cursor = 0
+                cursors[source_index] = cursor
+            return draws
+
         # Bound temporary memory even when an epoch represents millions of draws.
         draw_chunk_size = 65_536
         for chunk_start in range(0, self.num_samples, draw_chunk_size):
             chunk_size = min(draw_chunk_size, self.num_samples - chunk_start)
             source_indices = torch.multinomial(self.weights, chunk_size, replacement=True)
             sampled_indices = torch.empty(chunk_size, dtype=torch.int64)
-            for source_index, eligible in enumerate(self.eligible_indices):
+            for source_index in range(len(self.eligible_indices)):
                 positions = torch.where(source_indices == source_index)[0]
                 if positions.numel() == 0:
                     continue
-                draws = torch.randint(len(eligible), (positions.numel(),))
-                sampled_indices[positions] = eligible[draws] + self.offsets[source_index]
+                sampled_indices[positions] = draw_from_source(source_index, positions.numel())
             yield from sampled_indices.tolist()
 
     def __len__(self) -> int:
@@ -162,12 +249,18 @@ class SFTMixtureDataset(Dataset):
         datasets: Sequence[LeRobotDataset],
         weights: Sequence[float],
         samples_per_epoch: int | None = None,
+        source_names: Sequence[str] | None = None,
+        dataset_source_indices: Sequence[int] | None = None,
+        mask_padded_actions: bool = False,
     ) -> None:
         if len(datasets) != len(weights) or not datasets:
             raise ValueError("datasets and weights must have the same non-zero length.")
+        if any(len(dataset) == 0 for dataset in datasets):
+            raise ValueError("SFT datasets must contain at least one frame.")
         self.datasets = list(datasets)
-        self.weights = list(weights)
+        self.dataset_weights = list(weights)
         self.samples_per_epoch = samples_per_epoch or sum(len(dataset) for dataset in datasets)
+        self.mask_padded_actions = mask_padded_actions
         self.offsets: list[int] = []
         offset = 0
         for dataset in datasets:
@@ -179,7 +272,26 @@ class SFTMixtureDataset(Dataset):
         # checks guarantee that the first source accurately describes every model feature.
         self.meta = self.datasets[0].meta
         self.episodes = None
-        self.source_names = [dataset.repo_id for dataset in self.datasets]
+        self.source_names = (
+            list(source_names) if source_names is not None else [dataset.repo_id for dataset in self.datasets]
+        )
+        self.dataset_source_indices = (
+            list(dataset_source_indices)
+            if dataset_source_indices is not None
+            else list(range(len(self.datasets)))
+        )
+        if len(self.dataset_source_indices) != len(self.datasets):
+            raise ValueError("dataset_source_indices must contain one entry per dataset.")
+        if not self.source_names:
+            raise ValueError("source_names must not be empty.")
+        if any(
+            source_index < 0 or source_index >= len(self.source_names)
+            for source_index in self.dataset_source_indices
+        ):
+            raise ValueError("dataset_source_indices contains an out-of-range source index.")
+        self.weights = [0.0] * len(self.source_names)
+        for weight, source_index in zip(self.dataset_weights, self.dataset_source_indices, strict=True):
+            self.weights[source_index] += weight
 
     @property
     def num_frames(self) -> int:
@@ -189,12 +301,12 @@ class SFTMixtureDataset(Dataset):
     def num_episodes(self) -> int:
         return sum(dataset.num_episodes for dataset in self.datasets)
 
-    def make_sampler(self, drop_n_last_frames: int = 0) -> SFTMixtureSampler:
+    def make_sampler(self) -> SFTMixtureSampler:
         return SFTMixtureSampler(
             self.datasets,
-            self.weights,
+            self.dataset_weights,
             self.samples_per_epoch,
-            drop_n_last_frames=drop_n_last_frames,
+            dataset_source_indices=self.dataset_source_indices,
         )
 
     def __len__(self) -> int:
@@ -203,9 +315,11 @@ class SFTMixtureDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, Any]:
         if index < 0 or index >= len(self):
             raise IndexError(f"SFT mixture index {index} is out of bounds for length {len(self)}.")
-        source_index = bisect_right(self.offsets, index) - 1
-        item = self.datasets[source_index][index - self.offsets[source_index]]
-        item[SFT_SOURCE_INDEX] = torch.tensor(source_index, dtype=torch.int64)
+        dataset_index = bisect_right(self.offsets, index) - 1
+        item = self.datasets[dataset_index][index - self.offsets[dataset_index]]
+        item[SFT_SOURCE_INDEX] = torch.tensor(self.dataset_source_indices[dataset_index], dtype=torch.int64)
+        if self.mask_padded_actions:
+            item[SFT_MASK_PADDED_ACTIONS] = torch.tensor(True)
         return item
 
 
@@ -214,14 +328,15 @@ def make_sft_dataset(cfg: SFTPipelineConfig) -> SFTMixtureDataset:
     image_transforms = (
         ImageTransforms(cfg.dataset.image_transforms) if cfg.dataset.image_transforms.enable else None
     )
+    resolved_sources = _resolve_sources(cfg)
     metadata = [
         LeRobotDatasetMetadata(source.repo_id, root=source.root, revision=source.revision)
-        for source in cfg.dataset.sources
+        for source in resolved_sources
     ]
     _validate_compatible_metadata(metadata)
 
     datasets = []
-    for source, source_meta in zip(cfg.dataset.sources, metadata, strict=True):
+    for source, source_meta in zip(resolved_sources, metadata, strict=True):
         delta_timestamps = resolve_delta_timestamps(cfg.trainable_config, source_meta)
         datasets.append(
             LeRobotDataset(
@@ -237,8 +352,29 @@ def make_sft_dataset(cfg: SFTPipelineConfig) -> SFTMixtureDataset:
             )
         )
 
+    # A globbed folder is one logical source. Divide that source's probability
+    # across its children by frame count so sampling is uniform over all frames
+    # in the folder rather than uniform over recording sessions.
+    empty_datasets = [
+        source.repo_id
+        for dataset, source in zip(datasets, resolved_sources, strict=True)
+        if len(dataset) == 0
+    ]
+    if empty_datasets:
+        raise ValueError(f"SFT datasets must contain at least one frame: {empty_datasets}.")
+    source_frame_counts = [0] * len(cfg.dataset.sources)
+    for dataset, source in zip(datasets, resolved_sources, strict=True):
+        source_frame_counts[source.source_index] += len(dataset)
+    weights = [
+        source.weight * len(dataset) / source_frame_counts[source.source_index]
+        for dataset, source in zip(datasets, resolved_sources, strict=True)
+    ]
+
     return SFTMixtureDataset(
         datasets,
-        [source.weight for source in cfg.dataset.sources],
+        weights,
         samples_per_epoch=cfg.dataset.samples_per_epoch,
+        source_names=[source.repo_id for source in cfg.dataset.sources],
+        dataset_source_indices=[source.source_index for source in resolved_sources],
+        mask_padded_actions=cfg.dataset.mask_padded_actions,
     )
