@@ -10,6 +10,8 @@ Internal operational procedures, experiments, and repair utilities belong in thi
 - `training/` — internal training operations and recovery procedures.
 - `datasets/` — dataset collection, inspection, and repair runbooks.
 - `deployments/` — deployment and host-management procedures.
+- `hardware/` — battery, camera, and hardware diagnostic procedures.
+- `operations/` — robot operation and rollout procedures.
 - `experiments/` — unvalidated commands, recipes, and investigation notes.
 - `incidents/` — incident response and post-incident procedures.
 - `tools/datasets/` — executable dataset audit, combination, and repair utilities.

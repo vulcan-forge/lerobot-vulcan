@@ -1,5 +1,7 @@
 # Sourccey Dataset: Easy Combine -> Audit -> Clean
 
+> Status: Internal runbook
+
 Use this runbook when you want a clean local dataset for training.
 
 ## 0) Set your dataset name once
@@ -21,12 +23,12 @@ ISSUES_JSON="${AUDIT_DIR}/${SAFE_DATASET_REPO}_decode_issues.json"
 If per-merge stripping feels too slow, pre-strip once:
 
 ```bash
-uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/remove_feature.py \
+uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/remove_feature.py \
   --feature intervention \
   --out-parent "${HF_LEROBOT_HOME}/Prepared/no_intervention" \
   --dry-run
 
-uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/remove_feature.py \
+uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/remove_feature.py \
   --feature intervention \
   --out-parent "${HF_LEROBOT_HOME}/Prepared/no_intervention"
 ```
@@ -37,12 +39,12 @@ Then combine from that prepared folder:
 Preview what will be merged:
 
 ```bash
-uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/combine.py --list-only
+uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/combine.py --list-only
 ```
 
 Run merge:
 ```bash
-uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/combine.py
+uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/combine.py
 ```
 
 ## 2) Quick sanity check
@@ -60,14 +62,14 @@ uv run lerobot-edit-dataset \
 Dataset consistency audit (stats mismatch, intervention leakage, z.pos checks):
 
 ```bash
-uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/audit_dataset_consistency.py \
+uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/audit_dataset_consistency.py \
   --dataset-root "$DATASET_ROOT"
 ```
 
 Fail fast version (use in CI / strict checks):
 
 ```bash
-uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/audit_dataset_consistency.py \
+uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/audit_dataset_consistency.py \
   --dataset-root "$DATASET_ROOT" \
   --fail-on-issues
 ```
@@ -77,7 +79,7 @@ If consistency issues are reported, fix them with:
 Dry run:
 
 ```bash
-uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/fix_dataset_consistency.py \
+uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/fix_dataset_consistency.py \
   --dataset-root "$DATASET_ROOT" \
   --dry-run
 ```
@@ -85,7 +87,7 @@ uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/fix_dataset_c
 Apply fixes:
 
 ```bash
-uv run python src/lerobot/robots/sourccey/sourccey/sourccey/readme/fix_dataset_consistency.py \
+uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/fix_dataset_consistency.py \
   --dataset-root "$DATASET_ROOT"
 ```
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""Internal utility for repairing Sourccey dataset consistency."""
+
 import argparse
 import datetime as dt
 import json

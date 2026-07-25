@@ -1,3 +1,8 @@
 # Dataset tools
 
-Dataset auditing, combination, consistency repair, and feature-removal utilities will move here after review.
+Internal dataset utilities:
+
+- `audit_dataset_consistency.py`
+- `combine.py`
+- `fix_dataset_consistency.py`
+- `remove_feature.py`

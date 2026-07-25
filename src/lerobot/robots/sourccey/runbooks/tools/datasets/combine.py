@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""Internal utility for combining Sourccey datasets."""
+
 import argparse
 import csv
 import datetime as dt

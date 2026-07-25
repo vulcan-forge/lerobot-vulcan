@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""Internal utility for removing features from Sourccey datasets."""
+
 import argparse
 import datetime as dt
 import json
