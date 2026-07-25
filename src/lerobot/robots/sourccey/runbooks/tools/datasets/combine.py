@@ -25,20 +25,22 @@ from lerobot.datasets.feature_utils import features_equal_for_merge
 # -----------------------------------------------------------------------------
 # Every dataset listed here is included in full.
 DEFAULT_PARENTS = [
-    "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-pile-shirt-fold-a-001",
+    "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-009",
+    "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-specific-000"
+    
 ]
 
 # Each entry takes a random subset from one dataset. Add more entries to sample
 # multiple datasets, or edit episode_count to change the sample size.
 DEFAULT_SAMPLES = [
-    {
-        "dataset_root": "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-009",
-        "episode_count": 215,
-    },
+    # {
+    #     # "dataset_root": "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-009",
+    #     # "episode_count": 215,
+    # },
 ]
 
 DEFAULT_SAMPLE_SEED = 42
-DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-009-subset-215-pile-shirt-fold-a-001"
+DEFAULT_DATASET_REPO = "Combination/sourccey-shirt-fold-c-010"
 
 HF_LEROBOT_HOME = Path("/home/sourccey/.cache/huggingface/lerobot")
 

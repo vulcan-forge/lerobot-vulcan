@@ -28,9 +28,9 @@ uv run lerobot-rollout \
 #Variable
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 uv run lerobot-rollout \
+CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
   --strategy.type=base \
-  --policy.path="outputs/sft/xvla_s_sourccey-shirt-fold-c-009-corners-003/checkpoints/100000/pretrained_model" \
+  --policy.path="outputs/sft/xvla_s_sourccey-shirt-fold-c-009-corners-006/checkpoints/350000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --task="Fold the shirt" \

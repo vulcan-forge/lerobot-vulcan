@@ -8,7 +8,7 @@ Use this runbook when you want a clean local dataset for training.
 
 ```bash
 HF_LEROBOT_HOME="${HOME}/.cache/huggingface/lerobot"
-DATASET_REPO="Combination/sourccey-shirt-fold-c-009"
+DATASET_REPO="Combination/sourccey-shirt-fold-c-specific-000"
 DATASET_ROOT="${HF_LEROBOT_HOME}/${DATASET_REPO}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 
@@ -94,7 +94,7 @@ uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/fix_dataset_co
 Fast smoke test:
 
 ```bash
-uv run lerobot-audit-video-decode-errors \
+uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/audit_video_decode_errors.py \
   --dataset-repo-id "$DATASET_REPO" \
   --max-files 100 \
   --workers 8 \
@@ -104,7 +104,7 @@ uv run lerobot-audit-video-decode-errors \
 Full audit:
 
 ```bash
-uv run lerobot-audit-video-decode-errors \
+uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/audit_video_decode_errors.py \
   --dataset-repo-id "$DATASET_REPO" \
   --workers 8 \
   --output-dir "$AUDIT_DIR"
@@ -122,7 +122,7 @@ Audit outputs:
 Dry run:
 
 ```bash
-bash src/lerobot/scripts/sourccey/dataset/repair_bad_videos_from_audit.sh \
+bash src/lerobot/robots/sourccey/runbooks/tools/datasets/repair_bad_videos_from_audit.sh \
   --bad-files-txt "$BAD_FILES_TXT" \
   --dataset-repo-id "$DATASET_REPO" \
   --dry-run
@@ -131,7 +131,7 @@ bash src/lerobot/scripts/sourccey/dataset/repair_bad_videos_from_audit.sh \
 Apply repair:
 
 ```bash
-bash src/lerobot/scripts/sourccey/dataset/repair_bad_videos_from_audit.sh \
+bash src/lerobot/robots/sourccey/runbooks/tools/datasets/repair_bad_videos_from_audit.sh \
   --bad-files-txt "$BAD_FILES_TXT" \
   --dataset-repo-id "$DATASET_REPO"
 ```
@@ -139,7 +139,7 @@ bash src/lerobot/scripts/sourccey/dataset/repair_bad_videos_from_audit.sh \
 Re-audit after repair:
 
 ```bash
-uv run lerobot-audit-video-decode-errors \
+uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/audit_video_decode_errors.py \
   --dataset-repo-id "$DATASET_REPO" \
   --workers 8 \
   --output-dir "outputs/video_audit_${STAMP}_post_repair"
