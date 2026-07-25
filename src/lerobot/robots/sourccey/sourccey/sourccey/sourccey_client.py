@@ -123,13 +123,11 @@ class SourcceyClient(Robot):
         self._z_full_travel_s = max(0.1, float(config.z_teleop_full_travel_s))
         self._z_units_per_s = (self._z_max - self._z_min) / self._z_full_travel_s
         self._z_max_target_step = max(0.1, float(config.z_teleop_max_target_step))
-        self._z_release_compensation = max(0.0, float(config.z_teleop_release_compensation))
 
         # Stored target position. It is initialized from the first remote sensor
         # observation instead of assuming the actuator starts at +100.
         self._z_pos_cmd = 0.0
         self._z_pos_cmd_initialized = False
-        self._z_last_direction = 0.0
 
         # Log-throttle repeated poll timeouts to avoid terminal spam in teleop loops.
         self._no_data_log_interval_s = self.no_data_log_interval_s
@@ -605,20 +603,8 @@ class SourcceyClient(Robot):
             requested_step = z_dir * float(self._z_units_per_s) * dt
             z_step = float(np.clip(requested_step, -self._z_max_target_step, self._z_max_target_step))
             self._z_pos_cmd = float(np.clip(self._z_pos_cmd + z_step, self._z_min, self._z_max))
-        elif self._z_last_direction != 0.0 and valid_z_obs:
-            # The network observation trails the live actuator slightly. Preserve
-            # a small amount of target lead in the prior travel direction so key
-            # release cannot command a visible reversal toward stale feedback.
-            observed_position = float(z_obs_pos)
-            target_lead = self._z_pos_cmd - observed_position
-            if self._z_last_direction > 0.0:
-                compensation = float(np.clip(target_lead, 0.0, self._z_release_compensation))
-            else:
-                compensation = float(np.clip(target_lead, -self._z_release_compensation, 0.0))
-            self._z_pos_cmd = float(
-                np.clip(observed_position + compensation, self._z_min, self._z_max)
-            )
-        self._z_last_direction = z_dir
+        # With neither key held, freeze the existing target. In particular, do
+        # not replace it with a delayed network observation on key release.
 
         if abs(self._x_cmd_smoothed) >= self._x_deadbane:
             # already moving -> smooth changes

@@ -259,6 +259,8 @@ class SourcceyZActuator:
         self._target_lock = threading.Lock()
         self._target_pos_m100_100 = 0.0
         self._target_initialized = False
+        self._last_error_sign = 0
+        self._settled_target: float | None = None
         self._debug_mode = False
         self._last_debug_t = 0.0
 
@@ -324,7 +326,21 @@ class SourcceyZActuator:
         position = float(self.read_position())
         with self._target_lock:
             target = self._target_pos_m100_100
-        logical_command = self.compute_command(position, target)
+            settled = self._settled_target == target
+            error = target - position
+            error_sign = 1 if error > 0.0 else -1 if error < 0.0 else 0
+            crossed_target = (
+                self._last_error_sign != 0
+                and error_sign != 0
+                and error_sign != self._last_error_sign
+            )
+            if crossed_target:
+                self._settled_target = target
+                settled = True
+            if not settled and error_sign != 0:
+                self._last_error_sign = error_sign
+
+        logical_command = 0.0 if settled else self.compute_command(position, target)
         motor_command = -logical_command if self.motor_invert else logical_command
         self.driver.set_velocity(self.motor, motor_command, normalize=True, instant=instant)
 
@@ -465,7 +481,11 @@ class SourcceyZActuator:
         if not math.isfinite(target):
             raise ValueError("Z position target must be finite")
         with self._target_lock:
-            self._target_pos_m100_100 = max(-100.0, min(100.0, target))
+            target = max(-100.0, min(100.0, target))
+            if target != self._target_pos_m100_100:
+                self._settled_target = None
+                self._last_error_sign = 0
+            self._target_pos_m100_100 = target
             self._target_initialized = True
 
     ############################################################

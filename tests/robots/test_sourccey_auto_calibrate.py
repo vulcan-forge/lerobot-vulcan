@@ -434,6 +434,30 @@ def test_z_controller_rejects_nonfinite_target(monkeypatch: pytest.MonkeyPatch, 
         actuator.write_position(float("nan"))
 
 
+def test_z_controller_stops_after_crossing_target_until_target_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setattr(z_actuator_module, "HF_LEROBOT_CALIBRATION", tmp_path)
+    driver = _DummyDriver()
+    actuator = SourcceyZActuator(sensor=ZSensor(), driver=driver, motor_invert=False)
+    positions = iter((0.0, 11.0, 11.0, 11.0))
+    monkeypatch.setattr(actuator, "read_position", lambda: next(positions))
+    actuator.write_position(10.0)
+
+    actuator.update()
+    actuator.update()
+    actuator.update()
+
+    assert driver.velocity_calls[-3][1] > 0.0
+    assert driver.velocity_calls[-2][1] == 0.0
+    assert driver.velocity_calls[-1][1] == 0.0
+
+    actuator.write_position(-10.0)
+    actuator.update()
+
+    assert driver.velocity_calls[-1][1] < 0.0
+
+
 @pytest.mark.parametrize(
     ("raw_bottom", "raw_top", "expected_invert"),
     [

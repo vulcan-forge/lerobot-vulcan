@@ -187,7 +187,6 @@ class SourcceyClientConfig(RobotConfig):
     # Q/E position-target generation, deliberately slower than physical full travel.
     z_teleop_full_travel_s: float = 8.0
     z_teleop_max_target_step: float = 2.0
-    z_teleop_release_compensation: float = 0.25
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {
