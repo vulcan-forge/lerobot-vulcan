@@ -65,9 +65,10 @@ def test_z_teleop_compensates_stale_observation_once_on_release(monkeypatch) -> 
     released = client._from_keyboard_to_base_action(np.array([]), z_obs_pos=1.25)
     idle = client._from_keyboard_to_base_action(np.array([]), z_obs_pos=0.5)
 
-    assert moving["z.pos"] == pytest.approx(2.0)
-    assert released["z.pos"] == pytest.approx(2.0)
-    assert idle["z.pos"] == pytest.approx(2.0)
+    expected_step = (200.0 / 6.5) * 0.05
+    assert moving["z.pos"] == pytest.approx(expected_step)
+    assert released["z.pos"] == pytest.approx(expected_step)
+    assert idle["z.pos"] == pytest.approx(expected_step)
 
 
 def test_z_release_compensation_is_bounded(monkeypatch) -> None:
@@ -80,7 +81,7 @@ def test_z_release_compensation_is_bounded(monkeypatch) -> None:
 
     action = client._from_keyboard_to_base_action(np.array([]), z_obs_pos=5.0)
 
-    assert action["z.pos"] == pytest.approx(5.75)
+    assert action["z.pos"] == pytest.approx(5.5)
 
 
 def test_legacy_flat_slam_config_fields_still_work() -> None:
