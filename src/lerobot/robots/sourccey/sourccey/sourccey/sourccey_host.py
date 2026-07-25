@@ -63,6 +63,8 @@ def main():
 
     logging.info("Connecting Sourccey")
     robot.connect()
+    # Establish a known-safe base state before accepting the first client command.
+    robot.stop_base()
 
     logging.info("Starting Host")
     host_config = SourcceyHostConfig()
@@ -73,7 +75,9 @@ def main():
 
     print("Waiting for commands...")
 
-    last_cmd_time = time.time()
+    # The watchdog is armed by the first valid command. Until then the base is
+    # already stopped and an idle host should remain quietly ready for a client.
+    last_cmd_time: float | None = None
     watchdog_active = False
 
     try:
@@ -102,7 +106,7 @@ def main():
                 # Update the robot
                 robot.update()
 
-                last_cmd_time = time.time()
+                last_cmd_time = time.monotonic()
                 watchdog_active = False
             except zmq.Again:
                 if not watchdog_active:
@@ -111,11 +115,17 @@ def main():
             except Exception as e:
                 logging.error("Message fetching failed: %s", e)
 
-            now = time.time()
-            if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
-                logging.debug(
-                    f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. "
+            now = time.monotonic()
+            if (
+                last_cmd_time is not None
+                and now - last_cmd_time > host.watchdog_timeout_ms / 1000
+                and not watchdog_active
+            ):
+                logging.warning(
+                    "Command not received for more than %d milliseconds. Stopping the base.",
+                    host.watchdog_timeout_ms,
                 )
+                robot.stop_base()
                 watchdog_active = True
 
             observation = robot.get_observation()

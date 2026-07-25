@@ -74,6 +74,7 @@ class SourcceyClient(Robot):
 
         self.last_frames = {}
         self.last_remote_state = {}
+        self._last_sent_action: dict[str, Any] = {}
         self._slam_input_publisher = SlamInputPublisher(
             source_id=self.id,
             stereo_left_key=self.slam_stereo_left_key,
@@ -262,23 +263,40 @@ class SourcceyClient(Robot):
     def configure(self):
         pass
 
-    def _send_relax_command(self) -> None:
+    def _send_base_stop_command(self) -> bool:
         """
         Best-effort final command before disconnect.
 
-        Always stops base motion. Arm untorque is controlled by
-        ``config.untorque_on_disconnect``.
-        """        
-        relax_action = {
+        Stops base motion while resending existing arm targets. Z is omitted so the
+        host keeps its current target. If a complete arm state is unavailable, send
+        nothing and let the host watchdog stop the base.
+        """
+        stop_action: dict[str, Any] = {
             "x.vel": 0.0,
             "y.vel": 0.0,
             "theta.vel": 0.0,
-            "z.pos": float(self._z_pos_cmd),
-            "untorque_left": True,
-            "untorque_right": True,
         }
-        robot_action = self.protobuf_converter.action_to_protobuf(relax_action)
+        arm_keys = tuple(
+            key for key in self._state_order if key.startswith(("left_", "right_")) and key.endswith(".pos")
+        )
+        for key in arm_keys:
+            if key in self._last_sent_action:
+                stop_action[key] = self._last_sent_action[key]
+            elif key in self.last_remote_state:
+                stop_action[key] = self.last_remote_state[key]
+            else:
+                logging.debug("Skipping final base stop: no safe hold target for %s.", key)
+                return False
+
+        stop_action["untorque_left"] = bool(
+            self._last_sent_action.get("untorque_left", self.untorque_left_active)
+        )
+        stop_action["untorque_right"] = bool(
+            self._last_sent_action.get("untorque_right", self.untorque_right_active)
+        )
+        robot_action = self.protobuf_converter.action_to_protobuf(stop_action)
         self.zmq_cmd_socket.send(robot_action.SerializeToString(), flags=zmq.NOBLOCK)
+        return True
 
     def disconnect(self):
         """Cleans ZMQ comms"""
@@ -288,11 +306,11 @@ class SourcceyClient(Robot):
                 "SourcceyClient is not connected. You need to run `robot.connect()` before disconnecting."
             )
         try:
-            pass
+            self._send_base_stop_command()
         except zmq.Again:
-            logging.debug("Could not send final relax command before disconnect: socket not ready.")
+            logging.debug("Could not send final base stop before disconnect: socket not ready.")
         except Exception as e:
-            logging.debug(f"Could not send final relax command before disconnect: {e}")
+            logging.debug(f"Could not send final base stop before disconnect: {e}")
         if self.zmq_slam_input_socket is not None:
             close_slam_pub_socket(self.zmq_slam_input_socket)
             self.zmq_slam_input_socket = None
@@ -360,6 +378,7 @@ class SourcceyClient(Robot):
         # Convert action to protobuf and send
         robot_action = self.protobuf_converter.action_to_protobuf(action)
         self.zmq_cmd_socket.send(robot_action.SerializeToString())
+        self._last_sent_action = dict(action)
 
         # TODO(Steven): Remove the np conversion when it is possible to record a non-numpy array value
         actions = np.array([action.get(k, 0.0) for k in self._state_order], dtype=np.float32)
