@@ -375,6 +375,7 @@ lerobot-rollout="lerobot.scripts.lerobot_rollout:main"
 
 # ---------------- Custom Commands ----------------
 lerobot-audit-video-decode-errors="lerobot.scripts.sourccey.dataset.audit_video_decode_errors:main"
+sourccey-read-z="lerobot.scripts.sourccey.z.read_z_potentiometer:main"
 
 # ---------------- Tool Configurations ----------------
 
