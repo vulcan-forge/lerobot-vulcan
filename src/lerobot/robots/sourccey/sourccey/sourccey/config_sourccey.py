@@ -114,11 +114,11 @@ class SourcceyConfig(RobotConfig):
 
     # Z actuator runtime control. Calibration remains stored separately.
     z_adc_samples: int = 10
-    z_proportional_gain: float = 0.04
-    z_minimum_up_command: float = 0.65
-    z_minimum_down_command: float = 0.65
+    z_proportional_gain: float = 0.035
+    z_minimum_up_command: float = 0.45
+    z_minimum_down_command: float = 0.45
     z_maximum_command: float = 1.0
-    z_position_deadband: float = 0.35
+    z_position_deadband: float = 0.5
     z_control_hz: float = 50.0
 
     # Optional
@@ -187,7 +187,7 @@ class SourcceyClientConfig(RobotConfig):
     # Q/E position-target generation. Five seconds matches measured full travel.
     z_teleop_full_travel_s: float = 5.0
     z_teleop_max_target_step: float = 2.0
-    z_teleop_release_compensation: float = 1.0
+    z_teleop_release_compensation: float = 0.75
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {

@@ -49,10 +49,10 @@ def test_z_teleop_uses_precise_bounded_target_steps(monkeypatch) -> None:
     assert action["z.pos"] == pytest.approx(2.0)
 
 
-def test_z_teleop_uses_fast_rate_at_every_base_speed() -> None:
+def test_z_teleop_uses_fixed_rate_at_every_base_speed() -> None:
     client = _make_client()
 
-    assert [level["z"] for level in client.speed_levels] == [1.5, 1.5, 1.5]
+    assert [level["z"] for level in client.speed_levels] == [1.0, 1.0, 1.0]
 
 
 def test_z_teleop_compensates_stale_observation_once_on_release(monkeypatch) -> None:
@@ -80,7 +80,7 @@ def test_z_release_compensation_is_bounded(monkeypatch) -> None:
 
     action = client._from_keyboard_to_base_action(np.array([]), z_obs_pos=5.0)
 
-    assert action["z.pos"] == pytest.approx(6.0)
+    assert action["z.pos"] == pytest.approx(5.75)
 
 
 def test_legacy_flat_slam_config_fields_still_work() -> None:
