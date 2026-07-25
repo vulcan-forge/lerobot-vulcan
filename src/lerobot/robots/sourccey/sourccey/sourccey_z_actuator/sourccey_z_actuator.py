@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import contextlib
 import json
 import logging
-from pathlib import Path
+import math
 import threading
 import time
-from typing import Optional, Protocol
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
 
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator import SourcceyZCalibrator
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.spi_lock import spi_device_lock
-
 
 try:
     from gpiozero import MCP3008  # type: ignore
@@ -69,7 +70,7 @@ class ZSensor:
         self.calibration_max = self.raw_max
         self.invert = bool(invert)
 
-        self._adc: Optional["MCP3008"] = None
+        self._adc: MCP3008 | None = None
 
         # A disconnected potentiometer/SPI hiccup commonly reads the opposite ADC
         # rail for one cycle.  Without filtering, +100 can therefore appear as
@@ -98,10 +99,8 @@ class ZSensor:
                 raise  # Re-raise our floating signal error
             except Exception as exc:
                 if candidate is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         candidate.close()  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
                 print(f"Failed to initialize MCP3008 on channel {self.adc_channel}. {exc}")
 
             self._adc = candidate
@@ -116,7 +115,7 @@ class ZSensor:
             self._adc = None
             self.reset_position_filter()
 
-    def set_calibration(self, *, raw_min: int, raw_max: int, invert: Optional[bool] = None) -> None:
+    def set_calibration(self, *, raw_min: int, raw_max: int, invert: bool | None = None) -> None:
         self.calibration_min = int(raw_min)
         self.calibration_max = int(raw_max)
         if invert is not None:
@@ -226,6 +225,12 @@ class SourcceyZActuator:
         driver: ZMotorDriver | None = None,
         motor: str | int = "linear_actuator",
         motor_invert: bool = True,
+        proportional_gain: float = 0.025,
+        minimum_up_command: float = 0.30,
+        minimum_down_command: float = 0.30,
+        maximum_command: float = 0.85,
+        position_deadband: float = 1.0,
+        control_hz: float = 50.0,
     ) -> None:
 
         self.name = "sourccey_z_actuator"
@@ -235,35 +240,27 @@ class SourcceyZActuator:
         self.motor = motor
         self.use_z_actuator = False
 
-        # Position target (public API is position-only; motor command is internal).
-        self._target_pos_m100_100: float = 0.0
         self.motor_invert = bool(motor_invert)
-        # Published position convention (derived from sensor calibration).
         self.invert = sensor.invert
 
-        # Tunables (safe defaults; tune on hardware).
-        self.kp: float = 0.05
-        self.kd: float = 0.02 # Derivative gain: damps overshoot by "braking" when error is changing quickly. # (cmd = kp*err + kd*d(err)/dt)
+        # A deliberately small P-only controller. Minimum drive compensates for
+        # actuator stiction; separate up/down values allow gravity compensation.
+        self.proportional_gain = max(0.0, float(proportional_gain))
+        self.minimum_up_command = self._clamp_command_magnitude(minimum_up_command)
+        self.minimum_down_command = self._clamp_command_magnitude(minimum_down_command)
+        self.maximum_command = self._clamp_command_magnitude(maximum_command)
+        self.position_deadband = max(0.0, float(position_deadband))
+        self.control_hz = max(1.0, float(control_hz))
+        if self.minimum_up_command > self.maximum_command:
+            raise ValueError("minimum_up_command cannot exceed maximum_command")
+        if self.minimum_down_command > self.maximum_command:
+            raise ValueError("minimum_down_command cannot exceed maximum_command")
 
-        self.max_cmd: float = 1.0
-        self.deadband: float = 1.0
-
-        # Endpoint assist: when commanding near +/-100, we may need full power to overcome
-        # stiction / deadzone near the ends.
-        self.endpoint_target_threshold: float = 90.0
-        # Hysteresis: enter assist when far, exit when close (prevents rapid toggling/oscillation).
-        self.endpoint_enter_margin: float = 4.0
-        self.endpoint_exit_margin: float = 1.0
-        self._endpoint_assist_active: bool = False
-
-        # Controller state for D term.
-        self._prev_err: float = 0.0
-        self._prev_err_valid: bool = False
-
-        # Debugging
+        self._target_lock = threading.Lock()
+        self._target_pos_m100_100 = 0.0
+        self._target_initialized = False
         self._debug_mode = False
-        self._first_cmd_print_t = 0.0
-        self._last_cmd_print_t = 0.0
+        self._last_debug_t = 0.0
 
         # Calibration
         self.calibration_dir = (
@@ -277,12 +274,12 @@ class SourcceyZActuator:
 
         self.calibrator = SourcceyZCalibrator(self)
 
-        # --- background "servo-like" position controller thread ---
-        self._ctl_lock = threading.Lock()
         self._ctl_stop_event = threading.Event()
-        self._ctl_thread: Optional[threading.Thread] = None
-        self._ctl_hz: float = 30.0
-        self._ctl_instant: bool = True
+        self._ctl_thread: threading.Thread | None = None
+
+    @staticmethod
+    def _clamp_command_magnitude(command: float) -> float:
+        return max(0.0, min(1.0, float(command)))
 
     @property
     def is_connected(self) -> bool:
@@ -290,169 +287,89 @@ class SourcceyZActuator:
 
     def connect(self) -> None:
         self.sensor.connect()
-        self.use_z_actuator = True if self.sensor.is_connected else False
+        self.use_z_actuator = bool(self.sensor.is_connected)
+        if self.use_z_actuator:
+            # Starting the controller must never move Z before the first command.
+            self.write_position(self.read_position())
 
     def disconnect(self) -> None:
         # Ensure no background thread is still calling update() while we disconnect the ADC.
         self.stop_position_controller()
         self.sensor.disconnect()
 
-    def update(self, dt_s: float, *, instant: bool = True) -> None:
+    def compute_command(self, position: float, target: float) -> float:
+        """Return a normalized logical command from calibrated position error."""
+        position = float(position)
+        target = max(-100.0, min(100.0, float(target)))
+        if not math.isfinite(position) or not math.isfinite(target):
+            return 0.0
+
+        error = target - position
+        abs_error = abs(error)
+        if abs_error <= self.position_deadband:
+            return 0.0
+
+        minimum_command = self.minimum_up_command if error > 0.0 else self.minimum_down_command
+        proportional_error = abs_error - self.position_deadband
+        magnitude = minimum_command + self.proportional_gain * proportional_error
+        magnitude = min(self.maximum_command, magnitude)
+        return magnitude if error > 0.0 else -magnitude
+
+    def update(self, dt_s: float = 0.0, *, instant: bool = True) -> float:
+        """Run one deterministic position-control update."""
+        del dt_s  # P-only control is intentionally independent of loop jitter.
         if self.driver is None:
             raise RuntimeError("No driver provided. Pass `driver=...` (e.g. Sourccey.dc_motors_controller).")
 
-        pos = float(self.read_position())
-        target = float(self._target_pos_m100_100)
-        err = target - pos
+        position = float(self.read_position())
+        with self._target_lock:
+            target = self._target_pos_m100_100
+        logical_command = self.compute_command(position, target)
+        motor_command = -logical_command if self.motor_invert else logical_command
+        self.driver.set_velocity(self.motor, motor_command, normalize=True, instant=instant)
 
-        # --- debug: print once per second ---
         now = time.monotonic()
-        if self._debug_mode and now - self._first_cmd_print_t >= 1.0:
-            self._first_cmd_print_t = now
+        if self._debug_mode and now - self._last_debug_t >= 1.0:
+            self._last_debug_t = now
             print(
                 {
-                    "pos": round(float(pos), 2),
-                    "target": round(float(target), 2),
-                    "err": round(float(err), 2),
+                    "z_pos": round(position, 2),
+                    "z_target": round(target, 2),
+                    "z_error": round(target - position, 2),
+                    "z_command": round(logical_command, 3),
                 }
             )
-
-        # Keep the existing deadband behavior for normal targets, but when commanding extreme
-        # endpoints, tighten the deadband so we actually reach +/-100 instead of stopping short.
-        deadband = float(self.deadband)
-        if abs(target) >= 99.0:
-            deadband = 0.1
-
-        # --- PD control (P + D damping) ---
-        if abs(err) <= deadband:
-            # Reset derivative state so we don't get a "kick" when restarting from a stop.
-            self._prev_err_valid = False
-            self.stop()
-            return
-
-        # Endpoint assist with hysteresis:
-        # - uses enter/exit margins to avoid rapid toggling near the endpoint
-        # - only pushes *toward* the endpoint, never away (prevents banging back and forth)
-        near_endpoint_target = (abs(target) >= 99.0) or (abs(target) >= float(self.endpoint_target_threshold))
-        if near_endpoint_target:
-            if (not self._endpoint_assist_active) and (abs(err) >= float(self.endpoint_enter_margin)):
-                self._endpoint_assist_active = True
-            elif self._endpoint_assist_active and (abs(err) <= float(self.endpoint_exit_margin)):
-                self._endpoint_assist_active = False
-
-            if self._endpoint_assist_active:
-                if (target > 0.0 and err > 0.0):
-                    cmd = self.max_cmd
-                elif (target < 0.0 and err < 0.0):
-                    cmd = -self.max_cmd
-                else:
-                    cmd = 0.0  # past the endpoint; don't drive back with full power
-
-                # Reset controller state to avoid a D "kick" when we hand back to PD.
-                self._prev_err_valid = False
-                if self.motor_invert:
-                    cmd = -cmd
-                self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
-                return
-
-        dt = float(dt_s)
-        if dt <= 1e-6:
-            dt = 1e-3
-
-        # Derivative of error (finite difference). This adds damping near the target.
-        derr = 0.0
-        if self._prev_err_valid:
-            derr = (err - self._prev_err) / dt
-        self._prev_err = err
-        self._prev_err_valid = True
-
-        cmd = (self.kp * err) + (self.kd * derr)
-        cmd = max(-self.max_cmd, min(self.max_cmd, cmd))
-
-        if self.motor_invert:
-            cmd = -cmd
-
-        self.driver.set_velocity(self.motor, cmd, normalize=True, instant=instant)
-
-        # --- debug: print once per second ---
-        now = time.monotonic()
-        if self._debug_mode and now - self._last_cmd_print_t >= 1.0:
-            self._last_cmd_print_t = now
-            print(
-                {
-                    "z_cmd": round(float(cmd), 3),
-                    "z_err": round(float(err), 2),
-                    "z_pos": round(float(pos), 2),
-                    "z_target": round(float(self._target_pos_m100_100), 2),
-                }
-            )
+        return position
 
 
     ############################################################
     # Control Functions
     ############################################################
     def _control_loop(self) -> None:
-        last_t = time.monotonic()
-        last_print = time.monotonic()
-        it = 0
+        period = 1.0 / self.control_hz
+        next_tick = time.monotonic()
         while not self._ctl_stop_event.is_set():
-            # If we're not ready to drive, just idle.
-            if self.driver is None:
-                precise_sleep(0.05)
-                last_t = time.monotonic()
-                continue
-
-            now = time.monotonic()
-            dt = now - last_t
-            last_t = now
-
-            with self._ctl_lock:
-                hz = float(self._ctl_hz)
-                instant = bool(self._ctl_instant)
-
             try:
-                self.update(dt, instant=instant)
-            except Exception as e:
-                # Don't let the thread die on transient hardware/read errors.
-                try:
+                self.update(instant=True)
+            except Exception as exc:
+                logger.warning("Z position-control update failed; stopping motor: %s", exc)
+                with contextlib.suppress(Exception):
                     self.stop()
-                except Exception as e2:
-                    pass
-                precise_sleep(0.1)
+                if self._ctl_stop_event.wait(0.1):
+                    break
 
+            next_tick += period
+            remaining = next_tick - time.monotonic()
+            if remaining > 0.0:
+                precise_sleep(remaining)
+            else:
+                # Do not burst multiple updates after an ADC/SPI scheduling delay.
+                next_tick = time.monotonic()
 
-
-            it += 1
-            if self._debug_mode and now - last_print >= 1.0:
-                last_print = now
-                try:
-                    raw = self.sensor.read_raw().raw
-                except Exception as e:
-                    raw = f"ERR:{type(e).__name__}"
-                print({
-                    "it": it,
-                    "stop_event": self._ctl_stop_event.is_set(),
-                    "hz": hz,
-                    "instant": instant,
-                    "target": round(float(self._target_pos_m100_100), 2),
-                    "pos": round(float(self.read_position()), 2),
-                    "raw": raw,
-                })
-
-            period = 1.0 / max(1.0, hz)
-            precise_sleep(period)
-
-        # best-effort stop on exit
-        try:
+        with contextlib.suppress(Exception):
             self.stop()
-        except Exception as e3:
-            pass
 
-    def _ensure_controller_running(self, *, hz: float = 30.0, instant: bool = True) -> None:
-        with self._ctl_lock:
-            self._ctl_hz = float(hz)
-            self._ctl_instant = bool(instant)
-
+    def _ensure_controller_running(self) -> None:
         if self._ctl_thread is not None and self._ctl_thread.is_alive():
             return
 
@@ -466,7 +383,6 @@ class SourcceyZActuator:
 
     def stop_position_controller(self, *, join_timeout_s: float = 1.0) -> None:
         """Stop the background position controller (if running) and stop motor output."""
-        print("Stopping Z actuator position controller")
         self._ctl_stop_event.set()
         t = self._ctl_thread
         if t is not None and t.is_alive():
@@ -475,7 +391,7 @@ class SourcceyZActuator:
         self.stop()
 
     def stop(self) -> None:
-        """Stop motor output and reset integrator."""
+        """Stop motor output."""
         if self.driver is not None:
             self.driver.set_velocity(self.motor, 0.0, normalize=True, instant=True)
 
@@ -500,7 +416,7 @@ class SourcceyZActuator:
             return False
 
         try:
-            with open(fpath, "r") as f:
+            with open(fpath) as f:
                 data = json.load(f)
 
             raw_min = int(data["z_actuator"]["raw_min"])
@@ -543,9 +459,14 @@ class SourcceyZActuator:
     def read_position(self) -> float:
         return self.sensor.read_position_m100_100()
 
-     # --- Write Functions ---
+    # --- Write Functions ---
     def write_position(self, target_pos_m100_100: float) -> None:
-        self._target_pos_m100_100 = max(-100.0, min(100.0, float(target_pos_m100_100)))
+        target = float(target_pos_m100_100)
+        if not math.isfinite(target):
+            raise ValueError("Z position target must be finite")
+        with self._target_lock:
+            self._target_pos_m100_100 = max(-100.0, min(100.0, target))
+            self._target_initialized = True
 
     ############################################################
     # Move Position Functions
@@ -554,28 +475,25 @@ class SourcceyZActuator:
         self,
         target_pos_m100_100: float,
         *,
-        hz: float = 30.0,
+        hz: float | None = None,
         instant: bool = True,
     ) -> None:
-        """
-        Non-blocking "servo-like" position command.
-
-        - Sets the target position immediately.
-        - Starts (or reconfigures) a background loop that continuously drives toward the latest target.
-        - Call again at any time with a new target; the background loop will move to the new value.
-        """
+        """Set a position target and ensure the background controller is running."""
         if self.driver is None:
             raise RuntimeError("No driver provided. Pass `driver=...` to move the actuator.")
 
+        if hz is not None:
+            self.control_hz = max(1.0, float(hz))
         self.write_position(float(target_pos_m100_100))
-        self._ensure_controller_running(hz=float(hz), instant=bool(instant))
+        del instant  # Retained for compatibility with existing callers.
+        self._ensure_controller_running()
 
     def move_to_position_blocking(
         self,
         target_pos_m100_100: float,
         *,
         timeout_s: float = 10.0,
-        hz: float = 30.0,
+        hz: float | None = None,
         instant: bool = True,
     ) -> float:
         """
@@ -590,7 +508,8 @@ class SourcceyZActuator:
 
         self.write_position(float(target_pos_m100_100))
 
-        period = 1.0 / max(1.0, float(hz))
+        update_hz = self.control_hz if hz is None else max(1.0, float(hz))
+        period = 1.0 / update_hz
         t_end = time.monotonic() + float(timeout_s)
         last_t = time.monotonic()
 
@@ -602,11 +521,9 @@ class SourcceyZActuator:
 
             dt = now - last_t
             last_t = now
+            pos = self.update(dt, instant=instant)
 
-            self.update(dt, instant=instant)
-            pos = float(self.read_position())
-
-            if abs(pos - float(target_pos_m100_100)) <= float(self.deadband):
+            if abs(pos - float(target_pos_m100_100)) <= self.position_deadband:
                 self.stop()
                 return pos
 

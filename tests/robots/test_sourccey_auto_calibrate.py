@@ -398,6 +398,42 @@ def test_sourccey_z_actuator_loads_valid_calibration_file(
     assert actuator.invert is False
 
 
+def test_z_controller_is_proportional_bounded_and_has_no_endpoint_boost(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setattr(z_actuator_module, "HF_LEROBOT_CALIBRATION", tmp_path)
+    actuator = SourcceyZActuator(sensor=ZSensor(), driver=_DummyDriver(), motor_invert=False)
+
+    assert actuator.compute_command(position=0.0, target=0.5) == 0.0
+    assert actuator.compute_command(position=0.0, target=2.0) == pytest.approx(0.325)
+    assert actuator.compute_command(position=0.0, target=-2.0) == pytest.approx(-0.325)
+    assert actuator.compute_command(position=0.0, target=100.0) == pytest.approx(0.85)
+    assert actuator.compute_command(position=95.0, target=100.0) == pytest.approx(0.40)
+
+
+def test_z_controller_update_applies_motor_direction_inversion(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setattr(z_actuator_module, "HF_LEROBOT_CALIBRATION", tmp_path)
+    driver = _DummyDriver()
+    actuator = SourcceyZActuator(sensor=ZSensor(), driver=driver, motor_invert=True)
+    monkeypatch.setattr(actuator, "read_position", lambda: 0.0)
+    actuator.write_position(10.0)
+
+    position = actuator.update()
+
+    assert position == 0.0
+    assert driver.velocity_calls[-1] == ("linear_actuator", pytest.approx(-0.525), True, True)
+
+
+def test_z_controller_rejects_nonfinite_target(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr(z_actuator_module, "HF_LEROBOT_CALIBRATION", tmp_path)
+    actuator = SourcceyZActuator(sensor=ZSensor())
+
+    with pytest.raises(ValueError, match="must be finite"):
+        actuator.write_position(float("nan"))
+
+
 @pytest.mark.parametrize(
     ("raw_bottom", "raw_top", "expected_invert"),
     [

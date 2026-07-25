@@ -83,9 +83,9 @@ class SourcceyClient(Robot):
 
         # Define three speed levels and a current index
         self.speed_levels = [
-            {"x": 0.8,  "y": 0.8,  "z": 1.0, "theta": 0.8},   # slow
+            {"x": 0.8, "y": 0.8, "z": 0.5, "theta": 0.8},  # slow
             {"x": 0.9, "y": 0.9, "z": 1.0, "theta": 0.9},  # medium
-            {"x": 1.0,  "y": 1.0,  "z": 1.0, "theta": 1.0},   # fast
+            {"x": 1.0, "y": 1.0, "z": 1.5, "theta": 1.0},  # fast
         ]
         self.speed_index = 1  # Start at medium speed (0.9)
 
@@ -117,16 +117,19 @@ class SourcceyClient(Robot):
         self._y_cmd_smoothed = 0.0
 
         # Z Position Control
-        # You measured ~5s for z to go from +100 to -100 units (200-unit travel).
+        # Match target motion to the measured actuator travel time. At medium
+        # speed this is 40 position units/s, or roughly five seconds end-to-end.
         self._z_min = -100.0
         self._z_max = 100.0
-        self._z_full_travel_s = 1.0
+        self._z_full_travel_s = max(0.1, float(config.z_teleop_full_travel_s))
         self._z_units_per_s = (self._z_max - self._z_min) / self._z_full_travel_s
+        self._z_max_target_step = max(0.1, float(config.z_teleop_max_target_step))
 
         # Stored target position. It is initialized from the first remote sensor
         # observation instead of assuming the actuator starts at +100.
         self._z_pos_cmd = 0.0
         self._z_pos_cmd_initialized = False
+        self._z_was_moving = False
 
         # Log-throttle repeated poll timeouts to avoid terminal spam in teleop loops.
         self._no_data_log_interval_s = self.no_data_log_interval_s
@@ -598,11 +601,15 @@ class SourcceyClient(Robot):
             self._z_pos_cmd = float(z_obs_pos)
             self._z_pos_cmd_initialized = True
 
-        z_rate = float(self._z_units_per_s)
-        self._z_pos_cmd = float(np.clip(self._z_pos_cmd + (z_dir * z_rate * dt), self._z_min, self._z_max))
-
-        if valid_z_obs and z_dir == 0.0:
+        if z_dir != 0.0:
+            requested_step = z_dir * float(self._z_units_per_s) * dt
+            z_step = float(np.clip(requested_step, -self._z_max_target_step, self._z_max_target_step))
+            self._z_pos_cmd = float(np.clip(self._z_pos_cmd + z_step, self._z_min, self._z_max))
+        elif self._z_was_moving and valid_z_obs:
+            # On key release, stop at the latest measured position once. Do not
+            # continuously copy sensor/network noise into an otherwise fixed target.
             self._z_pos_cmd = float(z_obs_pos)
+        self._z_was_moving = z_dir != 0.0
 
         if abs(self._x_cmd_smoothed) >= self._x_deadbane:
             # already moving -> smooth changes

@@ -112,6 +112,15 @@ class SourcceyConfig(RobotConfig):
     dc_motors_config: dict = field(default_factory=sourccey_dc_motors_config)
     dc_motors: dict = field(default_factory=sourccey_dc_motors)
 
+    # Z actuator runtime control. Calibration remains stored separately.
+    z_adc_samples: int = 10
+    z_proportional_gain: float = 0.025
+    z_minimum_up_command: float = 0.30
+    z_minimum_down_command: float = 0.30
+    z_maximum_command: float = 0.85
+    z_position_deadband: float = 1.0
+    z_control_hz: float = 50.0
+
     # Optional
     left_arm_disable_torque_on_disconnect: bool = True
     left_arm_max_relative_target: int | None = None
@@ -174,6 +183,10 @@ class SourcceyClientConfig(RobotConfig):
     slam_stereo_left_key: str | None = None
     slam_stereo_right_key: str | None = None
     slam_jpeg_quality: int | None = None
+
+    # Q/E position-target generation. Five seconds matches measured full travel.
+    z_teleop_full_travel_s: float = 5.0
+    z_teleop_max_target_step: float = 2.0
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {

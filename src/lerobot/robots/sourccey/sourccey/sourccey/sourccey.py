@@ -81,11 +81,17 @@ class Sourccey(Robot):
         )
 
          # Z Actuator Code
-        self.z_sensor = ZSensor(adc_channel=1, vref=3.30, average_samples=50)
+        self.z_sensor = ZSensor(adc_channel=1, vref=3.30, average_samples=max(1, config.z_adc_samples))
         self.z_actuator = SourcceyZActuator(
             sensor=self.z_sensor,
             driver=self.dc_motors_controller,
             motor="linear_actuator",
+            proportional_gain=config.z_proportional_gain,
+            minimum_up_command=config.z_minimum_up_command,
+            minimum_down_command=config.z_minimum_down_command,
+            maximum_command=config.z_maximum_command,
+            position_deadband=config.z_position_deadband,
+            control_hz=config.z_control_hz,
         )
 
         # Initialize protobuf converter
@@ -386,7 +392,7 @@ class Sourccey(Robot):
             # Z actuator is position-controlled; drive toward the latest z.pos target (non-blocking).
             if "z.pos" in base_goal_pos and self.z_actuator.use_z_actuator:
                 try:
-                    self.z_actuator.move_to_position(float(base_goal_pos.get("z.pos", 100.0)), hz=30.0, instant=True)
+                    self.z_actuator.move_to_position(float(base_goal_pos["z.pos"]), instant=True)
                 except Exception as e:
                     logger.warning(f"Failed to command z actuator: {e}")
 
