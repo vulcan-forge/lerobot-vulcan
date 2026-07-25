@@ -73,7 +73,7 @@ def main():
 
     print("Waiting for commands...")
 
-    last_cmd_time = time.time()
+    last_cmd_time = time.monotonic()
     watchdog_active = False
 
     try:
@@ -102,7 +102,7 @@ def main():
                 # Update the robot
                 robot.update()
 
-                last_cmd_time = time.time()
+                last_cmd_time = time.monotonic()
                 watchdog_active = False
             except zmq.Again:
                 if not watchdog_active:
@@ -111,11 +111,13 @@ def main():
             except Exception as e:
                 logging.error("Message fetching failed: %s", e)
 
-            now = time.time()
+            now = time.monotonic()
             if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
-                logging.debug(
-                    f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. "
+                logging.warning(
+                    "Command not received for more than %d milliseconds. Stopping the base.",
+                    host.watchdog_timeout_ms,
                 )
+                robot.stop_base()
                 watchdog_active = True
 
             observation = robot.get_observation()

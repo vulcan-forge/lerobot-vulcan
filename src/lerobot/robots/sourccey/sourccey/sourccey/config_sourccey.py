@@ -147,8 +147,8 @@ class SourcceyHostConfig:
     # Duration of the application
     connection_time_s: int = 86400
 
-    # Watchdog: if command stream stalls, immediately stop base and release arm torque.
-    watchdog_timeout_ms: int = 60000
+    # Dead-man watchdog: stale command streams stop only the mobile base.
+    watchdog_timeout_ms: int = 500
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
