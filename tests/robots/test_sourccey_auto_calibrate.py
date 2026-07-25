@@ -404,11 +404,11 @@ def test_z_controller_is_proportional_bounded_and_has_no_endpoint_boost(
     monkeypatch.setattr(z_actuator_module, "HF_LEROBOT_CALIBRATION", tmp_path)
     actuator = SourcceyZActuator(sensor=ZSensor(), driver=_DummyDriver(), motor_invert=False)
 
-    assert actuator.compute_command(position=0.0, target=0.5) == 0.0
-    assert actuator.compute_command(position=0.0, target=2.0) == pytest.approx(0.325)
-    assert actuator.compute_command(position=0.0, target=-2.0) == pytest.approx(-0.325)
+    assert actuator.compute_command(position=0.0, target=0.25) == 0.0
+    assert actuator.compute_command(position=0.0, target=2.0) == pytest.approx(0.716)
+    assert actuator.compute_command(position=0.0, target=-2.0) == pytest.approx(-0.716)
     assert actuator.compute_command(position=0.0, target=100.0) == pytest.approx(1.0)
-    assert actuator.compute_command(position=95.0, target=100.0) == pytest.approx(0.40)
+    assert actuator.compute_command(position=95.0, target=100.0) == pytest.approx(0.836)
 
 
 def test_z_controller_update_applies_motor_direction_inversion(
@@ -423,7 +423,7 @@ def test_z_controller_update_applies_motor_direction_inversion(
     position = actuator.update()
 
     assert position == 0.0
-    assert driver.velocity_calls[-1] == ("linear_actuator", pytest.approx(-0.525), True, True)
+    assert driver.velocity_calls[-1] == ("linear_actuator", pytest.approx(-1.0), True, True)
 
 
 def test_z_controller_rejects_nonfinite_target(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

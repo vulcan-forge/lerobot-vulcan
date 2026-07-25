@@ -225,11 +225,11 @@ class SourcceyZActuator:
         driver: ZMotorDriver | None = None,
         motor: str | int = "linear_actuator",
         motor_invert: bool = True,
-        proportional_gain: float = 0.025,
-        minimum_up_command: float = 0.30,
-        minimum_down_command: float = 0.30,
+        proportional_gain: float = 0.04,
+        minimum_up_command: float = 0.65,
+        minimum_down_command: float = 0.65,
         maximum_command: float = 1.0,
-        position_deadband: float = 1.0,
+        position_deadband: float = 0.35,
         control_hz: float = 50.0,
     ) -> None:
 

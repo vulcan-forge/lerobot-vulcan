@@ -114,11 +114,11 @@ class SourcceyConfig(RobotConfig):
 
     # Z actuator runtime control. Calibration remains stored separately.
     z_adc_samples: int = 10
-    z_proportional_gain: float = 0.025
-    z_minimum_up_command: float = 0.30
-    z_minimum_down_command: float = 0.30
+    z_proportional_gain: float = 0.04
+    z_minimum_up_command: float = 0.65
+    z_minimum_down_command: float = 0.65
     z_maximum_command: float = 1.0
-    z_position_deadband: float = 1.0
+    z_position_deadband: float = 0.35
     z_control_hz: float = 50.0
 
     # Optional
