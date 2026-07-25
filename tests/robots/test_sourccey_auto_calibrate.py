@@ -19,6 +19,7 @@ from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_calibrator 
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey import Sourccey
 from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import (
     SourcceyZActuator,
+    ZActuatorReading,
     ZSensor,
 )
 from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.bi_sourccey_leader import (
@@ -42,6 +43,34 @@ class _DummyArm:
 
     def disconnect(self) -> None:
         self.is_connected = False
+
+
+def test_z_sensor_rejects_single_opposite_rail_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    sensor = ZSensor(average_samples=1, invert=False)
+    readings = iter((1023, 0, 1023))
+    monkeypatch.setattr(
+        sensor,
+        "read_raw",
+        lambda: ZActuatorReading(raw=next(readings), voltage=0.0),
+    )
+
+    assert sensor.read_position_m100_100() == pytest.approx(100.0)
+    assert sensor.read_position_m100_100() == pytest.approx(100.0)
+    assert sensor.read_position_m100_100() == pytest.approx(100.0)
+
+
+def test_z_sensor_accepts_confirmed_large_position_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    sensor = ZSensor(average_samples=1, invert=False)
+    readings = iter((1023, 0, 0))
+    monkeypatch.setattr(
+        sensor,
+        "read_raw",
+        lambda: ZActuatorReading(raw=next(readings), voltage=0.0),
+    )
+
+    assert sensor.read_position_m100_100() == pytest.approx(100.0)
+    assert sensor.read_position_m100_100() == pytest.approx(100.0)
+    assert sensor.read_position_m100_100() == pytest.approx(-100.0)
 
 
 class _DummyZCalibrator:

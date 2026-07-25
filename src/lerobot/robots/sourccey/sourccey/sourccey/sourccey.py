@@ -95,7 +95,10 @@ class Sourccey(Robot):
         self.untorque_left_prev = False
         self.untorque_right_prev = False
         self._z_hardware_available = True
-        self._last_known_z_pos = 100.0
+        # This is replaced with a real sensor reading during connect.  Zero is a
+        # neutral fallback; using +100 here could issue an unintended full-up
+        # command when the first ADC read was temporarily unavailable.
+        self._last_known_z_pos = 0.0
 
     def __del__(self):
         # Destructors can run on partially initialized objects if __init__ raised.
@@ -154,6 +157,10 @@ class Sourccey(Robot):
         try:
             self.dc_motors_controller.connect()
             self.z_actuator.connect()
+            try:
+                self._last_known_z_pos = float(self.z_actuator.read_position())
+            except Exception as exc:
+                logger.warning("Could not initialize Z position from the sensor: %s", exc)
         except RuntimeError as exc:
             self._z_hardware_available = False
             self.z_actuator.use_z_actuator = False

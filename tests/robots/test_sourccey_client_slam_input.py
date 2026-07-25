@@ -26,6 +26,16 @@ def _make_client() -> SourcceyClient:
     return SourcceyClient(config)
 
 
+def test_z_command_initializes_from_observation_instead_of_endpoint() -> None:
+    client = _make_client()
+
+    action = client._from_keyboard_to_base_action(np.array([], dtype=str), z_obs_pos=37.5)
+
+    assert client._z_pos_cmd_initialized is True
+    assert client._z_pos_cmd == 37.5
+    assert action["z.pos"] == 37.5
+
+
 def test_legacy_flat_slam_config_fields_still_work() -> None:
     config = SourcceyClientConfig(
         id="test-client",

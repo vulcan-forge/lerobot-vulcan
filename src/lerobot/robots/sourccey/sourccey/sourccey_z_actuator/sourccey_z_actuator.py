@@ -71,6 +71,17 @@ class ZSensor:
 
         self._adc: Optional["MCP3008"] = None
 
+        # A disconnected potentiometer/SPI hiccup commonly reads the opposite ADC
+        # rail for one cycle.  Without filtering, +100 can therefore appear as
+        # -100 and be fed straight back into both the position controller and a
+        # recorded action.  Confirm implausibly large jumps before publishing them.
+        self.max_position_jump: float = 40.0
+        self.jump_confirmation_reads: int = 2
+        self._last_position: float | None = None
+        self._jump_candidate: float | None = None
+        self._jump_candidate_reads: int = 0
+        self._position_lock = threading.Lock()
+
     @property
     def is_connected(self) -> bool:
         return self._adc is not None
@@ -94,6 +105,8 @@ class ZSensor:
                 print(f"Failed to initialize MCP3008 on channel {self.adc_channel}. {exc}")
 
             self._adc = candidate
+            if self._adc is not None:
+                self.reset_position_filter()
 
     def disconnect(self) -> None:
         if self._adc is not None:
@@ -101,12 +114,21 @@ class ZSensor:
             if callable(close):
                 close()
             self._adc = None
+            self.reset_position_filter()
 
     def set_calibration(self, *, raw_min: int, raw_max: int, invert: Optional[bool] = None) -> None:
         self.calibration_min = int(raw_min)
         self.calibration_max = int(raw_max)
         if invert is not None:
             self.invert = bool(invert)
+        self.reset_position_filter()
+
+    def reset_position_filter(self) -> None:
+        """Forget read history after connecting or changing calibration."""
+        with self._position_lock:
+            self._last_position = None
+            self._jump_candidate = None
+            self._jump_candidate_reads = 0
 
     @staticmethod
     def _clamp(x: float, lo: float, hi: float) -> float:
@@ -133,7 +155,33 @@ class ZSensor:
         return ZActuatorReading(raw=raw, voltage=voltage)
 
     def read_position_m100_100(self) -> float:
-        return self.raw_to_pos_m100_100(self.read_raw().raw)
+        measured = self.raw_to_pos_m100_100(self.read_raw().raw)
+        with self._position_lock:
+            if self._last_position is None:
+                self._last_position = measured
+                return measured
+
+            if abs(measured - self._last_position) <= self.max_position_jump:
+                self._last_position = measured
+                self._jump_candidate = None
+                self._jump_candidate_reads = 0
+                return measured
+
+            if (
+                self._jump_candidate is not None
+                and abs(measured - self._jump_candidate) <= self.max_position_jump
+            ):
+                self._jump_candidate_reads += 1
+            else:
+                self._jump_candidate = measured
+                self._jump_candidate_reads = 1
+
+            if self._jump_candidate_reads >= self.jump_confirmation_reads:
+                self._last_position = measured
+                self._jump_candidate = None
+                self._jump_candidate_reads = 0
+
+            return self._last_position
 
     ############################################################
     # Conversion Functions

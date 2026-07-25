@@ -123,8 +123,10 @@ class SourcceyClient(Robot):
         self._z_full_travel_s = 1.0
         self._z_units_per_s = (self._z_max - self._z_min) / self._z_full_travel_s
 
-        # Stored target position (what we "expect" z to be at while holding keys).
-        self._z_pos_cmd = 100.0
+        # Stored target position. It is initialized from the first remote sensor
+        # observation instead of assuming the actuator starts at +100.
+        self._z_pos_cmd = 0.0
+        self._z_pos_cmd_initialized = False
 
         # Log-throttle repeated poll timeouts to avoid terminal spam in teleop loops.
         self._no_data_log_interval_s = self.no_data_log_interval_s
@@ -587,10 +589,19 @@ class SourcceyClient(Robot):
         # If we cap dt to 1/30 while the loop runs slower (e.g., due to camera/network load),
         # z.pos changes become tiny and it can take ~seconds before the actuator deadband is exceeded.
         # We already cap dt above with `slew_time_s`, so using dt here is safe and makes Z feel immediate.
+        valid_z_obs = (
+            z_obs_pos is not None
+            and np.isfinite(z_obs_pos)
+            and self._z_min <= float(z_obs_pos) <= self._z_max
+        )
+        if valid_z_obs and not self._z_pos_cmd_initialized:
+            self._z_pos_cmd = float(z_obs_pos)
+            self._z_pos_cmd_initialized = True
+
         z_rate = float(self._z_units_per_s)
         self._z_pos_cmd = float(np.clip(self._z_pos_cmd + (z_dir * z_rate * dt), self._z_min, self._z_max))
 
-        if z_obs_pos is not None and z_dir == 0.0:
+        if valid_z_obs and z_dir == 0.0:
             self._z_pos_cmd = float(z_obs_pos)
 
         if abs(self._x_cmd_smoothed) >= self._x_deadbane:
