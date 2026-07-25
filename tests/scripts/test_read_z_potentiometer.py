@@ -32,6 +32,7 @@ def test_load_calibration_rejects_zero_range(tmp_path) -> None:
         (512, 0.0, -1.0, "OK"),
         (0, -100.0, 100.0, "ADC_RAIL,LARGE_JUMP"),
         (1023, 100.0, None, "ADC_RAIL"),
+        (4, 99.8, 99.8, "ADC_RAIL"),
         (500, -80.0, 80.0, "LARGE_JUMP"),
     ],
 )

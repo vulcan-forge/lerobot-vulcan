@@ -42,7 +42,9 @@ def classify_reading(
 ) -> str:
     """Flag electrical rail readings and physically implausible one-sample jumps."""
     warnings: list[str] = []
-    if raw <= 2 or raw >= 1021:
+    # Values within roughly 1% of either 10-bit ADC rail are suspicious for a
+    # position potentiometer unless the mechanism is physically at an endpoint.
+    if raw <= 10 or raw >= 1013:
         warnings.append("ADC_RAIL")
     calibrated_low = min(calibration_min, calibration_max)
     calibrated_high = max(calibration_min, calibration_max)
