@@ -54,3 +54,25 @@ def test_siva_c010_training_recipe(recipe_dir: str, filename: str, policy_name: 
     assert recipe["steps"] == 1_000_000
     assert recipe["save_freq"] == 50_000
     assert recipe["batch_size"] == 8
+
+
+def test_siva_c010_cached_training_recipe():
+    recipe = yaml.safe_load(
+        (CONFIG_DIR / "siva_recipes" / "siva_shirt_fold_c_010_cached.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert recipe["policy"]["path"].endswith("to-siva")
+    assert recipe["policy"]["freeze_vlm"] is True
+    assert recipe["policy"]["cache_florence_features"] is True
+    assert recipe["policy"]["florence_cache_path"] == (
+        "outputs/cache/siva_shirt_fold_c_010/florence_features.sqlite"
+    )
+    assert recipe["dataset"]["repo_id"] == "Combination/sourccey-shirt-fold-c-010"
+    assert recipe["dataset"]["image_transforms"]["enable"] is False
+    assert recipe["output_dir"] == "outputs/train/siva_sourccey-shirt-fold-c-010-cached"
+    assert recipe["job_name"] == "siva_sourccey-shirt-fold-c-010-cached"
+    assert recipe["steps"] == 1_000_000
+    assert recipe["save_freq"] == 100_000
+    assert recipe["batch_size"] == 8
