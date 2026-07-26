@@ -27,5 +27,5 @@ Retry automatically resumes from the last safe checkpoint. To resume manually:
 ```bash
 CUDA_VISIBLE_DEVICES=1 uv run lerobot-train \
   --resume=true \
-  --config_path=outputs/train/siva_s_sourccey-shirt-fold-c-010/checkpoints/last/pretrained_model/train_config.json
+  --config_path=outputs/train/siva_sourccey-shirt-fold-c-010/checkpoints/last/pretrained_model/train_config.json
 ```

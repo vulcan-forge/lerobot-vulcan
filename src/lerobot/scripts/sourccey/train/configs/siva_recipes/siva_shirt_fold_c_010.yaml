@@ -1,4 +1,4 @@
-# Train SIVA on C-010 from the separately converted C-009 XVLA checkpoint.
+# Train SIVA on C-010 from the converted C-009 XVLA checkpoint.
 policy:
   path: outputs/converted/xvla_s_sourccey-shirt-fold-c-009-to-siva
   dtype: bfloat16
@@ -11,13 +11,13 @@ policy:
 
 dataset:
   repo_id: Combination/sourccey-shirt-fold-c-010
+  root: /home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-010
 
-output_dir: outputs/train/siva_s_sourccey-shirt-fold-c-010
-job_name: siva_s_sourccey-shirt-fold-c-010
+output_dir: outputs/train/siva_sourccey-shirt-fold-c-010
+job_name: siva_sourccey-shirt-fold-c-010
 steps: 1000000
 save_freq: 50000
 batch_size: 8
 
 wandb:
   enable: false
-

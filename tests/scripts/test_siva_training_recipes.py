@@ -29,6 +29,12 @@ def test_siva_c010_training_recipe(filename: str, policy_name: str):
     recipe = yaml.safe_load((RECIPE_DIR / filename).read_text(encoding="utf-8"))
 
     assert recipe["dataset"]["repo_id"] == "Combination/sourccey-shirt-fold-c-010"
+    if policy_name == "siva":
+        assert recipe["dataset"]["root"] == (
+            "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-010"
+        )
+        assert recipe["output_dir"] == "outputs/train/siva_sourccey-shirt-fold-c-010"
+        assert recipe["job_name"] == "siva_sourccey-shirt-fold-c-010"
     assert recipe["policy"]["path"].endswith(f"to-{policy_name}")
     assert recipe["policy"]["dtype"] == "bfloat16"
     assert recipe["policy"]["input_features"] is None

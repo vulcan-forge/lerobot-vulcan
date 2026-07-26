@@ -1,0 +1,52 @@
+# Train SIVA on Sourccey shirt-fold C-010
+
+Run these commands from the repository root. The conversion starts SIVA from
+the C-009 XVLA checkpoint, and the YAML recipe trains it on the local C-010
+dataset.
+
+## 1. Convert XVLA C-009 to SIVA
+
+```bash
+uv run lerobot-convert-xvla-to-siva \
+  --source=outputs/train/xvla_s_sourccey-shirt-fold-c-009/checkpoints/1000000/pretrained_model \
+  --output-dir=outputs/converted/xvla_s_sourccey-shirt-fold-c-009-to-siva
+```
+
+The output directory must not already contain files. If a previous conversion
+is there, either use it or move it aside before rerunning the command.
+
+Conversion transfers the compatible Florence VLM weights and the XVLA
+preprocessor/postprocessor files. SIVA's context slots, router, motion priors,
+and flow action decoder are new modules that will be learned on C-010. The VLM
+is frozen by default; add `--train-vlm` only if you intentionally want to
+fine-tune it.
+
+## 2. Train `siva_sourccey-shirt-fold-c-010`
+
+The recipe is
+[`siva_shirt_fold_c_010.yaml`](../../../../scripts/sourccey/train/configs/siva_recipes/siva_shirt_fold_c_010.yaml).
+It uses the converted checkpoint above and the local dataset at
+`/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-010`.
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run lerobot-train-retry \
+  --max-attempts=30 \
+  --retry-delay-seconds=20 \
+  --config_path=src/lerobot/scripts/sourccey/train/configs/siva_recipes/siva_shirt_fold_c_010.yaml
+```
+
+The recipe trains for 1,000,000 steps with a batch size of 8, saves every
+50,000 steps, and writes the model to
+`outputs/train/siva_sourccey-shirt-fold-c-010`.
+
+Change `CUDA_VISIBLE_DEVICES=1` if the intended GPU has a different index. The
+retry wrapper automatically resumes from the last safe checkpoint after a
+failed attempt.
+
+## Resume manually
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run lerobot-train \
+  --resume=true \
+  --config_path=outputs/train/siva_sourccey-shirt-fold-c-010/checkpoints/last/pretrained_model/train_config.json
+```
