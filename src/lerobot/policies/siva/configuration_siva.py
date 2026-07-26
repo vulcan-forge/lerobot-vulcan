@@ -81,6 +81,13 @@ class SIVAConfig(XVLAConfig):
     # XVLA VLM.  Keeping this false by default prevents accidentally freezing a
     # randomly initialized Florence model in from-scratch tests.
     freeze_vlm: bool = False
+
+    # Optional, training-only disk cache for the frozen Florence output.  This
+    # is deliberately opt-in because it trades local disk space for throughput
+    # and is only correct when both the samples and Florence are deterministic.
+    cache_florence_features: bool = False
+    florence_cache_path: str | None = None
+
     # Set only by the XVLA-to-SIVA converter.  It records provenance and explains
     # why the first load is allowed to have newly initialized action modules.
     xvla_init_source: str | None = None
@@ -107,3 +114,10 @@ class SIVAConfig(XVLAConfig):
             raise ValueError("`prior_noise_scale` must be positive.")
         if self.routing_temperature <= 0.0:
             raise ValueError("`routing_temperature` must be positive.")
+        if self.cache_florence_features:
+            if not self.florence_cache_path:
+                raise ValueError(
+                    "`florence_cache_path` is required when `cache_florence_features=True`."
+                )
+            if not self.freeze_vlm:
+                raise ValueError("SIVA Florence caching requires `freeze_vlm=True`.")

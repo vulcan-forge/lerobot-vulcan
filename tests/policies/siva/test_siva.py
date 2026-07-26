@@ -12,7 +12,8 @@ from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.factory import get_policy_class, make_policy_config
 from lerobot.policies.siva.configuration_siva import SIVAConfig
 from lerobot.policies.siva.convert_checkpoint import convert_xvla_checkpoint
-from lerobot.policies.siva.modeling_siva import SIVAActionHead, SIVAPolicy
+from lerobot.policies.siva.florence_cache import SIVAFlorenceFeatureCache
+from lerobot.policies.siva.modeling_siva import SIVAActionHead, SIVAModel, SIVAPolicy
 from lerobot.policies.siva.structured_flow import MotionPriorLibrary, SlotCompressor
 from lerobot.policies.xvla.action_hub import build_action_space
 from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_LANGUAGE_TOKENS, OBS_STATE
@@ -68,6 +69,72 @@ def test_siva_rejects_invalid_architecture_settings(override, message):
     kwargs.update(override)
     with pytest.raises(ValueError, match=message):
         SIVAConfig(**kwargs)
+
+
+def test_siva_cache_is_optional_and_requires_a_frozen_vlm(tmp_path):
+    assert not _tiny_config().cache_florence_features
+
+    with pytest.raises(ValueError, match="florence_cache_path"):
+        SIVAConfig(
+            device="cpu",
+            chunk_size=6,
+            n_action_steps=6,
+            num_control_points=3,
+            hidden_size=32,
+            num_heads=4,
+            freeze_vlm=True,
+            cache_florence_features=True,
+        )
+    with pytest.raises(ValueError, match="freeze_vlm=True"):
+        SIVAConfig(
+            device="cpu",
+            chunk_size=6,
+            n_action_steps=6,
+            num_control_points=3,
+            hidden_size=32,
+            num_heads=4,
+            cache_florence_features=True,
+            florence_cache_path=str(tmp_path / "features.sqlite"),
+        )
+
+
+def test_siva_florence_cache_reuses_complete_context(tmp_path):
+    # Build only the cache-facing slice of SIVAModel; the cache behavior does
+    # not require constructing Florence for this focused unit test.
+    model = SIVAModel.__new__(SIVAModel)
+    torch.nn.Module.__init__(model)
+    model.config = type("CacheConfig", (), {"cache_florence_features": True})()
+    model._florence_cache = SIVAFlorenceFeatureCache(tmp_path / "features.sqlite", "test-signature")
+    model._cache_requests = 0
+    model._cache_hits = 0
+    model.training = True
+    online_calls = 0
+
+    def fake_online(input_ids, pixel_values, image_mask):
+        nonlocal online_calls
+        online_calls += 1
+        batch_size = input_ids.shape[0]
+        sample_value = input_ids[:, :1].to(torch.float32)
+        return {
+            "vlm_features": sample_value[:, :, None].expand(batch_size, 3, 5).clone(),
+            "auxiliary_visual_features": sample_value[:, :, None].expand(batch_size, 2, 5).clone(),
+            "context_mask": image_mask[:, :1].expand(batch_size, 5).bool().clone(),
+        }
+
+    model._forward_vlm_online = fake_online
+    input_ids = torch.tensor([[11, 1], [22, 1]])
+    pixel_values = torch.randn(2, 2, 3, 4, 4)
+    image_mask = torch.ones(2, 2, dtype=torch.bool)
+    cache_keys = torch.tensor([101, 202])
+
+    first = model.forward_vlm(input_ids, pixel_values, image_mask, cache_keys=cache_keys)
+    second = model.forward_vlm(input_ids, pixel_values, image_mask, cache_keys=cache_keys)
+
+    assert online_calls == 1
+    assert model._cache_hits == 2
+    assert model._florence_cache.count() == 2
+    assert first.keys() == second.keys()
+    assert all(torch.equal(first[name], second[name]) for name in first)
 
 
 def test_slot_compressor_has_fixed_output_size_for_different_input_lengths():

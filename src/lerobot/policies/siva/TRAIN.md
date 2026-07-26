@@ -22,6 +22,26 @@ steps and saves every 50,000 steps. Edit the
 [`YAML recipe`](../../scripts/sourccey/train/configs/siva_recipes/siva_shirt_fold_c_010.yaml)
 to change training parameters.
 
+## Optional Florence cache
+
+In the YAML recipe, enable:
+
+```yaml
+policy:
+  freeze_vlm: true
+  cache_florence_features: true
+  florence_cache_path: outputs/cache/siva_shirt_fold_c_010/florence_features.sqlite
+
+dataset:
+  image_transforms:
+    enable: false
+```
+
+The first visit to each sample fills the cache; later visits skip Florence. Use
+fast local storage. Choose a new path after changing the VLM, tokenizer, camera
+inputs, dtype, or preprocessing. Caching remains off by default and cannot be
+combined with VLM training.
+
 Retry automatically resumes from the last safe checkpoint. To resume manually:
 
 ```bash

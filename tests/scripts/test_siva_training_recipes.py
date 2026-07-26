@@ -35,6 +35,9 @@ def test_siva_c010_training_recipe(filename: str, policy_name: str):
         )
         assert recipe["output_dir"] == "outputs/train/siva_sourccey-shirt-fold-c-010"
         assert recipe["job_name"] == "siva_sourccey-shirt-fold-c-010"
+        assert recipe["policy"]["cache_florence_features"] is True
+        assert recipe["policy"]["florence_cache_path"].endswith("florence_features.sqlite")
+        assert recipe["dataset"]["image_transforms"]["enable"] is False
     assert recipe["policy"]["path"].endswith(f"to-{policy_name}")
     assert recipe["policy"]["dtype"] == "bfloat16"
     assert recipe["policy"]["input_features"] is None

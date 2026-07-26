@@ -15,6 +15,9 @@ boundary so comparisons can hold data, preprocessing, and visual features fixed.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 from collections import deque
 
 import torch
@@ -30,12 +33,43 @@ from lerobot.policies.xvla.modeling_xvla import XVLAPolicy
 from lerobot.utils.constants import ACTION
 
 from .configuration_siva import SIVAConfig
+from .florence_cache import SIVAFlorenceFeatureCache
 from .structured_flow import (
     MotionPriorLibrary,
     ResidualFlowDecoder,
     SlotCompressor,
     temporally_correlated_noise,
 )
+
+
+def _make_cache_signature(config: SIVAConfig, vlm: nn.Module) -> str:
+    """Fingerprint every input/model choice that determines cached Florence output."""
+    signature_config = {
+        "cache_boundary": "siva_florence_output_v1",
+        "florence_config": config.florence_config,
+        "tokenizer_name": config.tokenizer_name,
+        "tokenizer_max_length": config.tokenizer_max_length,
+        "tokenizer_padding_side": config.tokenizer_padding_side,
+        "pad_language_to": config.pad_language_to,
+        "resize_imgs_with_padding": config.resize_imgs_with_padding,
+        "num_image_views": config.num_image_views,
+        "image_features": list(config.image_features),
+        "dtype": config.dtype,
+    }
+    digest = hashlib.sha256(json.dumps(signature_config, sort_keys=True, default=str).encode())
+    # Sampling representative values avoids copying the full VLM to CPU while
+    # still rejecting a cache created by a different fine-tuned checkpoint.
+    for name, parameter in vlm.named_parameters():
+        digest.update(name.encode())
+        digest.update(str(tuple(parameter.shape)).encode())
+        digest.update(str(parameter.dtype).encode())
+        flattened = parameter.detach().reshape(-1)
+        if flattened.numel() > 0:
+            indices = torch.tensor(
+                [0, flattened.numel() // 2, flattened.numel() - 1], device=flattened.device
+            ).unique()
+            digest.update(flattened.index_select(0, indices).float().cpu().numpy().tobytes())
+    return digest.hexdigest()
 
 
 def _masked_mean(value: Tensor, valid: Tensor) -> Tensor:
@@ -252,6 +286,9 @@ class SIVAModel(nn.Module):
             token_dropout=config.vision_token_dropout,
         )
         self.action_head = SIVAActionHead(config, self.dim_action, self.action_space)
+        self._florence_cache: SIVAFlorenceFeatureCache | None = None
+        self._cache_requests = 0
+        self._cache_hits = 0
 
         if config.freeze_vlm:
             self.vlm.requires_grad_(False)
@@ -262,6 +299,8 @@ class SIVAModel(nn.Module):
             if config.freeze_language_encoder and hasattr(self.vlm, "language_model"):
                 self.vlm.language_model.requires_grad_(False)
         self.to(dtype=self._get_target_dtype())
+        if config.cache_florence_features:
+            logging.info("SIVA Florence feature cache enabled at %s", config.florence_cache_path)
 
     def _get_target_dtype(self) -> torch.dtype:
         return torch.bfloat16 if self.config.dtype == "bfloat16" else torch.float32
@@ -272,7 +311,19 @@ class SIVAModel(nn.Module):
             self.vlm.eval()
         return self
 
-    def forward_vlm(self, input_ids: Tensor, pixel_values: Tensor, image_mask: Tensor) -> dict[str, Tensor]:
+    def _get_florence_cache(self) -> SIVAFlorenceFeatureCache:
+        # Policy construction happens before from_pretrained loads weights, so
+        # delay the signature until the first batch sees the loaded checkpoint.
+        if self._florence_cache is None:
+            self._florence_cache = SIVAFlorenceFeatureCache(
+                self.config.florence_cache_path,
+                signature=_make_cache_signature(self.config, self.vlm),
+            )
+        return self._florence_cache
+
+    def _forward_vlm_online(
+        self, input_ids: Tensor, pixel_values: Tensor, image_mask: Tensor
+    ) -> dict[str, Tensor]:
         batch_size, num_views = pixel_values.shape[:2]
         flat_mask = image_mask.reshape(-1).bool()
         valid_images = pixel_values.flatten(0, 1)[flat_mask]
@@ -309,6 +360,84 @@ class SIVAModel(nn.Module):
             "context_mask": context_mask,
         }
 
+    def forward_vlm(
+        self,
+        input_ids: Tensor,
+        pixel_values: Tensor,
+        image_mask: Tensor,
+        cache_keys: Tensor | None = None,
+    ) -> dict[str, Tensor]:
+        """Run Florence, optionally serving frozen training features from disk."""
+        if not self.config.cache_florence_features or cache_keys is None or not self.training:
+            return self._forward_vlm_online(input_ids, pixel_values, image_mask)
+
+        sample_indices = [int(index) for index in cache_keys.detach().cpu().reshape(-1).tolist()]
+        if len(sample_indices) != input_ids.shape[0]:
+            raise ValueError(
+                f"Expected one Florence cache key per sample, got {len(sample_indices)} keys for "
+                f"batch size {input_ids.shape[0]}."
+            )
+
+        cache = self._get_florence_cache()
+        cached = cache.get_many(sample_indices)
+        missing_positions = [
+            position for position, sample_index in enumerate(sample_indices) if sample_index not in cached
+        ]
+        online: dict[int, dict[str, Tensor]] = {}
+        computed: dict[int, tuple[Tensor, Tensor, Tensor]] = {}
+        if missing_positions:
+            missing = torch.tensor(missing_positions, device=input_ids.device, dtype=torch.long)
+            with torch.no_grad():
+                missing_features = self._forward_vlm_online(
+                    input_ids.index_select(0, missing),
+                    pixel_values.index_select(0, missing),
+                    image_mask.index_select(0, missing),
+                )
+            for offset, position in enumerate(missing_positions):
+                sample_index = sample_indices[position]
+                sample_features = {
+                    "vlm_features": missing_features["vlm_features"][offset],
+                    "auxiliary_visual_features": missing_features["auxiliary_visual_features"][offset],
+                    "context_mask": missing_features["context_mask"][offset],
+                }
+                online[position] = sample_features
+                computed[sample_index] = (
+                    sample_features["vlm_features"],
+                    sample_features["auxiliary_visual_features"],
+                    sample_features["context_mask"],
+                )
+            cache.put_many(computed)
+
+        device = input_ids.device
+        resolved: dict[str, list[Tensor]] = {
+            "vlm_features": [],
+            "auxiliary_visual_features": [],
+            "context_mask": [],
+        }
+        for position, sample_index in enumerate(sample_indices):
+            features = online.get(position, cached.get(sample_index))
+            if features is None:
+                raise RuntimeError(f"Failed to resolve Florence features for dataset index {sample_index}.")
+            if "context_mask" not in features:
+                raise ValueError(
+                    "This cache entry predates SIVA context-mask caching. Use a new `florence_cache_path`."
+                )
+            resolved["vlm_features"].append(features["vlm_features"].to(device, non_blocking=True))
+            resolved["auxiliary_visual_features"].append(
+                features["auxiliary_visual_features"].to(device, non_blocking=True)
+            )
+            resolved["context_mask"].append(features["context_mask"].to(device, non_blocking=True))
+
+        self._cache_requests += len(sample_indices)
+        self._cache_hits += len(sample_indices) - len(missing_positions)
+        if self._cache_requests % 10_000 < len(sample_indices):
+            logging.info(
+                "SIVA Florence cache hit rate: %.1f%% (%d cached samples)",
+                100 * self._cache_hits / self._cache_requests,
+                cache.count(),
+            )
+        return {name: torch.stack(tensors) for name, tensors in resolved.items()}
+
     def _encode_context(
         self,
         input_ids: Tensor,
@@ -316,11 +445,12 @@ class SIVAModel(nn.Module):
         image_mask: Tensor,
         domain_id: Tensor,
         proprio: Tensor,
+        cache_keys: Tensor | None = None,
     ) -> Tensor:
         dtype = self._get_target_dtype()
         image_input = image_input.to(dtype=dtype)
         proprio = proprio.to(dtype=dtype)
-        features = self.forward_vlm(input_ids, image_input, image_mask)
+        features = self.forward_vlm(input_ids, image_input, image_mask, cache_keys=cache_keys)
         proprio_model, _ = self.action_space.preprocess(
             proprio, proprio.new_zeros((proprio.shape[0], self.chunk_size, self.dim_action))
         )
@@ -335,8 +465,11 @@ class SIVAModel(nn.Module):
         proprio: Tensor,
         action: Tensor,
         action_is_pad: Tensor | None = None,
+        cache_keys: Tensor | None = None,
     ) -> dict[str, Tensor]:
-        slots = self._encode_context(input_ids, image_input, image_mask, domain_id, proprio)
+        slots = self._encode_context(
+            input_ids, image_input, image_mask, domain_id, proprio, cache_keys=cache_keys
+        )
         return self.action_head(
             slots, action.to(dtype=self._get_target_dtype()), domain_id, action_is_pad=action_is_pad
         )
@@ -409,6 +542,10 @@ class SIVAPolicy(XVLAPolicy):
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
         inputs = self._build_model_inputs(batch)
+        if self.config.cache_florence_features and self.training:
+            if "index" not in batch:
+                raise KeyError("Florence caching requires the dataset's stable `index` field in every batch.")
+            inputs["cache_keys"] = batch["index"]
         targets = self._prepare_action_targets(batch)
         action_is_pad = _prepare_padding_mask(batch, targets)
         # Invalid boundary values must be sanitized before interpolation; masking
