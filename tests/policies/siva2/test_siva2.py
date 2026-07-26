@@ -21,7 +21,8 @@ from lerobot.policies.siva2.architecture_siva2 import (
 )
 from lerobot.policies.siva2.configuration_siva2 import SIVA2Config
 from lerobot.policies.siva2.convert_checkpoint import convert_xvla_checkpoint
-from lerobot.policies.siva2.modeling_siva2 import SIVA2ActionHead, SIVA2Policy
+from lerobot.policies.siva2.florence_cache import SIVA2FlorenceFeatureCache
+from lerobot.policies.siva2.modeling_siva2 import SIVA2ActionHead, SIVA2Model, SIVA2Policy
 from lerobot.policies.xvla.action_hub import build_action_space
 from lerobot.utils.constants import (
     ACTION,
@@ -97,6 +98,82 @@ def test_siva2_rejects_invalid_architecture_settings(override, message):
     kwargs.update(override)
     with pytest.raises(ValueError, match=message):
         SIVA2Config(**kwargs)
+
+
+def test_siva2_cache_is_optional_and_requires_frozen_florence(tmp_path):
+    assert not _tiny_config().cache_florence_features
+    with pytest.raises(ValueError, match="florence_cache_path"):
+        SIVA2Config(
+            device="cpu",
+            chunk_size=6,
+            n_action_steps=6,
+            num_control_points=3,
+            hidden_size=32,
+            num_heads=4,
+            freeze_vlm=True,
+            cache_florence_features=True,
+        )
+    with pytest.raises(ValueError, match="freeze_vlm=True"):
+        SIVA2Config(
+            device="cpu",
+            chunk_size=6,
+            n_action_steps=6,
+            num_control_points=3,
+            hidden_size=32,
+            num_heads=4,
+            cache_florence_features=True,
+            florence_cache_path=str(tmp_path / "features.sqlite"),
+        )
+
+
+def test_siva2_florence_cache_reuses_all_typed_context_inputs(tmp_path):
+    model = SIVA2Model.__new__(SIVA2Model)
+    torch.nn.Module.__init__(model)
+    model.config = type("CacheConfig", (), {"cache_florence_features": True})()
+    model._florence_cache = SIVA2FlorenceFeatureCache(
+        tmp_path / "features.sqlite", "test-signature"
+    )
+    model._cache_requests = 0
+    model._cache_hits = 0
+    model.training = True
+    online_calls = 0
+
+    def fake_online(**arguments):
+        nonlocal online_calls
+        online_calls += 1
+        input_ids = arguments["input_ids"]
+        batch_size = input_ids.shape[0]
+        value = input_ids[:, :1].to(torch.float32)
+        return {
+            "scene_tokens": value[:, :, None].expand(batch_size, 3, 4).clone(),
+            "scene_mask": torch.ones(batch_size, 3, dtype=torch.bool),
+            "history_features": value[:, None, :, None].expand(batch_size, 2, 3, 4).clone(),
+            "history_token_mask": torch.ones(batch_size, 2, 3, dtype=torch.bool),
+            "goal_embeddings": value[:, :, None].expand(batch_size, 2, 4).clone(),
+            "goal_mask": torch.ones(batch_size, 2, dtype=torch.bool),
+            "subgoal_features": value[:, :, None].expand(batch_size, 2, 4).clone(),
+            "subgoal_token_mask": torch.ones(batch_size, 2, dtype=torch.bool),
+        }
+
+    model._forward_florence_online = fake_online
+    arguments = {
+        "input_ids": torch.tensor([[11, 1], [22, 1]]),
+        "image_input": torch.randn(2, 1, 3, 4, 4),
+        "image_mask": torch.ones(2, 1, dtype=torch.bool),
+        "history_input": torch.randn(2, 2, 1, 3, 4, 4),
+        "history_mask": torch.ones(2, 2, 1, dtype=torch.bool),
+        "subgoal_input": torch.randn(2, 1, 3, 4, 4),
+        "subgoal_mask": torch.ones(2, 1, dtype=torch.bool),
+        "cache_keys": torch.tensor([101, 202]),
+    }
+    first = model.forward_florence(**arguments)
+    second = model.forward_florence(**arguments)
+
+    assert online_calls == 1
+    assert model._cache_hits == 2
+    assert model._florence_cache.count() == 2
+    assert first.keys() == second.keys()
+    assert all(torch.equal(first[name], second[name]) for name in first)
 
 
 def test_temporal_memory_has_fixed_output_for_different_histories():
@@ -216,7 +293,7 @@ def test_converter_copies_vlm_and_referenced_processor_state(tmp_path):
     assert (output / "siva2_initialization.json").is_file()
 
 
-def test_tiny_policy_runs_history_subgoal_value_forward_and_inference():
+def test_tiny_policy_runs_cached_history_subgoal_value_forward_and_inference(tmp_path):
     torch.manual_seed(11)
     florence_config = {
         "vision_config": {
@@ -248,6 +325,9 @@ def test_tiny_policy_runs_history_subgoal_value_forward_and_inference():
     image_key = f"{OBS_IMAGES}.front"
     subgoal_key = "observation.subgoal.front"
     config = _tiny_config()
+    config.freeze_vlm = True
+    config.cache_florence_features = True
+    config.florence_cache_path = str(tmp_path / "florence_features.sqlite")
     config.florence_config = florence_config
     config.input_features = {
         image_key: PolicyFeature(type=FeatureType.VISUAL, shape=(3, 32, 32)),
@@ -269,6 +349,7 @@ def test_tiny_policy_runs_history_subgoal_value_forward_and_inference():
         OBS_LANGUAGE_SUBTASK_ATTENTION_MASK: torch.ones(2, 8, dtype=torch.long),
         ACTION: torch.randn(2, config.chunk_size, 4),
         "domain_id": torch.tensor([0, 1]),
+        "index": torch.tensor([101, 202]),
         "action_is_pad": torch.tensor([[False] * 6, [False] * 4 + [True] * 2]),
         "siva2.quality": torch.tensor([5.0, 3.0]),
         "siva2.advantage": torch.tensor([1.0, -1.0]),

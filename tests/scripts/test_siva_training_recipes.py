@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-RECIPE_DIR = (
+CONFIG_DIR = (
     Path(__file__).parents[2]
     / "src"
     / "lerobot"
@@ -14,19 +14,18 @@ RECIPE_DIR = (
     / "sourccey"
     / "train"
     / "configs"
-    / "siva_recipes"
 )
 
 
 @pytest.mark.parametrize(
-    ("filename", "policy_name"),
+    ("recipe_dir", "filename", "policy_name"),
     [
-        ("siva_shirt_fold_c_010.yaml", "siva"),
-        ("siva2_shirt_fold_c_010.yaml", "siva2"),
+        ("siva_recipes", "siva_shirt_fold_c_010.yaml", "siva"),
+        ("siva2_recipes", "siva2_shirt_fold_c_010.yaml", "siva2"),
     ],
 )
-def test_siva_c010_training_recipe(filename: str, policy_name: str):
-    recipe = yaml.safe_load((RECIPE_DIR / filename).read_text(encoding="utf-8"))
+def test_siva_c010_training_recipe(recipe_dir: str, filename: str, policy_name: str):
+    recipe = yaml.safe_load((CONFIG_DIR / recipe_dir / filename).read_text(encoding="utf-8"))
 
     assert recipe["dataset"]["repo_id"] == "Combination/sourccey-shirt-fold-c-010"
     if policy_name == "siva":
@@ -35,6 +34,15 @@ def test_siva_c010_training_recipe(filename: str, policy_name: str):
         )
         assert recipe["output_dir"] == "outputs/train/siva_sourccey-shirt-fold-c-010"
         assert recipe["job_name"] == "siva_sourccey-shirt-fold-c-010"
+        assert recipe["policy"]["cache_florence_features"] is True
+        assert recipe["policy"]["florence_cache_path"].endswith("florence_features.sqlite")
+        assert recipe["dataset"]["image_transforms"]["enable"] is False
+    else:
+        assert recipe["dataset"]["root"] == (
+            "/home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-010"
+        )
+        assert recipe["output_dir"] == "outputs/train/siva2_sourccey-shirt-fold-c-010"
+        assert recipe["job_name"] == "siva2_sourccey-shirt-fold-c-010"
         assert recipe["policy"]["cache_florence_features"] is True
         assert recipe["policy"]["florence_cache_path"].endswith("florence_features.sqlite")
         assert recipe["dataset"]["image_transforms"]["enable"] is False

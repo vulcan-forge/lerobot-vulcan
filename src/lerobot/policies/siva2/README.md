@@ -67,6 +67,13 @@ Only `model.vlm.*` tensors transfer. Typed slots, temporal memory, factored
 priors, residual flow, and the value model begin newly initialized. Processor
 JSON files and their referenced normalization state files are copied together.
 
+## Optional Florence caching
+
+SIVA2 can cache the frozen Florence outputs for current cameras, observation
+history, task/subtask text, and subgoal images. Typed slots, temporal fusion,
+proprioception, condition dropout, value learning, and action learning remain
+live. See [`TRAIN.md`](TRAIN.md) for the C-010 YAML and copy-paste commands.
+
 ## First controlled comparison
 
 Train XVLA, SIVA, and SIVA2 on the same split and optimizer budget. Initially

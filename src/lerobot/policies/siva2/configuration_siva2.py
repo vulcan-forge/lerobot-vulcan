@@ -97,6 +97,10 @@ class SIVA2Config(XVLAConfig):
     value_intervention_loss_weight: float = 0.05
 
     freeze_vlm: bool = False
+    # Optional training-only cache for all frozen Florence outputs consumed by
+    # the typed scene, temporal-memory, goal, and subgoal branches.
+    cache_florence_features: bool = False
+    florence_cache_path: str | None = None
     xvla_init_source: str | None = None
 
     def __post_init__(self) -> None:
@@ -131,6 +135,13 @@ class SIVA2Config(XVLAConfig):
             raise ValueError("Condition category counts must be positive.")
         if self.speed_normalizer <= 0.0 or self.time_normalizer <= 0.0:
             raise ValueError("Condition normalizers must be positive.")
+        if self.cache_florence_features:
+            if not self.florence_cache_path:
+                raise ValueError(
+                    "`florence_cache_path` is required when `cache_florence_features=True`."
+                )
+            if not self.freeze_vlm:
+                raise ValueError("SIVA2 Florence caching requires `freeze_vlm=True`.")
 
     def validate_features(self) -> None:
         """Validate current cameras separately from optional subgoal images."""
