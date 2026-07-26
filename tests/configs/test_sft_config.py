@@ -30,7 +30,10 @@ SFT_RECIPE_DIR = (
 )
 
 
-@pytest.mark.parametrize("recipe_name", ["example.yaml", "shirt_fold_c_009.yaml"])
+@pytest.mark.parametrize(
+    "recipe_name",
+    ["example.yaml", "shirt_fold_c_009.yaml", "shirt_fold_c_010.yaml"],
+)
 def test_sft_recipes_are_valid_yaml(recipe_name: str) -> None:
     recipe = yaml.safe_load((SFT_RECIPE_DIR / recipe_name).read_text(encoding="utf-8"))
 

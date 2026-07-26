@@ -8,7 +8,7 @@ Use this runbook when you want a clean local dataset for training.
 
 ```bash
 HF_LEROBOT_HOME="${HOME}/.cache/huggingface/lerobot"
-DATASET_REPO="Combination/sourccey-shirt-fold-c-specific-000"
+DATASET_REPO="Combination/sourccey-shirt-fold-c-010"
 DATASET_ROOT="${HF_LEROBOT_HOME}/${DATASET_REPO}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 
@@ -96,7 +96,7 @@ Fast smoke test:
 ```bash
 uv run python src/lerobot/robots/sourccey/runbooks/tools/datasets/audit_video_decode_errors.py \
   --dataset-repo-id "$DATASET_REPO" \
-  --max-files 100 \
+  --max-files 1000 \
   --workers 8 \
   --output-dir "outputs/video_audit_${STAMP}_smoke"
 ```
