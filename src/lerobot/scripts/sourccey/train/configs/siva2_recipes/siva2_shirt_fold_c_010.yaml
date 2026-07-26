@@ -1,0 +1,30 @@
+# Train SIVA2 on C-010 from the separately converted C-009 XVLA checkpoint.
+policy:
+  path: outputs/converted/xvla_s_sourccey-shirt-fold-c-009-to-siva2
+  dtype: bfloat16
+  device: cuda
+  push_to_hub: false
+  input_features: null
+  scheduler_warmup_steps: 10000
+  scheduler_decay_steps: 1000000
+  scheduler_decay_lr: 5.0e-06
+
+  # Optional frozen-Florence cache. Set false to compute Florence every step.
+  cache_florence_features: true
+  florence_cache_path: outputs/cache/siva2_shirt_fold_c_010/florence_features.sqlite
+
+dataset:
+  repo_id: Combination/sourccey-shirt-fold-c-010
+  root: /home/sourccey/.cache/huggingface/lerobot/Combination/sourccey-shirt-fold-c-010
+  # Stable pixels are required because cache rows are keyed by dataset index.
+  image_transforms:
+    enable: false
+
+output_dir: outputs/train/siva2_sourccey-shirt-fold-c-010
+job_name: siva2_sourccey-shirt-fold-c-010
+steps: 1000000
+save_freq: 50000
+batch_size: 8
+
+wandb:
+  enable: false
