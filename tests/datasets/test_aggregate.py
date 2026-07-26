@@ -16,8 +16,12 @@
 
 import json
 import logging
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import pandas as pd
+import PIL.Image
 import pytest
 
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
@@ -30,6 +34,7 @@ from lerobot.datasets.aggregate import aggregate_datasets
 from lerobot.datasets.feature_utils import features_equal_for_merge
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.video_utils import encode_video_frames
+from lerobot.utils.import_utils import get_safe_default_video_backend
 from tests.fixtures.constants import DUMMY_REPO_ID
 
 
@@ -284,10 +289,10 @@ def assert_video_timestamps_within_bounds(aggr_ds):
     This catches bugs where timestamps point to frames beyond the actual video length,
     which would cause "Invalid frame index" errors during data loading.
     """
-    try:
-        from torchcodec.decoders import VideoDecoder
-    except ImportError:
+    if get_safe_default_video_backend() != "torchcodec":
         return
+
+    from torchcodec.decoders import VideoDecoder
 
     for ep_idx in range(aggr_ds.num_episodes):
         ep = aggr_ds.meta.episodes[ep_idx]

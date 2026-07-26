@@ -16,6 +16,7 @@
 import importlib
 import importlib.metadata
 import logging
+from functools import lru_cache
 from typing import Any
 
 from draccus.choice_types import ChoiceRegistry
@@ -69,15 +70,25 @@ def is_package_available(
         return package_exists
 
 
-def get_safe_default_video_backend():
+@lru_cache(maxsize=1)
+def get_safe_default_video_backend() -> str:
     logger = logging.getLogger(__name__)
-    if importlib.util.find_spec("torchcodec"):
-        return "torchcodec"
+    if importlib.util.find_spec("torchcodec") is not None:
+        try:
+            # Finding the package is insufficient: native TorchCodec libraries can
+            # still fail to load when FFmpeg is missing or ABI-incompatible.
+            importlib.import_module("torchcodec")
+        except Exception as exc:
+            logger.warning(
+                "'torchcodec' is installed but could not be loaded (%s); falling back to 'pyav'",
+                type(exc).__name__,
+            )
+        else:
+            return "torchcodec"
     else:
-        logger.warning(
-            "'torchcodec' is not available in your platform, falling back to 'pyav' as a default decoder"
-        )
-        return "pyav"
+        logger.warning("'torchcodec' is not installed; falling back to 'pyav'")
+
+    return "pyav"
 
 
 _require_package_cache: dict[str, bool] = {}
