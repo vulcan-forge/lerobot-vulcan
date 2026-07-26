@@ -21,6 +21,7 @@ If training exits with a non-zero code, it retries from:
 """
 
 import argparse
+import json
 import logging
 import shlex
 import subprocess
@@ -28,13 +29,15 @@ import sys
 import time
 from pathlib import Path
 
+import yaml
+
 from lerobot.utils.import_utils import register_third_party_plugins
 
 _LAST_TRAIN_CONFIG_RELATIVE = Path("checkpoints/last/pretrained_model/train_config.json")
 
 
 def _extract_output_dir(train_args: list[str]) -> Path | None:
-    """Extract output_dir from CLI args forwarded to lerobot_train."""
+    """Extract output_dir from CLI args, falling back to the YAML/JSON config."""
     for index, arg in enumerate(train_args):
         if arg.startswith("--output_dir="):
             return Path(arg.split("=", 1)[1]).expanduser()
@@ -42,6 +45,22 @@ def _extract_output_dir(train_args: list[str]) -> Path | None:
         if arg in ("--output_dir", "--output-dir") and index + 1 < len(train_args):
             return Path(train_args[index + 1]).expanduser()
 
+    config_path: Path | None = None
+    for index, arg in enumerate(train_args):
+        if arg.startswith(("--config_path=", "--config-path=")):
+            config_path = Path(arg.split("=", 1)[1]).expanduser()
+            break
+        if arg in ("--config_path", "--config-path") and index + 1 < len(train_args):
+            config_path = Path(train_args[index + 1]).expanduser()
+            break
+    if config_path is None or not config_path.is_file():
+        return None
+    with config_path.open(encoding="utf-8") as config_file:
+        config = (
+            json.load(config_file) if config_path.suffix.lower() == ".json" else yaml.safe_load(config_file)
+        )
+    if isinstance(config, dict) and config.get("output_dir"):
+        return Path(config["output_dir"]).expanduser()
     return None
 
 
@@ -127,7 +146,7 @@ def main() -> int:
 
     output_dir = _extract_output_dir(train_args)
     if output_dir is None:
-        parser.error("Missing --output_dir in training args. It is required for automatic resume.")
+        parser.error("Missing output_dir in the CLI arguments or training config. It is required for resume.")
 
     resume_config_path = output_dir / _LAST_TRAIN_CONFIG_RELATIVE
     retry_train_args = train_args
