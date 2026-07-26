@@ -189,7 +189,9 @@ def test_xvla_converter_transfers_only_vlm_and_records_new_modules(tmp_path):
     (source / "config.json").write_text(
         '{"type":"xvla_light","cache_florence_features":true,"florence_cache_path":"cache"}'
     )
-    (source / "policy_preprocessor.json").write_text("{}")
+    state_name = "policy_preprocessor_step_4_normalizer.safetensors"
+    (source / "policy_preprocessor.json").write_text(f'{{"steps":[{{"state_file":"{state_name}"}}]}}')
+    save_file({"mean": torch.ones(2)}, source / state_name)
     save_file(
         {
             "model.vlm.encoder.weight": torch.ones(2, 2),
@@ -211,6 +213,7 @@ def test_xvla_converter_transfers_only_vlm_and_records_new_modules(tmp_path):
     assert manifest["transferred_tensors"] == 1
     assert manifest["skipped_tensors"] == 1
     assert (output / "policy_preprocessor.json").is_file()
+    assert (output / state_name).is_file()
     assert (output / "siva_initialization.json").is_file()
 
 

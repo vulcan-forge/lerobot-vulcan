@@ -22,6 +22,29 @@ SUPPORTED_SOURCE_TYPES = {"xvla", "xvla_light", "xvla_extra_light"}
 VLM_PREFIX = "model.vlm."
 
 
+def _copy_processor_bundle(source: Path, output: Path) -> list[str]:
+    """Copy processor configs and every state file they reference."""
+    copied: list[str] = []
+    for filename in ("policy_preprocessor.json", "policy_postprocessor.json"):
+        config_path = source / filename
+        if not config_path.is_file():
+            continue
+        shutil.copy2(config_path, output / filename)
+        copied.append(filename)
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        for step in config.get("steps", []):
+            state_file = step.get("state_file")
+            if state_file and state_file not in copied:
+                state_path = source / state_file
+                if not state_path.is_file():
+                    raise FileNotFoundError(
+                        f"Processor {filename} references missing state file {state_file}."
+                    )
+                shutil.copy2(state_path, output / state_file)
+                copied.append(state_file)
+    return copied
+
+
 def convert_xvla_checkpoint(
     source: str | Path,
     output: str | Path,
@@ -90,12 +113,7 @@ def convert_xvla_checkpoint(
         raise ValueError("The checkpoint contains no model.vlm.* weights to transfer.")
     save_file(transferred, output / "model.safetensors")
 
-    copied_files = []
-    for filename in ("policy_preprocessor.json", "policy_postprocessor.json"):
-        candidate = source / filename
-        if candidate.is_file():
-            shutil.copy2(candidate, output / filename)
-            copied_files.append(filename)
+    copied_files = _copy_processor_bundle(source, output)
 
     manifest: dict[str, object] = {
         "format": 1,

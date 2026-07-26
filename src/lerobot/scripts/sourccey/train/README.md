@@ -3,6 +3,43 @@
 This package keeps Sourccey training changes isolated from LeRobot's upstream
 `lerobot_train.py` entry point.
 
+## SIVA quick start
+
+Convert a working XVLA checkpoint to SIVA:
+
+```bash
+uv run lerobot-convert-xvla-to-siva \
+  --source=outputs/train/my-xvla/checkpoints/last/pretrained_model \
+  --output-dir=outputs/converted/my-siva-init
+```
+
+Train the new SIVA modules while reusing the XVLA Florence weights and
+processors:
+
+```bash
+uv run sourccey-pretrain \
+  --policy.path=outputs/converted/my-siva-init \
+  --dataset.repo_id=YOUR_ORG/YOUR_DATASET \
+  --output_dir=outputs/train/my-siva \
+  --steps=100000 \
+  --batch_size=8 \
+  --save_freq=10000
+```
+
+Resume an interrupted run:
+
+```bash
+uv run sourccey-pretrain \
+  --resume=true \
+  --config_path=outputs/train/my-siva/checkpoints/last/pretrained_model/train_config.json
+```
+
+For SIVA2, use the same commands with
+`lerobot-convert-xvla-to-siva2`, `my-siva2-init`, and `my-siva2`. Conversion
+starts a new action architecture and optimizer; it does not make an XVLA action
+head compatible with SIVA. Florence is frozen by default. Add `--train-vlm` to
+the conversion command only when you intentionally want to fine-tune it.
+
 ## How the pieces fit together
 
 `trainer.py` is the shared Sourccey training engine. The other files are small
