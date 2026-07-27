@@ -1,66 +1,43 @@
 #!/usr/bin/env python
 
-import logging
+import time
 from types import SimpleNamespace
 
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_safety import SourcceyFollowerSafety
 
 
 def _make_safety() -> SourcceyFollowerSafety:
-    robot = SimpleNamespace(
-        bus=SimpleNamespace(motors={"elbow_flex": object()}),
-        config=SimpleNamespace(
-            orientation="left",
-            gripper_current_safety_threshold=None,
-            max_current_safety_threshold=2500,
-        ),
-    )
+    robot = SimpleNamespace(config=SimpleNamespace(orientation="left"))
     return SourcceyFollowerSafety(robot)
 
 
-def test_apply_overcurrent_slowdown_keeps_moving_deeper() -> None:
+def test_large_distance_uses_step_safety() -> None:
     safety = _make_safety()
-    safety.remember_goal({"elbow_flex": 110.0}, {"elbow_flex": 100.0})
+    safety._action_stream_start_time = time.monotonic() - safety.STEP_SAFETY_STARTUP_WINDOW_S - 1.0
 
-    safe_goal = safety.apply_overcurrent_slowdown(
-        {"elbow_flex": 111.0},
-        {"elbow_flex": 101.0},
-        {"elbow_flex": 200.0},
-    )
-
-    assert safe_goal["elbow_flex"] == 103.0
+    assert safety.should_use_step_safety({"shoulder_lift": 121.0}, {"shoulder_lift": 0.0})
 
 
-def test_apply_overcurrent_slowdown_slows_backing_away() -> None:
+def test_small_distance_does_not_use_step_safety_after_startup() -> None:
     safety = _make_safety()
-    safety.remember_goal({"elbow_flex": 110.0}, {"elbow_flex": 100.0})
+    safety._action_stream_start_time = time.monotonic() - safety.STEP_SAFETY_STARTUP_WINDOW_S - 1.0
 
-    safe_goal = safety.apply_overcurrent_slowdown(
-        {"elbow_flex": 95.0},
-        {"elbow_flex": 101.0},
-        {"elbow_flex": 200.0},
-    )
-
-    assert safe_goal["elbow_flex"] == 99.0
+    assert not safety.should_use_step_safety({"shoulder_lift": 119.0}, {"shoulder_lift": 0.0})
 
 
-def test_apply_overcurrent_slowdown_does_not_require_direction_history() -> None:
+def test_step_safety_limits_motion_in_both_directions() -> None:
     safety = _make_safety()
 
-    safe_goal = safety.apply_overcurrent_slowdown(
-        {"elbow_flex": 95.0},
-        {"elbow_flex": 101.0},
-        {"elbow_flex": 200.0},
-    )
+    positive = safety.apply_step_safety({"shoulder_lift": 100.0}, {"shoulder_lift": 10.0})
+    negative = safety.apply_step_safety({"shoulder_lift": -100.0}, {"shoulder_lift": 10.0})
 
-    assert safe_goal["elbow_flex"] == 99.0
+    assert positive["shoulder_lift"] == 15.0
+    assert negative["shoulder_lift"] == 5.0
 
 
-def test_log_overcurrent_motors_reports_slowdown(caplog) -> None:
+def test_step_safety_preserves_nearby_target() -> None:
     safety = _make_safety()
 
-    with caplog.at_level(logging.WARNING):
-        safety.log_overcurrent_motors({"elbow_flex": 200.0})
+    safe_goal = safety.apply_step_safety({"shoulder_lift": 12.0}, {"shoulder_lift": 10.0})
 
-    assert "Overcurrent slowdown active for left arm" in caplog.text
-    assert "elbow_flex" in caplog.text
+    assert safe_goal["shoulder_lift"] == 12.0
