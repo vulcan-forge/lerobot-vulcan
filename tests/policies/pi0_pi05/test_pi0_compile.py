@@ -38,6 +38,8 @@ pytestmark = pytest.mark.skipif(
     reason="torch.compile benchmark is too slow for CI; run manually on GPU nodes",
 )
 
+MIN_COMPILE_BENCHMARK_VRAM_GIB = 32
+
 
 def _make_model(*, compile_model):
     return PI0Pytorch(make_compile_config(PI0Config, compile_model=compile_model)).cuda().eval()
@@ -72,6 +74,12 @@ def test_pi0_torch_compile_forward_and_sample_actions():
         pytest.skip("torch.compile is not available")
     if not torch._dynamo.is_dynamo_supported():
         pytest.skip("torch._dynamo is not supported on this platform")
+    total_vram_gib = torch.cuda.get_device_properties(0).total_memory / 1024**3
+    if total_vram_gib < MIN_COMPILE_BENCHMARK_VRAM_GIB:
+        pytest.skip(
+            f"PI0 eager-vs-compiled benchmark requires at least "
+            f"{MIN_COMPILE_BENCHMARK_VRAM_GIB} GiB VRAM; found {total_vram_gib:.1f} GiB"
+        )
 
     torch.manual_seed(0)
     eager_model = _make_model(compile_model=False)

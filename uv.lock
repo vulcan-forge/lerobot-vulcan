@@ -1085,7 +1085,7 @@ name = "decord"
 version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", marker = "(platform_machine != 'arm64' and sys_platform == 'darwin') or (platform_machine == 'AMD64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "numpy", marker = "(platform_machine != 'arm64' and platform_machine != 's390x' and sys_platform == 'darwin') or (platform_machine == 'AMD64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'linux')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/11/79/936af42edf90a7bd4e41a6cac89c913d4b47fa48a26b042d5129a9242ee3/decord-0.6.0-py3-none-manylinux2010_x86_64.whl", hash = "sha256:51997f20be8958e23b7c4061ba45d0efcd86bffd5fe81c695d0befee0d442976", size = 13602299, upload-time = "2021-06-14T21:30:55.486Z" },
@@ -2932,6 +2932,7 @@ sourccey = [
     { name = "transformers" },
     { name = "vosk", marker = "sys_platform != 'darwin' and sys_platform != 'win32'" },
     { name = "wandb" },
+    { name = "websockets" },
 ]
 sourccey-desktop = [
     { name = "accelerate" },
@@ -2972,6 +2973,7 @@ sourccey-desktop = [
     { name = "transformers" },
     { name = "vosk", marker = "sys_platform != 'darwin' and sys_platform != 'win32'" },
     { name = "wandb" },
+    { name = "websockets" },
 ]
 test = [
     { name = "mock-serial", marker = "sys_platform != 'win32'" },
@@ -3273,6 +3275,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'transformers-dep'", specifier = ">=5.4.0,<5.6.0" },
     { name = "vosk", marker = "sys_platform != 'darwin' and sys_platform != 'win32' and extra == 'sourccey'", specifier = ">=0.3.45" },
     { name = "wandb", marker = "extra == 'training'", specifier = ">=0.24.0,<0.25.0" },
+    { name = "websockets", marker = "extra == 'sourccey'", specifier = ">=15.0,<17.0" },
 ]
 provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "transformers-dep", "grpcio-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "motorbridge-dep", "motorbridge-smart-servo-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "sourccey", "sourccey-desktop", "rebot", "kinematics", "intelrealsense", "phone", "diffusion", "wallx", "pi", "molmoact2", "smolvla", "multi-task-dit", "groot", "sarm", "robometer", "topreward", "xvla", "siva", "siva2", "eo1", "hilserl", "vla-jepa", "async", "peft", "dev", "notebook", "test", "video-benchmark", "mujoco-dep", "aloha", "pusht", "libero", "metaworld", "all"]
 

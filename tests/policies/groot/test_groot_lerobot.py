@@ -34,6 +34,7 @@ from lerobot.utils.device_utils import auto_select_torch_device
 from tests.utils import require_cuda
 
 pytest.importorskip("transformers")
+pytest.importorskip("peft", reason="GR00T tests require the optional lerobot[groot] dependencies")
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true",
