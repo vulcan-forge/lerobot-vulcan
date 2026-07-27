@@ -15,7 +15,6 @@ class SourcceyFollowerSafety:
     ###################################################################
     STEP_SAFETY_STARTUP_WINDOW_S = 3.0
     STEP_CURRENT_TARGET_TOLERANCE = 2.0
-    OVERCURRENT_DIRECTION_TOLERANCE = 1.0
     STEP_SAFETY_DELTA_THRESHOLDS = {
         "shoulder_pan": 120.0,
         "shoulder_lift": 120.0,
@@ -32,9 +31,17 @@ class SourcceyFollowerSafety:
         "wrist_roll": 5.0,
         "gripper": 5.0,
     }
+    OVERCURRENT_MAX_STEPS = {
+        "shoulder_pan": 2.0,
+        "shoulder_lift": 2.0,
+        "elbow_flex": 2.0,
+        "wrist_flex": 2.0,
+        "wrist_roll": 2.0,
+        "gripper": 1.0,
+    }
     DEFAULT_STEP_CURRENT_LIMITS = {
-        "shoulder_pan": 240.0,
-        "shoulder_lift": 240.0,
+        "shoulder_pan": 360.0,
+        "shoulder_lift": 360.0,
         "elbow_flex": 120.0,
         "wrist_flex": 120.0,
         "wrist_roll": 120.0,
@@ -218,45 +225,26 @@ class SourcceyFollowerSafety:
     # Used by:
     # - SourcceyFollower._apply_runtime_safety(...)
     #
-    # Private helpers used here:
-    # - _direction_from_delta(...)
-    # - _get_blocked_direction(...)
-    #
     # Purpose:
-    # - Once a joint crosses the higher threshold, reject deeper motion for
-    #   that joint until the command backs away or the overload clears.
+    # - Once a joint crosses the higher threshold, keep it moving toward the
+    #   requested target, but at a smaller per-frame step.
     ###################################################################
-    def apply_overcurrent_hold(
+    def apply_overcurrent_slowdown(
         self,
         goal_pos: dict[str, float],
         present_pos: dict[str, float],
         overcurrent_motors: dict[str, float],
     ) -> dict[str, float]:
-        """Hold overloaded joints in place unless the new command is backing away from the jam."""
+        """Slow overloaded joints without holding or direction-latching them."""
         safe_goal_pos = goal_pos.copy()
         for motor_name in overcurrent_motors:
-            if motor_name not in present_pos:
+            if motor_name not in present_pos or motor_name not in goal_pos:
                 continue
 
             current_pos = float(present_pos[motor_name])
-            requested_delta = float(goal_pos.get(motor_name, current_pos)) - current_pos
-            requested_direction = self._direction_from_delta(requested_delta)
-            blocked_direction = self._get_blocked_direction(motor_name)
-
-            if blocked_direction == 0:
-                # If we have not yet identified which direction caused the overload,
-                # do not freeze a fresh retreat command on the first overcurrent frame.
-                if requested_direction == 0:
-                    safe_goal_pos[motor_name] = current_pos
-                continue
-
-            # If the fresh command is already backing away from the blocked direction,
-            # let it through immediately.
-            if requested_direction != 0 and requested_direction != blocked_direction:
-                continue
-
-            # While overloaded, refuse to command this joint any deeper into the obstruction.
-            safe_goal_pos[motor_name] = current_pos
+            requested_delta = float(goal_pos[motor_name]) - current_pos
+            max_step = self.OVERCURRENT_MAX_STEPS.get(motor_name, 2.0)
+            safe_goal_pos[motor_name] = current_pos + max(-max_step, min(max_step, requested_delta))
 
         return safe_goal_pos
 
@@ -356,31 +344,6 @@ class SourcceyFollowerSafety:
         }
         logger.warning("%s for %s arm: %s", label, self.robot.config.orientation, formatted)
         setattr(self, last_log_attr, now)
-
-    ###################################################################
-    # Private Helpers: Overcurrent Direction
-    #
-    # Used by:
-    # - apply_overcurrent_hold(...)
-    ###################################################################
-    def _get_blocked_direction(
-        self,
-        motor_name: str,
-    ) -> int:
-        """Infer which previously requested direction was pushing the joint deeper into a jam."""
-        if motor_name not in self._last_goal_pos or motor_name not in self._last_present_pos:
-            return 0
-
-        blocked_delta = float(self._last_goal_pos[motor_name]) - float(self._last_present_pos[motor_name])
-        return self._direction_from_delta(blocked_delta)
-
-    def _direction_from_delta(self, delta: float) -> int:
-        """Collapse a delta into -1 / 0 / 1 using a small tolerance band."""
-        if delta > self.OVERCURRENT_DIRECTION_TOLERANCE:
-            return 1
-        if delta < -self.OVERCURRENT_DIRECTION_TOLERANCE:
-            return -1
-        return 0
 
     ###################################################################
     # Private Helpers: Raw Motor Reads

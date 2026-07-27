@@ -17,39 +17,39 @@ def _make_safety() -> SourcceyFollowerSafety:
     return SourcceyFollowerSafety(robot)
 
 
-def test_apply_overcurrent_hold_blocks_only_deeper_motion() -> None:
+def test_apply_overcurrent_slowdown_keeps_moving_deeper() -> None:
     safety = _make_safety()
     safety.remember_goal({"elbow_flex": 110.0}, {"elbow_flex": 100.0})
 
-    safe_goal = safety.apply_overcurrent_hold(
+    safe_goal = safety.apply_overcurrent_slowdown(
         {"elbow_flex": 111.0},
         {"elbow_flex": 101.0},
         {"elbow_flex": 200.0},
     )
 
-    assert safe_goal["elbow_flex"] == 101.0
+    assert safe_goal["elbow_flex"] == 103.0
 
 
-def test_apply_overcurrent_hold_allows_backing_away() -> None:
+def test_apply_overcurrent_slowdown_slows_backing_away() -> None:
     safety = _make_safety()
     safety.remember_goal({"elbow_flex": 110.0}, {"elbow_flex": 100.0})
 
-    safe_goal = safety.apply_overcurrent_hold(
+    safe_goal = safety.apply_overcurrent_slowdown(
         {"elbow_flex": 95.0},
         {"elbow_flex": 101.0},
         {"elbow_flex": 200.0},
     )
 
-    assert safe_goal["elbow_flex"] == 95.0
+    assert safe_goal["elbow_flex"] == 99.0
 
 
-def test_apply_overcurrent_hold_does_not_freeze_unknown_reverse_direction() -> None:
+def test_apply_overcurrent_slowdown_does_not_require_direction_history() -> None:
     safety = _make_safety()
 
-    safe_goal = safety.apply_overcurrent_hold(
+    safe_goal = safety.apply_overcurrent_slowdown(
         {"elbow_flex": 95.0},
         {"elbow_flex": 101.0},
         {"elbow_flex": 200.0},
     )
 
-    assert safe_goal["elbow_flex"] == 95.0
+    assert safe_goal["elbow_flex"] == 99.0
