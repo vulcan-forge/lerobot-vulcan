@@ -87,6 +87,14 @@ class SIVAActionHead(nn.Module):
         super().__init__()
         self.config = config
         self.action_space = action_space
+        # AutoActionSpace keeps XVLA's padded model width for processor
+        # compatibility, but SIVA's newly initialized head should learn only
+        # from controls that the robot can actually execute.
+        self.real_action_dim = int(getattr(action_space, "real_dim", action_dim))
+        if not 0 < self.real_action_dim <= action_dim:
+            raise ValueError(
+                f"Expected real action dimension in [1, {action_dim}], got {self.real_action_dim}."
+            )
         self.router = nn.Sequential(
             nn.LayerNorm(config.hidden_size),
             nn.Linear(config.hidden_size, config.hidden_size),
@@ -122,7 +130,16 @@ class SIVAActionHead(nn.Module):
         for index in action_space.gripper_idx:
             if index < action_dim:
                 flow_weights[index] = 0.25
+        flow_weights[self.real_action_dim :] = 0.0
         self.register_buffer("flow_weights", flow_weights, persistent=False)
+
+    def _mask_dummy_actions(self, value: Tensor) -> Tensor:
+        """Zero XVLA compatibility padding so it cannot affect SIVA's flow."""
+        if self.real_action_dim == value.shape[-1]:
+            return value
+        value = value.clone()
+        value[..., self.real_action_dim :] = 0.0
+        return value
 
     def _assign_modes(self, actions: Tensor, trajectories: Tensor, valid: Tensor) -> Tensor:
         squared_error = (trajectories - actions.unsqueeze(1)).square()
@@ -154,13 +171,14 @@ class SIVAActionHead(nn.Module):
         action_is_pad: Tensor | None = None,
     ) -> dict[str, Tensor]:
         batch_size, horizon, _ = actions.shape
+        actions = self._mask_dummy_actions(actions)
         valid = (
             torch.ones((batch_size, horizon), dtype=torch.bool, device=actions.device)
             if action_is_pad is None
             else ~action_is_pad.to(device=actions.device, dtype=torch.bool)
         )
 
-        trajectories = self.priors.all_trajectories(domain_id)
+        trajectories = self._mask_dummy_actions(self.priors.all_trajectories(domain_id))
         # Nearest-prior assignment acts like online trajectory clustering.  It
         # creates a self-supervised "intent" label from every demonstration,
         # while the observation router learns to predict that label before acting.
@@ -169,7 +187,9 @@ class SIVAActionHead(nn.Module):
         router_logits = self.router(slots.mean(dim=1)) / self.config.routing_temperature
 
         scales = self.priors.select(self.priors.all_scales(batch_size), mode)
-        noise = temporally_correlated_noise(actions, self.config.noise_temporal_correlation)
+        noise = self._mask_dummy_actions(
+            temporally_correlated_noise(actions, self.config.noise_temporal_correlation)
+        )
         # Stop gradients through the prior on the flow path.  The explicit prior
         # reconstruction objective behaves like stable mini-batch k-means; the
         # flow cannot improve its own loss by moving the source underneath itself.
@@ -186,8 +206,12 @@ class SIVAActionHead(nn.Module):
 
         weighted_flow_error = (velocity - target_velocity).square() * self.flow_weights
         losses: dict[str, Tensor] = {
-            "flow_loss": _masked_mean(weighted_flow_error, valid) * self.config.flow_loss_weight,
-            "prior_loss": _masked_mean((selected_prior - actions).square(), valid)
+            "flow_loss": _masked_mean(weighted_flow_error[..., : self.real_action_dim], valid)
+            * self.config.flow_loss_weight,
+            "prior_loss": _masked_mean(
+                (selected_prior[..., : self.real_action_dim] - actions[..., : self.real_action_dim]).square(),
+                valid,
+            )
             * self.config.prior_loss_weight,
             "router_loss": F.cross_entropy(router_logits, mode) * self.config.router_loss_weight,
         }
@@ -221,7 +245,9 @@ class SIVAActionHead(nn.Module):
     ) -> Tensor:
         batch_size = slots.shape[0]
         mode = self.router(slots.mean(dim=1)).argmax(dim=-1)
-        trajectory = self.priors.select(self.priors.all_trajectories(domain_id), mode)
+        trajectory = self._mask_dummy_actions(
+            self.priors.select(self.priors.all_trajectories(domain_id), mode)
+        )
         scale = self.priors.select(self.priors.all_scales(batch_size), mode)
         if noise is None:
             noise = (
@@ -233,14 +259,14 @@ class SIVAActionHead(nn.Module):
             raise ValueError(
                 f"Expected inference noise shape {tuple(trajectory.shape)}, got {tuple(noise.shape)}."
             )
-        action = trajectory + scale * noise
+        action = self._mask_dummy_actions(trajectory + scale * noise)
 
         steps = max(1, int(steps))
         step_size = 1.0 / steps
         for index in range(steps):
             time = torch.full((batch_size,), index / steps, device=action.device, dtype=action.dtype)
             velocity = self.flow(action, time, slots, mode, domain_id)
-            action = action + step_size * velocity
+            action = self._mask_dummy_actions(action + step_size * velocity)
         return action
 
 

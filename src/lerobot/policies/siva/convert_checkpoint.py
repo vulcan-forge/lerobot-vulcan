@@ -87,7 +87,9 @@ def convert_xvla_checkpoint(
             "num_motion_modes": 8,
             "num_control_points": min(6, int(source_config.get("chunk_size", 32))),
             "domain_adapter_rank": 4,
-            "num_denoising_steps": 3,
+            "num_denoising_steps": 10,
+            "endpoint_loss_weight": 1.0,
+            "prior_loss_weight": 0.05,
         }
     )
     # These belong to XVLA-light's feature cache, not to the SIVA config.

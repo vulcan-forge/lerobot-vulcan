@@ -63,16 +63,16 @@ class SIVAConfig(XVLAConfig):
     noise_temporal_correlation: float = 0.8
     routing_temperature: float = 1.0
 
-    # A short Euler solve is the intended operating point.  One and two step
-    # inference are explicit ablations; three steps is still much cheaper than
-    # the ten denoising evaluations used by the current XVLA configuration.
-    num_denoising_steps: int = 3
+    # Use the same ten-step operating point as XVLA for a stable baseline.
+    # Shorter Euler solves remain useful latency ablations once action quality
+    # has been established.
+    num_denoising_steps: int = 10
     deterministic_inference: bool = True
 
     # Loss weights are exposed so every architectural claim can be ablated.
     flow_loss_weight: float = 1.0
-    endpoint_loss_weight: float = 0.1
-    prior_loss_weight: float = 0.25
+    endpoint_loss_weight: float = 1.0
+    prior_loss_weight: float = 0.05
     router_loss_weight: float = 0.1
     router_balance_loss_weight: float = 0.01
     smoothness_loss_weight: float = 0.001
@@ -116,8 +116,6 @@ class SIVAConfig(XVLAConfig):
             raise ValueError("`routing_temperature` must be positive.")
         if self.cache_florence_features:
             if not self.florence_cache_path:
-                raise ValueError(
-                    "`florence_cache_path` is required when `cache_florence_features=True`."
-                )
+                raise ValueError("`florence_cache_path` is required when `cache_florence_features=True`.")
             if not self.freeze_vlm:
                 raise ValueError("SIVA Florence caching requires `freeze_vlm=True`.")

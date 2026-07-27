@@ -236,6 +236,29 @@ def test_action_head_trains_all_three_paths_and_masks_padding():
     assert slots.grad is not None
 
 
+def test_action_head_ignores_auto_action_padding():
+    torch.manual_seed(17)
+    config = _tiny_config()
+    action_space = build_action_space("auto", real_dim=4, max_dim=6)
+    head = SIVAActionHead(config, action_dim=6, action_space=action_space)
+    slots = torch.randn(2, config.num_context_slots, config.hidden_size)
+    actions = torch.randn(2, config.chunk_size, 6)
+    domains = torch.tensor([0, 1])
+
+    changed_padding = actions.clone()
+    changed_padding[..., 4:] = 10_000 * torch.randn_like(changed_padding[..., 4:])
+
+    torch.manual_seed(23)
+    original_losses = head(slots, actions, domains)
+    torch.manual_seed(23)
+    changed_losses = head(slots, changed_padding, domains)
+
+    assert head.real_action_dim == 4
+    assert torch.equal(head.flow_weights[4:], torch.zeros(2))
+    for name in original_losses:
+        assert torch.allclose(original_losses[name], changed_losses[name])
+
+
 def test_action_head_generation_is_deterministic_and_has_requested_horizon():
     config = _tiny_config()
     action_space = build_action_space("auto", real_dim=4, max_dim=4)

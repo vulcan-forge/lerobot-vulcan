@@ -9,6 +9,13 @@ policy:
   scheduler_decay_steps: 1000000
   scheduler_decay_lr: 5.0e-06
 
+  # Recovery experiment: prioritize direct action imitation over fitting an
+  # averaged motion prior, and use a finer flow solve during rollout.
+  endpoint_loss_weight: 1.0
+  prior_loss_weight: 0.05
+  num_denoising_steps: 10
+  n_action_steps: 4
+
   # Optional: switch this to true to cache the frozen Florence output after its
   # first use. Put the SQLite file on fast local NVMe, not a network filesystem.
   cache_florence_features: true
@@ -22,8 +29,8 @@ dataset:
   image_transforms:
     enable: false
 
-output_dir: outputs/train/siva_sourccey-shirt-fold-c-010
-job_name: siva_sourccey-shirt-fold-c-010
+output_dir: outputs/train/siva_sourccey-shirt-fold-c-010-recovery-001
+job_name: siva_sourccey-shirt-fold-c-010-recovery-001
 steps: 1000000
 save_freq: 50000
 batch_size: 8
