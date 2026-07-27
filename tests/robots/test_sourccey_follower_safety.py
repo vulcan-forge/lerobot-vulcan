@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import logging
 from types import SimpleNamespace
 
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_safety import SourcceyFollowerSafety
@@ -53,3 +54,13 @@ def test_apply_overcurrent_slowdown_does_not_require_direction_history() -> None
     )
 
     assert safe_goal["elbow_flex"] == 99.0
+
+
+def test_log_overcurrent_motors_reports_slowdown(caplog) -> None:
+    safety = _make_safety()
+
+    with caplog.at_level(logging.WARNING):
+        safety.log_overcurrent_motors({"elbow_flex": 200.0})
+
+    assert "Overcurrent slowdown active for left arm" in caplog.text
+    assert "elbow_flex" in caplog.text

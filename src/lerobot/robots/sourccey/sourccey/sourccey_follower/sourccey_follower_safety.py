@@ -40,7 +40,7 @@ class SourcceyFollowerSafety:
         "gripper": 1.0,
     }
     DEFAULT_STEP_CURRENT_LIMITS = {
-        "shoulder_pan": 360.0,
+        "shoulder_pan": 720.0,
         "shoulder_lift": 360.0,
         "elbow_flex": 120.0,
         "wrist_flex": 120.0,
@@ -308,10 +308,10 @@ class SourcceyFollowerSafety:
         )
 
     def log_overcurrent_motors(self, overcurrent_motors: dict[str, float]) -> None:
-        """Log the higher reverse/stop current threshold periodically while active."""
+        """Log the affected joints periodically while overcurrent slowdown is active."""
         self._log_current_threshold_motors(
             overcurrent_motors,
-            label="Overcurrent trigger",
+            label="Overcurrent slowdown active",
             last_log_attr="_last_overcurrent_log_time",
         )
 
