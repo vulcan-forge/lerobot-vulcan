@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -15,6 +16,11 @@ from .config import NoActiveRobotSessionError, WebsocketRelayConfig
 INITIAL_CONNECT_RETRY_DELAY_S = 15.0
 SESSION_RECOVERY_RETRY_DELAY_S = 15.0
 SESSION_RECOVERY_CLOSE_REASONS = {"session_not_found"}
+
+
+def _emit(message: str) -> None:
+    print(message)
+    logging.info(message)
 
 
 class HostWebsocketRelayConfig(Protocol):
@@ -89,14 +95,8 @@ class WebsocketRelayManager:
             logging.warning("Websocket relay stop failed: %s", exc)
 
     def _thread_main(self) -> None:
-        import asyncio
-
         def _utc_now() -> str:
             return datetime.now(timezone.utc).isoformat()
-
-        def _emit(message: str) -> None:
-            print(message)
-            logging.info(message)
 
         _emit(f"[{_utc_now()}] websocket_relay.thread_started")
 

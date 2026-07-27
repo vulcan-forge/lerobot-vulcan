@@ -21,7 +21,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from lerobot.policies.sarm.compute_rabc_weights import (
+from lerobot.rewards.sarm.compute_rabc_weights import (
     _episode_part_path,
     _get_parts_dir,
     _list_completed_episodes,
@@ -41,7 +41,7 @@ def _make_episode_table(episode_idx: int, start_index: int) -> pa.Table:
     )
 
 
-def test_parts_manifest_mismatch_raises(tmp_path: Path):
+def test_parts_manifest_mismatch_resets_incompatible_parts(tmp_path: Path):
     output_path = tmp_path / "sarm_progress.parquet"
     parts_dir = _get_parts_dir(output_path)
 
@@ -56,19 +56,21 @@ def test_parts_manifest_mismatch_raises(tmp_path: Path):
         num_episodes=2,
         reset_parts=False,
     )
+    pq.write_table(_make_episode_table(episode_idx=0, start_index=0), _episode_part_path(parts_dir, 0))
 
-    with pytest.raises(ValueError, match="different settings"):
-        _write_parts_manifest(
-            parts_dir,
-            dataset_repo_id="dummy/repo",
-            reward_model_path="model-A",
-            head_mode="dense",
-            stride=1,
-            compute_sparse=True,
-            compute_dense=False,
-            num_episodes=2,
-            reset_parts=False,
-        )
+    _write_parts_manifest(
+        parts_dir,
+        dataset_repo_id="dummy/repo",
+        reward_model_path="model-A",
+        head_mode="dense",
+        stride=1,
+        compute_sparse=True,
+        compute_dense=False,
+        num_episodes=2,
+        reset_parts=False,
+    )
+
+    assert _list_completed_episodes(parts_dir) == set()
 
 
 def test_merge_parts_to_output(tmp_path: Path):

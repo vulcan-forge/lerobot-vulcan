@@ -60,8 +60,6 @@ import re
 import shutil
 from pathlib import Path
 
-import matplotlib.gridspec as gridspec
-import matplotlib.pyplot as plt
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -151,6 +149,9 @@ def visualize_episode(
 
     Same as sarm_inference_visualization.py
     """
+    import matplotlib.gridspec as gridspec
+    import matplotlib.pyplot as plt
+
     num_stages = stage_preds.shape[1]
     colors = plt.cm.tab10(np.linspace(0, 1, num_stages))
     frame_indices = np.arange(len(progress_preds))
@@ -524,10 +525,10 @@ def _merge_parts_to_output(
         raise RuntimeError(f"No episode part files found in {parts_dir}")
 
     if len(part_paths) < expected_num_episodes:
-        logging.warning(
-            "Merging incomplete parts: found %d / expected %d episodes",
-            len(part_paths),
-            expected_num_episodes,
+        missing_count = expected_num_episodes - len(part_paths)
+        raise RuntimeError(
+            f"Missing {missing_count} episode part files: "
+            f"found {len(part_paths)} / expected {expected_num_episodes} in {parts_dir}"
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

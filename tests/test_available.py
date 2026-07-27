@@ -19,7 +19,7 @@ from unittest.mock import patch
 import pytest
 
 import lerobot
-from lerobot.utils.import_utils import _require_package_cache, require_package
+from lerobot.utils.import_utils import _require_package_cache, get_safe_default_video_backend, require_package
 
 
 def test_version():
@@ -60,3 +60,29 @@ def test_require_package_error_message_includes_uv():
                 require_package("grpcio", extra="async", import_name="grpc")
         finally:
             _require_package_cache.clear()
+
+
+def test_default_video_backend_uses_torchcodec_when_loadable():
+    get_safe_default_video_backend.cache_clear()
+    with (
+        patch("lerobot.utils.import_utils.importlib.util.find_spec", return_value=object()),
+        patch("lerobot.utils.import_utils.importlib.import_module"),
+    ):
+        assert get_safe_default_video_backend() == "torchcodec"
+    get_safe_default_video_backend.cache_clear()
+
+
+def test_default_video_backend_falls_back_when_torchcodec_cannot_load(caplog):
+    get_safe_default_video_backend.cache_clear()
+    with (
+        patch("lerobot.utils.import_utils.importlib.util.find_spec", return_value=object()),
+        patch(
+            "lerobot.utils.import_utils.importlib.import_module",
+            side_effect=RuntimeError("native library unavailable"),
+        ),
+        caplog.at_level("WARNING"),
+    ):
+        assert get_safe_default_video_backend() == "pyav"
+
+    assert "could not be loaded" in caplog.text
+    get_safe_default_video_backend.cache_clear()

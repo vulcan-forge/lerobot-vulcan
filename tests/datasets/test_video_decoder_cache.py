@@ -26,7 +26,10 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("torchcodec", reason="torchcodec is required (install lerobot[dataset])")
+from lerobot.utils.import_utils import get_safe_default_video_backend
+
+if get_safe_default_video_backend() != "torchcodec":
+    pytest.skip("torchcodec is installed but unavailable at runtime", allow_module_level=True)
 
 from lerobot.datasets.video_utils import VideoDecoderCache, decode_video_frames_torchcodec  # noqa: E402
 

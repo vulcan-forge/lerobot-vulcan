@@ -6,7 +6,9 @@ from lerobot.robots.sourccey.sourccey.sourccey.modules.torque import untorque
 
 def _make_robot():
     left_bus = MagicMock()
+    left_bus.motors = {"left_shoulder": MagicMock(), "left_elbow": MagicMock()}
     right_bus = MagicMock()
+    right_bus.motors = {"right_shoulder": MagicMock(), "right_elbow": MagicMock()}
     robot = SimpleNamespace(
         connect=MagicMock(),
         disconnect=MagicMock(),
@@ -31,9 +33,12 @@ def test_untorque_left_arm_uses_bus_connections_only(monkeypatch):
 
     robot.connect.assert_not_called()
     robot.disconnect.assert_not_called()
-    left_bus.connect.assert_called_once_with()
-    left_bus.disable_torque.assert_called_once_with()
-    left_bus.disconnect.assert_called_once_with(disable_torque=True)
+    left_bus.connect.assert_called_once_with(handshake=False)
+    assert left_bus.disable_torque.call_args_list == [
+        (("left_shoulder",), {"num_retry": 1}),
+        (("left_elbow",), {"num_retry": 1}),
+    ]
+    left_bus.disconnect.assert_called_once_with(disable_torque=False)
     right_bus.connect.assert_not_called()
 
 
@@ -50,7 +55,13 @@ def test_enable_preserves_torque_on_disconnect(monkeypatch):
 
     untorque.main()
 
-    left_bus.enable_torque.assert_called_once_with()
-    right_bus.enable_torque.assert_called_once_with()
+    assert left_bus.enable_torque.call_args_list == [
+        (("left_shoulder",), {"num_retry": 1}),
+        (("left_elbow",), {"num_retry": 1}),
+    ]
+    assert right_bus.enable_torque.call_args_list == [
+        (("right_shoulder",), {"num_retry": 1}),
+        (("right_elbow",), {"num_retry": 1}),
+    ]
     left_bus.disconnect.assert_called_once_with(disable_torque=False)
     right_bus.disconnect.assert_called_once_with(disable_torque=False)

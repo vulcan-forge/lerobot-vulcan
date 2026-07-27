@@ -23,6 +23,7 @@ import torch
 from datasets import load_dataset
 
 from lerobot.utils.constants import HF_LEROBOT_HOME, LOOKAHEAD_BACKTRACKTABLE, LOOKBACK_BACKTRACKTABLE
+from lerobot.utils.import_utils import get_safe_default_video_backend
 
 from .dataset_metadata import CODEBASE_VERSION, LeRobotDatasetMetadata
 from .feature_utils import get_delta_indices
@@ -35,6 +36,7 @@ from .utils import (
 )
 from .video_utils import (
     VideoDecoderCache,
+    decode_video_frames_pyav,
     decode_video_frames_torchcodec,
 )
 
@@ -290,6 +292,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         self.streaming = streaming
         self.buffer_size = buffer_size
         self._return_uint8 = return_uint8
+        self.video_backend = get_safe_default_video_backend()
 
         # We cache the video decoders to avoid re-initializing them at each frame (avoiding a ~10x slowdown)
         self.video_decoder_cache = None
@@ -353,7 +356,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
     # could be used with a ThreadPoolExecutor to run `make_frame` (especially video decoding)
     # in parallel, feeding a queue from which this iterator will yield processed items.
     def __iter__(self) -> Iterator[dict[str, torch.Tensor]]:
-        if self.video_decoder_cache is None:
+        if self.video_backend == "torchcodec" and self.video_decoder_cache is None:
             self.video_decoder_cache = VideoDecoderCache()
 
         # keep the same seed across exhaustions if shuffle is False, otherwise shuffle data across exhaustions
@@ -554,13 +557,21 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         for video_key, query_ts in query_timestamps.items():
             root = self.meta.url_root if self.streaming and not self.streaming_from_local else self.root
             video_path = f"{root}/{self.meta.get_video_file_path(ep_idx, video_key)}"
-            frames = decode_video_frames_torchcodec(
-                video_path,
-                query_ts,
-                self.tolerance_s,
-                decoder_cache=self.video_decoder_cache,
-                return_uint8=self._return_uint8,
-            )
+            if self.video_backend == "torchcodec":
+                frames = decode_video_frames_torchcodec(
+                    video_path,
+                    query_ts,
+                    self.tolerance_s,
+                    decoder_cache=self.video_decoder_cache,
+                    return_uint8=self._return_uint8,
+                )
+            else:
+                frames = decode_video_frames_pyav(
+                    video_path,
+                    query_ts,
+                    self.tolerance_s,
+                    return_uint8=self._return_uint8,
+                )
 
             item[video_key] = frames.squeeze(0) if len(query_ts) == 1 else frames
 

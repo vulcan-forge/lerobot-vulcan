@@ -15,7 +15,6 @@
 # limitations under the License.
 
 import sys
-from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -407,12 +406,12 @@ def test_release_brake(protocol_handler):
     "velocity, expected_pwm",
     [
         (0.0, 0.0),
-        (0.5, 0.325),  # deadzone + (1-deadzone) * 0.5^2 = 0.1 + 0.9 * 0.25
-        (1.0, 1.0),  # deadzone + (1-deadzone) * 1^2 = 0.1 + 0.9 * 1
+        (0.5, 0.5),
+        (1.0, 1.0),
     ],
 )
 def test_velocity_to_pwm(velocity, expected_pwm, protocol_handler):
-    """Test _velocity_to_pwm conversion."""
+    """Test the linear velocity-to-PWM conversion used by the 30 RPM motor."""
     protocol_handler.connect()
 
     pwm = protocol_handler._velocity_to_pwm(velocity)

@@ -29,6 +29,7 @@ import torch
 from torch import Tensor
 
 pytest.importorskip("transformers")
+pytest.importorskip("diffusers", reason="MultiTaskDiT tests require lerobot[multi_task_dit]")
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true",

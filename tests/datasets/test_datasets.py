@@ -17,7 +17,6 @@ import logging
 import re
 from itertools import chain
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -46,7 +45,6 @@ from lerobot.datasets.utils import (
     DEFAULT_VIDEO_FILE_SIZE_IN_MB,
     create_branch,
 )
-from lerobot.datasets.video_utils import VALID_VIDEO_CODECS
 from lerobot.envs.factory import make_env_config
 from lerobot.policies.factory import make_policy_config
 from lerobot.robots import make_robot_from_config
