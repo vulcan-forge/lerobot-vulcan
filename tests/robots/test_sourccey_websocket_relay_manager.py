@@ -68,7 +68,7 @@ def test_websocket_relay_manager_attempts_bridge_run_when_configured(monkeypatch
         _FakeBridge,
     )
     monkeypatch.setattr(
-        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.print",
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager._emit",
         lambda message: emitted_messages.append(message),
     )
 
@@ -156,7 +156,7 @@ def test_websocket_relay_manager_logs_connect_and_failures_across_retries(monkey
         _sleep_stub,
     )
     monkeypatch.setattr(
-        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.print",
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager._emit",
         lambda message: emitted_messages.append(message),
     )
 
@@ -227,7 +227,7 @@ def test_websocket_relay_manager_silences_config_failures_before_first_connect(m
         _sleep_stub,
     )
     monkeypatch.setattr(
-        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.print",
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager._emit",
         lambda message: emitted_messages.append(message),
     )
 
@@ -307,7 +307,7 @@ def test_websocket_relay_manager_logs_connecting_only_once_across_session_churn(
         _sleep_stub,
     )
     monkeypatch.setattr(
-        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.print",
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager._emit",
         lambda message: emitted_messages.append(message),
     )
 
@@ -382,7 +382,7 @@ def test_websocket_relay_manager_throttles_stale_session_retries(monkeypatch) ->
         _sleep_stub,
     )
     monkeypatch.setattr(
-        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager.print",
+        "lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.manager._emit",
         lambda message: emitted_messages.append(message),
     )
 

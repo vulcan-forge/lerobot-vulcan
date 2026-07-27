@@ -388,11 +388,16 @@ def decode_video_frames_torchcodec(
             frames_batch = decoder.get_frames_at(indices=frame_indices)
         except RuntimeError as retry_err:
             logger.warning(
-                "torchcodec retry failed for %s (%s). Falling back to torchvision/pyav for this read.",
+                "torchcodec retry failed for %s (%s). Falling back to PyAV for this read.",
                 video_path,
                 retry_err,
             )
-            return decode_video_frames_torchvision(video_path, timestamps, tolerance_s, backend="pyav")
+            return decode_video_frames_pyav(
+                video_path,
+                timestamps,
+                tolerance_s,
+                return_uint8=return_uint8,
+            )
 
     for frame, pts in zip(frames_batch.data, frames_batch.pts_seconds, strict=True):
         loaded_frames.append(frame)

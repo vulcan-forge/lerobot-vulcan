@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from lerobot.robots.sourccey.sourccey.sourccey.relay_agent.codec import RelayCodec
+from lerobot.robots.sourccey.sourccey.sourccey.modules.websocket_relay.codec import RelayCodec
 
 
 def test_encode_action_from_action_dict() -> None:

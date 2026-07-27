@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import pytest
+import logging
 
-from lerobot.scripts.lerobot_teleoperate import _connect_teleop_with_optional_default_fallback
+from lerobot.scripts.lerobot_teleoperate import connect_teleop
 
 
-class _DummyTeleopWithFallback:
+class _DummyTeleop:
     def __init__(self) -> None:
         self.connected = False
         self.disconnect_calls = 0
@@ -25,28 +25,23 @@ class _DummyTeleopWithFallback:
         return {"joint.pos": 0.0}
 
 
-class _DummyTeleopNoFallback(_DummyTeleopWithFallback):
-    def get_action(self) -> dict[str, float]:
-        raise RuntimeError("not connected")
+class _ConnectedDummyTeleop(_DummyTeleop):
+    def connect(self) -> None:
+        self.connected = True
 
 
-def test_connect_teleop_falls_back_when_default_action_is_available() -> None:
-    teleop = _DummyTeleopWithFallback()
-    connected = _connect_teleop_with_optional_default_fallback(
-        teleop, allow_default_fallback=True
-    )
+def test_connect_teleop_returns_true_when_connection_succeeds() -> None:
+    teleop = _ConnectedDummyTeleop()
 
-    assert connected is False
-    assert teleop.disconnect_calls == 1
+    assert connect_teleop(teleop) is True
+    assert teleop.is_connected is True
 
 
-def test_connect_teleop_raises_when_no_fallback_action_available() -> None:
-    teleop = _DummyTeleopNoFallback()
-    with pytest.raises(RuntimeError, match="no disconnected default action fallback"):
-        _connect_teleop_with_optional_default_fallback(teleop, allow_default_fallback=True)
+def test_connect_teleop_falls_back_after_connection_error(caplog) -> None:
+    teleop = _DummyTeleop()
 
+    with caplog.at_level(logging.WARNING):
+        assert connect_teleop(teleop) is False
 
-def test_connect_teleop_raises_original_error_when_fallback_disabled() -> None:
-    teleop = _DummyTeleopWithFallback()
-    with pytest.raises(RuntimeError, match="serial port not found"):
-        _connect_teleop_with_optional_default_fallback(teleop, allow_default_fallback=False)
+    assert "serial port not found" in caplog.text
+    assert "Continuing with disconnected default actions" in caplog.text
