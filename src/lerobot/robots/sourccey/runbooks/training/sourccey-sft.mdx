@@ -15,14 +15,18 @@ uv run lerobot-sft \
 The recipe's `output_dir` must not already exist when starting a new run.
 
 
-## Resume training
+## Resume training with automatic retry
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 \
-uv run lerobot-sft \
+uv run lerobot-sft-retry \
+  --max-attempts=30 \
+  --retry-delay-seconds=20 \
   --resume=true \
-  --config_path=outputs/sft/xvla_s_sourccey-shirt-fold-c-009-corners-006/checkpoints/350000/pretrained_model/train_config.json
+  --config_path=outputs/sft/xvla_s_sourccey-shirt-fold-c-010-pre-000/checkpoints/150000/pretrained_model/train_config.json
 ```
 
 Always resume with the checkpoint's `train_config.json`, not the original recipe.
 If no emergency checkpoint was saved, this resumes from the latest periodic checkpoint.
+After a failed attempt, the retry wrapper resumes from
+`<output_dir>/checkpoints/last/pretrained_model/train_config.json`.
