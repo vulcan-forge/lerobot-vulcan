@@ -19,6 +19,8 @@
 from __future__ import annotations
 
 import builtins
+import hashlib
+import json
 import logging
 import os
 from collections import deque
@@ -36,8 +38,38 @@ from lerobot.utils.constants import ACTION, OBS_LANGUAGE_TOKENS, OBS_STATE
 from .action_hub import build_action_space
 from .configuration_florence2 import Florence2Config
 from .configuration_xvla import XVLAConfig
+from .florence_cache import FlorenceFeatureCache
 from .modeling_florence2 import Florence2ForConditionalGeneration
 from .soft_transformer import SoftPromptedTransformer
+
+
+def _make_cache_signature(config: XVLAConfig, vlm: nn.Module) -> str:
+    """Fingerprint cache-boundary settings and representative loaded Florence weights."""
+    signature_config = {
+        "florence_config": config.florence_config,
+        "tokenizer_name": config.tokenizer_name,
+        "tokenizer_max_length": config.tokenizer_max_length,
+        "tokenizer_padding_side": config.tokenizer_padding_side,
+        "pad_language_to": config.pad_language_to,
+        "resize_imgs_with_padding": config.resize_imgs_with_padding,
+        "num_image_views": config.num_image_views,
+        "image_features": list(config.image_features),
+        "dtype": config.dtype,
+    }
+    digest = hashlib.sha256(json.dumps(signature_config, sort_keys=True, default=str).encode())
+    for name, parameter in vlm.named_parameters():
+        digest.update(name.encode())
+        digest.update(str(tuple(parameter.shape)).encode())
+        digest.update(str(parameter.dtype).encode())
+        flattened = parameter.detach().reshape(-1)
+        if flattened.numel() > 0:
+            indices = torch.tensor(
+                [0, flattened.numel() // 2, flattened.numel() - 1],
+                device=flattened.device,
+            ).unique()
+            sample = flattened.index_select(0, indices).float().cpu().numpy()
+            digest.update(sample.tobytes())
+    return digest.hexdigest()
 
 
 class XVLAModel(nn.Module):
@@ -55,6 +87,9 @@ class XVLAModel(nn.Module):
         self.config = config
         self.chunk_size: int = config.chunk_size
         self.use_proprio: bool = config.use_proprio
+        self._florence_cache: FlorenceFeatureCache | None = None
+        self._cache_requests = 0
+        self._cache_hits = 0
 
         # Build action space with auto-detection for "auto" mode
         if config.action_mode.lower() == "auto":
@@ -108,6 +143,30 @@ class XVLAModel(nn.Module):
         # Apply dtype casting based on config
         self._apply_dtype()
 
+        if config.cache_florence_features:
+            # The cache boundary includes Florence projections and positional
+            # parameters beyond the two legacy encoder freeze flags.
+            for parameter in self.vlm.parameters():
+                parameter.requires_grad = False
+            self.vlm.eval()
+            logging.info("XVLA Florence feature cache enabled at %s", config.florence_cache_path)
+
+    def _get_florence_cache(self) -> FlorenceFeatureCache:
+        # Construct lazily so the signature fingerprints loaded checkpoint weights,
+        # not the randomly initialized model created before from_pretrained loads.
+        if self._florence_cache is None:
+            self._florence_cache = FlorenceFeatureCache(
+                self.config.florence_cache_path,
+                signature=_make_cache_signature(self.config, self.vlm),
+            )
+        return self._florence_cache
+
+    def train(self, mode: bool = True) -> XVLAModel:
+        super().train(mode)
+        if self.config.cache_florence_features:
+            self.vlm.eval()
+        return self
+
     def _get_target_dtype(self) -> torch.dtype:
         """Get the target dtype based on config."""
         if self.config.dtype == "bfloat16":
@@ -154,7 +213,7 @@ class XVLAModel(nn.Module):
             for param in self.transformer.soft_prompt_hub.parameters():
                 param.requires_grad = False
 
-    def forward_vlm(
+    def _forward_vlm_online(
         self,
         input_ids: torch.LongTensor,
         pixel_values: torch.FloatTensor,
@@ -191,6 +250,74 @@ class XVLAModel(nn.Module):
         aux_visual_inputs = image_features[:, 1:].reshape(batch_size, -1, hidden_dim)
         return {"vlm_features": enc_out, "aux_visual_inputs": aux_visual_inputs}
 
+    def forward_vlm(
+        self,
+        input_ids: torch.LongTensor,
+        pixel_values: torch.FloatTensor,
+        image_mask: torch.Tensor,
+        cache_keys: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
+        if not self.config.cache_florence_features or cache_keys is None or not self.training:
+            return self._forward_vlm_online(input_ids, pixel_values, image_mask)
+
+        cache = self._get_florence_cache()
+        sample_indices = [int(index) for index in cache_keys.detach().cpu().reshape(-1).tolist()]
+        if len(sample_indices) != input_ids.shape[0]:
+            raise ValueError(
+                f"Expected one Florence cache key per sample, got {len(sample_indices)} keys for "
+                f"batch size {input_ids.shape[0]}."
+            )
+
+        cached = cache.get_many(sample_indices)
+        missing_positions = [
+            position for position, sample_index in enumerate(sample_indices) if sample_index not in cached
+        ]
+        computed: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+        online: dict[int, dict[str, torch.Tensor]] = {}
+        if missing_positions:
+            missing = torch.tensor(missing_positions, device=input_ids.device, dtype=torch.long)
+            with torch.no_grad():
+                missing_features = self._forward_vlm_online(
+                    input_ids.index_select(0, missing),
+                    pixel_values.index_select(0, missing),
+                    image_mask.index_select(0, missing),
+                )
+            for offset, position in enumerate(missing_positions):
+                sample_index = sample_indices[position]
+                sample_features = {
+                    "vlm_features": missing_features["vlm_features"][offset],
+                    "aux_visual_inputs": missing_features["aux_visual_inputs"][offset],
+                }
+                online[position] = sample_features
+                computed[sample_index] = (
+                    sample_features["vlm_features"],
+                    sample_features["aux_visual_inputs"],
+                )
+            cache.put_many(computed)
+
+        device = input_ids.device
+        vlm_features = []
+        aux_visual_inputs = []
+        for position, sample_index in enumerate(sample_indices):
+            features = online.get(position, cached.get(sample_index))
+            if features is None:
+                raise RuntimeError(f"Failed to resolve Florence features for dataset index {sample_index}.")
+            vlm_features.append(features["vlm_features"].to(device=device, non_blocking=True))
+            aux_visual_inputs.append(features["aux_visual_inputs"].to(device=device, non_blocking=True))
+
+        self._cache_requests += len(sample_indices)
+        self._cache_hits += len(sample_indices) - len(missing_positions)
+        if self._cache_requests % 10_000 < len(sample_indices):
+            logging.info(
+                "Florence cache hit rate: %.1f%% (%d cached samples)",
+                100 * self._cache_hits / self._cache_requests,
+                cache.count(),
+            )
+        return {
+            "vlm_features": torch.stack(vlm_features),
+            "aux_visual_inputs": torch.stack(aux_visual_inputs),
+        }
+
     def forward(
         self,
         input_ids: torch.LongTensor,
@@ -199,6 +326,7 @@ class XVLAModel(nn.Module):
         domain_id: torch.LongTensor,
         proprio: torch.Tensor,
         action: torch.Tensor,
+        cache_keys: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """
         Forward pass for the XVLA model.
@@ -208,7 +336,7 @@ class XVLAModel(nn.Module):
         proprio = proprio.to(dtype=target_dtype)
         action = action.to(dtype=target_dtype)
 
-        enc = self.forward_vlm(input_ids, image_input, image_mask)
+        enc = self.forward_vlm(input_ids, image_input, image_mask, cache_keys=cache_keys)
 
         batch_size = input_ids.shape[0]
         t = (
@@ -385,6 +513,10 @@ class XVLAPolicy(PreTrainedPolicy):
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
         inputs = self._build_model_inputs(batch)
+        if self.config.cache_florence_features:
+            if "index" not in batch:
+                raise KeyError("Florence caching requires the dataset's stable `index` field in every batch.")
+            inputs["cache_keys"] = batch["index"]
         targets = self._prepare_action_targets(batch)
         losses = self.model(action=targets, **inputs)
         total_loss = sum(losses.values())
