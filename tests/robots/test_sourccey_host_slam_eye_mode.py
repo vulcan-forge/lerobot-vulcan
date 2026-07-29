@@ -1,6 +1,8 @@
 import json
 
 import numpy as np
+import pytest
+import zmq
 
 from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import (
     SourcceyHostConfig,
@@ -11,6 +13,7 @@ from lerobot.robots.sourccey.sourccey.sourccey.sourccey_host import (
     _build_host_slam_obstacle_publisher,
     _build_slam_eye_v4l2_controls,
     _handle_command_watchdog_timeout,
+    _recv_latest_command,
 )
 from lerobot.sensors.imu.types import IMUSample
 
@@ -212,3 +215,35 @@ def test_handle_command_watchdog_timeout_stops_motion() -> None:
 
     assert robot.stop_calls == 1
     assert robot.update_calls == 1
+
+
+def test_host_default_watchdog_expires_latched_base_motion_quickly() -> None:
+    assert SourcceyHostConfig().watchdog_timeout_ms == 500
+
+
+def test_recv_latest_command_discards_stale_motion_before_stop() -> None:
+    class _FakeSocket:
+        def __init__(self, messages: list[bytes]) -> None:
+            self.messages = list(messages)
+
+        def recv(self, flags: int) -> bytes:
+            assert flags == zmq.NOBLOCK
+            if not self.messages:
+                raise zmq.Again()
+            return self.messages.pop(0)
+
+    socket = _FakeSocket([b"turn-left", b"turn-right", b"stop"])
+
+    latest, stale_count = _recv_latest_command(socket)
+
+    assert latest == b"stop"
+    assert stale_count == 2
+
+
+def test_recv_latest_command_preserves_empty_queue_semantics() -> None:
+    class _EmptySocket:
+        def recv(self, _flags: int) -> bytes:
+            raise zmq.Again()
+
+    with pytest.raises(zmq.Again):
+        _recv_latest_command(_EmptySocket())

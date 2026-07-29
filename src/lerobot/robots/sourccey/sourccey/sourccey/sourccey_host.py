@@ -26,9 +26,11 @@ from pathlib import Path
 
 import numpy as np
 import zmq
+
 from lerobot.configs import parser
 from lerobot.sensors.imu.types import IMUSample as HostIMUSample
 
+from ..protobuf.generated import sourccey_pb2
 from .config_sourccey import (
     SourcceyConfig,
     SourcceyHostConfig,
@@ -37,9 +39,6 @@ from .config_sourccey import (
 )
 from .modules.slam import SlamInputPublisher, close_slam_pub_socket, create_slam_pub_socket
 from .sourccey import Sourccey
-
-# Import protobuf modules
-from ..protobuf.generated import sourccey_pb2
 
 
 class _HostPanoramaFusion:
@@ -310,6 +309,28 @@ def _handle_command_watchdog_timeout(robot: Sourccey, watchdog_timeout_ms: int) 
     update_fn = getattr(robot, "update", None)
     if callable(update_fn):
         update_fn()
+
+
+def _recv_latest_command(command_socket) -> tuple[bytes, int]:
+    """Return only the newest pending command from a non-blocking PULL socket.
+
+    Mobile-base velocity messages describe current desired state; they are not
+    trajectory samples. Applying an accumulated FIFO after the sender has
+    already issued zero velocity makes the robot continue an obsolete turn.
+    Explicitly draining here is required even with ``ZMQ_CONFLATE`` configured:
+    deployed libzmq versions and existing connected peers have not reliably
+    provided conflate semantics for this PULL stream.
+
+    Raises ``zmq.Again`` when no command is pending, matching ``recv``.
+    """
+    latest = command_socket.recv(zmq.NOBLOCK)
+    stale_count = 0
+    while True:
+        try:
+            latest = command_socket.recv(zmq.NOBLOCK)
+            stale_count += 1
+        except zmq.Again:
+            return latest, stale_count
 
 
 def _build_host_slam_input_publisher(config: SourcceyHostConfig) -> SlamInputPublisher | None:
@@ -672,7 +693,14 @@ def main(host_config: SourcceyHostConfig):
             loop_start_time = time.time()
             try:
                 # Receive protobuf message instead of JSON
-                msg_bytes = host.zmq_cmd_socket.recv(zmq.NOBLOCK)
+                msg_bytes, stale_commands_dropped = _recv_latest_command(
+                    host.zmq_cmd_socket
+                )
+                if stale_commands_dropped:
+                    logging.debug(
+                        "Dropped %d stale base command(s); applying newest state only.",
+                        stale_commands_dropped,
+                    )
 
                 # Convert protobuf to action dictionary using existing method
                 robot_action = sourccey_pb2.SourcceyRobotAction()
