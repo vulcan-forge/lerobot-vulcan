@@ -38,13 +38,13 @@ def test_base_command_id_round_trips_through_protobuf() -> None:
     assert message.command_id == 12345
 
 
-def test_stop_ack_requires_matching_command_and_stationary_base() -> None:
+def test_stop_ack_accepts_newer_stationary_command_but_not_older_or_moving() -> None:
     class _StatusSocket:
         def __init__(self) -> None:
             self.statuses = [
                 {"applied_command_id": 40, "stationary": True},
                 {"applied_command_id": 42, "stationary": False},
-                {"applied_command_id": 42, "stationary": True},
+                {"applied_command_id": 43, "stationary": True},
             ]
 
         def poll(self, _timeout: int, event: int) -> bool:

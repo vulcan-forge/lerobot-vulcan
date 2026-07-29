@@ -221,6 +221,16 @@ def test_host_default_watchdog_expires_latched_base_motion_quickly() -> None:
     assert SourcceyHostConfig().watchdog_timeout_ms == 500
 
 
+def test_host_arm_hardware_can_be_explicitly_disabled() -> None:
+    """A base-only host must be selectable without changing normal defaults."""
+    config = SourcceyHostConfig()
+    base_only_config = SourcceyHostConfig(arm_hardware_enabled=False)
+
+    assert config.arm_hardware_enabled is True
+    assert base_only_config.arm_hardware_enabled is False
+    assert config.arm_connect_on_startup is False
+
+
 def test_recv_latest_command_discards_stale_motion_before_stop() -> None:
     class _FakeSocket:
         def __init__(self, messages: list[bytes]) -> None:

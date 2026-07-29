@@ -113,6 +113,7 @@ class SourcceyClient(Robot):
         # Time of last command
         self._last_cmd_t = time.monotonic()
         self._last_command_id = 0
+        self.remote_arms_available = True
 
         # Base movement smoothing
         self._slew_time_s_levels = [0.25, 0.25, 1.0]
@@ -266,6 +267,7 @@ class SourcceyClient(Robot):
                 raise DeviceNotConnectedError(
                     "Sourccey Host returned an incompatible base-status protocol."
                 )
+            self.remote_arms_available = bool(status.get("arms_available", True))
 
             self._is_connected = True
         except Exception:
@@ -427,7 +429,11 @@ class SourcceyClient(Robot):
             except zmq.Again:
                 continue
             if (
-                int(status.get("applied_command_id", 0)) == expected_id
+                # A controller thread may publish a newer zero-velocity lease
+                # after this stop request. Monotonic IDs share the same client
+                # clock, so a newer stationary acknowledgement is equally
+                # strong proof that obsolete motion has been superseded.
+                int(status.get("applied_command_id", 0)) >= expected_id
                 and bool(status.get("stationary", False))
             ):
                 return True

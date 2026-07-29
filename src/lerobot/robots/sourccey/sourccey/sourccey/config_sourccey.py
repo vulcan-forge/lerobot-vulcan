@@ -214,6 +214,9 @@ class SourcceyHostConfig:
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
     arm_connect_on_startup: bool = False
+    # Set false when running as a base-only platform with the follower arms
+    # physically removed. Disabled hosts never probe the Feetech buses.
+    arm_hardware_enabled: bool = True
     arm_calibrate_on_connect: bool = False
     arm_relax_on_startup: bool = True
     # Publish the underside camera as `bottom` alongside the other live feeds.

@@ -248,6 +248,12 @@ class Sourccey(Robot):
             raise
         self._arms_connected = True
 
+    def disable_arm_hardware(self, reason: str = "disabled by host configuration") -> None:
+        """Permanently quarantine follower-arm I/O for this host process."""
+        self._arms_connected = False
+        self._arms_available = False
+        self._arms_unavailable_reason = str(reason)
+
     def disconnect(self):
         if not self.is_connected:
             return

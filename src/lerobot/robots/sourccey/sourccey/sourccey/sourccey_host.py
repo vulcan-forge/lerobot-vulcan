@@ -378,6 +378,7 @@ class _BaseCommandService:
                     "stationary": bool(stationary),
                     "watchdog_stop": bool(watchdog),
                     "base_velocity": velocity,
+                    "arms_available": bool(self._robot._arms_available),
                     "host_monotonic_ns": time.monotonic_ns(),
                 },
                 flags=zmq.NOBLOCK,
@@ -432,9 +433,15 @@ class _BaseCommandService:
                     > float(self._host.watchdog_timeout_ms) / 1000.0
                 )
                 if expired and not watchdog_active:
-                    _handle_command_watchdog_timeout(
-                        self._robot, self._host.watchdog_timeout_ms
+                    velocity = self._robot.get_base_velocity()
+                    already_stationary = all(
+                        abs(float(velocity.get(key, 0.0))) <= 1e-3
+                        for key in ("x.vel", "y.vel", "theta.vel")
                     )
+                    if not already_stationary:
+                        _handle_command_watchdog_timeout(
+                            self._robot, self._host.watchdog_timeout_ms
+                        )
                     watchdog_active = True
                     self._status(status_socket, last_command_id, True)
                 if now >= heartbeat_at:
@@ -754,6 +761,14 @@ def main(host_config: SourcceyHostConfig):
     if host_config.slam_eye_only_mode:
         _configure_front_slam_eye_camera_devices(robot_config, host_config)
     robot = Sourccey(robot_config)
+    if not host_config.arm_hardware_enabled:
+        robot.disable_arm_hardware(
+            "follower arms disabled/removed in SourcceyHostConfig"
+        )
+        print(
+            "[HOST] Follower arms: DISABLED; arm targets will be ignored and "
+            "no Feetech bus discovery will run."
+        )
 
     if host_config.arm_connect_on_startup:
         logging.warning(
