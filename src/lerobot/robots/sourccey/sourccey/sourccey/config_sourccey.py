@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 from lerobot.cameras.configs import CameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.motors.dc_motors_controller import DCMotor, MotorNormMode
-
 from lerobot.robots.config import RobotConfig
+
 from .modules.slam import SlamInputConfig
 
 
@@ -193,6 +193,8 @@ class SourcceyHostConfig:
     # Network Configuration
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
+    # Camera-independent base command acknowledgement/lease heartbeat.
+    port_zmq_base_status: int = 5562
     # Broadcast observations for Unity and other SUB consumers. Port 5560 is
     # reserved for the SLAM/fused-vision stereo sidecar.
     port_zmq_observations_broadcast: int = 5561
@@ -204,8 +206,10 @@ class SourcceyHostConfig:
     # Duration of the application
     connection_time_s: int = 86400
 
-    # Watchdog: if command stream stalls, immediately stop base and release arm torque.
-    watchdog_timeout_ms: int = 60000
+    # Watchdog: mobile-base velocity commands are leases, not persistent state.
+    # Match the proven LeKiwi timeout: if the client disappears or spends time
+    # processing without refreshing motion, stop the base within half a second.
+    watchdog_timeout_ms: int = 500
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
@@ -305,6 +309,7 @@ class SourcceyClientConfig(RobotConfig):
     remote_ip: str
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
+    port_zmq_base_status: int = 5562
     # SLAM sidecar input stream (sourccey-slam expects slam_input.v1).
     # Canonical config lives under this nested field.
     slam: SlamInputConfig = field(default_factory=SlamInputConfig)

@@ -215,6 +215,46 @@ def collision_box_dimensions(profile: dict) -> tuple[float, float]:
     )
 
 
+def physical_body_self_return_mask(
+    points_forward_xy: np.ndarray,
+    *,
+    lidar_offset_forward_m: float,
+    physical_body_radius_m: float,
+    self_mask_inset_m: float,
+) -> np.ndarray:
+    """Identify LiDAR returns securely inside the robot's physical footprint.
+
+    Sourccey's mecanum chassis has a square footprint with rounded corners.  A
+    circular mask leaves the front/side shoulder regions exposed and mistakes
+    fixed chassis returns there for nearby walls.  This inset rounded-square
+    footprint is the standard geometric self-filter: points near or outside
+    the measured chassis boundary remain collision-sensitive.
+    """
+    points = np.asarray(points_forward_xy, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1:] != (2,):
+        return np.zeros(len(points) if points.ndim else 0, dtype=bool)
+    half_extent = max(
+        0.0,
+        float(physical_body_radius_m) - max(0.0, float(self_mask_inset_m)),
+    )
+    if half_extent <= 0.0 or not len(points):
+        return np.zeros(len(points), dtype=bool)
+
+    # Keep the self-filter conservative at the physical corners.  The 6 cm
+    # rounding matches a square mobile base without treating the full planning
+    # envelope as robot material.
+    corner_radius = min(0.06, 0.25 * half_extent)
+    centred_x = points[:, 0] + float(lidar_offset_forward_m)
+    centred_y = points[:, 1]
+    qx = np.abs(centred_x) - (half_extent - corner_radius)
+    qy = np.abs(centred_y) - (half_extent - corner_radius)
+    outside = np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0))
+    signed_distance = (
+        outside + np.minimum(np.maximum(qx, qy), 0.0) - corner_radius
+    )
+    return signed_distance <= 0.0
+
+
 def collision_box_violation(
     points_forward_xy: np.ndarray,
     profile: dict | None,
@@ -251,16 +291,13 @@ def collision_box_violation(
     safety_margin = float(profile.get("safety_margin_m", noise_tolerance))
     limits = thresholds[indices] + safety_margin - noise_tolerance
     violating = np.isfinite(limits) & np.isfinite(ranges) & (ranges >= 0.03) & (ranges < limits)
-    body_radius = max(0.0, float(physical_body_radius_m) - max(0.0, float(self_mask_inset_m)))
-    if body_radius > 0.0:
-        # Robot centre is ``-lidar_offset`` in the physical-forward LiDAR
-        # frame, hence point coordinates relative to the centre are
-        # (x + lidar_offset, y).
-        body_distance = np.hypot(
-            points[:, 0] + float(lidar_offset_forward_m),
-            points[:, 1],
-        )
-        violating &= body_distance >= body_radius
+    self_returns = physical_body_self_return_mask(
+        points,
+        lidar_offset_forward_m=lidar_offset_forward_m,
+        physical_body_radius_m=physical_body_radius_m,
+        self_mask_inset_m=self_mask_inset_m,
+    )
+    violating &= ~self_returns
     if not np.any(violating):
         return None
 
@@ -325,27 +362,41 @@ def collision_box_rotation_violation(
         or abs(requested) < 0.25
     ):
         return None
-    body_radius = max(
-        0.0,
-        float(physical_body_radius_m) - max(0.0, float(self_mask_inset_m)),
-    )
-    if body_radius > 0.0:
+    original_count = len(points)
+    retained_indices = np.arange(original_count, dtype=np.int64)
+    if float(physical_body_radius_m) > 0.0:
         # Self returns rotate with the robot, not with the stationary world.
         # Remove the inset physical-body core before projecting world points
         # through future robot headings.
-        current_body_distance = np.hypot(
-            points[:, 0] + float(lidar_offset_forward_m),
-            points[:, 1],
+        self_returns = physical_body_self_return_mask(
+            points,
+            lidar_offset_forward_m=lidar_offset_forward_m,
+            physical_body_radius_m=physical_body_radius_m,
+            self_mask_inset_m=self_mask_inset_m,
         )
-        points = points[current_body_distance >= body_radius]
+        keep = ~self_returns
+        retained_indices = retained_indices[keep]
+        points = points[keep]
         if not len(points):
             return None
 
+    # Self returns have now been removed exactly once in the current robot
+    # frame. Do not apply the self mask again to projected future frames: an
+    # external point swept into the physical core is a collision, not a new
+    # self return. Violation masks are remapped to the caller's original point
+    # array before leaving this function.
     geometry = {
         "lidar_offset_forward_m": float(lidar_offset_forward_m),
-        "physical_body_radius_m": float(physical_body_radius_m),
-        "self_mask_inset_m": float(self_mask_inset_m),
+        "physical_body_radius_m": 0.0,
+        "self_mask_inset_m": 0.0,
     }
+
+    def remap_hit(
+        hit: tuple[np.ndarray, str, float, float, float],
+    ) -> tuple[np.ndarray, str, float, float, float]:
+        full_mask = np.zeros(original_count, dtype=bool)
+        full_mask[retained_indices] = np.asarray(hit[0], dtype=bool)
+        return full_mask, hit[1], hit[2], hit[3], hit[4]
 
     def points_after_turn(delta_deg: float) -> np.ndarray:
         theta = math.radians(-float(delta_deg))
@@ -378,7 +429,7 @@ def collision_box_rotation_violation(
         # controller repeats this test on every fresh pose/scan while turning.
         if next_depth < current_depth - 0.001:
             return None
-        return current, 0.0
+        return remap_hit(current), 0.0
 
     sample_count = max(1, int(math.ceil(abs(requested) / step)))
     for delta in np.linspace(signed_step, requested, sample_count):
@@ -388,5 +439,5 @@ def collision_box_rotation_violation(
             **geometry,
         )
         if hit is not None:
-            return hit, float(delta)
+            return remap_hit(hit), float(delta)
     return None

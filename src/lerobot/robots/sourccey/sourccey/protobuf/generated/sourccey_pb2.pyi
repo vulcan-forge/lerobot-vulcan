@@ -61,17 +61,19 @@ class SourcceyRobotState(_message.Message):
     def __init__(self, left_arm_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., right_arm_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., base_position: _Optional[_Union[BasePosition, _Mapping]] = ..., base_velocity: _Optional[_Union[BaseVelocity, _Mapping]] = ..., cameras: _Optional[_Iterable[_Union[CameraImage, _Mapping]]] = ...) -> None: ...
 
 class SourcceyRobotAction(_message.Message):
-    __slots__ = ("left_arm_target_joints", "right_arm_target_joints", "base_target_position", "base_target_velocity", "untorque_left", "untorque_right")
+    __slots__ = ("left_arm_target_joints", "right_arm_target_joints", "base_target_position", "base_target_velocity", "untorque_left", "untorque_right", "command_id")
     LEFT_ARM_TARGET_JOINTS_FIELD_NUMBER: _ClassVar[int]
     RIGHT_ARM_TARGET_JOINTS_FIELD_NUMBER: _ClassVar[int]
     BASE_TARGET_POSITION_FIELD_NUMBER: _ClassVar[int]
     BASE_TARGET_VELOCITY_FIELD_NUMBER: _ClassVar[int]
     UNTORQUE_LEFT_FIELD_NUMBER: _ClassVar[int]
     UNTORQUE_RIGHT_FIELD_NUMBER: _ClassVar[int]
+    COMMAND_ID_FIELD_NUMBER: _ClassVar[int]
     left_arm_target_joints: MotorJoint
     right_arm_target_joints: MotorJoint
     base_target_position: BasePosition
     base_target_velocity: BaseVelocity
     untorque_left: bool
     untorque_right: bool
-    def __init__(self, left_arm_target_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., right_arm_target_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., base_target_position: _Optional[_Union[BasePosition, _Mapping]] = ..., base_target_velocity: _Optional[_Union[BaseVelocity, _Mapping]] = ..., untorque_left: bool = ..., untorque_right: bool = ...) -> None: ...
+    command_id: int
+    def __init__(self, left_arm_target_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., right_arm_target_joints: _Optional[_Union[MotorJoint, _Mapping]] = ..., base_target_position: _Optional[_Union[BasePosition, _Mapping]] = ..., base_target_velocity: _Optional[_Union[BaseVelocity, _Mapping]] = ..., untorque_left: bool = ..., untorque_right: bool = ..., command_id: _Optional[int] = ...) -> None: ...

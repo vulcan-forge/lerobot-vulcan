@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import json
 import logging
 import math
@@ -109,9 +110,6 @@ class SourcceyHost:
         self.imu_provider = imu_provider
         self.panorama_fusion = _HostPanoramaFusion(config)
         self.zmq_context = zmq.Context()
-        self.zmq_cmd_socket = self.zmq_context.socket(zmq.PULL)
-        self.zmq_cmd_socket.setsockopt(zmq.CONFLATE, 1)
-        self.zmq_cmd_socket.bind(f"tcp://*:{config.port_zmq_cmd}")
 
         self.zmq_observation_socket = self.zmq_context.socket(zmq.PUSH)
         self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
@@ -182,7 +180,6 @@ class SourcceyHost:
         close_slam_pub_socket(self.zmq_slam_obstacle_socket)
         self.zmq_observation_broadcast_socket.close()
         self.zmq_observation_socket.close()
-        self.zmq_cmd_socket.close()
         self.zmq_context.term()
 
     def publish_slam_input(self, observation: dict) -> None:
@@ -331,6 +328,124 @@ def _recv_latest_command(command_socket) -> tuple[bytes, int]:
             stale_count += 1
         except zmq.Again:
             return latest, stale_count
+
+
+class _BaseCommandService:
+    """Camera-independent real-time base command lease and acknowledgement."""
+
+    def __init__(self, host: SourcceyHost, robot: Sourccey):
+        self._host = host
+        self._robot = robot
+        self._stop = threading.Event()
+        self._ready = threading.Event()
+        self._startup_error: BaseException | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._run,
+            name="sourccey-base-command",
+            daemon=True,
+        )
+        self._thread.start()
+        if not self._ready.wait(2.0):
+            raise RuntimeError("real-time base command service did not start")
+        if self._startup_error is not None:
+            raise RuntimeError("real-time base command service failed") from self._startup_error
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+        # This direct hardware stop is intentionally repeated by the service's
+        # finally block. Shutdown must fail safe even if ZMQ teardown races.
+        self._robot.watchdog_stop_motion()
+
+    def _status(self, socket, command_id: int, watchdog: bool) -> None:
+        velocity = self._robot.get_base_velocity()
+        stationary = all(
+            abs(float(velocity.get(key, 0.0))) <= 1e-3
+            for key in ("x.vel", "y.vel", "theta.vel")
+        )
+        with contextlib.suppress(zmq.Again):
+            socket.send_json(
+                {
+                    "schema": "sourccey.base_status.v1",
+                    "applied_command_id": int(command_id),
+                    "stationary": bool(stationary),
+                    "watchdog_stop": bool(watchdog),
+                    "base_velocity": velocity,
+                    "host_monotonic_ns": time.monotonic_ns(),
+                },
+                flags=zmq.NOBLOCK,
+            )
+
+    def _run(self) -> None:
+        command_socket = None
+        status_socket = None
+        try:
+            command_socket = self._host.zmq_context.socket(zmq.PULL)
+            command_socket.setsockopt(zmq.CONFLATE, 1)
+            command_socket.bind(f"tcp://*:{self._host.config.port_zmq_cmd}")
+            status_socket = self._host.zmq_context.socket(zmq.PUB)
+            status_socket.setsockopt(zmq.CONFLATE, 1)
+            status_socket.bind(f"tcp://*:{self._host.config.port_zmq_base_status}")
+        except BaseException as exc:
+            self._startup_error = exc
+            self._ready.set()
+            if command_socket is not None:
+                command_socket.close(0)
+            if status_socket is not None:
+                status_socket.close(0)
+            return
+        self._ready.set()
+        last_command_at = time.monotonic()
+        last_command_id = 0
+        watchdog_active = False
+        heartbeat_at = 0.0
+        try:
+            while not self._stop.is_set():
+                try:
+                    payload, stale = _recv_latest_command(command_socket)
+                    if stale:
+                        logging.debug("Dropped %d stale base command(s).", stale)
+                    message = sourccey_pb2.SourcceyRobotAction()
+                    message.ParseFromString(payload)
+                    action = self._robot.protobuf_converter.protobuf_to_action(message)
+                    self._robot.send_action(action)
+                    self._robot.update()
+                    last_command_id = int(getattr(message, "command_id", 0))
+                    last_command_at = time.monotonic()
+                    watchdog_active = False
+                    self._status(status_socket, last_command_id, False)
+                except zmq.Again:
+                    pass
+                except Exception:
+                    logging.exception("Real-time base command failed")
+
+                now = time.monotonic()
+                expired = (
+                    now - last_command_at
+                    > float(self._host.watchdog_timeout_ms) / 1000.0
+                )
+                if expired and not watchdog_active:
+                    _handle_command_watchdog_timeout(
+                        self._robot, self._host.watchdog_timeout_ms
+                    )
+                    watchdog_active = True
+                    self._status(status_socket, last_command_id, True)
+                if now >= heartbeat_at:
+                    self._status(status_socket, last_command_id, watchdog_active)
+                    heartbeat_at = now + 0.10
+                self._stop.wait(0.01)
+        finally:
+            with contextlib.suppress(Exception):
+                self._robot.watchdog_stop_motion()
+            command_socket.close(0)
+            status_socket.close(0)
 
 
 def _build_host_slam_input_publisher(config: SourcceyHostConfig) -> SlamInputPublisher | None:
@@ -676,11 +791,17 @@ def main(host_config: SourcceyHostConfig):
     imu_reporter = _IMUReporter(host_config)
     imu_reporter.start()
     host = SourcceyHost(host_config, imu_provider=imu_reporter)
+    print(f"[HOST] Control module: {Path(__file__).resolve()}")
+    base_commands = _BaseCommandService(host, robot)
+    base_commands.start()
+    print(
+        "[HOST] Real-time base control: command lease on "
+        f"tcp://*:{host_config.port_zmq_cmd}, acknowledgements on "
+        f"tcp://*:{host_config.port_zmq_base_status}, watchdog "
+        f"{host_config.watchdog_timeout_ms}ms (camera-independent)."
+    )
 
     print("Waiting for commands...")
-
-    last_cmd_time = time.time()
-    watchdog_active = False
 
     try:
         # Business logic
@@ -691,46 +812,6 @@ def main(host_config: SourcceyHostConfig):
         previous_observation = None
         while duration < host.connection_time_s:
             loop_start_time = time.time()
-            try:
-                # Receive protobuf message instead of JSON
-                msg_bytes, stale_commands_dropped = _recv_latest_command(
-                    host.zmq_cmd_socket
-                )
-                if stale_commands_dropped:
-                    logging.debug(
-                        "Dropped %d stale base command(s); applying newest state only.",
-                        stale_commands_dropped,
-                    )
-
-                # Convert protobuf to action dictionary using existing method
-                robot_action = sourccey_pb2.SourcceyRobotAction()
-                robot_action.ParseFromString(msg_bytes)
-
-                data = robot.protobuf_converter.protobuf_to_action(robot_action)
-
-                # Send action to robot
-                _action_sent = robot.send_action(data)
-
-                # Update the robot
-                robot.update()
-
-                last_cmd_time = time.time()
-                watchdog_active = False
-            except zmq.Again:
-                if not watchdog_active:
-                    # logging.warning("No command available")
-                    pass
-            except Exception as e:
-                logging.error("Message fetching failed: %s", e)
-
-            now = time.time()
-            if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
-                try:
-                    _handle_command_watchdog_timeout(robot, host.watchdog_timeout_ms)
-                except Exception as e:
-                    logging.error("Failed to stop robot motion on watchdog timeout: %s", e)
-                watchdog_active = True
-
             if observation is not None and observation != {}:
                 previous_observation = observation
             observation = robot.get_observation()
@@ -777,6 +858,7 @@ def main(host_config: SourcceyHostConfig):
         print("Keyboard interrupt received. Exiting...")
     finally:
         print("Shutting down Sourccey Host.")
+        base_commands.stop()
         imu_reporter.stop()
         robot.disconnect()
         host.disconnect()

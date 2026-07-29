@@ -123,9 +123,9 @@ class DirectLidarFeed:
         min_frame_advances: int = 1,
         armed_wall_ts: float | None = None,
     ) -> tuple[int, ScanFrame | None]:
-        deadline = time.time() + float(timeout_s)
+        deadline = time.monotonic() + float(timeout_s)
         target_frame_id = int(after_frame_id) + max(1, int(min_frame_advances))
-        while time.time() < deadline and not self._stop.is_set():
+        while time.monotonic() < deadline and not self._stop.is_set():
             frame_id, frame = self.latest()
             if frame is not None and frame_id >= target_frame_id:
                 if armed_wall_ts is not None and frame.received_wall_ts < armed_wall_ts:
@@ -133,7 +133,11 @@ class DirectLidarFeed:
                     continue
                 return frame_id, frame
             time.sleep(0.01)
-        return self.latest()
+        # Never return a cached frame as though it satisfied the requested
+        # advancement. Reusing one revolution corrupts multi-scan consensus and
+        # makes a healthy-but-delayed consumer look like independent evidence.
+        frame_id, _frame = self.latest()
+        return frame_id, None
 
     def _run(self) -> None:
         while not self._stop.is_set():

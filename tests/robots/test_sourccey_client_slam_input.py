@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import cv2
 import numpy as np
+import zmq
 
 from lerobot.robots.sourccey.sourccey.sourccey import SourcceyClient, SourcceyClientConfig
 from lerobot.robots.sourccey.sourccey.sourccey.modules.slam import SlamInputConfig
@@ -26,6 +27,39 @@ def _make_client(*, eye_only_mode: bool = False) -> SourcceyClient:
         ),
     )
     return SourcceyClient(config)
+
+
+def test_base_command_id_round_trips_through_protobuf() -> None:
+    client = _make_client()
+    message = client.protobuf_converter.action_to_protobuf(
+        {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0, "_command_id": 12345}
+    )
+
+    assert message.command_id == 12345
+
+
+def test_stop_ack_requires_matching_command_and_stationary_base() -> None:
+    class _StatusSocket:
+        def __init__(self) -> None:
+            self.statuses = [
+                {"applied_command_id": 40, "stationary": True},
+                {"applied_command_id": 42, "stationary": False},
+                {"applied_command_id": 42, "stationary": True},
+            ]
+
+        def poll(self, _timeout: int, event: int) -> bool:
+            assert event == zmq.POLLIN
+            return bool(self.statuses)
+
+        def recv_json(self, flags: int) -> dict:
+            assert flags == zmq.NOBLOCK
+            return self.statuses.pop(0)
+
+    client = _make_client()
+    client._last_command_id = 42
+    client.zmq_base_status_socket = _StatusSocket()
+
+    assert client.wait_for_base_stop_ack(timeout_s=0.2)
 
 
 def test_legacy_flat_slam_config_fields_still_work() -> None:

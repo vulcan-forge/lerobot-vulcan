@@ -7,8 +7,9 @@ is noisy in magnitude and drifts without bound, so ONLY yaw DELTAS are ever
 consumed, and it is purely ADVISORY — it never writes the map. Its one real job
 is to break the room's rotational symmetry during pose recovery (a rectangular
 room looks the same at 0/90/180/270deg to a scan-matcher; the gyro says which one
-you're actually in). If the feed is dead or stale every accessor returns None and
-the caller falls back to lidar-only behavior.
+you're actually in). If the feed is dead or stale every accessor returns None.
+Mapping can remain LiDAR-only, while heading-controlled base motion enters a
+safe recovery hold until the stream returns.
 """
 
 from __future__ import annotations
@@ -29,8 +30,9 @@ class ImuYawClient:
     heading in degrees (sign-corrected to the SLAM CCW convention).
 
     Wholly optional and non-fatal: if zmq is unavailable, the socket never
-    connects, or samples stop arriving, ``deg()`` returns ``None`` and every
-    caller falls back to the prior lidar-only behavior. Only yaw DELTAS are ever
+    connects, or samples stop arriving, ``deg()`` returns ``None``. Mapping
+    callers fall back to LiDAR-only behavior; heading-controlled motion waits
+    for stream recovery instead of issuing a blind command. Only yaw DELTAS are
     consumed downstream, so unbounded gyro drift in the absolute value is fine.
     """
 
@@ -131,6 +133,18 @@ class ImuYawClient:
             try:
                 msg = self._sock.recv()
             except zmq.Again:
+                if ever_received:
+                    empty_polls += 1
+                    if empty_polls >= next_warn_at:
+                        next_warn_at = empty_polls + (
+                            150 if next_warn_at == 25 else 1500
+                        )
+                        print(
+                            f"[wander] WARNING: IMU yaw stream on {self._endpoint} "
+                            f"has been silent for ~{empty_polls // 5}s; navigation "
+                            "will hold safely until ZMQ reconnects."
+                        )
+                    continue
                 if not ever_received:
                     empty_polls += 1
                     if empty_polls >= next_warn_at:
@@ -151,7 +165,11 @@ class ImuYawClient:
                 host_ts_s = float(data["ts_ns"]) / 1e9 if data.get("ts_ns") is not None else None
             except Exception:  # noqa: BLE001
                 continue
+            if ever_received and empty_polls >= 25:
+                print("[wander] IMU yaw stream restored after a transport outage")
             ever_received = True
+            empty_polls = 0
+            next_warn_at = 25
             with self._lock:
                 self._yaw_deg = yaw_deg
                 self._last_rx_monotonic = time.monotonic()
@@ -227,6 +245,19 @@ class ImuYawClient:
             if now >= deadline:
                 return None
             time.sleep(0.02)
+
+    def sample_age_s(self) -> float | None:
+        """Age of the newest received sample, or ``None`` before first contact."""
+        with self._lock:
+            received = self._last_rx_monotonic
+        if received is None:
+            return None
+        return max(0.0, time.monotonic() - float(received))
+
+    def receiver_running(self) -> bool:
+        """Whether the background subscriber thread is still available."""
+        thread = self._thread
+        return bool(thread is not None and thread.is_alive() and not self._stop.is_set())
 
     def delta_since(self, yaw_before: float | None) -> float | None:
         """RAW yaw change since ``yaw_before`` (both sign-corrected), or None.

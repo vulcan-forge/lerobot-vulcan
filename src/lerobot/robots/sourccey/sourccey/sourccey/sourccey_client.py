@@ -52,6 +52,7 @@ class SourcceyClient(Robot):
         self.remote_ip = config.remote_ip
         self.port_zmq_cmd = config.port_zmq_cmd
         self.port_zmq_observations = config.port_zmq_observations
+        self.port_zmq_base_status = config.port_zmq_base_status
         slam_cfg = config.slam
         self.slam_input_enabled = slam_cfg.input_enabled
         self.slam_input_endpoint = slam_cfg.input_endpoint
@@ -69,6 +70,7 @@ class SourcceyClient(Robot):
         self.zmq_context = None
         self.zmq_cmd_socket = None
         self.zmq_observation_socket = None
+        self.zmq_base_status_socket = None
         self.zmq_slam_input_socket = None
 
         self.last_frames = {}
@@ -110,6 +112,7 @@ class SourcceyClient(Robot):
 
         # Time of last command
         self._last_cmd_t = time.monotonic()
+        self._last_command_id = 0
 
         # Base movement smoothing
         self._slew_time_s_levels = [0.25, 0.25, 1.0]
@@ -230,6 +233,13 @@ class SourcceyClient(Robot):
             self.zmq_observation_socket.connect(zmq_observations_locator)
             self.zmq_observation_socket.setsockopt(zmq.CONFLATE, 1)
 
+            self.zmq_base_status_socket = self.zmq_context.socket(zmq.SUB)
+            self.zmq_base_status_socket.setsockopt(zmq.SUBSCRIBE, b"")
+            self.zmq_base_status_socket.setsockopt(zmq.CONFLATE, 1)
+            self.zmq_base_status_socket.connect(
+                f"tcp://{self.remote_ip}:{self.port_zmq_base_status}"
+            )
+
             if self.slam_input_enabled:
                 self.zmq_slam_input_socket = create_slam_pub_socket(
                     self.zmq_context, self.slam_input_endpoint
@@ -241,6 +251,21 @@ class SourcceyClient(Robot):
             socks = dict(poller.poll(self.connect_timeout_s * 1000))
             if self.zmq_observation_socket not in socks or socks[self.zmq_observation_socket] != zmq.POLLIN:
                 raise DeviceNotConnectedError("Timeout waiting for Sourccey Host to connect expired.")
+
+            status_poller = zmq.Poller()
+            status_poller.register(self.zmq_base_status_socket, zmq.POLLIN)
+            status_socks = dict(status_poller.poll(2000))
+            if self.zmq_base_status_socket not in status_socks:
+                raise DeviceNotConnectedError(
+                    "Sourccey Host has no real-time base-status service on "
+                    f"tcp://{self.remote_ip}:{self.port_zmq_base_status}. Push "
+                    "the updated host/config/protobuf files and restart the Pi host."
+                )
+            status = self.zmq_base_status_socket.recv_json()
+            if status.get("schema") != "sourccey.base_status.v1":
+                raise DeviceNotConnectedError(
+                    "Sourccey Host returned an incompatible base-status protocol."
+                )
 
             self._is_connected = True
         except Exception:
@@ -254,6 +279,9 @@ class SourcceyClient(Robot):
             if self.zmq_cmd_socket is not None:
                 self.zmq_cmd_socket.close(0)
                 self.zmq_cmd_socket = None
+            if self.zmq_base_status_socket is not None:
+                self.zmq_base_status_socket.close(0)
+                self.zmq_base_status_socket = None
             if self.zmq_context is not None:
                 self.zmq_context.term()
                 self.zmq_context = None
@@ -306,6 +334,9 @@ class SourcceyClient(Robot):
             close_slam_pub_socket(self.zmq_slam_input_socket)
             self.zmq_slam_input_socket = None
         self.zmq_observation_socket.close()
+        if self.zmq_base_status_socket is not None:
+            self.zmq_base_status_socket.close(0)
+            self.zmq_base_status_socket = None
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
         self._is_connected = False
@@ -367,8 +398,11 @@ class SourcceyClient(Robot):
             action["theta.vel"] = 0.0
 
         # Convert action to protobuf and send
+        command_id = time.monotonic_ns()
+        action["_command_id"] = command_id
         robot_action = self.protobuf_converter.action_to_protobuf(action)
         self.zmq_cmd_socket.send(robot_action.SerializeToString())
+        self._last_command_id = command_id
 
         # TODO(Steven): Remove the np conversion when it is possible to record a non-numpy array value
         actions = np.array([action.get(k, 0.0) for k in self._state_order], dtype=np.float32)
@@ -376,6 +410,28 @@ class SourcceyClient(Robot):
         action_sent = {key: actions[i] for i, key in enumerate(self._state_order)}
         action_sent["action"] = actions
         return action_sent
+
+    def wait_for_base_stop_ack(self, timeout_s: float = 5.0) -> bool:
+        """Wait until the real-time host confirms this client's latest stop."""
+        socket = self.zmq_base_status_socket
+        expected_id = int(self._last_command_id)
+        if socket is None or expected_id <= 0:
+            return False
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        while time.monotonic() < deadline:
+            remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+            if not socket.poll(min(100, remaining_ms), zmq.POLLIN):
+                continue
+            try:
+                status = socket.recv_json(flags=zmq.NOBLOCK)
+            except zmq.Again:
+                continue
+            if (
+                int(status.get("applied_command_id", 0)) == expected_id
+                and bool(status.get("stationary", False))
+            ):
+                return True
+        return False
 
     ###################################################################
     # Private Data Management

@@ -96,6 +96,8 @@ class Sourccey(Robot):
         self.untorque_left_prev = False
         self.untorque_right_prev = False
         self._arms_connected = False
+        self._arms_available = True
+        self._arms_unavailable_reason: str | None = None
         self._connect_arms_on_startup = True
 
     def __del__(self):
@@ -222,8 +224,28 @@ class Sourccey(Robot):
     def _connect_arms(self, *, calibrate: bool) -> None:
         if self._arms_connected:
             return
-        self.left_arm.connect(calibrate)
-        self.right_arm.connect(calibrate)
+        if not self._arms_available:
+            raise RuntimeError(
+                self._arms_unavailable_reason or "follower arms are unavailable"
+            )
+        try:
+            self.left_arm.connect(calibrate)
+            self.right_arm.connect(calibrate)
+        except Exception as exc:
+            # A removed arm can leave the first follower partially connected
+            # when discovery fails. Roll the lazy connection back atomically
+            # and latch it unavailable so every subsequent base packet does not
+            # retry the same broken serial handshake.
+            for arm in (self.left_arm, self.right_arm):
+                if getattr(arm, "is_connected", False):
+                    try:
+                        arm.disconnect()
+                    except Exception:
+                        logger.exception("Failed to roll back partial arm connection")
+            self._arms_connected = False
+            self._arms_available = False
+            self._arms_unavailable_reason = str(exc)
+            raise
         self._arms_connected = True
 
     def disconnect(self):
@@ -389,12 +411,21 @@ class Sourccey(Robot):
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         try:
+            # Commit the real-time base command before touching either serial arm
+            # bus. A slow or wedged follower servo must never starve wheel control.
+            base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
+            wheel_action = self._body_to_wheel_normalized(
+                base_goal_vel.get("x.vel", 0.0),
+                base_goal_vel.get("y.vel", 0.0),
+                base_goal_vel.get("theta.vel", 0.0),
+            )
+            self.dc_motors_controller.set_velocities(wheel_action)
+
             # Apply per-arm untorque flags automatically
             action = self.apply_untorque_flags(action)
 
             left_action = {key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")}
             right_action = {key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")}
-            base_goal_vel = {k: v for k, v in action.items() if k.endswith(".vel")}
             base_goal_pos = {k: v for k, v in action.items() if k.endswith(".pos")}
 
             # Proto3 cannot mark arm targets as ABSENT — every command arrives with
@@ -412,34 +443,48 @@ class Sourccey(Robot):
             # bring the arms online (a torque request with no targets must still
             # connect them so they start reporting — with nothing forwarded below,
             # connecting cannot move them).
-            wants_arms = bool(left_action or right_action) or not (
-                bool(action.get("untorque_left", True)) and bool(action.get("untorque_right", True))
-            )
+            wants_arms = bool(left_action or right_action)
             if wants_arms and not self._arms_connected:
-                self._connect_arms(calibrate=False)
+                if self._arms_available:
+                    try:
+                        self._connect_arms(calibrate=False)
+                    except Exception as exc:
+                        logger.error(
+                            "Follower arms unavailable; quarantining all arm "
+                            "targets while base control continues: %s",
+                            exc,
+                        )
+                if not self._arms_connected:
+                    left_action = {}
+                    right_action = {}
+                    wants_arms = False
 
             prefixed_send_action_left = {}
             prefixed_send_action_right = {}
 
             # Only send to followers if there are keys for that arm
             if left_action:
-                sent_left = self.left_arm.send_action(left_action)
+                try:
+                    sent_left = self.left_arm.send_action(left_action)
+                except Exception as exc:
+                    # Arm communication and base actuation are independent
+                    # subsystems. A transient follower-bus fault must not skip
+                    # the wheel write below and immobilize autonomous recovery.
+                    logger.error("Left arm command failed; base command will continue: %s", exc)
+                    sent_left = {}
             else:
                 sent_left = {}
             if right_action:
-                sent_right = self.right_arm.send_action(right_action)
+                try:
+                    sent_right = self.right_arm.send_action(right_action)
+                except Exception as exc:
+                    logger.error("Right arm command failed; base command will continue: %s", exc)
+                    sent_right = {}
             else:
                 sent_right = {}
 
             prefixed_send_action_left = {f"left_{key}": value for key, value in sent_left.items()}
             prefixed_send_action_right = {f"right_{key}": value for key, value in sent_right.items()}
-
-            # Base velocity
-            wheel_action = self._body_to_wheel_normalized(
-                base_goal_vel.get("x.vel", 0.0),
-                base_goal_vel.get("y.vel", 0.0),
-                base_goal_vel.get("theta.vel", 0.0)
-            )
 
             # Z actuator is position-controlled; drive toward the latest z.pos target (non-blocking).
             if "z.pos" in base_goal_pos and self.z_actuator.use_z_actuator:
@@ -447,9 +492,6 @@ class Sourccey(Robot):
                     self.z_actuator.move_to_position(float(base_goal_pos.get("z.pos", 100.0)), hz=30.0, instant=True)
                 except Exception as e:
                     logger.warning(f"Failed to command z actuator: {e}")
-
-            dc_motors_action = {**wheel_action }
-            self.dc_motors_controller.set_velocities(dc_motors_action)
 
             sent_action = {**prefixed_send_action_left, **prefixed_send_action_right, **base_goal_pos, **base_goal_vel}
             return sent_action
@@ -504,6 +546,12 @@ class Sourccey(Robot):
     def update(self):
         # Can be used to update the robot every cycle. Such as potentially a motor
         self.dc_motors_controller.update_velocity(max_step=0.25)
+
+    def get_base_velocity(self) -> dict[str, Any]:
+        """Read wheel-derived body velocity without touching cameras or arms."""
+        return self._wheel_normalized_to_body(
+            self.dc_motors_controller.get_velocities()
+        )
 
     # Base Functions
     def stop_base(self):
