@@ -57,4 +57,8 @@ message SourcceyRobotAction {
     // Host control actions (per-arm)
     bool untorque_left = 5;
     bool untorque_right = 6;
+
+    // Unique client-generated command lease identifier. The real-time host
+    // status channel echoes this after the command has reached the wheel layer.
+    uint64 command_id = 7;
 }

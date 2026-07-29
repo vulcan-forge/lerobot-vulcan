@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Any
 
 import cv2
@@ -20,25 +21,46 @@ class SourcceyProtobuf:
         try:
             robot_action = sourccey_pb2.SourcceyRobotAction()
 
-            # Process left arm action
-            left_target_positions = sourccey_pb2.MotorJoint()
-            left_target_positions.shoulder_pan = float(action.get("left_shoulder_pan.pos", 0.0))
-            left_target_positions.shoulder_lift = float(action.get("left_shoulder_lift.pos", 0.0))
-            left_target_positions.elbow_flex = float(action.get("left_elbow_flex.pos", 0.0))
-            left_target_positions.wrist_flex = float(action.get("left_wrist_flex.pos", 0.0))
-            left_target_positions.wrist_roll = float(action.get("left_wrist_roll.pos", 0.0))
-            left_target_positions.gripper = float(action.get("left_gripper.pos", 0.0))
-            robot_action.left_arm_target_joints.CopyFrom(left_target_positions)
+            # Preserve protobuf message presence. Base-only control packets must not
+            # materialize six zero-valued arm targets: an older receiver cannot
+            # distinguish those synthetic zeros from a real request to move every
+            # joint, and a slow/stalled serial arm bus can then starve wheel writes.
+            left_keys = (
+                "left_shoulder_pan.pos",
+                "left_shoulder_lift.pos",
+                "left_elbow_flex.pos",
+                "left_wrist_flex.pos",
+                "left_wrist_roll.pos",
+                "left_gripper.pos",
+            )
+            if any(key in action for key in left_keys):
+                left_target_positions = sourccey_pb2.MotorJoint()
+                left_target_positions.shoulder_pan = float(action.get("left_shoulder_pan.pos", 0.0))
+                left_target_positions.shoulder_lift = float(action.get("left_shoulder_lift.pos", 0.0))
+                left_target_positions.elbow_flex = float(action.get("left_elbow_flex.pos", 0.0))
+                left_target_positions.wrist_flex = float(action.get("left_wrist_flex.pos", 0.0))
+                left_target_positions.wrist_roll = float(action.get("left_wrist_roll.pos", 0.0))
+                left_target_positions.gripper = float(action.get("left_gripper.pos", 0.0))
+                robot_action.left_arm_target_joints.CopyFrom(left_target_positions)
 
             # Process right arm action
-            right_target_positions = sourccey_pb2.MotorJoint()
-            right_target_positions.shoulder_pan = float(action.get("right_shoulder_pan.pos", 0.0))
-            right_target_positions.shoulder_lift = float(action.get("right_shoulder_lift.pos", 0.0))
-            right_target_positions.elbow_flex = float(action.get("right_elbow_flex.pos", 0.0))
-            right_target_positions.wrist_flex = float(action.get("right_wrist_flex.pos", 0.0))
-            right_target_positions.wrist_roll = float(action.get("right_wrist_roll.pos", 0.0))
-            right_target_positions.gripper = float(action.get("right_gripper.pos", 0.0))
-            robot_action.right_arm_target_joints.CopyFrom(right_target_positions)
+            right_keys = (
+                "right_shoulder_pan.pos",
+                "right_shoulder_lift.pos",
+                "right_elbow_flex.pos",
+                "right_wrist_flex.pos",
+                "right_wrist_roll.pos",
+                "right_gripper.pos",
+            )
+            if any(key in action for key in right_keys):
+                right_target_positions = sourccey_pb2.MotorJoint()
+                right_target_positions.shoulder_pan = float(action.get("right_shoulder_pan.pos", 0.0))
+                right_target_positions.shoulder_lift = float(action.get("right_shoulder_lift.pos", 0.0))
+                right_target_positions.elbow_flex = float(action.get("right_elbow_flex.pos", 0.0))
+                right_target_positions.wrist_flex = float(action.get("right_wrist_flex.pos", 0.0))
+                right_target_positions.wrist_roll = float(action.get("right_wrist_roll.pos", 0.0))
+                right_target_positions.gripper = float(action.get("right_gripper.pos", 0.0))
+                robot_action.right_arm_target_joints.CopyFrom(right_target_positions)
 
             # Process base action
             base_action = sourccey_pb2.BaseVelocity()
@@ -48,9 +70,10 @@ class SourcceyProtobuf:
             robot_action.base_target_velocity.CopyFrom(base_action)
 
             # Process base position (linear actuator)
-            base_pos = sourccey_pb2.BasePosition()
-            base_pos.z_pos = float(action.get("z.pos", 0.0))
-            robot_action.base_target_position.CopyFrom(base_pos)
+            if "z.pos" in action:
+                base_pos = sourccey_pb2.BasePosition()
+                base_pos.z_pos = float(action["z.pos"])
+                robot_action.base_target_position.CopyFrom(base_pos)
 
             # Per-arm flags
             if "untorque_left" in action:
@@ -63,6 +86,10 @@ class SourcceyProtobuf:
                     robot_action.untorque_right = bool(action.get("untorque_right", False))
                 except AttributeError:
                     pass
+
+            robot_action.command_id = int(
+                action.get("_command_id", time.monotonic_ns())
+            )
 
             return robot_action
 
@@ -132,27 +159,29 @@ class SourcceyProtobuf:
         try:
             action = {}
 
-            # Convert left arm action
-            left_motor_pos = action_msg.left_arm_target_joints
-            action.update({
-                "left_shoulder_pan.pos": left_motor_pos.shoulder_pan,
-                "left_shoulder_lift.pos": left_motor_pos.shoulder_lift,
-                "left_elbow_flex.pos": left_motor_pos.elbow_flex,
-                "left_wrist_flex.pos": left_motor_pos.wrist_flex,
-                "left_wrist_roll.pos": left_motor_pos.wrist_roll,
-                "left_gripper.pos": left_motor_pos.gripper,
-            })
+            # Only decode arm targets that were actually present on the wire.
+            if action_msg.HasField("left_arm_target_joints"):
+                left_motor_pos = action_msg.left_arm_target_joints
+                action.update({
+                    "left_shoulder_pan.pos": left_motor_pos.shoulder_pan,
+                    "left_shoulder_lift.pos": left_motor_pos.shoulder_lift,
+                    "left_elbow_flex.pos": left_motor_pos.elbow_flex,
+                    "left_wrist_flex.pos": left_motor_pos.wrist_flex,
+                    "left_wrist_roll.pos": left_motor_pos.wrist_roll,
+                    "left_gripper.pos": left_motor_pos.gripper,
+                })
 
             # Convert right arm action
-            right_motor_pos = action_msg.right_arm_target_joints
-            action.update({
-                "right_shoulder_pan.pos": right_motor_pos.shoulder_pan,
-                "right_shoulder_lift.pos": right_motor_pos.shoulder_lift,
-                "right_elbow_flex.pos": right_motor_pos.elbow_flex,
-                "right_wrist_flex.pos": right_motor_pos.wrist_flex,
-                "right_wrist_roll.pos": right_motor_pos.wrist_roll,
-                "right_gripper.pos": right_motor_pos.gripper,
-            })
+            if action_msg.HasField("right_arm_target_joints"):
+                right_motor_pos = action_msg.right_arm_target_joints
+                action.update({
+                    "right_shoulder_pan.pos": right_motor_pos.shoulder_pan,
+                    "right_shoulder_lift.pos": right_motor_pos.shoulder_lift,
+                    "right_elbow_flex.pos": right_motor_pos.elbow_flex,
+                    "right_wrist_flex.pos": right_motor_pos.wrist_flex,
+                    "right_wrist_roll.pos": right_motor_pos.wrist_roll,
+                    "right_gripper.pos": right_motor_pos.gripper,
+                })
 
             # Convert base action
             base_vel = action_msg.base_target_velocity
@@ -163,7 +192,8 @@ class SourcceyProtobuf:
             })
 
             # Convert base position (linear actuator)
-            action["z.pos"] = action_msg.base_target_position.z_pos
+            if action_msg.HasField("base_target_position"):
+                action["z.pos"] = action_msg.base_target_position.z_pos
 
             # Per-arm flags from protobuf
             action["untorque_left"] = bool(getattr(action_msg, "untorque_left", False))
