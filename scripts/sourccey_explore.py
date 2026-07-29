@@ -50,6 +50,7 @@ from ldlidar_direct_snapshot_stitch import (
 from sourccey_arm_pose import DEFAULT_POSE_PATH, apply_pose_blocking, hold_action, limp_action, load_pose
 from sourccey_collision_box import (
     DEFAULT_COLLISION_BOX_PATH,
+    collision_box_rotation_violation as _collision_box_rotation_violation,
     collision_box_violation as _collision_box_violation,
     load_collision_box as _load_collision_box,
 )
@@ -406,6 +407,34 @@ def _behind_completed_transition(
         float(np.dot(point - anchor, outward)) < -slack
         for anchor, outward in transitions
     )
+
+
+def _doorway_transition(
+    anchor_xy: np.ndarray,
+    objective_start_xy: np.ndarray,
+    observe_xy: np.ndarray,
+    scans_added: int,
+    newly_known_cells: int,
+    min_gain_cells: int,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Create a directed room-transition constraint from verified map growth.
+
+    Frontier exploration is most stable as a depth-first traversal of connected
+    rooms: once a doorway observation reveals substantial new space, continue
+    exploring on that side instead of immediately selecting an attractive old
+    frontier behind the robot.  This is deliberately based on accepted scans
+    and measured information gain, not merely on the frontier's width.
+    """
+    if int(scans_added) <= 0 or int(newly_known_cells) < int(min_gain_cells):
+        return None
+    outward = (
+        np.asarray(observe_xy, dtype=np.float64)
+        - np.asarray(objective_start_xy, dtype=np.float64)
+    )
+    outward_norm = float(np.hypot(*outward))
+    if outward_norm < 0.30:
+        return None
+    return np.asarray(anchor_xy, dtype=np.float64).copy(), outward / outward_norm
 
 
 @dataclass(slots=True)
@@ -778,6 +807,8 @@ def _pick_target(
     sampled_viewpoints_xy: list[np.ndarray] | None = None,
     completed_transitions: list[tuple[np.ndarray, np.ndarray]] | None = None,
     transition_backtrack_slack_m: float = 0.25,
+    current_heading_deg: float | None = None,
+    turn_cost_per_deg: float = 1.0,
 ) -> tuple[FrontierCluster, np.ndarray, list[np.ndarray], bool, np.ndarray, int] | None:
     """Choose a reachable observation pose with line-of-sight to unknown space.
 
@@ -907,11 +938,21 @@ def _pick_target(
                 # reported unreachable after one large doorway scan. Penalize
                 # it instead; a reachable repeated pose beats no plan at all.
                 repeat_penalty = 350.0 if repeat_d < max(0.35, float(visited_skip_m)) else 0.0
+                turn_deg = 0.0
+                if current_heading_deg is not None:
+                    delta = goal_xy - robot_centre_xy
+                    if float(np.hypot(*delta)) > 0.05:
+                        target_heading = math.degrees(math.atan2(float(delta[1]), float(delta[0])))
+                        turn_deg = abs(
+                            (target_heading - float(current_heading_deg) + 180.0) % 360.0
+                            - 180.0
+                        )
                 geometric_score = (
                     float(expected_gain)
                     + 30.0 * float(cluster.span_m)
                     - 25.0 * abs(float(d_all[idx]) - desired_standoff)
                     - repeat_penalty
+                    - max(0.0, float(turn_cost_per_deg)) * turn_deg
                 )
                 geometric.append((
                     1 if cluster.passable else 0,
@@ -938,7 +979,24 @@ def _pick_target(
             if path is None:
                 continue
             travel_m = max(analysis.res_m, (len(path) - 1) * analysis.res_m)
-            utility = float(expected_gain) / (1.0 + 0.35 * travel_m)
+            turn_deg = 0.0
+            if current_heading_deg is not None and len(path) > 1:
+                first_xy = analysis.to_world(path[1])
+                delta = first_xy - robot_centre_xy
+                if float(np.hypot(*delta)) > 0.01:
+                    first_heading = math.degrees(
+                        math.atan2(float(delta[1]), float(delta[0]))
+                    )
+                    turn_deg = abs(
+                        (first_heading - float(current_heading_deg) + 180.0) % 360.0
+                        - 180.0
+                    )
+            # Standard frontier utility: information gain minus travel and turn
+            # effort. Heading is a soft cost, never a reachability gate.
+            utility = (
+                float(expected_gain) / (1.0 + 0.35 * travel_m)
+                - max(0.0, float(turn_cost_per_deg)) * turn_deg
+            )
             if best is None or utility > best[0]:
                 best = (
                     utility,
@@ -1042,6 +1100,9 @@ def _localize(
     theta_window_deg: float,
     coarse_angle_step_deg: float = 2.0,
     allow_whole_map_search: bool = False,
+    fine_angle_step_deg: float = 0.35,
+    fine_theta_half_window_deg: float | None = None,
+    use_nearest_penalty: bool = True,
 ) -> tuple[Pose2D, float]:
     ref = world_map.reference()
     # Preserve angular coverage while bounding candidate-scoring cost. The full
@@ -1058,7 +1119,7 @@ def _localize(
         resolution_m=float(args.stitch_resolution_m),
         search_xy_m=float(search_xy_m),
         coarse_angle_step_deg=float(coarse_angle_step_deg),
-        fine_angle_step_deg=0.35,
+        fine_angle_step_deg=float(fine_angle_step_deg),
         theta_window_deg=float(theta_window_deg),
         whole_map_theta_center_deg=float(seed.theta_deg),
         whole_map_theta_window_deg=float(theta_window_deg) + 4.0,
@@ -1067,6 +1128,8 @@ def _localize(
         prior_translation_weight=0.05,
         prior_theta_weight=0.04,
         allow_whole_map_search=bool(allow_whole_map_search),
+        local_fine_theta_half_window_deg=fine_theta_half_window_deg,
+        local_use_nearest_penalty=bool(use_nearest_penalty),
     )
     return solved, float(meta.get("score") or 0.0)
 
@@ -1102,6 +1165,7 @@ class BaseController:
         self._mode: tuple[str, float, float] = ("halt", 0.0, 0.0)  # (kind, x_vel, target_imu_deg)
         self._lock = threading.Lock()
         self._safety_check = None
+        self._rotation_safety_check = None
         self._safety_latched_reason: str | None = None
         self._run = False
         self._thread: threading.Thread | None = None
@@ -1118,6 +1182,7 @@ class BaseController:
             with self._lock:
                 kind, x_vel, target = self._mode
                 safety_check = self._safety_check
+                rotation_safety_check = self._rotation_safety_check
             x = th = 0.0
             if kind != "halt":
                 yaw = None
@@ -1152,6 +1217,18 @@ class BaseController:
                     with self._lock:
                         self._safety_latched_reason = str(reason)
                         self._mode = ("halt", 0.0, 0.0)
+            if kind == "rotate" and abs(th) > 0.0 and rotation_safety_check is not None:
+                reason = None
+                try:
+                    reason = rotation_safety_check(err_deg)
+                except Exception:
+                    # A broken rotational safety callback fails closed too.
+                    reason = "rotational safety check failed"
+                if reason:
+                    x = th = 0.0
+                    with self._lock:
+                        self._safety_latched_reason = str(reason)
+                        self._mode = ("halt", 0.0, 0.0)
             try:
                 self.robot.send_action({
                     "x.vel": x, "y.vel": 0.0, "theta.vel": th,
@@ -1175,6 +1252,10 @@ class BaseController:
     def set_safety_check(self, check) -> None:
         with self._lock:
             self._safety_check = check
+
+    def set_rotation_safety_check(self, check) -> None:
+        with self._lock:
+            self._rotation_safety_check = check
 
     def clear_safety_latch(self) -> None:
         with self._lock:
@@ -1396,7 +1477,10 @@ def main() -> int:
     parser.add_argument("--anchor-deskew-reverse", action="store_true", default=False,
                         help="Reverse LiDAR point acquisition order for deskewing if required by "
                              "a different host driver.")
-    parser.add_argument("--snapshots", type=int, default=240)
+    parser.add_argument("--snapshots", type=int, default=72,
+                        help="Maximum anchor keyframes stitched per spin pass. Full LiDAR scans are "
+                             "retained; 72 gives 5-degree heading coverage without solving hundreds "
+                             "of nearly identical adjacent revolutions.")
     parser.add_argument("--stitch-resolution-m", type=float, default=0.03)
     parser.add_argument("--search-xy-m", type=float, default=0.18)
     parser.add_argument("--theta-window-deg", type=float, default=8.0)
@@ -1460,6 +1544,13 @@ def main() -> int:
                         help="Never re-target a frontier this close to one already snapshotted.")
     parser.add_argument("--robot-radius-m", type=float, default=0.31,
                         help="Planning inflation radius (body half-width 0.28 + margin).")
+    parser.add_argument("--physical-body-radius-m", type=float, default=0.28,
+                        help="Measured physical chassis radius used only to reject impossible "
+                             "LiDAR self-returns inside the body; unlike --robot-radius-m this "
+                             "contains no navigation margin.")
+    parser.add_argument("--collision-self-mask-inset-m", type=float, default=0.02,
+                        help="Keep this much of the measured chassis edge collision-sensitive. "
+                             "Only returns deeper inside the physical body are treated as self.")
     parser.add_argument("--passable-opening-min-m", type=float, default=0.90,
                         help="Minimum frontier span treated as a crossable room transition. "
                              "Smaller gaps are mapped from this side as NARROW-LOOK targets.")
@@ -1522,12 +1613,16 @@ def main() -> int:
     parser.add_argument("--frontier-handoff-sweep-deg", type=float, default=120.0,
                         help="Total bounded turn-and-snapshot arc at a passable frontier. This is "
                              "never a full recovery spin.")
+    parser.add_argument("--frontier-turn-cost-per-deg", type=float, default=1.0,
+                        help="Soft frontier-utility cost for initial turning. Turning around remains "
+                             "legal when necessary; it is never treated as unreachable.")
     parser.add_argument("--frontier-handoff-min-known-ratio", type=float, default=0.15,
                         help="Minimum fraction of a doorway-handoff scan that must overlap the "
                              "trusted map before that scan may extend the map.")
     parser.add_argument("--frontier-handoff-checkpoint-m", type=float, default=0.50,
                         help="Distance between overlap-verified stationary mapping checkpoints "
-                             "while travelling toward a passable frontier.")
+                             "on every long path. Checkpoints grow the trusted map before the robot "
+                             "can outrun LiDAR overlap; they are not limited to doorway targets.")
     # Arms are QUARANTINED by default (hardware damage 2026-07-21): no torque, no
     # targets, ever — unless --arm-stow explicitly opts in.
     parser.add_argument("--arm-stow", action="store_true", default=False,
@@ -1572,9 +1667,10 @@ def main() -> int:
                              "A mapped shoulder collision stops/replans; unknown space stops for a "
                              "new stationary viewpoint before proceeding. Keep this short because "
                              "the robot follows curved paths; 25Hz checks cover stopping latency.")
-    parser.add_argument("--lidar-safety-max-age-s", type=float, default=0.60,
-                        help="Fail closed during forward motion when the newest LiDAR revolution "
-                             "is older than this many seconds.")
+    parser.add_argument("--lidar-safety-max-age-s", type=float, default=1.50,
+                        help="Stop only when the LiDAR feed is genuinely unavailable, not for a "
+                             "single delayed revolution. Forward motion resumes on the same "
+                             "straight command as soon as one fresh revolution arrives.")
     parser.add_argument("--obstacle-wait-s", type=float, default=4.0,
                         help="How long to stop and watch a novel obstacle before replanning around it. "
                              "(Persisted obstacles are marked into the occupancy grid; clearing rays "
@@ -1592,6 +1688,10 @@ def main() -> int:
     parser.add_argument("--rerun-grpc-port", type=int, default=9877)
     parser.add_argument("--rerun-web-port", type=int, default=9878)
     args = parser.parse_args()
+    if not 0.0 < float(args.physical_body_radius_m) <= float(args.robot_radius_m):
+        parser.error("--physical-body-radius-m must be positive and no larger than --robot-radius-m")
+    if not 0.0 <= float(args.collision_self_mask_inset_m) < float(args.physical_body_radius_m):
+        parser.error("--collision-self-mask-inset-m must be nonnegative and smaller than the body radius")
     configure_candidate_scoring_device(str(args.matcher_device))
 
     lidar_host = args.lidar_host or args.remote_ip
@@ -1668,7 +1768,10 @@ def main() -> int:
             learned = collision_profile["ranges_m"]
             print(f"[explore] calibrated collision box ENABLED "
                   f"({sum(v is not None for v in learned)}/{len(learned)} angular bins; "
-                  "side intrusions are single-bin hard stops).")
+                  "side intrusions are single-bin hard stops; "
+                  f"self-return core radius "
+                  f"{max(0.0, float(args.physical_body_radius_m) - float(args.collision_self_mask_inset_m)):.2f}m "
+                  f"about the robot centre is excluded).")
         else:
             print("[explore] no collision-box calibration; using legacy forward stop lane.")
 
@@ -1732,6 +1835,59 @@ def main() -> int:
                                 hold_gain=float(args.heading_hold_gain),
                                 hold_max=float(args.heading_hold_max),
                                 hold_deadband_deg=float(args.heading_hold_deadband_deg))
+
+    def _rotation_safety_check(remaining_yaw_deg: float) -> str | None:
+        """Validate the requested rotational footprint trajectory."""
+        if collision_profile is None:
+            return None
+        _frame_id, frame = feed.latest()
+        if frame is None:
+            return "LiDAR safety unavailable during pivot (no scan)"
+        frame_age_s = time.time() - float(
+            getattr(frame, "received_wall_ts", 0.0) or 0.0
+        )
+        if (
+            not math.isfinite(frame_age_s)
+            or frame_age_s > float(args.lidar_safety_max_age_s)
+        ):
+            return f"LiDAR safety stale during pivot ({max(0.0, frame_age_s):.2f}s old)"
+        local = _scan_local(frame, args)
+        if not len(local):
+            return "LiDAR safety unavailable during pivot (empty scan)"
+        forward_points = _to_forward_frame(local, forward_offset)
+        sweep_result = _collision_box_rotation_violation(
+            forward_points,
+            collision_profile,
+            float(remaining_yaw_deg),
+            lidar_offset_forward_m=lever_m,
+            physical_body_radius_m=float(args.physical_body_radius_m),
+            self_mask_inset_m=float(args.collision_self_mask_inset_m),
+        )
+        if sweep_result is None:
+            return None
+        hit, blocked_at_deg = sweep_result
+        mask, sector, angle, hit_range, limit = hit
+        evidence_points = int(np.count_nonzero(mask))
+        evidence_bins = int(np.unique(
+            np.floor(
+                (
+                    np.degrees(np.arctan2(
+                        forward_points[mask, 1],
+                        forward_points[mask, 0],
+                    ))
+                    + 180.0
+                )
+                / float(collision_profile["bin_size_deg"])
+            ).astype(np.int64)
+        ).size)
+        return (
+            f"rotational collision box {sector} at sweep {blocked_at_deg:+.0f}deg: "
+            f"{hit_range:.2f}m "
+            f"at {angle:+.0f}deg (limit {limit:.2f}m; "
+            f"{evidence_points} points/{evidence_bins} bins)"
+        )
+
+    controller.set_rotation_safety_check(_rotation_safety_check)
     odom = OdometryFeed(robot)
     odom_scale = [float(args.odom_scale)]   # metres per x.vel-unit; calibrated online
 
@@ -1868,6 +2024,8 @@ def main() -> int:
         matched = 0
         rejected = 0
         score_sum = 0.0
+        exhaustive_retries = 0
+        build_started = time.monotonic()
         prev_pose: Pose2D | None = None
         prev_heading: float | None = None
         for raw_xy, deskewed_xy, heading in selected:
@@ -1886,14 +2044,32 @@ def main() -> int:
                 seed = _lidar_pose_from_robot_centre(
                     previous_centre, theta_seed, lever_m, forward_offset
                 )
+                # The IMU owns anchor heading, so try a tight angular solve
+                # first. Strong geometry accepts immediately; ambiguous scans
+                # fall back to the original exhaustive search below.
                 solved, score = _localize(
                     local_xy,
                     pass_map,
                     seed,
                     args,
                     float(args.search_xy_m),
-                    min(5.0, float(args.theta_window_deg)),
+                    min(2.0, float(args.theta_window_deg)),
+                    coarse_angle_step_deg=1.0,
+                    fine_angle_step_deg=0.5,
+                    fine_theta_half_window_deg=2.0,
                 )
+                if score < 12.0:
+                    exhaustive_retries += 1
+                    full_solved, full_score = _localize(
+                        local_xy,
+                        pass_map,
+                        seed,
+                        args,
+                        float(args.search_xy_m),
+                        min(5.0, float(args.theta_window_deg)),
+                    )
+                    if full_score > score:
+                        solved, score = full_solved, full_score
                 solved_centre = _robot_centre_from_lidar_pose(
                     solved, lever_m, forward_offset
                 )
@@ -1930,11 +2106,13 @@ def main() -> int:
         mean_score = score_sum / max(1, matched)
         max_heading_gap = _max_heading_gap_deg([item[1] for item in accepted])
         mode = "deskewed" if deskew else "raw"
+        build_elapsed = time.monotonic() - build_started
         print(
             f"[explore]   {label} {mode} candidate: accepted "
             f"{len(accepted)}/{len(selected)} scans; rejected {rejected}, "
             f"validation {ratio:.1%}, mean match {mean_score:.1f}, "
-            f"largest heading gap {max_heading_gap:.1f}deg."
+            f"largest heading gap {max_heading_gap:.1f}deg, "
+            f"{build_elapsed:.1f}s ({exhaustive_retries} exhaustive retries)."
         )
         return pass_map, accepted, ratio, mean_score, max_heading_gap
 
@@ -1942,6 +2120,8 @@ def main() -> int:
         scans: list[tuple[np.ndarray, np.ndarray, float]],
         label: str,
         timed_ratio: float,
+        *,
+        permit_auto_deskew: bool = True,
     ) -> tuple[
         WorldMap,
         list[tuple[np.ndarray, float, Pose2D]],
@@ -1964,7 +2144,26 @@ def main() -> int:
         ] = []
         if mode in ("auto", "off"):
             candidates.append(("raw", _build_anchor_pass(scans, label, deskew=False)))
-        if mode == "on" or (mode == "auto" and timed_ratio >= 0.80):
+        build_deskewed = mode == "on"
+        if mode == "auto" and timed_ratio >= 0.80 and permit_auto_deskew:
+            raw = candidates[0][1]
+            raw_is_strong = (
+                raw[2] >= 0.95
+                and raw[3] >= 12.0
+                and raw[4] <= float(args.anchor_max_heading_gap_deg)
+            )
+            build_deskewed = not raw_is_strong
+            if raw_is_strong:
+                print(
+                    f"[explore]   {label}: raw anchor is already strong; "
+                    "skipping redundant deskewed rebuild."
+                )
+        elif mode == "auto" and not permit_auto_deskew:
+            print(
+                f"[explore]   {label}: stronger pass already available; "
+                "using this pass for raw bidirectional verification only."
+            )
+        if build_deskewed:
             candidates.append(("deskewed", _build_anchor_pass(scans, label, deskew=True)))
         if not candidates:
             _abort(
@@ -2053,7 +2252,10 @@ def main() -> int:
     if second_capture is not None:
         second_scans, _second_net_spin, second_timed_ratio = second_capture
         second_map, second_accepted, second_ratio, second_mean, second_gap = _choose_anchor_pass(
-            second_scans, "return pass", second_timed_ratio
+            second_scans,
+            "return pass",
+            second_timed_ratio,
+            permit_auto_deskew=first_quality < 0.85,
         )
         second_quality = _anchor_pass_quality(
             second_accepted, second_ratio, second_mean, second_gap
@@ -2512,6 +2714,13 @@ def main() -> int:
         try:
             while True:
                 yaw_now = imu.deg()
+                blocked_reason = controller.safety_latched_reason()
+                if blocked_reason is not None:
+                    print(
+                        f"[explore]   recovery spin refused: {blocked_reason}; "
+                        "remaining at the current safe heading."
+                    )
+                    return False
                 fid, frame = feed.latest()
                 if frame is not None and int(fid) != prev_id and yaw_now is not None:
                     prev_id = int(fid)
@@ -2739,7 +2948,11 @@ def main() -> int:
         print(f"[explore] facing {label}: pivot {error:+.0f}deg before snapshot.")
         controller.rotate_to(target_yaw)
         started = time.monotonic()
+        blocked_reason = None
         while time.monotonic() - started < 6.0:
+            blocked_reason = controller.safety_latched_reason()
+            if blocked_reason is not None:
+                break
             yaw_now = imu.deg()
             if yaw_now is not None and abs(target_yaw - float(yaw_now)) <= 3.0:
                 break
@@ -2755,6 +2968,12 @@ def main() -> int:
             lever_m,
             forward_offset,
         )
+        if blocked_reason is not None:
+            print(
+                f"[explore] snapshot pivot refused: {blocked_reason}; "
+                "mapping from the current safe heading instead."
+            )
+            return False
         return abs(target_yaw - float(yaw_after)) <= 5.0
 
     def _drive_leg(
@@ -2788,7 +3007,8 @@ def main() -> int:
             handoff_added += int(vp_last[0] or 0)
             handoff_gain += int(vp_gain_last[0] or 0)
             handoff_pose_ok = handoff_pose_ok or bool(vp_pose_ok_last[0])
-            last_handoff_centre = _robot_centre(cur_pose).copy()
+            if vp_pose_ok_last[0]:
+                last_handoff_centre = _robot_centre(cur_pose).copy()
             return bool(vp_pose_ok_last[0])
 
         def _fast_safety_check() -> str | None:
@@ -2824,7 +3044,13 @@ def main() -> int:
             if not len(local):
                 return "LiDAR safety unavailable (empty scan)"
             ff = _to_forward_frame(local, forward_offset)
-            calibrated_hit = _collision_box_violation(ff, collision_profile)
+            calibrated_hit = _collision_box_violation(
+                ff,
+                collision_profile,
+                lidar_offset_forward_m=lever_m,
+                physical_body_radius_m=float(args.physical_body_radius_m),
+                self_mask_inset_m=float(args.collision_self_mask_inset_m),
+            )
             if calibrated_hit is not None:
                 mask, sector, angle, hit_range, limit = calibrated_hit
                 # Count only fresh LiDAR revolutions. Re-reading one frame at
@@ -2847,8 +3073,19 @@ def main() -> int:
                 if collision_streak["count"] < required_frames:
                     return None
                 pending_collision_local[0] = local[mask].copy()
+                evidence_points = int(np.count_nonzero(mask))
+                evidence_bins = int(np.unique(
+                    np.floor(
+                        (
+                            np.degrees(np.arctan2(ff[mask, 1], ff[mask, 0]))
+                            + 180.0
+                        )
+                        / float(collision_profile["bin_size_deg"])
+                    ).astype(np.int64)
+                ).size)
                 return (f"calibrated collision box {sector}: {hit_range:.2f}m "
-                        f"at {angle:+.0f}deg (limit {limit:.2f}m)")
+                        f"at {angle:+.0f}deg (limit {limit:.2f}m; "
+                        f"{evidence_points} points/{evidence_bins} bins)")
             if collision_profile is not None:
                 if frame_id != collision_streak["frame_id"]:
                     collision_streak.update(frame_id=frame_id, sector=None, count=0)
@@ -2963,7 +3200,11 @@ def main() -> int:
                             frame_id=None, sector=None, count=0
                         )
                         controller.clear_safety_latch()
-                        print("[drive] fresh LiDAR restored — resuming the same plan.")
+                        # Safety latching changed the fast controller to HALT.
+                        # Clearing the reason alone does not restore its drive
+                        # mode, so resend the unchanged straight command.
+                        last_sent = None
+                        print("[drive] fresh LiDAR restored — resuming the same straight command.")
                         continue
                     if safety_reason.startswith("map edge"):
                         print(f"[drive] {safety_reason} — stopping to map before continuing.")
@@ -2982,6 +3223,12 @@ def main() -> int:
                         print(
                             f"[drive] {safety_reason} — clearance boundary reached; "
                             "ending this approach without same-target retries."
+                        )
+                        return f"hard stop ({safety_reason})"
+                    if safety_reason.startswith("rotational collision box"):
+                        print(
+                            f"[drive] {safety_reason} - pivot prohibited; "
+                            "mapping this clearance boundary without rotating."
                         )
                         return f"hard stop ({safety_reason})"
                     if _replan_same_frontier(f"safety stop: {safety_reason}"):
@@ -3235,18 +3482,22 @@ def main() -> int:
                             prev_imu = imu.deg()
                             continue
                     if (
-                        overlap_handoff
-                        and score >= float(args.min_match_score)
+                        score >= float(args.min_match_score)
                         and float(np.hypot(*(
                             _robot_centre(cur_pose) - last_handoff_centre
                         ))) >= max(0.20, float(args.frontier_handoff_checkpoint_m))
                     ):
                         controller.halt()
                         print(
-                            "[explore] passable-frontier transit checkpoint — "
-                            "snapshotting before continuing through the opening."
+                            "[explore] map-growth checkpoint — snapshotting before "
+                            "continuing the same path."
                         )
-                        _capture_handoff()
+                        if not _capture_handoff():
+                            print(
+                                "[drive] checkpoint could not match the trusted map; "
+                                "remaining stopped before overlap is lost completely."
+                            )
+                            return "tracking lost"
                         prev_imu = imu.deg()
                         last_good_t = time.monotonic()
                         last_sent = None
@@ -3351,7 +3602,11 @@ def main() -> int:
                     step_target = float(y_before) + commanded_step
                     controller.rotate_to(step_target)
                     t_f = time.monotonic()
+                    blocked_reason = None
                     while time.monotonic() - t_f < 6.0:
+                        blocked_reason = controller.safety_latched_reason()
+                        if blocked_reason is not None:
+                            break
                         y_now = imu.deg()
                         if (
                             y_now is not None
@@ -3370,6 +3625,13 @@ def main() -> int:
                         lever_m,
                         forward_offset,
                     )
+                    if blocked_reason is not None:
+                        print(
+                            f"[explore] room handoff pivot refused: {blocked_reason}; "
+                            "taking the overlap snapshot at the last safe heading."
+                        )
+                        _capture_handoff()
+                        break
                     if abs(actual_step) < 2.0:
                         print(
                             "[explore] room handoff pivot made no progress; "
@@ -3411,6 +3673,7 @@ def main() -> int:
     # ================= PHASE 2..N: explore the frontiers =================
     aborted = ""
     localization_hold = False
+    localization_hold_attempts = 0
     if bool(args.spin_only):
         print("[explore] --spin-only: skipping exploration; rendering the anchor spin map only.")
     else:
@@ -3428,13 +3691,22 @@ def main() -> int:
             break
         if localization_hold:
             controller.halt()
+            localization_hold_attempts += 1
             print("\n[explore] localization hold; retrying a stationary boundary map "
                   "without moving or spinning ...")
             _integrate_at_viewpoint()
             if vp_pose_ok_last[0]:
                 localization_hold = False
+                localization_hold_attempts = 0
                 print("[explore] stationary localization recovered; resuming the active plan.")
             else:
+                if localization_hold_attempts >= 2:
+                    aborted = "stationary localization could not recover"
+                    print(
+                        "[explore] stationary localization failed twice; stopping "
+                        "cleanly instead of repeating the same zero-gain retry forever."
+                    )
+                    break
                 time.sleep(1.0)
                 continue
         print("\n[explore] analyzing the map for significant frontiers ...")
@@ -3456,25 +3728,40 @@ def main() -> int:
                                      completed_transitions=completed_transitions,
                                      transition_backtrack_slack_m=(
                                          float(args.doorway_ratchet_slack_m)
-                                     ))
+                                     ),
+                                     current_heading_deg=(
+                                         float(cur_pose.theta_deg) + forward_offset
+                                     ),
+                                     turn_cost_per_deg=float(args.frontier_turn_cost_per_deg))
         if picked_target is None:
             # 'No target' has TWO very different meanings, and conflating them
             # once ended a mission at 0 viewpoints with live frontiers: either
             # the map is genuinely done, or PLANNING failed from the current
             # (possibly wobbled) pose. If frontiers remain, re-anchor the pose
             # stationary and retry before ever declaring completion.
-            live = [
+            unconstrained_live = [
                 c for c in analysis.clusters
                 if not any(
                     np.hypot(*(c.centroid_xy - v)) < float(args.visited_skip_m)
                     for v in visited
                 )
-                and not _behind_completed_transition(
+            ]
+            live = [
+                c for c in unconstrained_live
+                if not _behind_completed_transition(
                     c.centroid_xy,
                     completed_transitions,
                     float(args.doorway_ratchet_slack_m),
                 )
             ]
+            if active_frontier_xy is None and completed_transitions and unconstrained_live:
+                completed_transitions.pop()
+                none_retries = 0
+                print(
+                    "[explore] current room has no reachable frontier; releasing the "
+                    "most recent doorway commitment and returning to the parent area."
+                )
+                continue
             if live and none_retries < 2:
                 none_retries += 1
                 print(f"[explore] {len(live)} live frontier(s) but planning failed from here — "
@@ -3553,6 +3840,9 @@ def main() -> int:
             overlap_handoff=bool(cluster.passable),
         )
         clearance_limited = leg_failed.startswith("hard stop")
+        rotation_limited = leg_failed.startswith(
+            "hard stop (rotational collision box"
+        )
         if leg_failed == "mission time budget spent":
             aborted = leg_failed
             break
@@ -3589,6 +3879,7 @@ def main() -> int:
             # and retry stationary localization without repeating recovery spins.
             lost_strikes[fkey] = lost_strikes.get(fkey, 0) + 1
             localization_hold = True
+            localization_hold_attempts = 0
             print("[explore] tracking lost; preserving the active frontier and entering "
                   "stationary localization hold.")
             continue
@@ -3653,29 +3944,50 @@ def main() -> int:
         actual_gain = int(vp_gain_last[0] or 0)
         vp_gain_last[0] = None
         active_frontier_xy = None
-        if _viewpoint_completes_frontier(cluster, viewpoint_scans_added):
+        transition = None
+        if cluster.passable and not rotation_limited:
+            transition = _doorway_transition(
+                here,
+                objective_start_xy,
+                observe_xy,
+                viewpoint_scans_added,
+                actual_gain,
+                int(args.doorway_ratchet_min_gain_cells),
+            )
+        if transition is not None:
+            anchor, outward = transition
+            duplicate = any(
+                float(np.hypot(*(anchor - old_anchor))) < 0.75
+                and float(np.dot(outward, old_outward)) > 0.70
+                for old_anchor, old_outward in completed_transitions
+            )
+            if not duplicate:
+                completed_transitions.append((anchor, outward))
+            visited.append(cluster.centroid_xy.copy())
+            qualifier = "clearance-limited " if clearance_limited else ""
+            print(
+                f"[explore] {qualifier}passable frontier revealed a new room - "
+                "doorway commitment armed; continuing outward before any return."
+            )
+        elif (
+            not rotation_limited
+            and _viewpoint_completes_frontier(cluster, viewpoint_scans_added)
+        ):
             visited.append(cluster.centroid_xy.copy())
             print("[explore] narrow/non-crossable frontier observed successfully — "
                   "retiring this look target so planning advances.")
+        elif rotation_limited:
+            print(
+                "[explore] target was not reached because its initial rotational "
+                "trajectory was blocked; leaving the frontier eligible for a "
+                "different approach."
+            )
         elif clearance_limited:
             visited.append(cluster.centroid_xy.copy())
             print(
                 "[explore] blocked approach was mapped once — retiring this "
                 "viewpoint so the planner selects a different frontier."
             )
-        elif (
-            cluster.passable
-            and viewpoint_scans_added > 0
-            and actual_gain >= int(args.doorway_ratchet_min_gain_cells)
-        ):
-            outward = np.asarray(observe_xy, dtype=np.float64) - objective_start_xy
-            outward_norm = float(np.hypot(*outward))
-            if outward_norm >= 0.30:
-                outward /= outward_norm
-                completed_transitions.append((here.copy(), outward.copy()))
-                visited.append(cluster.centroid_xy.copy())
-                print("[explore] passable frontier produced a high-gain room transition - "
-                      "doorway ratchet armed; targets back in the completed room are excluded.")
         kind_msg = "close look" if close_look else "advance"
         print(f"[explore] {kind_msg} {viewpoints_reached} done; map now {len(world_map.scans)} "
               f"scans, actual gain {actual_gain} newly-known cells; selecting next viewpoint.")

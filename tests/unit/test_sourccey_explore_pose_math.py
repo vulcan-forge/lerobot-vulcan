@@ -21,6 +21,7 @@ from ldlidar_direct_snapshot_stitch import Pose2D, _search_pose, _transform_poin
 from sourccey_collision_box import (  # noqa: E402
     calibrate_collision_box,
     collision_box_dimensions,
+    collision_box_rotation_violation,
     collision_box_violation,
     effective_ranges,
 )
@@ -177,6 +178,95 @@ def test_pick_target_does_not_globally_switch_away_from_active_frontier() -> Non
 
     assert picked is not None
     assert picked[0] is active
+
+
+def test_pick_target_turn_cost_is_soft_and_never_makes_rear_unreachable() -> None:
+    analysis = _open_analysis()
+    rear = explore.FrontierCluster(
+        cells_ij=np.array([[10, 2]], dtype=np.int64),
+        centroid_xy=analysis.to_world((10, 2)),
+        span_m=1.4,
+        size=8,
+        passable=False,
+    )
+    analysis.clusters = [rear]
+
+    picked = explore._pick_target(
+        analysis,
+        robot_centre_xy=np.zeros(2),
+        visited_xy=[],
+        pullback_m=0.4,
+        visited_skip_m=0.2,
+        current_heading_deg=0.0,
+        turn_cost_per_deg=1.0,
+    )
+
+    assert picked is not None
+    assert picked[0] is rear
+
+
+def test_pick_target_softly_prefers_less_turn_when_frontiers_are_available() -> None:
+    analysis = _open_analysis()
+    rear = explore.FrontierCluster(
+        cells_ij=np.array([[10, 2]], dtype=np.int64),
+        centroid_xy=analysis.to_world((10, 2)),
+        span_m=1.4,
+        size=8,
+        passable=False,
+    )
+    forward = explore.FrontierCluster(
+        cells_ij=np.array([[10, 18]], dtype=np.int64),
+        centroid_xy=analysis.to_world((10, 18)),
+        span_m=0.4,
+        size=8,
+        passable=False,
+    )
+    analysis.clusters = [rear, forward]
+
+    picked = explore._pick_target(
+        analysis,
+        robot_centre_xy=np.zeros(2),
+        visited_xy=[],
+        pullback_m=0.4,
+        visited_skip_m=0.2,
+        current_heading_deg=0.0,
+        turn_cost_per_deg=1.0,
+    )
+
+    assert picked is not None
+    assert picked[0] is forward
+
+
+def test_high_gain_doorway_observation_arms_directed_room_commitment() -> None:
+    transition = explore._doorway_transition(
+        anchor_xy=np.array([1.0, 0.0]),
+        objective_start_xy=np.array([0.0, 0.0]),
+        observe_xy=np.array([2.0, 0.0]),
+        scans_added=8,
+        newly_known_cells=400,
+        min_gain_cells=300,
+    )
+
+    assert transition is not None
+    anchor, outward = transition
+    assert anchor == pytest.approx([1.0, 0.0])
+    assert outward == pytest.approx([1.0, 0.0])
+
+
+def test_weak_or_empty_doorway_observation_does_not_arm_commitment() -> None:
+    common = {
+        "anchor_xy": np.array([1.0, 0.0]),
+        "objective_start_xy": np.array([0.0, 0.0]),
+        "observe_xy": np.array([2.0, 0.0]),
+        "min_gain_cells": 300,
+    }
+
+    assert explore._doorway_transition(
+        **common, scans_added=0, newly_known_cells=400
+    ) is None
+    assert explore._doorway_transition(
+        **common, scans_added=8, newly_known_cells=299
+    ) is None
 
 
 def test_pick_target_aims_at_visible_frontier_cell_and_predicts_gain() -> None:
@@ -417,6 +507,92 @@ def test_collision_box_prioritizes_single_bin_side_intrusion() -> None:
     assert collision_box_violation(front_points, profile)[1] == "front"
 
 
+def test_collision_box_excludes_only_returns_safely_inside_physical_chassis() -> None:
+    profile = {
+        "version": 1,
+        "frame": "physical_forward_xy",
+        "bin_size_deg": 4.0,
+        "ranges_m": [0.50] * 90,
+        "noise_tolerance_m": 0.0,
+        "safety_margin_m": 0.0,
+        "min_violation_bins": 2,
+        "side_min_violation_bins": 1,
+        "side_min_violation_points": 2,
+    }
+    geometry = {
+        "lidar_offset_forward_m": 0.229,
+        "physical_body_radius_m": 0.28,
+        "self_mask_inset_m": 0.02,
+    }
+
+    # At the LiDAR's lateral plane these points are deep inside the measured
+    # chassis circle about the robot centre and cannot be an external obstacle.
+    internal = np.array([[0.0, -0.08], [0.002, -0.085]])
+    assert collision_box_violation(internal, profile, **geometry) is None
+
+    # A wall 26cm to the side is outside that physical core but still inside
+    # the larger collision envelope, so shoulder protection remains active.
+    external = np.array([[0.0, -0.26], [0.002, -0.265]])
+    hit = collision_box_violation(external, profile, **geometry)
+    assert hit is not None
+    assert hit[1] == "right side"
+
+
+def test_rotational_sweep_allows_clearance_increasing_turn_and_blocks_worsening_turn() -> None:
+    profile = {
+        "version": 1,
+        "frame": "physical_forward_xy",
+        "bin_size_deg": 4.0,
+        "ranges_m": [0.25 if 22 <= idx <= 67 else None for idx in range(90)],
+        "complete_box": True,
+        "completed_width_m": 0.724,
+        "completed_front_m": 0.230,
+        "completed_rear_m": 0.583,
+        "corner_radius_m": 0.343,
+        "noise_tolerance_m": 0.0,
+        "safety_margin_m": 0.0,
+        "min_violation_bins": 2,
+        "side_min_violation_bins": 1,
+        "side_min_violation_points": 2,
+    }
+    angles = np.radians(np.array([-81.0, -80.0, -79.0, -78.0]))
+    right_obstacle = np.column_stack([
+        0.30 * np.cos(angles),
+        0.30 * np.sin(angles),
+    ])
+    geometry = {
+        "lidar_offset_forward_m": 0.229,
+        "physical_body_radius_m": 0.28,
+        "self_mask_inset_m": 0.02,
+    }
+
+    # Positive yaw moves this right-side surface out of the rounded footprint;
+    # the opposite direction sweeps the body farther into it.
+    assert collision_box_rotation_violation(
+        right_obstacle, profile, +30.0, **geometry
+    ) is None
+    blocked = collision_box_rotation_violation(
+        right_obstacle, profile, -30.0, **geometry
+    )
+    assert blocked is not None
+    assert blocked[0][1] == "right side"
+    assert blocked[1] == pytest.approx(0.0)
+
+    left_angles = np.radians(np.array([78.0, 79.0, 80.0, 81.0]))
+    left_obstacle = np.column_stack([
+        0.29 * np.cos(left_angles),
+        0.29 * np.sin(left_angles),
+    ])
+    assert collision_box_rotation_violation(
+        left_obstacle, profile, -30.0, **geometry
+    ) is None
+    left_blocked = collision_box_rotation_violation(
+        left_obstacle, profile, +30.0, **geometry
+    )
+    assert left_blocked is not None
+    assert left_blocked[0][1] == "left side"
+
+
 def test_collision_box_dimensions_expand_live_envelope() -> None:
     profile = {
         "bin_size_deg": 4.0,
@@ -501,6 +677,25 @@ def test_completed_collision_box_keeps_separate_dimensions_from_learned_box() ->
 
     profile["complete_box"] = False
     assert collision_box_dimensions(profile) == pytest.approx((0.50, 0.40))
+
+
+def test_completed_collision_box_has_independent_front_and_rear_depths() -> None:
+    profile = {
+        "bin_size_deg": 4.0,
+        "ranges_m": [0.50] * 90,
+        "complete_box": True,
+        "completed_width_m": 0.60,
+        "completed_length_m": 0.80,
+        "completed_front_m": 0.25,
+        "completed_rear_m": 0.55,
+        "corner_radius_m": 0.0,
+    }
+
+    completed = effective_ranges(profile)
+
+    assert completed[45] == pytest.approx(0.25, abs=0.02)
+    assert completed[0] == pytest.approx(0.55, abs=0.02)
+    assert completed[67] == pytest.approx(0.30, abs=0.02)
 
 
 def test_swept_footprint_reports_mapped_shoulder_clearance() -> None:
@@ -657,6 +852,35 @@ def test_fast_controller_latches_safety_before_forward_command() -> None:
     assert controller.safety_latched_reason() == "mapped full-body clearance"
     assert robot.actions
     assert all(float(action["x.vel"]) <= 0.0 for action in robot.actions)
+
+
+def test_fast_controller_latches_rotational_safety_before_pivot_command() -> None:
+    class FakeRobot:
+        _z_pos_cmd = 100.0
+
+        def __init__(self) -> None:
+            self.actions: list[dict[str, float]] = []
+
+        def send_action(self, action) -> None:
+            self.actions.append(dict(action))
+
+    class FakeImu:
+        def deg(self) -> float:
+            return 0.0
+
+    robot = FakeRobot()
+    controller = explore.BaseController(robot, {}, FakeImu(), rate_hz=100.0)
+    controller.set_rotation_safety_check(
+        lambda _remaining_deg: "rotational collision box left side"
+    )
+    controller.start()
+    controller.rotate_to(90.0)
+    time.sleep(0.06)
+    controller.shutdown()
+
+    assert controller.safety_latched_reason() == "rotational collision box left side"
+    assert robot.actions
+    assert all(float(action["theta.vel"]) == 0.0 for action in robot.actions)
 
 
 def test_heading_hold_deadband_does_not_hunt_small_imu_error() -> None:

@@ -314,7 +314,11 @@ def _score_candidates_batch_cuda(
     cand_t = torch.as_tensor(cand, dtype=torch.float32, device=device)
     origin_t = torch.as_tensor(grid_origin_xy, dtype=torch.float32, device=device)
     n_cand, n_pts = int(cand_t.shape[0]), int(cand_t.shape[1])
-    scores = torch.full((n_cand,), -1e9, dtype=torch.float64, device=device)
+    # Consumer GPUs such as the RTX 2070 execute float64 at only a small
+    # fraction of their float32 rate. Candidate coordinates and occupancy
+    # arithmetic are already float32, so keeping the score reductions float32
+    # avoids an expensive precision promotion without changing grid hits.
+    scores = torch.full((n_cand,), -1e9, dtype=torch.float32, device=device)
     rel = (cand_t - origin_t) / float(resolution_m)
     ij = torch.round(rel).to(torch.int64)
     height, width = dilated_grid.shape
@@ -336,13 +340,13 @@ def _score_candidates_batch_cuda(
     nearby_hits = (cached["dilated"][ii, jj] & known).sum(dim=1)
     inside_counts = inside.sum(dim=1)
     ok_idx = torch.nonzero(ok, as_tuple=False).flatten()
-    m_counts = matchable_count[ok_idx].to(torch.float64)
-    exact_hit_ratio = exact_hits[ok_idx].to(torch.float64) / m_counts
-    nearby_hit_ratio = nearby_hits[ok_idx].to(torch.float64) / m_counts
-    inside_ratio = inside_counts[ok_idx].to(torch.float64) / float(n_pts)
+    m_counts = matchable_count[ok_idx].to(torch.float32)
+    exact_hit_ratio = exact_hits[ok_idx].to(torch.float32) / m_counts
+    nearby_hit_ratio = nearby_hits[ok_idx].to(torch.float32) / m_counts
+    inside_ratio = inside_counts[ok_idx].to(torch.float32) / float(n_pts)
     miss_ratio = 1.0 - nearby_hit_ratio
 
-    nearest_mean = torch.zeros(len(ok_idx), dtype=torch.float64, device=device)
+    nearest_mean = torch.zeros(len(ok_idx), dtype=torch.float32, device=device)
     global_t = cached["global"]
     if use_nearest_penalty and len(global_sampled_xy):
         known_ok = known[ok_idx]
@@ -370,8 +374,8 @@ def _score_candidates_batch_cuda(
             ).amin(dim=2)
             sums = torch.where(pick_valid, nearest_sq, 0.0).sum(dim=1)
             nearest_mean = torch.sqrt(
-                torch.clamp(sums, min=0.0).to(torch.float64)
-                / n_picks.to(torch.float64)
+                torch.clamp(sums, min=0.0)
+                / n_picks.to(torch.float32)
             )
 
     base_score = (
@@ -379,7 +383,11 @@ def _score_candidates_batch_cuda(
         + nearby_hit_ratio * 3.0
         + inside_ratio * 1.5
         - miss_ratio * 6.0
-        - torch.minimum(nearest_mean, torch.tensor(0.5, device=device)) * 10.0
+        - torch.minimum(
+            nearest_mean,
+            torch.tensor(0.5, dtype=torch.float32, device=device),
+        )
+        * 10.0
     )
     coverage_ratio = m_counts / float(n_pts)
     coverage_weight = 0.55 + 0.45 * torch.minimum(
@@ -785,6 +793,8 @@ def _search_pose(
     prior_translation_weight: float = 0.0,
     prior_theta_weight: float = 0.0,
     allow_whole_map_search: bool = True,
+    local_fine_theta_half_window_deg: float | None = None,
+    local_use_nearest_penalty: bool = True,
 ) -> tuple[Pose2D, dict[str, object]]:
     build_started = time.monotonic()
     exact_grid, origin = _build_occupancy(global_points_xy, resolution_m=resolution_m, padding_m=search_xy_m + 0.4)
@@ -879,7 +889,11 @@ def _search_pose(
                 float(coarse_theta_candidates[k // n_coarse_xy]),
             )
 
-    fine_theta_half_window_deg = max(6.0, min(18.0, theta_window_deg * 0.35))
+    fine_theta_half_window_deg = (
+        max(float(fine_angle_step_deg), float(local_fine_theta_half_window_deg))
+        if local_fine_theta_half_window_deg is not None
+        else max(6.0, min(18.0, theta_window_deg * 0.35))
+    )
     local_best_pose, local_best_score = _refine_pose(
         snapshot_points_xy=snapshot_points_xy,
         seed_pose=local_best_pose,
@@ -897,7 +911,7 @@ def _search_pose(
         prior_pose=prior_pose,
         prior_translation_weight=float(prior_translation_weight),
         prior_theta_weight=float(prior_theta_weight),
-        use_nearest_penalty=True,
+        use_nearest_penalty=bool(local_use_nearest_penalty),
         anchor_pose=initial_pose,
         max_translation_m=max_translation_from_initial_m,
     )

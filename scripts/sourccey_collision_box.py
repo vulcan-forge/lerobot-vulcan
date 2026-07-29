@@ -101,9 +101,17 @@ def _completed_rounded_box_ranges(
     width_m: float,
     length_m: float,
     corner_radius_m: float,
+    front_m: float | None = None,
+    rear_m: float | None = None,
 ) -> np.ndarray:
-    """Radial boundary of a rounded rectangle centred on the LiDAR."""
-    half_x = 0.5 * max(0.001, float(length_m))
+    """Radial boundary of a rounded rectangle around the LiDAR origin."""
+    if front_m is None or rear_m is None:
+        front = rear = 0.5 * max(0.001, float(length_m))
+    else:
+        front = max(0.001, float(front_m))
+        rear = max(0.001, float(rear_m))
+    half_x = 0.5 * (front + rear)
+    centre_x = 0.5 * (front - rear)
     half_y = 0.5 * max(0.001, float(width_m))
     radius = min(
         max(0.0, float(corner_radius_m)),
@@ -117,7 +125,7 @@ def _completed_rounded_box_ranges(
 
     def inside(distance: np.ndarray) -> np.ndarray:
         points = directions * distance[:, None]
-        qx = np.abs(points[:, 0]) - (half_x - radius)
+        qx = np.abs(points[:, 0] - centre_x) - (half_x - radius)
         qy = np.abs(points[:, 1]) - (half_y - radius)
         outside = np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0))
         signed = outside + np.minimum(np.maximum(qx, qy), 0.0) - radius
@@ -126,7 +134,8 @@ def _completed_rounded_box_ranges(
     low = np.zeros(int(count), dtype=np.float64)
     high = np.full(
         int(count),
-        math.hypot(half_x, half_y) + max(0.01, radius),
+        max(math.hypot(front, half_y), math.hypot(rear, half_y))
+        + max(0.01, radius),
         dtype=np.float64,
     )
     for _ in range(40):
@@ -159,6 +168,8 @@ def effective_ranges(profile: dict) -> np.ndarray:
                 profile.get("length_m", max(base_length, width)),
             )
         )
+        front = float(profile.get("completed_front_m", 0.5 * length))
+        rear = float(profile.get("completed_rear_m", 0.5 * length))
         default_radius = 0.20 * min(width, length)
         return _completed_rounded_box_ranges(
             count=len(raw),
@@ -166,6 +177,8 @@ def effective_ranges(profile: dict) -> np.ndarray:
             width_m=width,
             length_m=length,
             corner_radius_m=float(profile.get("corner_radius_m", default_radius)),
+            front_m=front,
+            rear_m=rear,
         )
     angles = np.radians(-180.0 + (np.arange(len(raw)) + 0.5) * bin_size)
     x = raw * np.cos(angles)
@@ -205,8 +218,19 @@ def collision_box_dimensions(profile: dict) -> tuple[float, float]:
 def collision_box_violation(
     points_forward_xy: np.ndarray,
     profile: dict | None,
+    *,
+    lidar_offset_forward_m: float = 0.0,
+    physical_body_radius_m: float = 0.0,
+    self_mask_inset_m: float = 0.0,
 ) -> tuple[np.ndarray, str, float, float, float] | None:
-    """Return violating point mask and details when a scan enters the envelope."""
+    """Return violating point mask and details when a scan enters the envelope.
+
+    The LiDAR sits forward of the robot centre and can see chassis structure
+    beneath/behind its scan plane. Returns safely inside the measured physical
+    body cannot be environmental obstacles, so exclude only an inset core of
+    that body. The larger planning/collision margin is intentionally *not*
+    excluded: a wall beside the shoulder must still stop the robot.
+    """
     if not profile:
         return None
     points = np.asarray(points_forward_xy, dtype=np.float64)
@@ -227,6 +251,16 @@ def collision_box_violation(
     safety_margin = float(profile.get("safety_margin_m", noise_tolerance))
     limits = thresholds[indices] + safety_margin - noise_tolerance
     violating = np.isfinite(limits) & np.isfinite(ranges) & (ranges >= 0.03) & (ranges < limits)
+    body_radius = max(0.0, float(physical_body_radius_m) - max(0.0, float(self_mask_inset_m)))
+    if body_radius > 0.0:
+        # Robot centre is ``-lidar_offset`` in the physical-forward LiDAR
+        # frame, hence point coordinates relative to the centre are
+        # (x + lidar_offset, y).
+        body_distance = np.hypot(
+            points[:, 0] + float(lidar_offset_forward_m),
+            points[:, 1],
+        )
+        violating &= body_distance >= body_radius
     if not np.any(violating):
         return None
 
@@ -259,4 +293,100 @@ def collision_box_violation(
         sector = "rear"
     else:
         sector = "front"
-    return violating, sector, angle, float(ranges[pick]), float(limits[pick])
+    return accepted, sector, angle, float(ranges[pick]), float(limits[pick])
+
+
+def collision_box_rotation_violation(
+    points_forward_xy: np.ndarray,
+    profile: dict | None,
+    rotation_deg: float,
+    *,
+    lidar_offset_forward_m: float = 0.0,
+    physical_body_radius_m: float = 0.0,
+    self_mask_inset_m: float = 0.0,
+    sweep_step_deg: float = 3.0,
+) -> tuple[tuple[np.ndarray, str, float, float, float], float] | None:
+    """Predict whether a requested in-place rotation sweeps into the envelope.
+
+    Points are stationary in the world. For a robot turn ``delta``, rotate each
+    point by ``-delta`` about the robot centre, then express it from the
+    forward-offset LiDAR again. If the robot is already inside its safety
+    margin, permit only the direction whose first step strictly reduces the
+    deepest penetration. This is the rotate-in-place equivalent of a local
+    planner's footprint trajectory check.
+    """
+    points = np.asarray(points_forward_xy, dtype=np.float64)
+    requested = float(rotation_deg)
+    if (
+        not profile
+        or points.ndim != 2
+        or points.shape[1:] != (2,)
+        or not len(points)
+        or abs(requested) < 0.25
+    ):
+        return None
+    body_radius = max(
+        0.0,
+        float(physical_body_radius_m) - max(0.0, float(self_mask_inset_m)),
+    )
+    if body_radius > 0.0:
+        # Self returns rotate with the robot, not with the stationary world.
+        # Remove the inset physical-body core before projecting world points
+        # through future robot headings.
+        current_body_distance = np.hypot(
+            points[:, 0] + float(lidar_offset_forward_m),
+            points[:, 1],
+        )
+        points = points[current_body_distance >= body_radius]
+        if not len(points):
+            return None
+
+    geometry = {
+        "lidar_offset_forward_m": float(lidar_offset_forward_m),
+        "physical_body_radius_m": float(physical_body_radius_m),
+        "self_mask_inset_m": float(self_mask_inset_m),
+    }
+
+    def points_after_turn(delta_deg: float) -> np.ndarray:
+        theta = math.radians(-float(delta_deg))
+        c, s = math.cos(theta), math.sin(theta)
+        centred = points.copy()
+        centred[:, 0] += float(lidar_offset_forward_m)
+        turned = np.column_stack([
+            centred[:, 0] * c - centred[:, 1] * s,
+            centred[:, 0] * s + centred[:, 1] * c,
+        ])
+        turned[:, 0] -= float(lidar_offset_forward_m)
+        return turned
+
+    current = collision_box_violation(points, profile, **geometry)
+    step = max(0.5, min(abs(requested), abs(float(sweep_step_deg))))
+    signed_step = math.copysign(step, requested)
+    if current is not None:
+        after_step = collision_box_violation(
+            points_after_turn(signed_step),
+            profile,
+            **geometry,
+        )
+        current_depth = float(current[4] - current[3])
+        next_depth = (
+            float(after_step[4] - after_step[3])
+            if after_step is not None
+            else -math.inf
+        )
+        # Allow only an escape rotation that measurably opens clearance. The
+        # controller repeats this test on every fresh pose/scan while turning.
+        if next_depth < current_depth - 0.001:
+            return None
+        return current, 0.0
+
+    sample_count = max(1, int(math.ceil(abs(requested) / step)))
+    for delta in np.linspace(signed_step, requested, sample_count):
+        hit = collision_box_violation(
+            points_after_turn(float(delta)),
+            profile,
+            **geometry,
+        )
+        if hit is not None:
+            return hit, float(delta)
+    return None
