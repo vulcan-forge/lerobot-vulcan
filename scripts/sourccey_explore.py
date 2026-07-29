@@ -398,6 +398,29 @@ def _anchor_motion_is_complete(
     )
 
 
+def _anchor_pass_is_self_consistent(
+    accepted_count: int,
+    accepted_ratio: float,
+    quality: float,
+    net_sweep_deg: float,
+    requested_sweep_deg: float,
+) -> bool:
+    """Whether a complete, coherently matched sweep can initialize SLAM.
+
+    A post-spin stationary matcher is useful additional evidence, but repeated
+    geometry or a view dominated by new space can make it inconclusive. It must
+    not veto a physically complete sweep whose own sequential scan chain is
+    dense and internally consistent.
+    """
+    return (
+        int(accepted_count) >= 12
+        and float(accepted_ratio) >= 0.90
+        and float(quality) >= 0.75
+        and abs(float(net_sweep_deg))
+        >= 0.90 * abs(float(requested_sweep_deg))
+    )
+
+
 def _anchor_failure_consumes_motion_budget(stop_reason: str) -> bool:
     """Safety interruptions are local-planner events, not actuator failures."""
     return str(stop_reason) != "safety_blocked"
@@ -418,10 +441,11 @@ def _keyframe_batch_is_committable(
     maximum_position_correction_m: float,
     heading_correction_deg: float,
     maximum_heading_correction_deg: float,
+    minimum_inliers: int = 4,
 ) -> bool:
     """Gate irreversible map writes using measurement and motion-prior evidence."""
     return (
-        int(inlier_count) >= 4
+        int(inlier_count) >= max(1, int(minimum_inliers))
         and float(mean_match_score) >= float(minimum_match_score)
         and float(mean_known_support) >= float(minimum_known_support)
         and float(position_correction_m) <= float(maximum_position_correction_m)
@@ -444,7 +468,7 @@ def _keyframe_heading_correction_limit_deg(
     when the batch was internally consistent. Larger hypotheses remain valid
     for pose-only recovery, never irreversible map writes.
     """
-    required_inliers = max(4, int(math.ceil(0.75 * max(1, int(batch_count)))))
+    required_inliers = max(3, int(math.ceil(0.75 * max(1, int(batch_count)))))
     high_confidence = (
         int(inlier_count) >= required_inliers
         and float(mean_match_score) >= max(12.0, float(minimum_match_score))
@@ -460,6 +484,8 @@ def _keyframe_match_commit_threshold(
     inlier_count: int,
     batch_count: int,
     mean_known_support: float,
+    *,
+    sequential_overlap_keyframe: bool = False,
 ) -> float:
     """Lower the score floor only for a strongly supported stationary batch.
 
@@ -468,8 +494,21 @@ def _keyframe_match_commit_threshold(
     missing confidence, allowing mapping to grow without accepting weak lost-
     tracking batches.
     """
-    required_inliers = max(4, int(math.ceil(0.75 * max(1, int(batch_count)))))
-    if int(inlier_count) >= required_inliers and float(mean_known_support) >= 0.50:
+    required_inliers = max(3, int(math.ceil(0.75 * max(1, int(batch_count)))))
+    strongly_supported = (
+        int(inlier_count) >= required_inliers
+        and float(mean_known_support) >= 0.50
+    )
+    if sequential_overlap_keyframe and strongly_supported:
+        # At a doorway most returns legitimately point into new space, so the
+        # global occupied-grid score is not on the same scale as ordinary
+        # in-room localization.  The professional SLAM criterion here is a
+        # compact multi-scan pose mode plus overlap with the preceding trusted
+        # keyframe, not an unrelated global score floor.  Keep a modest score
+        # floor as an aliasing guard; the existing support, innovation,
+        # position and heading gates still all apply before GOLD is changed.
+        return min(float(configured_score), 6.5)
+    if strongly_supported:
         return min(float(configured_score), 12.0)
     return float(configured_score)
 
@@ -484,10 +523,11 @@ def _stationary_pose_is_recoverable(
     maximum_position_correction_m: float,
     heading_correction_deg: float,
     maximum_heading_correction_deg: float,
+    minimum_inliers: int = 4,
 ) -> bool:
     """Accept a coherent pose-only correction without authorizing a map write."""
     return (
-        int(inlier_count) >= 4
+        int(inlier_count) >= max(1, int(minimum_inliers))
         and float(mean_match_score) >= float(minimum_match_score)
         and float(mean_known_support) >= float(minimum_known_support)
         and float(position_correction_m) <= float(maximum_position_correction_m)
@@ -661,6 +701,28 @@ def _filter_isolated_lidar_specks(points_xy: np.ndarray) -> np.ndarray:
     return clean[supported].astype(points.dtype, copy=False)
 
 
+def _continuous_passage_keyframe_is_eligible(
+    *,
+    fresh_scan: bool,
+    pose_accepted: bool,
+    local_match_valid: bool,
+    local_support: float,
+    local_innovation_m: float,
+) -> bool:
+    """Tight, local-only gate for a live passage keyframe.
+
+    This intentionally has no global-map score: doorway scans contain new
+    space. Pose continuity comes from the immediately preceding rolling submap
+    plus IMU yaw, while bounded innovation prevents a bad relative match from
+    entering permanent geometry.
+    """
+    return (
+        bool(fresh_scan)
+        and bool(pose_accepted)
+        and bool(local_match_valid)
+        and float(local_support) >= 0.25
+        and float(local_innovation_m) <= 0.15
+    )
 def _translation_escape_is_safe(
     points_forward_xy: np.ndarray,
     profile: dict | None,
@@ -1850,6 +1912,74 @@ def _astar(traversable: np.ndarray, start: tuple[int, int], goal: tuple[int, int
     return None
 
 
+def _route_cost_field(
+    traversable: np.ndarray,
+    start: tuple[int, int],
+    cost: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One Dijkstra expansion reused for every frontier candidate.
+
+    Frontier selection previously ran as many as 48 independent A* searches
+    over the same costmap. A single-source cost field is the standard global
+    planner primitive: it gives reachability, route cost, and a predecessor
+    tree for every candidate in one pass.
+    """
+    h, w = traversable.shape
+    distance = np.full((h, w), np.inf, dtype=np.float64)
+    parent_i = np.full((h, w), -1, dtype=np.int32)
+    parent_j = np.full((h, w), -1, dtype=np.int32)
+    si, sj = start
+    if not (0 <= si < h and 0 <= sj < w) or not traversable[si, sj]:
+        return distance, parent_i, parent_j
+    distance[si, sj] = 0.0
+    open_heap: list[tuple[float, int, int]] = [(0.0, si, sj)]
+    while open_heap:
+        current, ci, cj = heapq.heappop(open_heap)
+        if current > float(distance[ci, cj]) + 1e-9:
+            continue
+        for di, dj, step in _NEIGHBORS:
+            ni, nj = ci + di, cj + dj
+            if not (0 <= ni < h and 0 <= nj < w and traversable[ni, nj]):
+                continue
+            multiplier = float(cost[ni, nj]) if cost is not None else 1.0
+            candidate = current + float(step) * multiplier
+            if candidate < float(distance[ni, nj]):
+                distance[ni, nj] = candidate
+                parent_i[ni, nj] = ci
+                parent_j[ni, nj] = cj
+                heapq.heappush(open_heap, (candidate, ni, nj))
+    return distance, parent_i, parent_j
+
+
+def _path_from_cost_field(
+    start: tuple[int, int],
+    goal: tuple[int, int],
+    distance: np.ndarray,
+    parent_i: np.ndarray,
+    parent_j: np.ndarray,
+) -> list[tuple[int, int]] | None:
+    """Recover one route from a reusable single-source predecessor tree."""
+    gi, gj = goal
+    if not (
+        0 <= gi < distance.shape[0]
+        and 0 <= gj < distance.shape[1]
+        and math.isfinite(float(distance[gi, gj]))
+    ):
+        return None
+    path = [(gi, gj)]
+    limit = int(distance.size) + 1
+    while path[-1] != start and len(path) <= limit:
+        ci, cj = path[-1]
+        pi, pj = int(parent_i[ci, cj]), int(parent_j[ci, cj])
+        if pi < 0 or pj < 0:
+            return None
+        path.append((pi, pj))
+    if path[-1] != start:
+        return None
+    path.reverse()
+    return path
+
+
 def _line_free(traversable: np.ndarray, a: tuple[int, int], b: tuple[int, int]) -> bool:
     n = int(max(abs(b[0] - a[0]), abs(b[1] - a[1]))) * 2 + 1
     for t in np.linspace(0.0, 1.0, n):
@@ -2016,6 +2146,7 @@ def _pick_target(
     Candidate poses therefore aim at an actual frontier cell and are ranked by
     nearby unknown cells they can reveal, then by path cost.
     """
+    planning_started = time.monotonic()
     transitions = completed_transitions or []
     traversable = analysis.traversable
     if transitions:
@@ -2054,25 +2185,14 @@ def _pick_target(
             return None
         si, sj = best[1], best[2]
 
-    # Label the robot's connected free-space component once. Frontier geometry
-    # across walls or scan-matching islands can look extremely attractive but
-    # can never produce an A* path from here; previously those candidates filled
-    # the shortlist and made a healthy map report every frontier unreachable.
-    reachable = np.zeros_like(traversable)
-    reachable[si, sj] = True
-    stack = [(si, sj)]
-    while stack:
-        ci, cj = stack.pop()
-        for di, dj, _step in _NEIGHBORS:
-            ni, nj = ci + di, cj + dj
-            if (
-                0 <= ni < h
-                and 0 <= nj < w
-                and traversable[ni, nj]
-                and not reachable[ni, nj]
-            ):
-                reachable[ni, nj] = True
-                stack.append((ni, nj))
+    route_started = time.monotonic()
+    route_distance, route_parent_i, route_parent_j = _route_cost_field(
+        traversable,
+        (si, sj),
+        cost=analysis.cost,
+    )
+    reachable = np.isfinite(route_distance)
+    route_elapsed = time.monotonic() - route_started
 
     trav_cells = np.column_stack(np.nonzero(traversable))
     if len(trav_cells) == 0:
@@ -2144,9 +2264,28 @@ def _pick_target(
                 (d_all >= 0.15) & (d_all <= 2.50) & reachable_goals
                 & ~((d_all >= 0.30) & (d_all <= 1.0))
             )
+            def _nearest_standoff(
+                indices: np.ndarray,
+                limit: int = 96,
+                distances: np.ndarray = d_all,
+                desired: float = desired_standoff,
+            ) -> np.ndarray:
+                if not len(indices):
+                    return indices
+                residual = np.abs(distances[indices] - desired)
+                if len(indices) > limit:
+                    keep = np.argpartition(residual, limit - 1)[:limit]
+                    indices = indices[keep]
+                    residual = residual[keep]
+                return indices[np.argsort(residual)]
+
+            # Bound line-of-sight work per frontier cell. Testing every free
+            # cell in a 2.5m disk made candidate generation—not routing—the
+            # dominant 2.4s pause. Ninety-six representatives from each band
+            # preserve angular/standoff diversity while keeping latency fixed.
             eligible = np.concatenate((
-                normal[np.argsort(np.abs(d_all[normal] - desired_standoff))],
-                extended[np.argsort(np.abs(d_all[extended] - desired_standoff))],
+                _nearest_standoff(normal),
+                _nearest_standoff(extended),
             ))
             if not len(eligible):
                 cells_without_reachable_standoff += 1
@@ -2225,10 +2364,19 @@ def _pick_target(
             repeat_penalty,
         ) in tier_candidates:
             cell = (int(trav_cells[idx, 0]), int(trav_cells[idx, 1]))
-            path = _astar(traversable, (si, sj), cell, cost=analysis.cost)
+            path = _path_from_cost_field(
+                (si, sj),
+                cell,
+                route_distance,
+                route_parent_i,
+                route_parent_j,
+            )
             if path is None:
                 continue
-            travel_m = max(analysis.res_m, (len(path) - 1) * analysis.res_m)
+            travel_m = max(
+                analysis.res_m,
+                float(route_distance[cell]) * analysis.res_m,
+            )
             turn_deg = 0.0
             if current_heading_deg is not None and len(path) > 1:
                 first_xy = analysis.to_world(path[1])
@@ -2271,6 +2419,10 @@ def _pick_target(
             f"blocked-viewpoints={blocked_viewpoints_rejected}, "
             f"rejected-sightlines={sightlines_rejected}."
         )
+        print(
+            f"[perf] frontier planning {time.monotonic() - planning_started:.3f}s "
+            f"(shared route field {route_elapsed:.3f}s; no route selected)."
+        )
         return None
     if extended_standoff_candidates:
         print(
@@ -2289,6 +2441,11 @@ def _pick_target(
     if not waypoints or np.hypot(*(waypoints[-1] - goal_xy)) > 0.05:
         waypoints.append(goal_xy)
     close_look = float(np.hypot(*(goal_xy - observe_xy))) <= 0.9
+    print(
+        f"[perf] frontier planning {time.monotonic() - planning_started:.3f}s "
+        f"(shared route field {route_elapsed:.3f}s, "
+        f"{len(geometric)} geometric candidate(s))."
+    )
     return cluster, goal_xy, waypoints, close_look, observe_xy, expected_gain
 
 
@@ -3213,10 +3370,10 @@ def main() -> int:
     parser.add_argument("--frontier-keyframe-fan-half-deg", type=float, default=30.0,
                         help="Deprecated compatibility option. Doorway mapping now follows one "
                              "monotonic turn toward unexplored space and never sweeps back and forth.")
-    parser.add_argument("--frontier-keyframe-batch-scans", type=int, default=5,
-                        help="Stationary revolutions per doorway angle. Five permits robust "
-                             "four-inlier consensus with one rejected alias while avoiding eight "
-                             "redundant solves at every fan heading.")
+    parser.add_argument("--frontier-keyframe-batch-scans", type=int, default=3,
+                        help="Stationary revolutions per routine doorway angle. Three coherent "
+                             "scans provide a fast pose/map transaction; ambiguous recovery "
+                             "paths explicitly request five scans.")
     parser.add_argument("--frontier-handoff-sweep-deg", type=float, default=120.0,
                         help="Maximum monotonic turn-and-snapshot arc toward a passable frontier. "
                              "This is never a full recovery spin or a bidirectional fan.")
@@ -3370,8 +3527,8 @@ def main() -> int:
         parser.error("--startup-escape-max-steps must be at least one")
     if float(args.frontier_doorway_keyframe_m) <= 0.0:
         parser.error("--frontier-doorway-keyframe-m must be positive")
-    if not 4 <= int(args.frontier_keyframe_batch_scans) <= 8:
-        parser.error("--frontier-keyframe-batch-scans must be between 4 and 8")
+    if not 3 <= int(args.frontier_keyframe_batch_scans) <= 8:
+        parser.error("--frontier-keyframe-batch-scans must be between 3 and 8")
     configure_candidate_scoring_device(str(args.matcher_device))
 
     lidar_host = args.lidar_host or args.remote_ip
@@ -3429,7 +3586,12 @@ def main() -> int:
     # physically flipped and cracked the left arm; the read-back scale is not
     # trusted against the write path until verified on the hardware). Default is
     # to NEVER torque or target the arms; --arm-stow is an explicit opt-in.
-    stow_pose = load_pose(args.arm_stow_pose) if bool(args.arm_stow) else None
+    remote_arms_available = bool(getattr(robot, "remote_arms_available", True))
+    stow_pose = (
+        load_pose(args.arm_stow_pose)
+        if bool(args.arm_stow) and remote_arms_available
+        else None
+    )
     if stow_pose is not None:
         print(f"[explore] --arm-stow OPT-IN: moving arms to {args.arm_stow_pose} ...")
         apply_pose_blocking(robot, stow_pose, settle_s=float(args.arm_settle_s))
@@ -3443,7 +3605,12 @@ def main() -> int:
         )
     else:
         hold = _latched_arm_torque_state(stowed=False)
-        if bool(args.arm_stow):
+        if bool(args.arm_stow) and not remote_arms_available:
+            print(
+                "[explore] --arm-stow ignored: Pi host reports follower-arm "
+                "hardware disabled/removed; exploration remains base-only."
+            )
+        elif bool(args.arm_stow):
             print(f"[explore] WARNING: --arm-stow set but no pose at {args.arm_stow_pose}; "
                   "arms left untorqued.")
         else:
@@ -6451,11 +6618,12 @@ def main() -> int:
     base_quality = first_quality
     base_ratio = first_ratio
     base_gap = first_gap
+    base_net_spin = first_net_spin
     latest_pass = base_pass
     bidirectional_verified = False
 
     if second_capture is not None:
-        second_scans, _second_net_spin, second_timed_ratio, _second_direction = second_capture
+        second_scans, second_net_spin, second_timed_ratio, _second_direction = second_capture
         second_map, second_accepted, second_ratio, second_mean, second_gap = (
             _phase_1_2_choose_initial_map_candidate(
             second_scans,
@@ -6478,6 +6646,7 @@ def main() -> int:
             base_quality = second_quality
             base_ratio = second_ratio
             base_gap = second_gap
+            base_net_spin = second_net_spin
             latest_pass = second_accepted
             print(
                 "[explore] return pass is stronger; using it as the anchor instead "
@@ -6672,35 +6841,29 @@ def main() -> int:
     # consensus is already independent map evidence and remains authoritative
     # when this secondary single-view comparison is merely inconclusive.
     validation_overridden_by_bidirectional = False
-    if _anchor_pass_is_eligible(
+    validation_accepted_from_complete_pass = False
+    anchor_coverage_eligible = _anchor_pass_is_eligible(
         len(base_pass),
         base_ratio,
         base_gap,
         float(args.anchor_min_accept_ratio),
         float(args.anchor_max_heading_gap_deg),
-    ):
-        (
-            validation_pose,
-            validation_score,
-            validation_support,
-            validation_inliers,
-            validation_requested,
-            validation_centre_scatter,
-            validation_heading_scatter,
-        ) = _phase_1_4_validate_initial_map(world_map, cur_pose)
-    else:
-        validation_pose = None
-        validation_score = -1.0
-        validation_support = 0.0
-        validation_inliers = 0
-        validation_requested = int(args.anchor_validation_scans)
-        validation_centre_scatter = float("inf")
-        validation_heading_scatter = float("inf")
+    )
+    if not anchor_coverage_eligible:
         print(
             f"[explore] selected anchor pass has {base_ratio:.1%} accepted scans "
-            f"and a {base_gap:.1f}deg heading gap; independent validation skipped "
-            "because angular coverage is incomplete."
+            f"and a {base_gap:.1f}deg heading gap; attempting the independent "
+            "stationary cross-check despite sparse angular sampling."
         )
+    (
+        validation_pose,
+        validation_score,
+        validation_support,
+        validation_inliers,
+        validation_requested,
+        validation_centre_scatter,
+        validation_heading_scatter,
+    ) = _phase_1_4_validate_initial_map(world_map, cur_pose)
     if validation_pose is None and _bidirectional_anchor_is_sufficient(
         bidirectional_verified,
         len(base_pass),
@@ -6735,6 +6898,23 @@ def main() -> int:
                 f"support {terminal_support:.1%}). Map quality will not be used "
                 "as a substitute for live-pose registration."
             )
+    if validation_pose is None and _anchor_pass_is_self_consistent(
+        len(base_pass),
+        base_ratio,
+        base_quality,
+        base_net_spin,
+        float(args.spin_degrees),
+    ):
+        validation_pose = cur_pose
+        validation_accepted_from_complete_pass = True
+        verified_live_anchor_scan[0] = base_pass[-1][0].copy()
+        print(
+            "[explore] stationary anchor cross-check was inconclusive, but the "
+            f"physical sweep completed {base_net_spin:+.1f}deg with "
+            f"{len(base_pass)} coherent scans, {base_ratio:.1%} acceptance, and "
+            f"quality {base_quality:.3f}. Preserving that internally consistent "
+            "anchor and its terminal pose; no rebuild loop is required."
+        )
     rebuild_round = 0
     while validation_pose is None and rebuild_round < int(args.anchor_map_retries):
         rebuild_round += 1
@@ -6929,7 +7109,9 @@ def main() -> int:
             "geometry was used; inspect LiDAR/IMU timing or scan dropout before retrying."
         )
     cur_pose = validation_pose
-    if validation_overridden_by_bidirectional:
+    if validation_accepted_from_complete_pass:
+        validation_method = "complete self-consistent sequential LiDAR/IMU sweep"
+    elif validation_overridden_by_bidirectional:
         validation_method = (
             "bidirectional map consensus plus terminal-view pose registration"
         )
@@ -6938,7 +7120,13 @@ def main() -> int:
             "high-confidence supported stationary view"
             if validation_inliers == 1 else "multi-scan stationary consensus"
         )
-    if validation_overridden_by_bidirectional:
+    if validation_accepted_from_complete_pass:
+        print(
+            f"[explore] anchor initialized by {validation_method}; the optional "
+            "stationary cross-check was inconclusive but did not contradict the "
+            "completed sweep. Exploration enabled."
+        )
+    elif validation_overridden_by_bidirectional:
         print(
             f"[explore] anchor independently validated by {validation_method}; "
             "both map geometry and the robot's current live pose are verified. "
@@ -7026,6 +7214,14 @@ def main() -> int:
     last_tracking_frame_id: list[int | None] = [None]
     last_tracking_score = [float(args.min_match_score)]
     global_tracking_cycle = [0]
+    last_tracking_health: dict[str, float | bool] = {
+        "fresh": False,
+        "accepted": False,
+        "local_valid": False,
+        "local_support": 0.0,
+        "local_innovation_m": math.inf,
+        "global_valid": False,
+    }
 
     def _reset_local_odometry(local_xy: np.ndarray, pose: Pose2D) -> None:
         """Re-anchor the rolling submap after a verified stationary solution."""
@@ -7034,8 +7230,13 @@ def main() -> int:
         last_tracking_score[0] = float(args.min_match_score)
         global_tracking_cycle[0] = 0
 
-    def _track(prev_imu_deg: float | None, *, integrate: bool = True,
-               search_xy_m: float | None = None) -> tuple[float, np.ndarray, float | None]:
+    def _track(
+        prev_imu_deg: float | None,
+        *,
+        integrate: bool = True,
+        search_xy_m: float | None = None,
+        global_match_every: int = 2,
+    ) -> tuple[float, np.ndarray, float | None]:
         """Continuous local-submap odometry plus guarded global-map correction.
 
         Every fresh revolution first matches the rolling nearby scan submap.
@@ -7051,6 +7252,14 @@ def main() -> int:
         and preserve all yaw accumulated while the matcher was running."""
         nonlocal cur_pose
         empty = np.zeros((0, 2), dtype=np.float32)
+        last_tracking_health.update(
+            fresh=False,
+            accepted=False,
+            local_valid=False,
+            local_support=0.0,
+            local_innovation_m=math.inf,
+            global_valid=False,
+        )
         frame_id, frame = feed.latest()
         if frame is None:
             return 0.0, empty, prev_imu_deg
@@ -7061,6 +7270,7 @@ def main() -> int:
             return last_tracking_score[0], empty, prev_imu_deg
         last_tracking_frame_id[0] = int(frame_id)
         global_tracking_cycle[0] += 1
+        last_tracking_health["fresh"] = True
         local = _scan_local(frame, args)
         if len(local) < 12:
             return 0.0, local, prev_imu_deg
@@ -7089,7 +7299,8 @@ def main() -> int:
         # Local odometry runs on every fresh revolution. Global alignment is a
         # lower-rate correction, as in a conventional SLAM front/back end; it
         # must not double matcher latency on every control iteration.
-        run_global_match = global_tracking_cycle[0] % 2 == 1
+        match_period = max(1, int(global_match_every))
+        run_global_match = global_tracking_cycle[0] % match_period == 1
         if run_global_match:
             solved_global, global_score = _localize(
                 match_local,
@@ -7134,6 +7345,12 @@ def main() -> int:
             global_score >= float(args.min_match_score)
             and global_support >= max(0.12, float(args.viewpoint_min_known_ratio) * 0.75)
         )
+        last_tracking_health.update(
+            local_valid=bool(local_valid),
+            local_support=float(local_support),
+            local_innovation_m=float(local_innovation),
+            global_valid=bool(global_valid),
+        )
 
         candidate: Pose2D | None = None
         if local_valid:
@@ -7162,6 +7379,7 @@ def main() -> int:
         if accepted_tracking:
             cur_pose = candidate
             local_odometry.add(local, cur_pose)
+            last_tracking_health["accepted"] = True
             # Local scan odometry has different score statistics from matching
             # an accumulated global map. Report it as healthy once its overlap
             # and bounded innovation tests pass so the caller does not invoke a
@@ -7246,7 +7464,7 @@ def main() -> int:
     def _integrate_at_viewpoint(
         *,
         require_known_overlap: bool = False,
-        scan_count: int = 5,
+        scan_count: int = 3,
     ) -> int:
         """Stop, settle, and map the new area with CLEAN stationary scans —
         committed as a BATCH only if the batch is self-consistent.
@@ -7258,6 +7476,9 @@ def main() -> int:
         representative revolutions are promoted to GOLD. This keeps one stopped
         pose from dominating the reference map or amplifying tiny residuals."""
         nonlocal cur_pose
+        integration_started = time.monotonic()
+        requested_scans = max(3, int(scan_count))
+        minimum_inliers = 3 if requested_scans <= 3 else 4
         vp_pose_ok_last[0] = False
         controller.halt()
         time.sleep(float(args.viewpoint_settle_s))
@@ -7269,7 +7490,7 @@ def main() -> int:
         last_score = 0.0
         stationary_pose_reference = cur_pose
         stationary_yaw_reference = imu.deg()
-        for _ in range(max(4, int(scan_count))):
+        for _ in range(requested_scans):
             fid, frame = feed.wait_for_frame_after(after_frame_id=after, timeout_s=1.0,
                                                    min_frame_advances=1)
             if frame is None:
@@ -7326,7 +7547,7 @@ def main() -> int:
                 support_ratio = float(np.mean(solved_support)) if len(local) else 0.0
                 batch.append((local, solved, last_score, support_ratio))
         added = 0
-        if len(batch) >= 4:
+        if len(batch) >= minimum_inliers:
             consensus_pose, inlier_indices, scatter, th_scatter = (
                 _stationary_pose_inlier_consensus(
                     [pose for _local, pose, _score, _support in batch],
@@ -7335,7 +7556,7 @@ def main() -> int:
                     forward_offset,
                     float(args.viewpoint_max_position_scatter_m),
                     float(args.viewpoint_max_heading_scatter_deg),
-                    min_inliers=4,
+                    min_inliers=minimum_inliers,
                     reference_centre_xy=_robot_centre(cur_pose),
                 )
             )
@@ -7358,6 +7579,7 @@ def main() -> int:
                 len(inlier_indices),
                 len(batch),
                 mean_support,
+                sequential_overlap_keyframe=bool(require_known_overlap),
             )
             heading_commit_limit = _keyframe_heading_correction_limit_deg(
                 float(args.viewpoint_max_pose_correction_deg),
@@ -7377,6 +7599,7 @@ def main() -> int:
                 float(args.viewpoint_max_pose_correction_m),
                 heading_correction,
                 heading_commit_limit,
+                minimum_inliers,
             )
             pose_recoverable = _stationary_pose_is_recoverable(
                 len(inlier_indices),
@@ -7386,6 +7609,7 @@ def main() -> int:
                 max(0.15, float(args.viewpoint_min_known_ratio)),
                 position_correction,
                 max(
+                    float(args.global_relocalization_max_pose_correction_m),
                     float(args.relocalization_max_pose_correction_m),
                     float(args.viewpoint_max_pose_correction_m),
                 ),
@@ -7395,6 +7619,7 @@ def main() -> int:
                     float(args.viewpoint_max_pose_correction_deg),
                     15.0,
                 ),
+                minimum_inliers,
             )
             if committable and _pose_stays_beyond_completed_doorways(consensus_pose):
                 # The base was stationary: every revolution belongs at one
@@ -7453,7 +7678,7 @@ def main() -> int:
                     f"{position_correction * 100:.0f}cm/{heading_correction:.1f}deg. "
                     "No occupancy cells were changed."
                 )
-        if added == 0 and len(batch) < 4:
+        if added == 0 and len(batch) < minimum_inliers:
             # Too few even matched: stationary bounded relocalization vs GOLD —
             # POSE ONLY, nothing is written to the map from a recovery.
             print(f"[explore]   viewpoint match weak ({last_score:.1f}) — stationary relocalization ...")
@@ -7519,6 +7744,11 @@ def main() -> int:
             # conservative fallback when padding changes array coordinates.
             new_known = max(0, int(known_after.sum()) - int(known_before.sum()))
         odom.take_forward_delta()      # absolute fixes above: discard pending odometry
+        print(
+            f"[perf] stationary integration "
+            f"{time.monotonic() - integration_started:.3f}s "
+            f"({len(batch)}/{requested_scans} matched, {added} committed)."
+        )
         print(f"[explore]   mapped viewpoint: +{added} scans, {new_known} newly-known cells "
               f"(match {last_score:.1f})")
         vp_last[0] = added
@@ -8099,6 +8329,8 @@ def main() -> int:
     deferred_frontiers: list[tuple[np.ndarray, int]] = []
     sampled_viewpoints: list[np.ndarray] = []
     transient_obstacles: list[tuple[np.ndarray, float]] = []
+    transient_obstacle_revision = [0]
+    analysis_cache: list[object | None] = [None, None]
     # Local-planner failure memory. A collision-limited navigation goal is not
     # evidence that its whole frontier is invalid, but immediately selecting
     # the same goal again creates an infinite stop/snapshot loop. Keep the
@@ -8142,11 +8374,14 @@ def main() -> int:
 
     def _active_transient_obstacle_points() -> np.ndarray:
         now = time.monotonic()
+        previous_count = len(transient_obstacles)
         transient_obstacles[:] = [
             (points, expires_at)
             for points, expires_at in transient_obstacles
             if expires_at > now
         ]
+        if len(transient_obstacles) != previous_count:
+            transient_obstacle_revision[0] += 1
         active = [points for points, _expires_at in transient_obstacles if len(points)]
         if not active:
             return np.empty((0, 2), dtype=np.float32)
@@ -8164,11 +8399,19 @@ def main() -> int:
             points[np.sort(indices)],
             time.monotonic() + float(args.obstacle_memory_s),
         ))
+        transient_obstacle_revision[0] += 1
         if len(transient_obstacles) > 12:
             del transient_obstacles[:-12]
 
     def _analysis_now() -> Analysis:
         dynamic = _active_transient_obstacle_points()
+        cache_key = (
+            int(world_map.grid.version),
+            int(transient_obstacle_revision[0]),
+        )
+        if analysis_cache[0] == cache_key and isinstance(analysis_cache[1], Analysis):
+            return analysis_cache[1]
+        analysis_started = time.monotonic()
         if len(dynamic):
             xyz = np.column_stack([
                 dynamic[:, 0], dynamic[:, 1], np.zeros(len(dynamic), dtype=np.float32)
@@ -8186,10 +8429,21 @@ def main() -> int:
                 "world/obstacle",
                 rr.Points3D(np.empty((0, 3), dtype=np.float32)),
             )
-        return analyze_grid(world_map.grid, float(args.robot_radius_m),
-                            float(args.min_frontier_span_m), int(args.min_frontier_cells),
-                            float(args.passable_opening_min_m),
-                            extra_occupied_xy=dynamic)
+        result = analyze_grid(
+            world_map.grid,
+            float(args.robot_radius_m),
+            float(args.min_frontier_span_m),
+            int(args.min_frontier_cells),
+            float(args.passable_opening_min_m),
+            extra_occupied_xy=dynamic,
+        )
+        analysis_cache[:] = [cache_key, result]
+        print(
+            f"[perf] occupancy/frontier analysis "
+            f"{time.monotonic() - analysis_started:.3f}s "
+            f"(grid revision {cache_key[0]}, obstacle revision {cache_key[1]})."
+        )
+        return result
 
     # --- TWO support masks, deliberately separate (field 2026-07-21): -------
     # MATCHING support comes ONLY from actually-integrated scan points, NEVER
@@ -8391,6 +8645,7 @@ def main() -> int:
         *,
         overlap_handoff: bool = False,
         rolling_submap: bool = False,
+        continuing_doorway: bool = False,
     ) -> str:
         """Execute a path as PIVOT -> STRAIGHT -> PIVOT -> STRAIGHT segments.
 
@@ -8411,6 +8666,65 @@ def main() -> int:
         last_handoff_centre = leg_start_centre.copy()
         last_handoff_heading: float | None = None
         handoff_keyframes: list[tuple[np.ndarray, float]] = []
+
+        def _commit_continuous_passage_keyframe(local_xy: np.ndarray) -> bool:
+            """Add one distance-spaced, already-tracked scan without stopping.
+
+            The rolling local submap and IMU already own the passage pose. A
+            second stationary/global solve at every checkpoint created two pose
+            authorities and caused the stop/turn/replan behavior. Here a healthy
+            live revolution simply extends both GOLD and occupancy while the
+            fixed-heading drive continues.
+            """
+            nonlocal handoff_added, handoff_gain, handoff_pose_ok
+            nonlocal last_handoff_centre, last_handoff_heading
+            if len(local_xy) < 12:
+                return False
+            if not _continuous_passage_keyframe_is_eligible(
+                fresh_scan=bool(last_tracking_health["fresh"]),
+                pose_accepted=bool(last_tracking_health["accepted"]),
+                local_match_valid=bool(last_tracking_health["local_valid"]),
+                local_support=float(last_tracking_health["local_support"]),
+                local_innovation_m=float(
+                    last_tracking_health["local_innovation_m"]
+                ),
+            ):
+                return False
+
+            known_before = world_map.grid.occupied() | world_map.grid.free()
+            origin_before = world_map.grid.origin.copy()
+            world_map.add(local_xy, cur_pose, gold=True)
+            known_after = world_map.grid.occupied() | world_map.grid.free()
+            if (
+                known_after.shape == known_before.shape
+                and np.allclose(world_map.grid.origin, origin_before)
+            ):
+                gain_now = int(np.count_nonzero(known_after & ~known_before))
+            else:
+                gain_now = max(0, int(known_after.sum()) - int(known_before.sum()))
+
+            centre_now = _robot_centre(cur_pose).copy()
+            heading_now = float(cur_pose.theta_deg) + forward_offset
+            last_handoff_centre = centre_now
+            last_handoff_heading = heading_now
+            handoff_keyframes.append((centre_now.copy(), heading_now))
+            if len(handoff_keyframes) > 64:
+                del handoff_keyframes[:-64]
+            handoff_added += 1
+            handoff_gain += gain_now
+            handoff_pose_ok = True
+            last_leg_mapping["scans"] = int(last_leg_mapping["scans"]) + 1
+            last_leg_mapping["gain"] = int(last_leg_mapping["gain"]) + gain_now
+            if gain_now > int(last_leg_mapping["best_gain"]):
+                last_leg_mapping["best_gain"] = gain_now
+                last_leg_mapping["best_pose"] = centre_now.copy()
+            print(
+                "[explore] continuous passage keyframe committed while moving: "
+                f"support {float(last_tracking_health['local_support']):.1%}, "
+                f"innovation {float(last_tracking_health['local_innovation_m']) * 100:.0f}cm, "
+                f"+{gain_now} newly-known cells."
+            )
+            return True
 
         def _record_mapping_result() -> tuple[int, int]:
             added_now = int(vp_last[0] or 0)
@@ -8458,7 +8772,7 @@ def main() -> int:
                 require_known_overlap=True,
                 scan_count=(
                     int(args.frontier_keyframe_batch_scans)
-                    if doorway_keyframe else 5
+                    if doorway_keyframe else 3
                 ),
             )
             added_now, gain_now = _record_mapping_result()
@@ -8613,6 +8927,7 @@ def main() -> int:
             if navigation_start_cell is not None
             else None
         )
+        corridor_translation_active = [False]
 
         def _fast_safety_check() -> str | None:
             pose = cur_pose
@@ -8656,6 +8971,19 @@ def main() -> int:
                 self_mask_inset_m=float(args.collision_self_mask_inset_m),
             )
             if calibrated_hit is not None:
+                if corridor_translation_active[0] and _translation_trajectory_is_safe(
+                    ff,
+                    collision_profile,
+                    np.array([0.10, 0.0], dtype=np.float64),
+                    lidar_offset_forward_m=lever_m,
+                    physical_body_radius_m=float(args.physical_body_radius_m),
+                    self_mask_inset_m=float(args.collision_self_mask_inset_m),
+                ):
+                    # Permit only a non-worsening straight doorway translation.
+                    # The same calibrated rollout is rechecked on every fresh
+                    # revolution; rotation and motion deeper into contact remain
+                    # prohibited.
+                    return None
                 mask, sector, angle, hit_range, limit = calibrated_hit
                 # Count only fresh LiDAR revolutions. Re-reading one frame at
                 # 25Hz must not turn a single glint/self-return into a stop.
@@ -8777,18 +9105,15 @@ def main() -> int:
                   f"({replans}/3), no target switching.")
             return True
 
-        if overlap_handoff:
+        if overlap_handoff and not continuing_doorway:
             print(
-                "[explore] passable-frontier transit: capturing a trusted "
-                "overlap reference before advancing toward the doorway."
+                "[explore] passable-frontier transit: taking one stationary "
+                "overlap reference, then holding one passage heading while "
+                "live LiDAR keyframes grow the map continuously."
             )
-            handoff_ready = _capture_overlap_turn(
-                "pre-door local submap",
-                np.asarray(face_xy if face_xy is not None else goal_xy, dtype=np.float64),
-                max_centre_arc_deg=min(
-                    60.0,
-                    max(30.0, 0.5 * float(args.frontier_handoff_sweep_deg)),
-                ),
+            handoff_ready = _capture_handoff(
+                force=True,
+                doorway_keyframe=True,
             )
             if not handoff_ready:
                 print(
@@ -8808,6 +9133,12 @@ def main() -> int:
             # Mapping time is not navigation failure time. Start the leg slice
             # after the deliberate stationary handoff has completed.
             leg_t0 = time.monotonic()
+        elif overlap_handoff:
+            print(
+                "[explore] continuing committed doorway transit: reusing the "
+                "existing overlap reference until the base translates; no "
+                "duplicate pre-door scan batch."
+            )
 
         if True:     # single-leg loop (keeps the body's indentation stable)
             while True:
@@ -8872,6 +9203,61 @@ def main() -> int:
                         )
                         return f"hard stop ({safety_reason})"
                     if safety_reason.startswith("rotational collision box"):
+                        if overlap_handoff and segment_index < len(waypoints):
+                            centre_now = _robot_centre(cur_pose)
+                            segment_end_now = np.asarray(
+                                waypoints[segment_index], dtype=np.float64
+                            )
+                            desired_vector = segment_end_now - centre_now
+                            desired_heading = math.degrees(math.atan2(
+                                float(desired_vector[1]), float(desired_vector[0])
+                            ))
+                            physical_heading = float(cur_pose.theta_deg) + forward_offset
+                            heading_error = (
+                                (desired_heading - physical_heading + 180.0) % 360.0
+                            ) - 180.0
+                            _frame_id, latest_frame = feed.latest()
+                            latest_local = (
+                                _scan_local(latest_frame, args)
+                                if latest_frame is not None else np.empty((0, 2))
+                            )
+                            latest_forward = _to_forward_frame(
+                                latest_local, forward_offset
+                            )
+                            step_m = min(
+                                0.20,
+                                max(0.12, float(np.hypot(*desired_vector))),
+                            )
+                            translation_safe = _translation_trajectory_is_safe(
+                                latest_forward,
+                                collision_profile,
+                                np.array([step_m, 0.0], dtype=np.float64),
+                                lidar_offset_forward_m=lever_m,
+                                physical_body_radius_m=float(args.physical_body_radius_m),
+                                self_mask_inset_m=float(args.collision_self_mask_inset_m),
+                            )
+                            if abs(heading_error) <= 25.0 and translation_safe:
+                                heading_rad = math.radians(physical_heading)
+                                escape_end = centre_now + step_m * np.array([
+                                    math.cos(heading_rad), math.sin(heading_rad)
+                                ])
+                                waypoints.insert(segment_index, escape_end)
+                                segment_start = centre_now.copy()
+                                segment_target_imu = imu.deg()
+                                driving = segment_target_imu is not None
+                                corridor_translation_active[0] = driving
+                                last_sent = None
+                                pivot_target_imu = None
+                                pivot_last_yaw = None
+                                controller.clear_safety_latch()
+                                if driving:
+                                    print(
+                                        f"[drive] doorway pivot constrained at "
+                                        f"{heading_error:+.1f}deg; calibrated "
+                                        f"straight rollout is safe, translating "
+                                        f"{step_m:.2f}m before reconsidering the turn."
+                                    )
+                                    continue
                         print(
                             f"[drive] {safety_reason} - pivot prohibited; "
                             "mapping this clearance boundary without rotating."
@@ -8915,6 +9301,7 @@ def main() -> int:
                     controller.halt()
                     segment_index += 1
                     segment_start = centre.copy()
+                    corridor_translation_active[0] = False
                     segment_target_imu = None
                     pivot_target_imu = None
                     pivot_last_yaw = None
@@ -8950,6 +9337,7 @@ def main() -> int:
                         segment_target_imu = target_imu
                         pivot_target_imu = None
                         pivot_last_yaw = None
+                        corridor_translation_active[0] = bool(overlap_handoff)
                         print(
                             f"[drive] segment {segment_index + 1}/{len(waypoints)} aligned — "
                             f"straight {float(np.hypot(*vec)):.2f}m."
@@ -9050,7 +9438,13 @@ def main() -> int:
                     t_now = time.monotonic()
                     window = min(0.45, v_max * (t_now - last_good_t) + 0.10)
                     score, local, prev_imu = _track(
-                        prev_imu, integrate=False, search_xy_m=window
+                        prev_imu,
+                        integrate=False,
+                        search_xy_m=window,
+                        # Local scan-to-submap odometry owns passage
+                        # continuity. Global correction remains available at a
+                        # lower rate without blocking every control cycle.
+                        global_match_every=(6 if overlap_handoff else 2),
                     )
 
                     # SAFETY PRECEDES localization recovery. A previous ordering
@@ -9217,7 +9611,7 @@ def main() -> int:
                                 controller.halt()
                                 print("[drive] stationary relock failed; mapping this boundary "
                                       "once without performing a recovery spin.")
-                                _integrate_at_viewpoint()
+                                _integrate_at_viewpoint(scan_count=5)
                                 if vp_pose_ok_last[0]:
                                     print(
                                         "[drive] boundary localization accepted; continuing "
@@ -9237,7 +9631,7 @@ def main() -> int:
                             segment_target_imu = None
                             prev_imu = imu.deg()
                             continue
-                    if (
+                    passage_checkpoint_due = (
                         score >= float(args.min_match_score)
                         and float(np.hypot(*(
                             _robot_centre(cur_pose) - last_handoff_centre
@@ -9246,24 +9640,20 @@ def main() -> int:
                             if overlap_handoff or rolling_submap
                             else max(0.20, float(args.frontier_handoff_checkpoint_m))
                         )
-                    ):
+                    )
+                    if passage_checkpoint_due and (overlap_handoff or rolling_submap):
+                        # Passage mode is deliberately monotonic: never halt,
+                        # pivot or declare tracking lost because an optional map
+                        # keyframe was unsuitable. Keep driving and let the next
+                        # fresh revolution try again.
+                        _commit_continuous_passage_keyframe(local)
+                    if passage_checkpoint_due and not (overlap_handoff or rolling_submap):
                         controller.halt()
                         print(
                             "[explore] map-growth checkpoint — snapshotting before "
                             "continuing the same path."
                         )
-                        checkpoint_ok = (
-                            _capture_overlap_turn(
-                                "doorway-progress local submap",
-                                np.asarray(
-                                    face_xy if face_xy is not None else goal_xy,
-                                    dtype=np.float64,
-                                ),
-                                max_centre_arc_deg=30.0,
-                            )
-                            if overlap_handoff or rolling_submap
-                            else _capture_handoff()
-                        )
+                        checkpoint_ok = _capture_handoff()
                         if not checkpoint_ok:
                             checkpoint_failures += 1
                             if checkpoint_failures < 2:
@@ -9396,8 +9786,14 @@ def main() -> int:
             )
         if overlap_handoff or rolling_submap:
             # If no pre-arrival handoff ran, acquire one overlap-verified view.
-            if not handoff_attempted:
+            if not handoff_attempted and leg_translation >= 0.12:
                 _capture_handoff(doorway_keyframe=True)
+            elif not handoff_attempted:
+                print(
+                    "[explore] doorway handoff retry skipped: the base did not "
+                    "translate, so another stationary batch would duplicate the "
+                    "same failed observation."
+                )
             vp_last[0] = handoff_added
             vp_gain_last[0] = handoff_gain
             vp_pose_ok_last[0] = handoff_pose_ok
@@ -9441,7 +9837,7 @@ def main() -> int:
             localization_hold_attempts += 1
             print("\n[explore] bounded localization recovery: stationary batch, "
                   "local-submap consensus, then one collision-checked parallax move.")
-            _integrate_at_viewpoint()
+            _integrate_at_viewpoint(scan_count=5)
             if vp_pose_ok_last[0]:
                 localization_hold = False
                 localization_hold_attempts = 0
@@ -9514,6 +9910,10 @@ def main() -> int:
                                      blocked_viewpoints_xy=[
                                          item[0] for item in blocked_viewpoints
                                      ],
+                                     blocked_viewpoint_skip_m=max(
+                                         0.75,
+                                         2.0 * float(args.robot_radius_m),
+                                     ),
                                      completed_transitions=completed_transitions,
                                      transition_backtrack_slack_m=(
                                          float(args.doorway_ratchet_slack_m)
@@ -9772,6 +10172,7 @@ def main() -> int:
         none_retries = 0
         cluster, goal_xy, waypoints, close_look, observe_xy, expected_gain = picked_target
         objective_start_xy = centre.copy()
+        objective_trail_start = len(trail)
         continuing_objective = active_frontier_xy is not None
         active_frontier_xy = cluster.centroid_xy.copy()
         kind = "CLOSE LOOK at" if close_look else "ADVANCE toward"
@@ -9804,6 +10205,7 @@ def main() -> int:
             face_xy=observe_xy,
             overlap_handoff=bool(cluster.passable),
             rolling_submap=rolling_submap_active,
+            continuing_doorway=bool(cluster.passable and continuing_objective),
         )
         clearance_limited = leg_failed.startswith("hard stop")
         rotation_limited = leg_failed.startswith(
@@ -9956,14 +10358,19 @@ def main() -> int:
                           "retiring it and continuing to the next frontier.")
                     continue
                 print("[explore] map-consistency watchdog: two failed viewpoints.")
-                _retire_frontier(cluster.centroid_xy)
-                active_frontier_xy = None
+                # A rejected map transaction is not evidence that a physical
+                # doorway stopped existing.  Retiring it here was the exact
+                # path that sent the robot back to old-room photography after
+                # a healthy, strongly tracked crossing. Preserve topological
+                # ownership and force a fresh translated keyframe attempt.
+                active_frontier_xy = cluster.centroid_xy.copy()
                 consistency_fails = 0
                 vp_last[0] = None
                 vp_gain_last[0] = None
                 print(
-                    "[explore] passable target produced two unusable batches — "
-                    "retiring it and selecting another frontier; no recovery spin."
+                    "[explore] passable target produced two conservative map "
+                    "transactions — retaining doorway ownership and continuing "
+                    "outward from a translated pose; no old-room target switch."
                 )
                 continue
         elif viewpoint_scans_added > 0:
@@ -10011,7 +10418,19 @@ def main() -> int:
                     max_distinct_attempts=2,
                 )
             )
-            if frontier_deferred_by_clearance:
+            if frontier_deferred_by_clearance and cluster.passable:
+                # A blocked in-place pivot inside a doorway is not evidence
+                # that the opening is unreachable. Preserve the topological
+                # objective and let the enlarged failed-approach region force a
+                # translated, lower-turn approach. Abandoning it here sent the
+                # robot back into the room after exactly two shoulder stops.
+                frontier_deferred_by_clearance = False
+                print(
+                    f"[plan] passable-frontier approach ({goal_xy[0]:+.2f}, "
+                    f"{goal_xy[1]:+.2f}) is rotation-constrained; preserving "
+                    "doorway ownership and requiring a translated approach."
+                )
+            elif frontier_deferred_by_clearance:
                 _defer_frontier(cluster.centroid_xy)
                 # The cooldown permits new map evidence and a new set of
                 # approaches later; do not make today's failures permanent.
@@ -10046,6 +10465,30 @@ def main() -> int:
                 actual_gain,
                 int(args.doorway_ratchet_min_gain_cells),
             )
+            if transition is None:
+                executed_leg = [objective_start_xy]
+                executed_leg.extend(
+                    np.asarray(point, dtype=np.float64).copy()
+                    for point in trail[objective_trail_start:]
+                )
+                executed_leg.append(here)
+                geometric_crossing = _crossed_passable_frontier(
+                    analysis,
+                    executed_leg,
+                )
+                if geometric_crossing is not None:
+                    # Room topology and map insertion confidence are separate
+                    # state estimates. A collision-checked, continuously
+                    # localized trajectory can prove the chassis crossed a
+                    # doorway even when a conservative stationary map write is
+                    # withheld. Record that crossing so the global planner may
+                    # not immediately choose the old side of the doorway.
+                    transition = geometric_crossing
+                    print(
+                        "[explore] passable-frontier crossing verified from the "
+                        "executed trajectory; committing room topology "
+                        "independently of the stationary map transaction."
+                    )
         if transition is not None:
             anchor, outward = transition
             _record_completed_transition(
@@ -10060,12 +10503,14 @@ def main() -> int:
                 "doorway commitment armed; continuing outward before any return."
             )
         elif cluster.passable and not rotation_limited and viewpoint_scans_added > 0:
-            # A photographed passable frontier is not necessarily a crossed
-            # doorway. Keep it available later, but do not select the identical
-            # zero-length objective again on the next planning epoch. That loop
-            # previously produced observations 30-33 from one pose, with no
-            # drive motion between repeated turn/snapshot fans.
-            _retire_frontier(cluster.centroid_xy, cooldown_epochs=12)
+            # A photographed passable frontier is not yet a completed doorway.
+            # Keep the global objective committed to this opening until the
+            # chassis crosses it. Selecting side/rear frontiers while the body
+            # occupies the doorway caused repeated refused pivots and visible
+            # left/right meandering. Only the exact observation region is
+            # suppressed so the next plan advances through the same opening
+            # from a translated pose.
+            active_frontier_xy = cluster.centroid_xy.copy()
             blocked_viewpoints.append((
                 np.asarray(goal_xy, dtype=np.float64).copy(),
                 planning_epoch + 12,
@@ -10074,8 +10519,17 @@ def main() -> int:
                 del blocked_viewpoints[:-32]
             print(
                 "[explore] passable frontier photographed without an executed "
-                "crossing - cooling this observation pose and selecting a "
-                "different target."
+                "crossing - retaining doorway transit ownership and advancing "
+                "through the same opening from a translated viewpoint."
+            )
+        elif cluster.passable and not rotation_limited:
+            # Even a conservative/no-commit snapshot does not cancel a valid
+            # doorway route. Continue the same topological transition; mapping
+            # checkpoints along the translated leg will reacquire overlap.
+            active_frontier_xy = cluster.centroid_xy.copy()
+            print(
+                "[explore] doorway snapshot was conservative; retaining the "
+                "same passable-frontier transit instead of selecting a side target."
             )
         elif (
             not rotation_limited
@@ -10085,11 +10539,19 @@ def main() -> int:
             print("[explore] narrow/non-crossable frontier observed successfully — "
                   "retiring this look target so planning advances.")
         elif rotation_limited and not frontier_deferred_by_clearance:
-            print(
-                "[explore] target was not reached because its initial rotational "
-                "trajectory was blocked; leaving the frontier eligible for a "
-                "different approach."
-            )
+            if cluster.passable:
+                active_frontier_xy = cluster.centroid_xy.copy()
+                print(
+                    "[explore] doorway pivot was constrained, but the passage "
+                    "remains the committed objective; replanning a translated "
+                    "low-turn approach instead of turning back."
+                )
+            else:
+                print(
+                    "[explore] target was not reached because its initial rotational "
+                    "trajectory was blocked; leaving the frontier eligible for a "
+                    "different approach."
+                )
         elif clearance_limited:
             _retire_frontier(cluster.centroid_xy)
             print(

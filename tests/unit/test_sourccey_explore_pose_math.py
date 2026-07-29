@@ -210,6 +210,17 @@ def test_keyframe_transaction_requires_map_support_and_bounded_pose_innovation()
     assert not explore._keyframe_batch_is_committable(6, 15.0, 12.0, 0.35, 0.08, 0.04, 0.25, 12.0, 8.0)
 
 
+def test_three_scan_routine_keyframe_requires_all_three_inliers() -> None:
+    assert explore._keyframe_batch_is_committable(
+        3, 15.0, 12.0, 0.80, 0.20, 0.04, 0.25, 1.0, 5.0,
+        minimum_inliers=3,
+    )
+    assert not explore._keyframe_batch_is_committable(
+        2, 15.0, 12.0, 0.80, 0.20, 0.04, 0.25, 1.0, 5.0,
+        minimum_inliers=3,
+    )
+
+
 def test_large_lidar_yaw_correction_requires_high_confidence_submap_overlap() -> None:
     assert explore._keyframe_heading_correction_limit_deg(
         5.0, 8, 8, 15.4, 13.0, 1.0
@@ -565,6 +576,21 @@ def test_heading_behind_robot_can_be_reached_by_more_than_three_control_steps() 
     assert len(steps) == 7
     assert steps == pytest.approx([25.0] * 7)
     assert remaining == pytest.approx(0.9)
+
+
+def test_complete_coherent_anchor_does_not_depend_on_optional_stationary_match() -> None:
+    assert explore._anchor_pass_is_self_consistent(
+        accepted_count=46,
+        accepted_ratio=1.0,
+        quality=0.84,
+        net_sweep_deg=364.2,
+        requested_sweep_deg=360.0,
+    )
+
+
+def test_partial_or_weak_anchor_still_requires_reacquisition() -> None:
+    assert not explore._anchor_pass_is_self_consistent(46, 1.0, 0.84, 125.7, 360.0)
+    assert not explore._anchor_pass_is_self_consistent(8, 1.0, 0.84, 364.0, 360.0)
 
 
 def test_startup_escape_route_is_exactly_one_bounded_forward_segment() -> None:
@@ -1084,6 +1110,53 @@ def test_high_gain_doorway_photo_does_not_fake_an_unexecuted_crossing() -> None:
     ) is None
 
 
+def test_sequential_doorway_keyframe_uses_overlap_consensus_score_scale() -> None:
+    assert explore._keyframe_match_commit_threshold(
+        13.0,
+        3,
+        3,
+        0.67,
+        sequential_overlap_keyframe=True,
+    ) == pytest.approx(6.5)
+
+    # Ordinary stationary mapping keeps the stricter global-map threshold.
+    assert explore._keyframe_match_commit_threshold(
+        13.0,
+        3,
+        3,
+        0.67,
+    ) == pytest.approx(12.0)
+
+    # Weakly supported doorway observations receive no relaxation.
+    assert explore._keyframe_match_commit_threshold(
+        13.0,
+        3,
+        3,
+        0.20,
+        sequential_overlap_keyframe=True,
+    ) == pytest.approx(13.0)
+
+
+def test_continuous_passage_keyframe_requires_fresh_bounded_local_overlap() -> None:
+    common = {
+        "fresh_scan": True,
+        "pose_accepted": True,
+        "local_match_valid": True,
+        "local_support": 0.60,
+        "local_innovation_m": 0.05,
+    }
+    assert explore._continuous_passage_keyframe_is_eligible(**common)
+    assert not explore._continuous_passage_keyframe_is_eligible(
+        **(common | {"fresh_scan": False})
+    )
+    assert not explore._continuous_passage_keyframe_is_eligible(
+        **(common | {"local_support": 0.24})
+    )
+    assert not explore._continuous_passage_keyframe_is_eligible(
+        **(common | {"local_innovation_m": 0.16})
+    )
+
+
 def test_executed_patrol_crossing_detects_passable_frontier_direction() -> None:
     traversable = np.ones((24, 24), dtype=bool)
     analysis = explore.Analysis(
@@ -1452,6 +1525,31 @@ def test_collision_blocked_goal_changes_approach_without_retiring_frontier() -> 
     assert second is not None
     assert second[0] is cluster
     assert np.hypot(*(second[1] - first[1])) >= 0.45
+
+
+def test_shared_route_cost_field_reconstructs_cost_aware_route() -> None:
+    traversable = np.ones((9, 11), dtype=bool)
+    traversable[1:8, 5] = False
+    traversable[6, 5] = True
+    cost = np.ones_like(traversable, dtype=np.float32)
+    cost[4:7, 3:5] = 2.0
+    start = (4, 1)
+    goal = (4, 9)
+
+    distance, parent_i, parent_j = explore._route_cost_field(
+        traversable, start, cost=cost
+    )
+    shared_path = explore._path_from_cost_field(
+        start, goal, distance, parent_i, parent_j
+    )
+    astar_path = explore._astar(traversable, start, goal, cost=cost)
+
+    assert shared_path is not None
+    assert astar_path is not None
+    assert shared_path[0] == astar_path[0] == start
+    assert shared_path[-1] == astar_path[-1] == goal
+    assert all(traversable[cell] for cell in shared_path)
+    assert math.isfinite(float(distance[goal]))
 
 
 def test_metric_inflation_does_not_round_31cm_up_to_35cm() -> None:
