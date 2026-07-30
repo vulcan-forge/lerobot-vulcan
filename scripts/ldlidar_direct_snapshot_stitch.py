@@ -721,6 +721,7 @@ def _whole_map_seed_poses(
     resolution_m: float,
     theta_center_deg: float | None = None,
     theta_window_deg: float | None = None,
+    max_seed_poses: int = 12,
 ) -> list[Pose2D]:
     if len(snapshot_points_xy) == 0 or len(global_points_xy) == 0:
         return []
@@ -770,7 +771,7 @@ def _whole_map_seed_poses(
         ):
             continue
         deduped.append(pose)
-        if len(deduped) >= 12:
+        if len(deduped) >= max(1, int(max_seed_poses)):
             break
 
     return deduped
@@ -793,8 +794,12 @@ def _search_pose(
     prior_translation_weight: float = 0.0,
     prior_theta_weight: float = 0.0,
     allow_whole_map_search: bool = True,
+    force_whole_map_search: bool = False,
     local_fine_theta_half_window_deg: float | None = None,
     local_use_nearest_penalty: bool = True,
+    whole_map_seed_count: int = 12,
+    whole_map_refine_count: int = 12,
+    whole_map_position_seeds_xy: np.ndarray | None = None,
 ) -> tuple[Pose2D, dict[str, object]]:
     build_started = time.monotonic()
     exact_grid, origin = _build_occupancy(global_points_xy, resolution_m=resolution_m, padding_m=search_xy_m + 0.4)
@@ -919,7 +924,9 @@ def _search_pose(
 
     global_best_pose = local_best_pose
     global_best_score = local_best_score
-    run_whole_map_search = bool(allow_whole_map_search) and local_best_score < 8.0
+    run_whole_map_search = bool(allow_whole_map_search) and (
+        bool(force_whole_map_search) or local_best_score < 8.0
+    )
     whole_map_search_elapsed_s = 0.0
     if run_whole_map_search:
         whole_map_started = time.monotonic()
@@ -930,7 +937,80 @@ def _search_pose(
             resolution_m=float(resolution_m),
             theta_center_deg=whole_map_theta_center_deg,
             theta_window_deg=whole_map_theta_window_deg,
+            max_seed_poses=max(1, int(whole_map_seed_count)),
         )
+        ranked_global_seeds: list[tuple[float, Pose2D]] = []
+
+        # Global localization must search robot positions, not merely the
+        # strongest endpoint-correlation peaks. Repeated parallel walls can
+        # dominate the Hough accumulator and prevent the true room from ever
+        # reaching refinement. Callers that possess an occupancy map may pass
+        # known-free position seeds; score every position at every coarse
+        # heading, then refine only the bounded set of winners.
+        position_seeds = np.asarray(
+            whole_map_position_seeds_xy
+            if whole_map_position_seeds_xy is not None
+            else np.empty((0, 2)),
+            dtype=np.float32,
+        ).reshape((-1, 2))
+        if len(position_seeds) and len(snapshot_points_xy):
+            theta_centre = (
+                float(whole_map_theta_center_deg)
+                if whole_map_theta_center_deg is not None
+                else float(initial_pose.theta_deg)
+            )
+            theta_half_window = (
+                abs(float(whole_map_theta_window_deg))
+                if whole_map_theta_window_deg is not None
+                else 180.0
+            )
+            global_theta_candidates = np.arange(
+                theta_centre - theta_half_window,
+                theta_centre + theta_half_window + 1e-6,
+                max(1.0, float(coarse_angle_step_deg)),
+                dtype=np.float32,
+            )
+            position_winners: list[tuple[float, Pose2D]] = []
+            winners_per_heading = max(2, int(math.ceil(whole_map_seed_count / max(1, len(global_theta_candidates)))))
+            for theta in global_theta_candidates:
+                rotated = _transform_points(
+                    snapshot_points_xy,
+                    Pose2D(0.0, 0.0, float(theta)),
+                )
+                candidates = rotated[None, :, :] + position_seeds[:, None, :]
+                scores = _score_candidates_batch(
+                    candidates,
+                    exact_grid=exact_grid,
+                    dilated_grid=dilated,
+                    known_grid=known_grid,
+                    grid_origin_xy=origin,
+                    resolution_m=resolution_m,
+                    global_sampled_xy=global_sampled_xy,
+                    use_nearest_penalty=False,
+                )
+                keep_count = min(winners_per_heading, len(scores))
+                if keep_count <= 0:
+                    continue
+                keep = np.argpartition(scores, -keep_count)[-keep_count:]
+                for index in keep:
+                    position_winners.append(
+                        (
+                            float(scores[index]),
+                            Pose2D(
+                                float(position_seeds[index, 0]),
+                                float(position_seeds[index, 1]),
+                                float(theta),
+                            ),
+                        )
+                    )
+            position_winners.sort(key=lambda item: item[0], reverse=True)
+            global_seed_poses.extend(
+                pose
+                for _score, pose in position_winners[
+                    : max(1, int(whole_map_seed_count))
+                ]
+            )
+
         for seed_pose in global_seed_poses:
             if max_translation_from_initial_m is not None:
                 seed_translation = math.hypot(seed_pose.x - initial_pose.x, seed_pose.y - initial_pose.y)
@@ -954,6 +1034,12 @@ def _search_pose(
                 translation_weight=float(prior_translation_weight),
                 theta_weight=float(prior_theta_weight),
             )
+            ranked_global_seeds.append((float(seed_score), seed_pose))
+        ranked_global_seeds.sort(key=lambda item: item[0], reverse=True)
+        refined_global_modes: list[tuple[float, Pose2D]] = []
+        for seed_score, seed_pose in ranked_global_seeds[
+            : max(1, int(whole_map_refine_count))
+        ]:
             refined_pose, refined_score = _refine_pose(
                 snapshot_points_xy=snapshot_points_xy,
                 seed_pose=seed_pose,
@@ -979,6 +1065,7 @@ def _search_pose(
                 refined_translation = math.hypot(refined_pose.x - initial_pose.x, refined_pose.y - initial_pose.y)
                 if refined_translation > float(max_translation_from_initial_m):
                     continue
+            refined_global_modes.append((float(refined_score), refined_pose))
             if refined_score > global_best_score:
                 global_best_score = refined_score
                 global_best_pose = refined_pose
@@ -993,12 +1080,40 @@ def _search_pose(
         best_score = local_best_score
         source = "local"
 
+    # Report distinct whole-map alternatives so global localization can reject
+    # a repeated-wall alias instead of treating a single argmax as certainty.
+    distinct_modes: list[tuple[float, Pose2D]] = []
+    if run_whole_map_search:
+        for mode_score, mode_pose in sorted(
+            refined_global_modes,
+            key=lambda item: item[0],
+            reverse=True,
+        ):
+            if any(
+                math.hypot(mode_pose.x - existing.x, mode_pose.y - existing.y) < 0.35
+                and abs(_normalize_angle_deg(mode_pose.theta_deg - existing.theta_deg)) < 12.0
+                for _existing_score, existing in distinct_modes
+            ):
+                continue
+            distinct_modes.append((mode_score, mode_pose))
+            if len(distinct_modes) >= 20:
+                break
+
     return best_pose, {
         "score": round(best_score, 4),
         "local_score": round(local_best_score, 4),
         "whole_map_score": round(global_best_score, 4),
         "source": source,
         "whole_map_searched": run_whole_map_search,
+        "whole_map_modes": [
+            {
+                "score": round(float(mode_score), 4),
+                "x": float(mode_pose.x),
+                "y": float(mode_pose.y),
+                "theta_deg": float(mode_pose.theta_deg),
+            }
+            for mode_score, mode_pose in distinct_modes
+        ],
         "timing_s": {
             "build_occupancy": round(build_elapsed_s, 4),
             "local_search": round(local_search_elapsed_s, 4),

@@ -103,8 +103,9 @@ def _completed_rounded_box_ranges(
     corner_radius_m: float,
     front_m: float | None = None,
     rear_m: float | None = None,
+    front_width_m: float | None = None,
 ) -> np.ndarray:
-    """Radial boundary of a rounded rectangle around the LiDAR origin."""
+    """Radial boundary of a rounded box with optional 45-degree front shoulders."""
     if front_m is None or rear_m is None:
         front = rear = 0.5 * max(0.001, float(length_m))
     else:
@@ -113,6 +114,16 @@ def _completed_rounded_box_ranges(
     half_x = 0.5 * (front + rear)
     centre_x = 0.5 * (front - rear)
     half_y = 0.5 * max(0.001, float(width_m))
+    front_half_y = min(
+        half_y,
+        0.5 * max(0.001, float(
+            width_m if front_width_m is None else front_width_m
+        )),
+    )
+    # The front face transitions to the full side width at 45 degrees. When
+    # both widths match this degenerates exactly to the old rounded rectangle.
+    shoulder_depth = max(0.0, half_y - front_half_y)
+    shoulder_start_x = front - shoulder_depth
     radius = min(
         max(0.0, float(corner_radius_m)),
         half_x,
@@ -129,7 +140,13 @@ def _completed_rounded_box_ranges(
         qy = np.abs(points[:, 1]) - (half_y - radius)
         outside = np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0))
         signed = outside + np.minimum(np.maximum(qx, qy), 0.0) - radius
-        return signed <= 0.0
+        rounded_body = signed <= 0.0
+        abs_y = np.abs(points[:, 1])
+        front_shoulder = (
+            (points[:, 0] <= shoulder_start_x)
+            | (abs_y <= front_half_y + np.maximum(0.0, front - points[:, 0]))
+        )
+        return rounded_body & front_shoulder
 
     low = np.zeros(int(count), dtype=np.float64)
     high = np.full(
@@ -179,6 +196,7 @@ def effective_ranges(profile: dict) -> np.ndarray:
             corner_radius_m=float(profile.get("corner_radius_m", default_radius)),
             front_m=front,
             rear_m=rear,
+            front_width_m=float(profile.get("completed_front_width_m", width)),
         )
     angles = np.radians(-180.0 + (np.arange(len(raw)) + 0.5) * bin_size)
     x = raw * np.cos(angles)

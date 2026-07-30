@@ -114,7 +114,7 @@ class CollisionBoxViewer:
             frame, width=self.canvas_size, height=self.canvas_size,
             background="#101418", highlightthickness=0,
         )
-        self.canvas.grid(row=0, column=0, rowspan=21, sticky="nsew", padx=(0, 14))
+        self.canvas.grid(row=0, column=0, rowspan=24, sticky="nsew", padx=(0, 14))
         self.canvas.bind("<MouseWheel>", self._mouse_wheel)
         self.canvas.bind("<Button-4>", lambda _event: self._change_zoom(1.15))
         self.canvas.bind("<Button-5>", lambda _event: self._change_zoom(1.0 / 1.15))
@@ -123,6 +123,7 @@ class CollisionBoxViewer:
         self.complete_var = tk.BooleanVar(value=bool(profile.get("complete_box", False)))
         self.editing_complete = bool(self.complete_var.get())
         self.width_var = tk.DoubleVar()
+        self.front_width_var = tk.DoubleVar()
         self.length_var = tk.DoubleVar()
         self.rear_var = tk.DoubleVar()
         self.corner_var = tk.DoubleVar()
@@ -135,7 +136,9 @@ class CollisionBoxViewer:
             variable=self.complete_var,
             command=self._completion_changed,
         ).grid(row=1, column=1, sticky="w", pady=(6, 4))
-        ttk.Label(frame, text="Width (inches)").grid(row=2, column=1, sticky="sw")
+        ttk.Label(frame, text="Overall/body width (inches)").grid(
+            row=2, column=1, sticky="sw"
+        )
         self.width_entry = ttk.Entry(frame, textvariable=self.width_var, width=12)
         self.width_entry.grid(row=3, column=1, sticky="ew", pady=(2, 4))
         self.width_entry.bind("<Return>", self._dimensions_changed)
@@ -146,46 +149,61 @@ class CollisionBoxViewer:
         ).grid(row=4, column=1, sticky="ew")
         self.width_label = ttk.Label(frame)
         self.width_label.grid(row=5, column=1, sticky="nw")
+        self.front_width_title = ttk.Label(frame, text="Front width (inches)")
+        self.front_width_title.grid(row=6, column=1, sticky="sw", pady=(6, 0))
+        self.front_width_entry = ttk.Entry(
+            frame, textvariable=self.front_width_var, width=12
+        )
+        self.front_width_entry.grid(row=7, column=1, sticky="ew", pady=(2, 4))
+        self.front_width_entry.bind("<Return>", self._dimensions_changed)
+        self.front_width_entry.bind("<FocusOut>", self._dimensions_changed)
+        self.front_width_scale = ttk.Scale(
+            frame, from_=8.0, to=60.0, variable=self.front_width_var,
+            command=self._dimensions_changed, length=260,
+        )
+        self.front_width_scale.grid(row=8, column=1, sticky="ew")
+        self.front_width_label = ttk.Label(frame)
+        self.front_width_label.grid(row=9, column=1, sticky="nw")
         self.length_title = ttk.Label(frame, text="Length (inches)")
-        self.length_title.grid(row=6, column=1, sticky="sw")
+        self.length_title.grid(row=10, column=1, sticky="sw")
         self.length_entry = ttk.Entry(frame, textvariable=self.length_var, width=12)
-        self.length_entry.grid(row=7, column=1, sticky="ew", pady=(2, 4))
+        self.length_entry.grid(row=11, column=1, sticky="ew", pady=(2, 4))
         self.length_entry.bind("<Return>", self._dimensions_changed)
         self.length_entry.bind("<FocusOut>", self._dimensions_changed)
         ttk.Scale(
             frame, from_=8.0, to=72.0, variable=self.length_var,
             command=self._dimensions_changed, length=260,
-        ).grid(row=8, column=1, sticky="ew")
+        ).grid(row=12, column=1, sticky="ew")
         self.length_label = ttk.Label(frame)
-        self.length_label.grid(row=9, column=1, sticky="nw")
+        self.length_label.grid(row=13, column=1, sticky="nw")
         self.rear_title = ttk.Label(frame, text="Rear envelope depth (inches)")
-        self.rear_title.grid(row=10, column=1, sticky="sw", pady=(6, 0))
+        self.rear_title.grid(row=14, column=1, sticky="sw", pady=(6, 0))
         self.rear_entry = ttk.Entry(frame, textvariable=self.rear_var, width=12)
-        self.rear_entry.grid(row=11, column=1, sticky="ew", pady=(2, 4))
+        self.rear_entry.grid(row=15, column=1, sticky="ew", pady=(2, 4))
         self.rear_entry.bind("<Return>", self._dimensions_changed)
         self.rear_entry.bind("<FocusOut>", self._dimensions_changed)
         self.rear_scale = ttk.Scale(
             frame, from_=0.25, to=48.0, variable=self.rear_var,
             command=self._dimensions_changed, length=260,
         )
-        self.rear_scale.grid(row=12, column=1, sticky="ew")
+        self.rear_scale.grid(row=16, column=1, sticky="ew")
         self.rear_label = ttk.Label(frame)
-        self.rear_label.grid(row=13, column=1, sticky="nw")
+        self.rear_label.grid(row=17, column=1, sticky="nw")
         ttk.Label(frame, text="Side/rear corner radius (inches)").grid(
-            row=14, column=1, sticky="sw", pady=(6, 0)
+            row=18, column=1, sticky="sw", pady=(6, 0)
         )
         self.corner_entry = ttk.Entry(frame, textvariable=self.corner_var, width=12)
-        self.corner_entry.grid(row=15, column=1, sticky="ew", pady=(2, 4))
+        self.corner_entry.grid(row=19, column=1, sticky="ew", pady=(2, 4))
         self.corner_entry.bind("<Return>", self._dimensions_changed)
         self.corner_entry.bind("<FocusOut>", self._dimensions_changed)
         ttk.Scale(
             frame, from_=0.0, to=18.0, variable=self.corner_var,
             command=self._dimensions_changed, length=260,
-        ).grid(row=16, column=1, sticky="ew")
+        ).grid(row=20, column=1, sticky="ew")
         self.corner_label = ttk.Label(frame)
-        self.corner_label.grid(row=17, column=1, sticky="nw")
+        self.corner_label.grid(row=21, column=1, sticky="nw")
         buttons = ttk.Frame(frame)
-        buttons.grid(row=18, column=1, sticky="new", pady=(16, 4))
+        buttons.grid(row=22, column=1, sticky="new", pady=(16, 4))
         buttons.columnconfigure(0, weight=1)
         buttons.columnconfigure(1, weight=1)
         ttk.Button(buttons, text="Reset to default", command=self.reset).grid(
@@ -195,7 +213,7 @@ class CollisionBoxViewer:
             row=0, column=1, sticky="ew", padx=(4, 0)
         )
         self.status = ttk.Label(frame, text="Waiting for LiDAR…", wraplength=260)
-        self.status.grid(row=19, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.status.grid(row=23, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self._load_controls_for_mode()
         self._dimensions_changed()
         self.root.after(50, self.refresh)
@@ -220,6 +238,9 @@ class CollisionBoxViewer:
         )
         if bool(self.profile.get("complete_box", False)):
             width_m = float(self.profile.get("completed_width_m", learned_width_m))
+            front_width_m = float(
+                self.profile.get("completed_front_width_m", width_m)
+            )
             if "completed_front_m" in self.profile or "completed_rear_m" in self.profile:
                 front_m = float(self.profile.get("completed_front_m", learned_length_m))
                 rear_m = float(
@@ -238,16 +259,24 @@ class CollisionBoxViewer:
             length_m = front_m
             self.rear_entry.state(["!disabled"])
             self.rear_scale.state(["!disabled"])
+            self.front_width_entry.state(["!disabled"])
+            self.front_width_scale.state(["!disabled"])
         else:
             width_m, length_m = learned_width_m, learned_length_m
+            front_width_m = float(
+                self.profile.get("completed_front_width_m", width_m)
+            )
             rear_m = float(self.profile.get("completed_rear_m", max(0.001, width_m - length_m)))
             self.rear_entry.state(["disabled"])
             self.rear_scale.state(["disabled"])
+            self.front_width_entry.state(["disabled"])
+            self.front_width_scale.state(["disabled"])
         self.length_title.configure(
             text="Forward envelope depth (inches)"
         )
         default_corner_m = 0.20 * min(width_m, length_m + rear_m)
         self.width_var.set(width_m / _METRES_PER_INCH)
+        self.front_width_var.set(front_width_m / _METRES_PER_INCH)
         self.length_var.set(length_m / _METRES_PER_INCH)
         self.rear_var.set(rear_m / _METRES_PER_INCH)
         self.corner_var.set(
@@ -258,21 +287,25 @@ class CollisionBoxViewer:
     def _dimensions_changed(self, _value=None, *, mode: bool | None = None) -> None:
         try:
             width_in = float(self.width_var.get())
+            front_width_in = float(self.front_width_var.get())
             length_in = float(self.length_var.get())
             rear_in = float(self.rear_var.get())
             corner_in = float(self.corner_var.get())
         except (tk.TclError, ValueError):
-            self.status.configure(text="Width, length, and corner radius must be valid numbers.")
+            self.status.configure(
+                text="Widths, lengths, and corner radius must be valid numbers."
+            )
             return
         completing = self.editing_complete if mode is None else bool(mode)
         if (
             width_in <= 0.0
+            or front_width_in <= 0.0
             or length_in <= 0.0
             or (completing and rear_in <= 0.0)
             or corner_in < 0.0
         ):
             self.status.configure(
-                text="Width, forward depth, and rear depth must be positive; corner radius cannot be negative."
+                text="Widths, forward depth, and rear depth must be positive; corner radius cannot be negative."
             )
             return
         total_length_in = length_in + rear_in if completing else length_in
@@ -280,10 +313,14 @@ class CollisionBoxViewer:
         corner_in = min(corner_in, max_corner_in)
         self.corner_var.set(corner_in)
         width_m = width_in * _METRES_PER_INCH
+        front_width_in = min(front_width_in, width_in)
+        self.front_width_var.set(front_width_in)
+        front_width_m = front_width_in * _METRES_PER_INCH
         length_m = length_in * _METRES_PER_INCH
         rear_m = rear_in * _METRES_PER_INCH
         if completing:
             self.profile["completed_width_m"] = width_m
+            self.profile["completed_front_width_m"] = front_width_m
             self.profile["completed_front_m"] = length_m
             self.profile["completed_rear_m"] = rear_m
             self.profile["completed_length_m"] = length_m + rear_m
@@ -293,6 +330,13 @@ class CollisionBoxViewer:
         self.profile["corner_radius_m"] = corner_in * _METRES_PER_INCH
         self.width_label.configure(
             text=f"{width_in:.2f} in  /  {width_m:.3f} m"
+        )
+        self.front_width_label.configure(
+            text=(
+                f"{front_width_in:.2f} in  /  {front_width_m:.3f} m"
+                if completing
+                else "Available in 360° mode"
+            )
         )
         self.length_label.configure(
             text=f"{length_in:.2f} in  /  {length_m:.3f} m"

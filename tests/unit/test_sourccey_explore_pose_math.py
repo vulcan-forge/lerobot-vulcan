@@ -64,6 +64,27 @@ def test_transient_planner_obstacle_does_not_mutate_slam_grid() -> None:
     assert np.array_equal(grid.L, before)
 
 
+def test_planner_obstacle_pose_requires_local_and_global_corroboration() -> None:
+    common = {
+        "fresh_scan": True,
+        "pose_accepted": True,
+        "local_match_valid": True,
+        "global_match_valid": True,
+        "local_innovation_m": 0.03,
+        "local_global_agreement_m": 0.05,
+    }
+    assert explore._obstacle_pose_fix_is_corroborated(**common)
+    assert not explore._obstacle_pose_fix_is_corroborated(
+        **(common | {"global_match_valid": False})
+    )
+    assert not explore._obstacle_pose_fix_is_corroborated(
+        **(common | {"local_global_agreement_m": 0.41})
+    )
+    assert not explore._obstacle_pose_fix_is_corroborated(
+        **(common | {"local_innovation_m": 0.32})
+    )
+
+
 def test_indefinite_patrol_selects_reachable_underobserved_free_space() -> None:
     traversable = np.ones((9, 9), dtype=bool)
     analysis = explore.Analysis(
@@ -79,6 +100,65 @@ def test_indefinite_patrol_selects_reachable_underobserved_free_space() -> None:
     assert patrol is not None
     goal, route = patrol
     assert float(np.hypot(*(goal - robot))) >= 0.75
+    assert route
+
+
+def test_photographed_passable_frontier_plans_directly_beyond_opening() -> None:
+    traversable = np.ones((41, 41), dtype=bool)
+    analysis = explore.Analysis(
+        origin_xy=np.array([-2.0, -2.0]),
+        res_m=0.10,
+        occupied=np.zeros_like(traversable),
+        free=traversable.copy(),
+        traversable=traversable,
+        cost=np.ones(traversable.shape, dtype=np.float64),
+    )
+    robot = np.array([0.0, 0.0])
+    doorway = explore.FrontierCluster(
+        cells_ij=np.array([[20, 28]], dtype=np.int64),
+        centroid_xy=np.array([0.80, 0.0]),
+        span_m=1.0,
+        size=10,
+        passable=True,
+    )
+
+    planned = explore._plan_passable_frontier_crossing(
+        analysis,
+        robot,
+        doorway,
+    )
+
+    assert planned is not None
+    goal, route = planned
+    assert goal[0] >= 0.95
+    assert abs(goal[1]) <= 0.10
+    assert route
+    assert float(np.hypot(*(route[-1] - robot))) >= 0.30
+
+
+def test_patrol_never_crosses_back_over_completed_doorway() -> None:
+    traversable = np.ones((31, 31), dtype=bool)
+    analysis = explore.Analysis(
+        origin_xy=np.array([-1.5, -1.5]),
+        res_m=0.10,
+        occupied=np.zeros_like(traversable),
+        free=traversable.copy(),
+        traversable=traversable,
+        cost=np.ones(traversable.shape, dtype=np.float64),
+    )
+    robot = np.array([0.50, 0.0])
+    doorway = [(np.array([0.0, 0.0]), np.array([1.0, 0.0]))]
+    patrol = explore._pick_patrol_route(
+        analysis,
+        robot,
+        [robot.copy(), np.array([1.0, 0.0])],
+        completed_transitions=doorway,
+        current_heading_deg=0.0,
+    )
+
+    assert patrol is not None
+    goal, route = patrol
+    assert goal[0] >= -0.25
     assert route
 
 
@@ -1064,6 +1144,91 @@ def test_pick_target_softly_prefers_less_turn_when_frontiers_are_available() -> 
     assert picked[0] is forward
 
 
+def test_forward_progress_outranks_rear_narrow_frontier_across_priority_tiers() -> None:
+    analysis = _open_analysis()
+    rear_narrow = explore.FrontierCluster(
+        cells_ij=np.array([[10, 2]], dtype=np.int64),
+        centroid_xy=analysis.to_world((10, 2)),
+        span_m=0.4,
+        size=8,
+        passable=False,
+    )
+    forward_passable = explore.FrontierCluster(
+        cells_ij=np.array([[10, 18]], dtype=np.int64),
+        centroid_xy=analysis.to_world((10, 18)),
+        span_m=1.4,
+        size=8,
+        passable=True,
+    )
+    analysis.clusters = [rear_narrow, forward_passable]
+
+    picked = explore._pick_target(
+        analysis,
+        robot_centre_xy=np.zeros(2),
+        visited_xy=[],
+        pullback_m=0.4,
+        visited_skip_m=0.2,
+        current_heading_deg=0.0,
+        turn_cost_per_deg=0.0,
+        forward_turn_limit_deg=95.0,
+    )
+
+    assert picked is not None
+    assert picked[0] is forward_passable
+
+
+def test_route_progress_class_allows_return_only_as_fallback_class() -> None:
+    transitions = [(np.array([0.0, 0.0]), np.array([1.0, 0.0]))]
+    assert explore._route_progress_class(
+        np.array([1.0, 0.0]),
+        np.array([1.2, 0.0]),
+        np.array([2.0, 0.0]),
+        0.0,
+        transitions,
+    ) == 0
+    assert explore._route_progress_class(
+        np.array([1.0, 0.0]),
+        np.array([0.8, 0.0]),
+        np.array([0.0, 0.0]),
+        0.0,
+        transitions,
+    ) == 1
+
+
+def test_pick_target_can_defer_a_rear_only_route_for_map_refresh() -> None:
+    analysis = _open_analysis()
+    rear = explore.FrontierCluster(
+        cells_ij=np.array([[10, 2]], dtype=np.int64),
+        centroid_xy=analysis.to_world((10, 2)),
+        span_m=1.4,
+        size=8,
+        passable=True,
+    )
+    analysis.clusters = [rear]
+
+    assert explore._pick_target(
+        analysis,
+        robot_centre_xy=np.zeros(2),
+        visited_xy=[],
+        pullback_m=0.4,
+        visited_skip_m=0.2,
+        current_heading_deg=0.0,
+        allow_return_routes=False,
+    ) is None
+
+    picked = explore._pick_target(
+        analysis,
+        robot_centre_xy=np.zeros(2),
+        visited_xy=[],
+        pullback_m=0.4,
+        visited_skip_m=0.2,
+        current_heading_deg=0.0,
+        allow_return_routes=True,
+    )
+    assert picked is not None
+    assert picked[0] is rear
+
+
 def test_high_gain_doorway_observation_arms_directed_room_commitment() -> None:
     transition = explore._doorway_transition(
         anchor_xy=np.array([1.0, 0.0]),
@@ -1142,7 +1307,7 @@ def test_continuous_passage_keyframe_requires_fresh_bounded_local_overlap() -> N
         "fresh_scan": True,
         "pose_accepted": True,
         "local_match_valid": True,
-        "local_support": 0.60,
+        "local_support": 0.75,
         "local_innovation_m": 0.05,
     }
     assert explore._continuous_passage_keyframe_is_eligible(**common)
@@ -1150,10 +1315,39 @@ def test_continuous_passage_keyframe_requires_fresh_bounded_local_overlap() -> N
         **(common | {"fresh_scan": False})
     )
     assert not explore._continuous_passage_keyframe_is_eligible(
-        **(common | {"local_support": 0.24})
+        **(common | {"local_support": 0.64})
     )
     assert not explore._continuous_passage_keyframe_is_eligible(
-        **(common | {"local_innovation_m": 0.16})
+        **(common | {"local_innovation_m": 0.09})
+    )
+
+
+def test_moving_keyframe_requires_spaced_nearly_straight_motion() -> None:
+    assert explore._moving_keyframe_motion_is_eligible(0.30, 2.0)
+    assert not explore._moving_keyframe_motion_is_eligible(0.19, 2.0)
+    assert not explore._moving_keyframe_motion_is_eligible(0.30, 5.1)
+
+
+def test_ordinary_stationary_recovery_rejects_global_scale_pose_jump() -> None:
+    common = {
+        "inlier_count": 3,
+        "mean_match_score": 10.0,
+        "minimum_match_score": 8.0,
+        "mean_known_support": 0.70,
+        "minimum_known_support": 0.15,
+        "heading_correction_deg": 0.0,
+        "maximum_heading_correction_deg": 6.0,
+        "minimum_inliers": 3,
+    }
+    assert explore._stationary_pose_is_recoverable(
+        position_correction_m=0.10,
+        maximum_position_correction_m=0.15,
+        **common,
+    )
+    assert not explore._stationary_pose_is_recoverable(
+        position_correction_m=0.40,
+        maximum_position_correction_m=0.15,
+        **common,
     )
 
 
@@ -1902,6 +2096,31 @@ def test_completed_collision_box_corner_radius_rounds_square_corners() -> None:
     diagonal_bin = 56  # approximately +46 degrees
     assert rounded[diagonal_bin] < square[diagonal_bin]
     assert rounded[45] == pytest.approx(square[45], abs=0.01)
+
+
+def test_completed_collision_box_front_width_creates_45_degree_shoulders() -> None:
+    profile = {
+        "bin_size_deg": 4.0,
+        "ranges_m": [1.0] * 90,
+        "complete_box": True,
+        "completed_width_m": 0.80,
+        "completed_front_width_m": 0.40,
+        "completed_front_m": 0.50,
+        "completed_rear_m": 0.50,
+        "corner_radius_m": 0.0,
+    }
+    tapered = effective_ranges(profile)
+    square = effective_ranges({
+        **profile,
+        "completed_front_width_m": 0.80,
+    })
+
+    front_bin = 45
+    shoulder_bin = int((45.0 + 180.0) // 4.0)
+    side_bin = int((90.0 + 180.0) // 4.0)
+    assert tapered[front_bin] == pytest.approx(square[front_bin], abs=0.01)
+    assert tapered[shoulder_bin] < square[shoulder_bin]
+    assert tapered[side_bin] == pytest.approx(square[side_bin], abs=0.01)
 
 
 def test_completed_collision_box_keeps_separate_dimensions_from_learned_box() -> None:
