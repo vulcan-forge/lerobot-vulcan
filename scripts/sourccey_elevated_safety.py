@@ -41,12 +41,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-
-from lerobot.control.sourccey.sourccey.elevated_edge_scan_live import (
-    EdgeObservation,
-    ElevatedEdgeDetector,
-    ElevatedEdgeScanConfig,
-)
 from sourccey_camera_geometry import (
     CameraModel,
     default_bottom,
@@ -55,6 +49,12 @@ from sourccey_camera_geometry import (
     edge_point_robot_frame,
     edge_segment_hazard_distances,
     solve_edge_by_parallax,
+)
+
+from lerobot.control.sourccey.sourccey.elevated_edge_scan_live import (
+    EdgeObservation,
+    ElevatedEdgeDetector,
+    ElevatedEdgeScanConfig,
 )
 
 
@@ -318,7 +318,7 @@ class HazardState:
 
 
 def points_beyond_wall_mask(
-    points_xy: "list[tuple[float, float]] | tuple",
+    points_xy: list[tuple[float, float]] | tuple,
     lidar_bearings_deg: np.ndarray,
     lidar_ranges_m: np.ndarray,
     *,
@@ -415,8 +415,9 @@ def gate_turn_allowed(state: HazardState) -> tuple[bool, str]:
 
 class SlamCameraSubscriber:
     """Subscribes to the host `slam_input.v1` stream: decodes camera JPEG
-    frames (eyes + bottom when the host publishes it) and tracks the base
-    velocity for retreat/parallax integration."""
+    frames (eyes + bottom when the host publishes it). The optional base
+    velocity field is commanded PWM state, not encoder odometry, and must not
+    be integrated as measured robot motion."""
 
     def __init__(
         self,
@@ -429,6 +430,7 @@ class SlamCameraSubscriber:
         self._lock = threading.Lock()
         self._frames: dict[str, np.ndarray] = {}
         self._frame_received_monotonic: dict[str, float] = {}
+        self._frame_sequence: dict[str, int] = {}
         self._base_x_vel: float | None = None
         self._base_vel_monotonic: float | None = None
         self._packets_received = 0
@@ -517,6 +519,7 @@ class SlamCameraSubscriber:
         with self._lock:
             self._frames[cam_name] = frame
             self._frame_received_monotonic[cam_name] = stamp
+            self._frame_sequence[cam_name] = self._frame_sequence.get(cam_name, 0) + 1
 
     def latest(self, cam_name: str) -> tuple[np.ndarray | None, float | None]:
         with self._lock:
@@ -525,6 +528,18 @@ class SlamCameraSubscriber:
         if frame is None or stamp is None:
             return None, None
         return frame, max(0.0, time.monotonic() - stamp)
+
+    def latest_sample(
+        self, cam_name: str
+    ) -> tuple[np.ndarray | None, float | None, int | None]:
+        """Return a frame, age, and monotonic per-camera sequence number."""
+        with self._lock:
+            frame = self._frames.get(cam_name)
+            stamp = self._frame_received_monotonic.get(cam_name)
+            sequence = self._frame_sequence.get(cam_name)
+        if frame is None or stamp is None or sequence is None:
+            return None, None, None
+        return frame, max(0.0, time.monotonic() - stamp), int(sequence)
 
     def latest_base_velocity(self) -> tuple[float | None, float | None]:
         with self._lock:
@@ -1092,7 +1107,9 @@ class ElevatedHazardMonitor:
                     )
                     if beyond.any():
                         footprint = tuple(
-                            p for p, is_beyond in zip(footprint, beyond) if not is_beyond
+                            p
+                            for p, is_beyond in zip(footprint, beyond, strict=False)
+                            if not is_beyond
                         )
             # Depth mode publishes the thin leading boundary from ANY
             # bearing whose nearest point sits in the reliable band

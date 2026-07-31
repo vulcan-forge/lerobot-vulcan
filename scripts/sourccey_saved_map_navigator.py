@@ -70,6 +70,7 @@ from sourccey_explore import (
     _translation_trajectory_is_safe,
     analyze_grid,
 )
+from sourccey_ground_odometry import BottomCameraGroundOdometry
 from sourccey_saved_map import DEFAULT_SAVED_MAP_PATH, SavedMap, load_saved_map
 from sourccey_wander.imu_heading import ImuYawClient
 
@@ -955,6 +956,59 @@ class SavedMapNavigator:
             sign=float(args.imu_yaw_sign),
         )
         self.imu.start()
+        self.camera_subscriber = None
+        self.ground_odometry = None
+        if str(args.bottom_odometry) != "off":
+            try:
+                from sourccey_elevated_safety import (
+                    SlamCameraSubscriber,
+                    endpoint_from_remote_ip,
+                )
+
+                camera_endpoint = (
+                    str(args.slam_input_endpoint or "").strip()
+                    or endpoint_from_remote_ip(args.remote_ip)
+                )
+                self.camera_subscriber = SlamCameraSubscriber(
+                    endpoint=camera_endpoint,
+                    camera_keys=("bottom",),
+                )
+                self.camera_subscriber.start()
+                bottom_ready = self.camera_subscriber.wait_for_frames(
+                    timeout_s=5.0,
+                    required=("bottom",),
+                )
+                if not bottom_ready:
+                    if str(args.bottom_odometry) == "required":
+                        raise RuntimeError(
+                            "bottom-camera odometry is required but the host "
+                            "published no bottom frame within 5s"
+                        )
+                    print(
+                        "[saved-map] WARNING: bottom camera unavailable; using "
+                        "rolling LiDAR odometry + IMU yaw only."
+                    )
+                else:
+                    self.ground_odometry = BottomCameraGroundOdometry(
+                        self.camera_subscriber,
+                        self.imu,
+                    )
+                    self.ground_odometry.start()
+                    print(
+                        "[saved-map] bottom-camera ground odometry ENABLED; "
+                        "floor flow supplies bounded translation priors only."
+                    )
+            except Exception as exc:
+                if self.camera_subscriber is not None:
+                    with contextlib.suppress(Exception):
+                        self.camera_subscriber.stop()
+                    self.camera_subscriber = None
+                if str(args.bottom_odometry) == "required":
+                    raise
+                print(
+                    "[saved-map] WARNING: bottom-camera odometry disabled "
+                    f"({type(exc).__name__}: {exc})."
+                )
         self.robot = SourcceyClient(
             SourcceyClientConfig(id=args.robot_id, remote_ip=args.remote_ip)
         )
@@ -1100,6 +1154,45 @@ class SavedMapNavigator:
     def _centre(self, pose: Pose2D) -> np.ndarray:
         return _robot_centre_from_lidar_pose(
             pose, self.lever_m, self.forward_offset
+        )
+
+    def _discard_ground_translation(self) -> None:
+        if self.ground_odometry is not None:
+            self.ground_odometry.discard()
+
+    def _apply_ground_translation_prior(self, pose: Pose2D) -> tuple[Pose2D, object | None]:
+        """Advance a LiDAR seed with validated floor flow, never motor commands."""
+        if self.ground_odometry is None:
+            return pose, None
+        measurement = self.ground_odometry.take_delta()
+        yaw_now = self.imu.deg()
+        if measurement is None or yaw_now is None:
+            return pose, measurement
+        delta_imu = np.asarray(
+            [measurement.forward_imu_m, measurement.left_imu_m],
+            dtype=np.float64,
+        )
+        if not np.all(np.isfinite(delta_imu)) or float(np.hypot(*delta_imu)) > 0.45:
+            return pose, None
+        map_minus_imu = math.radians(
+            float(pose.theta_deg) + self.forward_offset - float(yaw_now)
+        )
+        rotation = np.asarray(
+            [
+                [math.cos(map_minus_imu), -math.sin(map_minus_imu)],
+                [math.sin(map_minus_imu), math.cos(map_minus_imu)],
+            ],
+            dtype=np.float64,
+        )
+        centre = self._centre(pose) + rotation @ delta_imu
+        return (
+            _lidar_pose_from_robot_centre(
+                centre,
+                float(pose.theta_deg),
+                self.lever_m,
+                self.forward_offset,
+            ),
+            measurement,
         )
 
     def _start_initial_relocalization(self) -> None:
@@ -1732,7 +1825,7 @@ class SavedMapNavigator:
         one-sided return before a shoulder reaches the hard box. Equal evidence
         on both sides is a valid narrow corridor and produces no bias.
         """
-        if self._edge_escape_anchor is not None:
+        if getattr(self, "_edge_escape_anchor", None) is not None:
             return 0.0
         sample = self._fresh_forward_sample()
         if sample is None or not self.soft_collision_profile:
@@ -3681,6 +3774,7 @@ class SavedMapNavigator:
             self.status.configure(text=self.status_text)
             return
         self.localization_attempt += 1
+        self._discard_ground_translation()
         self.stop_event.clear()
         self.localized = False
         self.status_text = (
@@ -3990,6 +4084,7 @@ class SavedMapNavigator:
         )
         seed_local = _scan_local(seed_frame, self.args) if seed_frame is not None else captures[0][0]
         self.local_odometry.reset(seed_local, solved)
+        self._discard_ground_translation()
         self.global_tracking_cycle = 0
         self.localization_imu = float(return_yaw)
         self.localized = self.localization_imu is not None
@@ -4405,6 +4500,9 @@ class SavedMapNavigator:
         backup_failures: int = 0,
     ) -> None:
         self.status_text = "Navigating..."
+        # Relocalization and any preceding pivot own the initial pose. Camera
+        # flow accumulated before this route must not leak into its first seed.
+        self._discard_ground_translation()
         imu_anchor = self.imu.deg()
         if imu_anchor is None:
             self.status_text = "IMU unavailable—navigation cancelled"
@@ -4497,6 +4595,7 @@ class SavedMapNavigator:
                     self.forward_offset,
                 )
             imu_anchor = yaw_after
+            self._discard_ground_translation()
 
             # The sensor sees only one hemisphere.  A substantial waypoint
             # turn can therefore replace nearly the entire visible scene even
@@ -4654,6 +4753,14 @@ class SavedMapNavigator:
                 local = _scan_local(frame, self.args)
                 if len(local) < 30:
                     continue
+                pose_before_ground = current_pose
+                propagated_pose, ground_motion = self._apply_ground_translation_prior(
+                    current_pose
+                )
+                if ground_motion is not None:
+                    current_pose = propagated_pose
+                    with self.pose_lock:
+                        self.pose = propagated_pose
                 yaw = _imu_yaw_for_scan(self.imu, frame)
                 theta_seed = current_pose.theta_deg + (
                     (float(yaw) - float(imu_anchor)) if yaw is not None else 0.0
@@ -4681,6 +4788,11 @@ class SavedMapNavigator:
                 local_step = (
                     self._centre(solved_local) - self._centre(current_pose)
                 )
+                if ground_motion is not None:
+                    local_step = (
+                        self._centre(solved_local)
+                        - self._centre(pose_before_ground)
+                    )
                 pose_dt = max(0.05, time.monotonic() - last_pose_update_at)
                 maximum_forward_step = min(0.20, max(0.04, 0.40 * pose_dt))
                 maximum_lateral_step = min(0.05, max(0.02, 0.08 * pose_dt))
@@ -4766,7 +4878,7 @@ class SavedMapNavigator:
                     )
                     recovered_step = (
                         self._centre(recovered_local)
-                        - self._centre(current_pose)
+                        - self._centre(pose_before_ground)
                     )
                     recovered_valid = (
                         recovered_score
@@ -5092,6 +5204,16 @@ class SavedMapNavigator:
             self._close_collision_diagnostic_video,
             self.controller.shutdown,
             lambda: _send_stop(self.robot),
+            (
+                self.ground_odometry.stop
+                if self.ground_odometry is not None
+                else (lambda: None)
+            ),
+            (
+                self.camera_subscriber.stop
+                if self.camera_subscriber is not None
+                else (lambda: None)
+            ),
             self.imu.stop,
             self.feed.stop,
             self.robot.disconnect,
@@ -5154,6 +5276,20 @@ def _parse_args() -> Namespace:
     parser.add_argument("--lidar-port", type=int, default=8765)
     parser.add_argument("--imu-yaw-port", type=int, default=8770)
     parser.add_argument("--imu-yaw-sign", type=float, default=1.0)
+    parser.add_argument(
+        "--slam-input-endpoint",
+        default="",
+        help="Override the host slam_input.v1 endpoint used for the bottom camera.",
+    )
+    parser.add_argument(
+        "--bottom-odometry",
+        choices=("on", "off", "required"),
+        default="on",
+        help=(
+            "Use validated bottom-camera floor flow as a bounded translation "
+            "prior for rolling LiDAR odometry (default: on, fail-soft)."
+        ),
+    )
     parser.add_argument(
         "--drive-speed",
         type=float,

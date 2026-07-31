@@ -77,6 +77,7 @@ from sourccey_collision_box import (
     load_collision_box as _load_collision_box,
     physical_body_self_return_mask as _physical_body_self_return_mask,
 )
+from sourccey_ground_odometry import BottomCameraGroundOdometry
 from sourccey_saved_map import DEFAULT_SAVED_MAP_PATH, save_world_map
 from sourccey_spin_map import (
     _MAP_PALETTE,
@@ -3218,68 +3219,6 @@ class BaseController:
 
 
 # ---------------------------------------------------------------------------
-# Odometry feed: the PROPAGATE half of the professional pose pipeline
-# (propagate by odometry, CORRECT by scan matching). Integrates the host's
-# measured body-frame forward velocity (wheel-derived, ~m/s) into cumulative
-# forward travel. Without propagation the position estimate freezes between
-# matches, every pivot/skid becomes drift the matcher must chase — and can
-# alias onto with a HIGH score (field 2026-07-21: the robot bumped the real
-# table while its confident estimate put it elsewhere, painting the table into
-# the map as a phantom and 'blocking' on it forever).
-# ---------------------------------------------------------------------------
-
-class OdometryFeed:
-    """Integrates RAW ∫x.vel·dt — unit-agnostic. The metres-per-unit scale is
-    applied (and continuously calibrated against the scan matcher) by the caller."""
-
-    def __init__(self, robot, rate_hz: float = 12.0) -> None:
-        self.robot = robot
-        self.dt = 1.0 / float(rate_hz)
-        self._s = 0.0
-        self._lock = threading.Lock()
-        self._run = False
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if self._thread is not None:
-            return
-        self._run = True
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
-
-    def _loop(self) -> None:
-        last_t = time.monotonic()
-        while self._run:
-            v = 0.0
-            try:
-                obs = self.robot.get_observation()
-                v = float(obs.get("x.vel", 0.0) or 0.0)
-            except Exception:
-                pass
-            now = time.monotonic()
-            dt = now - last_t
-            last_t = now
-            # Deadband kills standstill noise; dt guard skips stalled polls.
-            if abs(v) > 0.02 and dt < 1.0:
-                with self._lock:
-                    self._s += v * dt
-            time.sleep(self.dt)
-
-    def take_forward_delta(self) -> float:
-        """Forward metres travelled since the last call (signed); resets."""
-        with self._lock:
-            s = self._s
-            self._s = 0.0
-        return s
-
-    def shutdown(self) -> None:
-        self._run = False
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
-            self._thread = None
-
-
-# ---------------------------------------------------------------------------
 # Physical-forward frame helpers.
 # ---------------------------------------------------------------------------
 
@@ -3559,12 +3498,27 @@ def main() -> int:
     parser.add_argument("--track-search-xy-m", type=float, default=0.22,
                         help="Translation search window for each continuous tracking match — covers how "
                              "far the base rolls between matches.")
-    parser.add_argument("--odom-scale", type=float, default=0.45,
-                        help="INITIAL metres-per-unit scale on the host's reported x.vel. The true "
-                             "scale is CALIBRATED ONLINE against the scan matcher (every strong match "
-                             "measures how far propagation over/undershot) — field 2026-07-22: treating "
-                             "x.vel as m/s (scale 1.0) made the pose race ahead of the robot, 'arrive' "
-                             "early, and pin the stationary matches outside the search window.")
+    parser.add_argument(
+        "--drive-command-distance-scale",
+        "--odom-scale",
+        dest="drive_command_distance_scale",
+        type=float,
+        default=0.45,
+        help=(
+            "Estimated metres per command-unit-second, used only to time bounded "
+            "startup/recovery translations. This is not wheel odometry and is "
+            "never integrated into pose. --odom-scale remains an alias."
+        ),
+    )
+    parser.add_argument(
+        "--bottom-odometry",
+        choices=("on", "off", "required"),
+        default="on",
+        help=(
+            "Use validated bottom-camera floor flow as a short translation prior "
+            "for LiDAR odometry (default: on, fail-soft)."
+        ),
+    )
     parser.add_argument("--max-speed-mps", type=float, default=0.45,
                         help="Physical top speed of the base. Bounds every tracking/relock search "
                              "window (the truth cannot be farther than v_max * elapsed), which is what "
@@ -3929,31 +3883,70 @@ def main() -> int:
     rr, _viewer_url = _init_rerun(session_name="sourccey_explore", mode=args.rerun_mode,
                                   grpc_port=grpc_port, web_port=web_port)
 
-    # ---- Panorama (display only, fail-soft) ----
+    # ---- Camera stream: panorama display plus bottom-camera ground odometry ----
     cam_sub = None
     eye_mosaic = None
     cam_left_key = cam_right_key = None
-    if str(args.panorama) == "on":
+    ground_odom = None
+    if str(args.panorama) == "on" or str(args.bottom_odometry) != "off":
         try:
             from sourccey_elevated_safety import SlamCameraSubscriber, endpoint_from_remote_ip
-            from sourccey_eye_panorama import load_perception_mosaic
             cam_left_key, cam_right_key = "front_left", "front_right"
             cam_endpoint = (
                 str(args.slam_input_endpoint or "").strip()
                 or endpoint_from_remote_ip(args.remote_ip)
             )
-            cam_sub = SlamCameraSubscriber(endpoint=cam_endpoint, camera_keys=(cam_left_key, cam_right_key))
+            camera_keys: list[str] = []
+            if str(args.panorama) == "on":
+                camera_keys.extend((cam_left_key, cam_right_key))
+            if str(args.bottom_odometry) != "off":
+                camera_keys.append("bottom")
+            cam_sub = SlamCameraSubscriber(
+                endpoint=cam_endpoint,
+                camera_keys=tuple(dict.fromkeys(camera_keys)),
+            )
             cam_sub.start()
-            if not cam_sub.wait_for_frames(timeout_s=5.0, required=(cam_left_key, cam_right_key)):
-                raise RuntimeError("no camera frames within 5s")
-            eye_mosaic = load_perception_mosaic()
-            print("[explore] panorama view ON — rerun entity cameras/panorama")
+            if str(args.bottom_odometry) != "off":
+                bottom_ready = cam_sub.wait_for_frames(
+                    timeout_s=5.0, required=("bottom",)
+                )
+                if not bottom_ready and str(args.bottom_odometry) == "required":
+                    _abort(
+                        "Bottom-camera odometry required but no bottom frame "
+                        "arrived within 5s."
+                    )
+                if bottom_ready:
+                    ground_odom = BottomCameraGroundOdometry(cam_sub, imu)
+                    ground_odom.start()
+                    print(
+                        "[explore] bottom-camera ground odometry ENABLED; "
+                        "validated optical flow supplies translation priors only."
+                    )
+                else:
+                    print(
+                        "[explore] WARNING: bottom camera unavailable; continuing "
+                        "with LiDAR local odometry + IMU yaw only."
+                    )
+            if str(args.panorama) == "on":
+                from sourccey_eye_panorama import load_perception_mosaic
+
+                if not cam_sub.wait_for_frames(
+                    timeout_s=5.0, required=(cam_left_key, cam_right_key)
+                ):
+                    raise RuntimeError("no eye-camera frames within 5s")
+                eye_mosaic = load_perception_mosaic()
+                print("[explore] panorama view ON — rerun entity cameras/panorama")
         except Exception as exc:  # noqa: BLE001
-            print(f"[explore] panorama unavailable ({type(exc).__name__}: {exc}); continuing without it.")
-            if cam_sub is not None:
-                with contextlib.suppress(Exception):
-                    cam_sub.stop()
-            cam_sub = None
+            capability = (
+                "panorama unavailable; bottom odometry remains active"
+                if ground_odom is not None
+                else "camera assistance unavailable"
+            )
+            print(
+                f"[explore] {capability} ({type(exc).__name__}: {exc})."
+            )
+            if str(args.bottom_odometry) == "required" and ground_odom is None:
+                raise
             eye_mosaic = None
 
     def _log_panorama() -> None:
@@ -4168,8 +4161,47 @@ def main() -> int:
         )
 
     controller.set_rotation_safety_check(_rotation_safety_check)
-    odom = OdometryFeed(robot)
-    odom_scale = [float(args.odom_scale)]   # metres per x.vel-unit; calibrated online
+
+    def _discard_translation_prior() -> None:
+        if ground_odom is not None:
+            ground_odom.discard()
+
+    def _apply_ground_translation_prior(pose: Pose2D) -> tuple[Pose2D, object | None]:
+        """Propagate translation from floor flow; LiDAR will correct this seed."""
+        if ground_odom is None:
+            return pose, None
+        measurement = ground_odom.take_delta()
+        yaw_now = imu.deg()
+        if measurement is None or yaw_now is None:
+            return pose, measurement
+        delta_imu = np.asarray(
+            [measurement.forward_imu_m, measurement.left_imu_m],
+            dtype=np.float64,
+        )
+        if not np.all(np.isfinite(delta_imu)) or float(np.hypot(*delta_imu)) > 0.45:
+            return pose, None
+        # The accumulated flow vector is expressed in the IMU's continuous
+        # yaw-zero frame. Align that frame to the current map physical-forward
+        # heading, then advance the robot centre (not the offset LiDAR origin).
+        map_minus_imu = math.radians(
+            float(pose.theta_deg) + forward_offset - float(yaw_now)
+        )
+        rotation = np.asarray(
+            [
+                [math.cos(map_minus_imu), -math.sin(map_minus_imu)],
+                [math.sin(map_minus_imu), math.cos(map_minus_imu)],
+            ],
+            dtype=np.float64,
+        )
+        delta_map = rotation @ delta_imu
+        centre = _robot_centre_from_lidar_pose(pose, lever_m, forward_offset)
+        propagated = _lidar_pose_from_robot_centre(
+            centre + delta_map,
+            float(pose.theta_deg),
+            lever_m,
+            forward_offset,
+        )
+        return propagated, measurement
 
     # =======================================================================
     # EXPLORE PHASE 1 SUPPORT — INITIAL-SPIN SENSING AND COLLISION SAFETY
@@ -4307,9 +4339,9 @@ def main() -> int:
             norm = float(np.hypot(*delta))
             command_xy = _startup_escape_velocity(delta, speed)
             command_effort = float(np.max(np.abs(command_xy)))
-            # odom_scale is the field-calibrated metres per velocity-unit-second.
+            # Command scale estimates duration only; it is never pose odometry.
             duration_s = float(np.clip(
-                norm / max(0.05, float(args.odom_scale) * command_effort),
+                norm / max(0.05, float(args.drive_command_distance_scale) * command_effort),
                 0.45,
                 1.20,
             ))
@@ -4670,7 +4702,7 @@ def main() -> int:
                 command_xy = _startup_escape_velocity(delta, speed)
                 command_effort = float(np.max(np.abs(command_xy)))
                 duration_s = float(np.clip(
-                    norm / max(0.05, float(args.odom_scale) * command_effort),
+                    norm / max(0.05, float(args.drive_command_distance_scale) * command_effort),
                     0.45,
                     1.20,
                 ))
@@ -5723,7 +5755,7 @@ def main() -> int:
             )
             speed = max(0.80, min(1.0, abs(float(args.startup_escape_speed))))
             duration_s = float(np.clip(
-                distance / max(0.05, float(args.odom_scale) * speed),
+                distance / max(0.05, float(args.drive_command_distance_scale) * speed),
                 0.35,
                 3.0,
             ))
@@ -6001,7 +6033,7 @@ def main() -> int:
                 min(1.0, abs(float(args.startup_escape_speed))),
             )
             duration_s = float(np.clip(
-                distance / max(0.05, float(args.odom_scale) * requested_speed),
+                distance / max(0.05, float(args.drive_command_distance_scale) * requested_speed),
                 0.55,
                 3.0,
             ))
@@ -8105,7 +8137,7 @@ def main() -> int:
             # Grid growth is rare in a room-scale mission. Net known cells is a
             # conservative fallback when padding changes array coordinates.
             new_known = max(0, int(known_after.sum()) - int(known_before.sum()))
-        odom.take_forward_delta()      # absolute fixes above: discard pending odometry
+        _discard_translation_prior()  # absolute stationary fix owns this pose
         print(
             f"[perf] stationary integration "
             f"{time.monotonic() - integration_started:.3f}s "
@@ -8257,7 +8289,7 @@ def main() -> int:
             )
             return False
         cur_pose = consensus
-        odom.take_forward_delta()
+        _discard_translation_prior()
         vp_pose_ok_last[0] = True
         _reset_active_localization_recovery()
         mean_score = float(np.mean([scores[index] for index in inliers]))
@@ -8369,7 +8401,7 @@ def main() -> int:
         )
         command_effort = float(np.max(np.abs(command_xy)))
         duration_s = float(np.clip(
-            distance / max(0.05, float(args.odom_scale) * command_effort),
+            distance / max(0.05, float(args.drive_command_distance_scale) * command_effort),
             0.45,
             1.20,
         ))
@@ -8439,7 +8471,7 @@ def main() -> int:
             lever_m,
             forward_offset,
         )
-        odom.take_forward_delta()
+        _discard_translation_prior()
         trail.append(_robot_centre(cur_pose).copy())
         active_localization_state["swept_deg"] = 0.0
         active_localization_state["translation_attempted"] = True
@@ -8682,7 +8714,7 @@ def main() -> int:
             print("[explore]   panorama solution crossed a completed doorway — rejected.")
             return False
         cur_pose = recovered_pose
-        odom.take_forward_delta()
+        _discard_translation_prior()
         print(f"[explore]   pose RE-ANCHORED by panorama (match {score:.1f}).")
         return True
 
@@ -9742,19 +9774,7 @@ def main() -> int:
                 if time.monotonic() - leg_t0 > float(args.max_leg_seconds):
                     controller.halt()
                     return "leg time budget spent"
-                # ODOMETRY PROPAGATION: fold measured forward travel since the
-                # last iteration into the pose along the physical-forward bearing.
-                # The matcher then only CORRECTS a pose that already moved — it no
-                # longer has to find (or alias onto) the robot from a frozen guess.
-                od = odom.take_forward_delta() * odom_scale[0]
-                prop_info = None
-                if abs(od) > 1e-4:
-                    obr = math.radians(float(cur_pose.theta_deg) + forward_offset)
-                    cur_pose = Pose2D(x=float(cur_pose.x) + od * math.cos(obr),
-                                      y=float(cur_pose.y) + od * math.sin(obr),
-                                      theta_deg=float(cur_pose.theta_deg))
-                    prop_info = (od, math.cos(obr), math.sin(obr),
-                                 float(cur_pose.x), float(cur_pose.y))
+                ground_motion = None
                 centre = _robot_centre(cur_pose)
                 while segment_index < len(waypoints):
                     segment_end = np.asarray(waypoints[segment_index], dtype=np.float64)
@@ -9830,6 +9850,7 @@ def main() -> int:
                                 forward_offset,
                             )
                         prev_imu = yaw_settled
+                        _discard_translation_prior()
                         continue
                     # PIVOT phase: NO scan-matching. During fast rotation the scan
                     # was captured ~0.1-0.2s before the IMU read that seeds the
@@ -9897,6 +9918,11 @@ def main() -> int:
                     assert segment_target_imu is not None
                     target_imu = float(segment_target_imu)
                     err_map = target_imu - float(yaw_now)
+                    # PROPAGATE with measured floor motion, then CORRECT with
+                    # LiDAR. Commanded PWM is intentionally absent from pose.
+                    cur_pose, ground_motion = _apply_ground_translation_prior(
+                        cur_pose
+                    )
                     # DRIVE phase: scan-to-map tracking with a PHYSICS-BOUNDED
                     # window — the base cannot outrun v_max, so no match may claim
                     # a bigger displacement, whatever its score. While driving
@@ -9981,19 +10007,6 @@ def main() -> int:
                         # while it was making good progress and then abandoned
                         # the objective. Recovery is now reserved for consecutive
                         # matches below --min-match-score in the branch below.
-                        # ONLINE ODOMETRY CALIBRATION: a strong match is ground
-                        # truth for how far we actually moved. Compare it with the
-                        # propagated step to walk the metres-per-unit scale onto
-                        # the host's true velocity units (unknown a priori).
-                        if score >= 12.0 and prop_info is not None and abs(prop_info[0]) > 0.03:
-                            od_i, fx_i, fy_i, px_i, py_i = prop_info
-                            c_fwd = ((float(cur_pose.x) - px_i) * fx_i
-                                     + (float(cur_pose.y) - py_i) * fy_i)
-                            ratio = (od_i + c_fwd) / od_i
-                            if 0.3 < ratio < 3.0:
-                                odom_scale[0] = float(np.clip(
-                                    0.85 * odom_scale[0] + 0.15 * odom_scale[0] * ratio,
-                                    0.05, 1.5))
                     else:
                         n_weak += 1
                         if n_weak >= 2:
@@ -10063,7 +10076,7 @@ def main() -> int:
                                 )
                                 if len(inliers_r) >= 2:
                                     cur_pose = consensus_r
-                                    odom.take_forward_delta()
+                                    _discard_translation_prior()
                                     relocked = True
                                     mean_relock_score = float(np.mean([
                                         relock_candidates[index][1] for index in inliers_r
@@ -10184,9 +10197,17 @@ def main() -> int:
                     if t_now - last_diag >= 2.0:
                         last_diag = t_now
                         c_dbg = _robot_centre(cur_pose)
+                        ground_label = (
+                            "ground --"
+                            if ground_motion is None
+                            else (
+                                f"ground {ground_motion.samples}x/"
+                                f"{ground_motion.residual_m * 100:.1f}cm"
+                            )
+                        )
                         print(f"[drive] score {max(score, -9.9):4.1f} window {window:.2f}m "
                               f"pos ({c_dbg[0]:+.2f},{c_dbg[1]:+.2f}) dist {float(np.hypot(*vec)):.2f}m "
-                              f"heading_err {err_map:+.1f}deg odo x{odom_scale[0]:.2f}")
+                              f"heading_err {err_map:+.1f}deg {ground_label}")
                     # Novel returns in the box? Do NOT stop yet — first apply the
                     # physical discriminator, which only works WHILE MOVING:
                     # a REAL object stays fixed in the world as the robot
@@ -10326,8 +10347,7 @@ def main() -> int:
         print("[explore] --spin-only: skipping exploration; rendering the anchor spin map only.")
     else:
         controller.start()   # background velocity streaming for continuous driving
-        odom.start()         # propagate-by-odometry between scan corrections
-        odom.take_forward_delta()   # discard anything accumulated during startup
+        _discard_translation_prior()  # startup pivots are not translation priors
     while (
         not bool(args.spin_only)
         and not _budget_exhausted(viewpoints_reached, int(args.explore_viewpoints))
@@ -11243,7 +11263,7 @@ def main() -> int:
     finally:
         for _cleanup in (
             controller.shutdown,
-            odom.shutdown,
+            (ground_odom.stop if ground_odom is not None else (lambda: None)),
             lambda: _send_stop(robot),
             _stop_live_lidar_publisher,
             imu.stop,
