@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import base64
 import json
-import math
 import threading
 import time
 from collections import deque
@@ -41,9 +40,16 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from sourccey_bottom_camera import (
+    BottomFloorDetector,
+    BottomGroundSafetyGate,
+    FloorObstacle,
+    bottom_obstacle_explains_floor_point,
+    default_bottom_camera_model,
+    render_bottom_overlay,
+)
 from sourccey_camera_geometry import (
     CameraModel,
-    default_bottom,
     default_eye_left,
     default_eye_right,
     edge_point_robot_frame,
@@ -157,7 +163,7 @@ class ElevatedSafetyConfig:
     # ---- geometry / classification -----------------------------------------
     eye_left_model: CameraModel = field(default_factory=default_eye_left)
     eye_right_model: CameraModel = field(default_factory=default_eye_right)
-    bottom_model: CameraModel = field(default_factory=default_bottom)
+    bottom_model: CameraModel = field(default_factory=default_bottom_camera_model)
     # Referee tolerances: a candidate is "explained" as a floor object when a
     # lidar return / bottom-camera base sits this close to its if-on-floor
     # position.
@@ -368,9 +374,7 @@ def points_beyond_wall_mask(
     return beyond
 
 
-def gap_clears_body(
-    gap_left_m: float | None, gap_right_m: float | None, body_half_width_m: float
-) -> bool:
+def gap_clears_body(gap_left_m: float | None, gap_right_m: float | None, body_half_width_m: float) -> bool:
     """Measured-gap passability: the clear gap must extend at least the
     robot's body half-width to EACH side of the centerline. A None bound
     means nothing was measured on that side (open)."""
@@ -431,6 +435,7 @@ class SlamCameraSubscriber:
         self._frames: dict[str, np.ndarray] = {}
         self._frame_received_monotonic: dict[str, float] = {}
         self._frame_sequence: dict[str, int] = {}
+        self._source_frame_id: dict[str, int] = {}
         self._base_x_vel: float | None = None
         self._base_vel_monotonic: float | None = None
         self._packets_received = 0
@@ -440,9 +445,7 @@ class SlamCameraSubscriber:
     def start(self) -> None:
         if self._thread is not None:
             return
-        self._thread = threading.Thread(
-            target=self._run, name="slam-camera-subscriber", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="slam-camera-subscriber", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -508,18 +511,40 @@ class SlamCameraSubscriber:
                 continue
             if frame is None:
                 continue
-            self._store_frame(cam_name, frame, received_monotonic=now)
+            source_frame_id = entry.get("frame_id")
+            try:
+                source_frame_id = int(source_frame_id)
+            except (TypeError, ValueError):
+                source_frame_id = None
+            self._store_frame(
+                cam_name,
+                frame,
+                received_monotonic=now,
+                source_frame_id=source_frame_id,
+            )
         with self._lock:
             self._packets_received += 1
 
     def _store_frame(
-        self, cam_name: str, frame: np.ndarray, *, received_monotonic: float | None = None
+        self,
+        cam_name: str,
+        frame: np.ndarray,
+        *,
+        received_monotonic: float | None = None,
+        source_frame_id: int | None = None,
     ) -> None:
         stamp = time.monotonic() if received_monotonic is None else float(received_monotonic)
         with self._lock:
+            # A host may continue publishing packets while a camera is dead.  In
+            # that case its last frame_id is repeated; do not refresh the local
+            # age or sequence and thereby make a cached image look live.
+            if source_frame_id is not None and self._source_frame_id.get(cam_name) == source_frame_id:
+                return
             self._frames[cam_name] = frame
             self._frame_received_monotonic[cam_name] = stamp
             self._frame_sequence[cam_name] = self._frame_sequence.get(cam_name, 0) + 1
+            if source_frame_id is not None:
+                self._source_frame_id[cam_name] = source_frame_id
 
     def latest(self, cam_name: str) -> tuple[np.ndarray | None, float | None]:
         with self._lock:
@@ -529,9 +554,7 @@ class SlamCameraSubscriber:
             return None, None
         return frame, max(0.0, time.monotonic() - stamp)
 
-    def latest_sample(
-        self, cam_name: str
-    ) -> tuple[np.ndarray | None, float | None, int | None]:
+    def latest_sample(self, cam_name: str) -> tuple[np.ndarray | None, float | None, int | None]:
         """Return a frame, age, and monotonic per-camera sequence number."""
         with self._lock:
             frame = self._frames.get(cam_name)
@@ -562,114 +585,6 @@ class SlamCameraSubscriber:
                 return True
             time.sleep(0.1)
         return all(self.latest(cam)[0] is not None for cam in cams)
-
-
-@dataclass
-class FloorObstacle:
-    bearing_deg: float
-    distance_m: float
-    x_ratio: float
-    y_ratio: float
-    height_m: float = 0.0
-    # True when the contiguous silhouette crosses the camera-height horizon
-    # row. For a level camera NOTHING lying on the floor can appear above the
-    # horizon, so this is a depth-extent-proof "taller than the camera"
-    # classifier — the row-height estimate is confounded by floor features
-    # that extend away in depth (field bug: cable loops measured 5-10cm).
-    crosses_horizon: bool = False
-
-
-class BottomFloorDetector:
-    """Finds floor-obstacle bases in the level bottom camera.
-
-    Everything on the floor appears BELOW the camera's horizon row (the
-    5-inch height plane); the image row of an object's floor contact gives
-    its exact distance. Splits the frame into column bands and reports the
-    lowest strong edge row per band as a base candidate."""
-
-    def __init__(self, model: CameraModel, config: ElevatedSafetyConfig) -> None:
-        self.model = model
-        self.config = config
-
-    def detect(self, frame_bgr: np.ndarray) -> list[FloorObstacle]:
-        frame = np.asarray(frame_bgr)
-        if frame.ndim != 3 or frame.shape[0] < 8 or frame.shape[1] < 8:
-            return []
-        height, width = frame.shape[:2]
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (5, 5), 0)
-        edges = cv2.Canny(gray, 50, 130)
-        horizon = float(np.clip(self.model.horizon_y_ratio(), 0.05, 0.9))
-        y_start = int(height * min(horizon + 0.04, 0.95))
-        if y_start >= height - 2:
-            return []
-        obstacles: list[FloorObstacle] = []
-        bands = max(int(self.config.ground_column_bands), 4)
-        band_w = max(width // bands, 4)
-        min_edges = max(int(band_w * float(self.config.ground_edge_density)), 2)
-        min_height_m = float(self.config.ground_min_obstacle_height_m)
-        for band in range(bands):
-            x0 = band * band_w
-            x1 = min(x0 + band_w, width)
-            column = edges[y_start:height, x0:x1]
-            row_counts = (column > 0).sum(axis=1)
-            strong_rows = np.nonzero(row_counts >= min_edges)[0]
-            if len(strong_rows) == 0:
-                continue
-            base_row = y_start + int(strong_rows[-1])  # lowest strong edge = nearest base
-            y_ratio = base_row / max(height - 1, 1)
-            distance = self.model.floor_distance_for_row(y_ratio)
-            if distance is None or distance > float(self.config.ground_max_distance_m):
-                continue
-            # Object height from its silhouette top: cables/carpet seams are a
-            # few pixels tall and must not stop the base; dumbbells, table
-            # legs, and walls tower above their base row. The silhouette must
-            # be CONTIGUOUS with the base (small gaps only) — scattered
-            # carpet-texture edges above a cable are not part of the object
-            # (field bug: cables measured 0.10m tall from carpet noise).
-            base_index = int(strong_rows[-1])
-            top_index = base_index
-            gap = 0
-            scan = base_index - 1
-            while scan >= 0 and gap <= 4:
-                # A vertical silhouette edge is ~1px wide after Canny, so a
-                # single edge pixel keeps the run alive; the gap limit is what
-                # rejects scattered floor-texture noise.
-                if row_counts[scan] >= 1:
-                    top_index = scan
-                    gap = 0
-                else:
-                    gap += 1
-                scan -= 1
-            top_row = y_start + top_index
-            top_ratio = top_row / max(height - 1, 1)
-            top_depression_deg = self.model.depression_deg_for_row(top_ratio)
-            obstacle_height_m = float(self.model.height_m) - float(distance) * math.tan(
-                math.radians(top_depression_deg)
-            )
-            if obstacle_height_m < min_height_m:
-                continue
-            # The scan region starts just below the horizon, so a contiguous
-            # run reaching the very top of it means the silhouette continues
-            # ACROSS the horizon: taller than the camera. Verify by checking
-            # for edge content in the band just above the horizon row.
-            crosses = False
-            if top_index <= 1:
-                above_y0 = max(0, int(horizon * height) - int(0.08 * height))
-                above_band = edges[above_y0 : max(above_y0 + 1, y_start - 2), x0:x1]
-                crosses = bool(above_band.size > 0 and (above_band > 0).any(axis=1).sum() >= 2)
-            x_ratio = ((x0 + x1) * 0.5) / max(width - 1, 1)
-            obstacles.append(
-                FloorObstacle(
-                    bearing_deg=float(self.model.bearing_deg_for_column(x_ratio)),
-                    distance_m=float(distance),
-                    x_ratio=float(x_ratio),
-                    y_ratio=float(y_ratio),
-                    height_m=float(obstacle_height_m),
-                    crosses_horizon=crosses,
-                )
-            )
-        return obstacles
 
 
 @dataclass
@@ -733,6 +648,7 @@ class ElevatedHazardMonitor:
         self._semantic_worker = semantic_worker
         self._detector = ElevatedEdgeDetector(config.detector_config())
         self._bottom_detector = BottomFloorDetector(config.bottom_model, config)
+        self._bottom_ground_gate = BottomGroundSafetyGate(config)
         self._lock = threading.Lock()
         self._state = HazardState(enabled=True)
         self._annotated: dict[str, np.ndarray] = {}
@@ -754,9 +670,6 @@ class ElevatedHazardMonitor:
         # Elevated-hazard hysteresis.
         self._hit_ticks = 0
         self._clean_ticks = 0
-        # Ground-gate hysteresis.
-        self._ground_hits = 0
-        self._ground_clean = 0
         # Motion integration.
         self._last_tick_monotonic: float | None = None
         self._forward_travel_m = 0.0
@@ -823,9 +736,7 @@ class ElevatedHazardMonitor:
     def start(self) -> None:
         if self._thread is not None:
             return
-        self._thread = threading.Thread(
-            target=self._run, name="elevated-hazard-monitor", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="elevated-hazard-monitor", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -869,7 +780,9 @@ class ElevatedHazardMonitor:
                 bearing = getattr(sem, "bearing_deg", None)
                 side = "front"
                 if bearing is not None:
-                    side = "left" if float(bearing) > 12.0 else ("right" if float(bearing) < -12.0 else "front")
+                    side = (
+                        "left" if float(bearing) > 12.0 else ("right" if float(bearing) < -12.0 else "front")
+                    )
                 return False, f"semantic_edge_stop_{side}({getattr(sem, 'label', '')})"
         return True, reason
 
@@ -1029,9 +942,7 @@ class ElevatedHazardMonitor:
             # before this field existed keep their legacy behavior.
             if getattr(result, "proposal_detected", True) is False:
                 continue
-            advance = max(
-                0.0, self._forward_travel_m - self._travel_at(float(result.frame_monotonic))
-            )
+            advance = max(0.0, self._forward_travel_m - self._travel_at(float(result.frame_monotonic)))
             # Floor (free-space) evidence flows on EVERY rotation-fresh
             # result — including hazard-free frames, which are exactly the
             # ones that prove a mapped red cell isn't there. Published once
@@ -1040,8 +951,7 @@ class ElevatedHazardMonitor:
             if (
                 floor_pts
                 and float(result.frame_monotonic) >= self._last_rotation_monotonic + 0.2
-                and self._floor_evidence_last_frame.get(eye_key)
-                != float(result.frame_monotonic)
+                and self._floor_evidence_last_frame.get(eye_key) != float(result.frame_monotonic)
             ):
                 self._floor_evidence_last_frame[eye_key] = float(result.frame_monotonic)
                 with self._lock:
@@ -1049,9 +959,7 @@ class ElevatedHazardMonitor:
                         FloorEvidence(
                             eye=str(eye_key),
                             monotonic=now,
-                            points_robot_xy=tuple(
-                                (float(px) - advance, float(py)) for px, py in floor_pts
-                            ),
+                            points_robot_xy=tuple((float(px) - advance, float(py)) for px, py in floor_pts),
                         )
                     )
                     del self._floor_evidence_queue[:-20]
@@ -1087,8 +995,7 @@ class ElevatedHazardMonitor:
             # is rotated relative to the stamp pose; travel compensation
             # cannot fix heading).
             footprint = tuple(
-                (float(px) - advance, float(py))
-                for px, py in getattr(result, "region_points_xy", ()) or ()
+                (float(px) - advance, float(py)) for px, py in getattr(result, "region_points_xy", ()) or ()
             )
             # MAP-ONLY wall-occlusion filter: drop points claiming structure
             # BEYOND a contiguous lidar wall arc on their bearing (see
@@ -1102,14 +1009,10 @@ class ElevatedHazardMonitor:
                 except Exception:
                     wall_ranges = None
                 if wall_ranges is not None and len(wall_ranges[0]):
-                    beyond = points_beyond_wall_mask(
-                        footprint, wall_ranges[0], wall_ranges[1]
-                    )
+                    beyond = points_beyond_wall_mask(footprint, wall_ranges[0], wall_ranges[1])
                     if beyond.any():
                         footprint = tuple(
-                            p
-                            for p, is_beyond in zip(footprint, beyond, strict=False)
-                            if not is_beyond
+                            p for p, is_beyond in zip(footprint, beyond, strict=False) if not is_beyond
                         )
             # Depth mode publishes the thin leading boundary from ANY
             # bearing whose nearest point sits in the reliable band
@@ -1138,15 +1041,10 @@ class ElevatedHazardMonitor:
             scale_stable = True
             if str(eye_key) == "panorama":
                 result_scale = float(getattr(result, "scale", 1.0) or 1.0)
-                fresh_scale_frame = (
-                    float(result.frame_monotonic) != self._last_scale_mono
-                )
+                fresh_scale_frame = float(result.frame_monotonic) != self._last_scale_mono
                 if len(self._recent_scales) >= 3:
                     scale_ref = float(np.median(list(self._recent_scales)))
-                    if (
-                        scale_ref > 1e-6
-                        and abs(result_scale - scale_ref) / scale_ref > 0.15
-                    ):
+                    if scale_ref > 1e-6 and abs(result_scale - scale_ref) / scale_ref > 0.15:
                         scale_stable = False
                 if fresh_scale_frame:
                     self._last_scale_mono = float(result.frame_monotonic)
@@ -1162,9 +1060,7 @@ class ElevatedHazardMonitor:
             ):
                 self._last_view_report_mono = float(result.frame_monotonic)
                 with self._lock:
-                    self._view_report_queue.append(
-                        ViewReport(monotonic=now, points_robot_xy=footprint)
-                    )
+                    self._view_report_queue.append(ViewReport(monotonic=now, points_robot_xy=footprint))
                     del self._view_report_queue[:-40]
             publish_metric = nearest if nearest is not None else gate
             if (
@@ -1172,8 +1068,7 @@ class ElevatedHazardMonitor:
                 and publish_metric is not None
                 and 0.30 <= publish_metric <= 1.80
                 and float(result.frame_monotonic) >= self._last_rotation_monotonic + 0.2
-                and float(result.frame_monotonic)
-                != self._last_footprint_frame_mono.get(str(eye_key), -1.0)
+                and float(result.frame_monotonic) != self._last_footprint_frame_mono.get(str(eye_key), -1.0)
                 and footprint
             ):
                 self._last_footprint_frame_mono[str(eye_key)] = float(result.frame_monotonic)
@@ -1229,25 +1124,9 @@ class ElevatedHazardMonitor:
             return False
         return bool(
             np.any(
-                np.abs(distances[mask] - float(distance_m))
-                <= float(self.config.lidar_distance_tolerance_m)
+                np.abs(distances[mask] - float(distance_m)) <= float(self.config.lidar_distance_tolerance_m)
             )
         )
-
-    def _bottom_explains(
-        self, obstacles: list[FloorObstacle], bearing_deg: float, distance_m: float
-    ) -> bool:
-        for obstacle in obstacles:
-            bearing_delta = abs(
-                ((obstacle.bearing_deg - float(bearing_deg)) + 180.0) % 360.0 - 180.0
-            )
-            if bearing_delta > float(self.config.bottom_bearing_tolerance_deg):
-                continue
-            if abs(obstacle.distance_m - float(distance_m)) <= float(
-                self.config.bottom_distance_tolerance_m
-            ):
-                return True
-        return False
 
     def _segment_distances(
         self,
@@ -1260,11 +1139,9 @@ class ElevatedHazardMonitor:
         for diagonal approaches). Falls back to the center-ray when the line
         endpoints are unavailable."""
         if obs.line_xy is None:
-            center = (
-                model.elevated_distance_for_row(
-                    float(obs.center_y_ratio) if obs.center_y_ratio is not None else 0.7,
-                    edge_height_m,
-                )
+            center = model.elevated_distance_for_row(
+                float(obs.center_y_ratio) if obs.center_y_ratio is not None else 0.7,
+                edge_height_m,
             )
             return center, center
         frame_h, frame_w = int(frame_shape[0]), int(frame_shape[1])
@@ -1394,7 +1271,12 @@ class ElevatedHazardMonitor:
         if floor_distance is not None:
             if self._lidar_explains(bearing, floor_distance):
                 return "floor_lidar", floor_distance, floor_distance, None, bearing
-            if bottom_available and self._bottom_explains(bottom_obstacles, bearing, floor_distance):
+            if bottom_available and bottom_obstacle_explains_floor_point(
+                bottom_obstacles,
+                bearing,
+                floor_distance,
+                self.config,
+            ):
                 return "floor_low", floor_distance, floor_distance, None, bearing
 
         assumed = model.elevated_distance_for_row(y_ratio, float(self.config.assumed_edge_height_m))
@@ -1452,9 +1334,7 @@ class ElevatedHazardMonitor:
                 return self._state
 
         bottom_available = (
-            bottom_frame is not None
-            and bottom_age is not None
-            and bottom_age <= float(cfg.stale_timeout_s)
+            bottom_frame is not None and bottom_age is not None and bottom_age <= float(cfg.stale_timeout_s)
         )
         bottom_obstacles: list[FloorObstacle] = []
         if bottom_available:
@@ -1480,9 +1360,7 @@ class ElevatedHazardMonitor:
             if depth_failure is None and getattr(self._depth_worker, "ready", False):
                 # The worker declares its result keys: ("panorama",) in fused
                 # mode, the two eye keys in per-eye mode.
-                worker_keys = tuple(
-                    getattr(self._depth_worker, "eye_keys", (cfg.left_key, cfg.right_key))
-                )
+                worker_keys = tuple(getattr(self._depth_worker, "eye_keys", (cfg.left_key, cfg.right_key)))
                 for eye_key in worker_keys:
                     depth_result = self._depth_worker.latest(
                         eye_key, max_age_s=float(cfg.depth_stale_timeout_s)
@@ -1667,8 +1545,7 @@ class ElevatedHazardMonitor:
                 for eye_key, obs in ((cfg.left_key, left_obs), (cfg.right_key, right_obs))
                 if obs.detected
                 and obs.center_y_ratio is not None
-                and candidates.get(eye_key, ("",))[0]
-                in ("elevated_confirmed", "elevated_unresolved")
+                and candidates.get(eye_key, ("",))[0] in ("elevated_confirmed", "elevated_unresolved")
             ]
         deepest_row = max(deep_rows) if deep_rows else None
         # "Blind" must mean NO deep detection AT ALL — classification flapping
@@ -1683,9 +1560,7 @@ class ElevatedHazardMonitor:
         # Visible at/below the recede row (any classification) = we can still
         # see the edge region: never a "miss". A miss requires seeing NOTHING
         # down there.
-        edge_region_visible = deepest_any is not None and deepest_any >= float(
-            cfg.vanish_recede_row_ratio
-        )
+        edge_region_visible = deepest_any is not None and deepest_any >= float(cfg.vanish_recede_row_ratio)
         if self._blind_latched:
             # The latch means "the eyes are BLIND down where the edge was".
             # Re-sighting anything in the edge region (whatever its
@@ -1693,9 +1568,7 @@ class ElevatedHazardMonitor:
             # governs from there.
             released_by_sight = edge_region_visible
             released_by_retreat = self._retreat_m >= float(cfg.vanish_release_reverse_m)
-            released_by_rotation = self._rotation_since_stop_deg >= float(
-                cfg.vanish_release_rotation_deg
-            )
+            released_by_rotation = self._rotation_since_stop_deg >= float(cfg.vanish_release_rotation_deg)
             if released_by_sight or released_by_retreat or released_by_rotation:
                 self._blind_latched = False
                 self._retreat_m = 0.0
@@ -1708,8 +1581,10 @@ class ElevatedHazardMonitor:
             if self._vanish_hits >= max(int(cfg.vanish_arm_frames), 1):
                 self._vanish_armed = True
                 self._vanish_row = deepest_row
-                self._vanish_side = side if side != "none" else (
-                    "left" if (left_obs is not None and left_obs.detected) else "right"
+                self._vanish_side = (
+                    side
+                    if side != "none"
+                    else ("left" if (left_obs is not None and left_obs.detected) else "right")
                 )
         elif deepest_row is not None and deepest_row < float(cfg.vanish_recede_row_ratio):
             # Candidate receded (moved up in the frame): disarm.
@@ -1750,46 +1625,13 @@ class ElevatedHazardMonitor:
             reason = "vanished_near"
 
         # ---- bottom-camera ground gate -------------------------------------------
-        ground_active = previous.ground_active
-        ground_distance: float | None = previous.ground_distance_m
-        ground_side = previous.ground_side
-        if bool(cfg.ground_gate_enabled) and bottom_available:
-            in_corridor = [
-                obstacle
-                for obstacle in bottom_obstacles
-                if obstacle.crosses_horizon
-                and obstacle.distance_m <= float(cfg.ground_stop_distance_m)
-                and abs(obstacle.distance_m * math.sin(math.radians(obstacle.bearing_deg)))
-                <= float(cfg.ground_corridor_half_width_m)
-            ]
-            if in_corridor:
-                self._ground_hits += 1
-                self._ground_clean = 0
-            else:
-                self._ground_hits = 0
-            if self._ground_hits >= max(int(cfg.ground_trip_frames), 1):
-                ground_active = True
-                nearest = min(in_corridor, key=lambda o: o.distance_m)
-                ground_distance = float(nearest.distance_m)
-                ground_side = (
-                    "front"
-                    if abs(nearest.bearing_deg) <= 8.0
-                    else ("left" if nearest.bearing_deg > 0 else "right")
-                )
-            elif ground_active and not in_corridor:
-                self._ground_clean += 1
-                if self._ground_clean >= max(int(cfg.ground_clear_frames), 1):
-                    ground_active = False
-                    ground_distance = None
-                    ground_side = "none"
-                    self._ground_clean = 0
-            elif ground_active:
-                self._ground_clean = 0
-        elif not bottom_available:
-            # No referee, no ground gate — never latch a stale ground stop.
-            ground_active = False
-            ground_distance = None
-            ground_side = "none"
+        ground_decision = self._bottom_ground_gate.update(
+            bottom_obstacles,
+            camera_available=bottom_available,
+        )
+        ground_active = ground_decision.active
+        ground_distance = ground_decision.distance_m
+        ground_side = ground_decision.side
         if ground_active and reason == "clear":
             reason = "ground_obstacle"
 
@@ -1823,9 +1665,7 @@ class ElevatedHazardMonitor:
                     )
                     value = max(
                         0.05,
-                        float(narrow_gate)
-                        - advance
-                        + max(0.0, float(cfg.depth_edge_approach_allowance_m)),
+                        float(narrow_gate) - advance + max(0.0, float(cfg.depth_edge_approach_allowance_m)),
                     )
                     if narrow_min is None or value < narrow_min:
                         narrow_min = value
@@ -1836,9 +1676,7 @@ class ElevatedHazardMonitor:
             external_reason = self._external_stop_reason
             self._external_stop_reason = None
         # A squeeze pass-through is not a stop: it must not arm a hold.
-        stopping_now = bool(
-            (active and not squeeze) or blind_zone or ground_active or external_reason
-        )
+        stopping_now = bool((active and not squeeze) or blind_zone or ground_active or external_reason)
         stop_reason = (
             external_reason
             if external_reason
@@ -1921,11 +1759,19 @@ class ElevatedHazardMonitor:
             annotated_right = right_frame
         else:
             annotated_left = render_overlay(
-                left_frame, cfg.left_key, left_obs, state, cfg,
+                left_frame,
+                cfg.left_key,
+                left_obs,
+                state,
+                cfg,
                 classification=candidates.get(cfg.left_key, ("none", None, None, None, 0.0)),
             )
             annotated_right = render_overlay(
-                right_frame, cfg.right_key, right_obs, state, cfg,
+                right_frame,
+                cfg.right_key,
+                right_obs,
+                state,
+                cfg,
                 classification=candidates.get(cfg.right_key, ("none", None, None, None, 0.0)),
             )
         with self._lock:
@@ -1967,16 +1813,26 @@ class ElevatedHazardMonitor:
                     continue
                 canvas = frame.copy()
                 cv2.putText(
-                    canvas, label, (4, 14), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.4, (0, 0, 0), 3, cv2.LINE_AA,
+                    canvas,
+                    label,
+                    (4, 14),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4,
+                    (0, 0, 0),
+                    3,
+                    cv2.LINE_AA,
                 )
                 cv2.putText(
-                    canvas, label, (4, 14), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.4, (0, 255, 255), 1, cv2.LINE_AA,
+                    canvas,
+                    label,
+                    (4, 14),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4,
+                    (0, 255, 255),
+                    1,
+                    cv2.LINE_AA,
                 )
-                cv2.imwrite(
-                    str(self._recorder_dir / f"{key}_{ring_idx:03d}.jpg"), canvas
-                )
+                cv2.imwrite(str(self._recorder_dir / f"{key}_{ring_idx:03d}.jpg"), canvas)
         except Exception as exc:
             self._recorder_failed = True
             print(f"[safety] flight recorder disabled after error: {exc!r}")
@@ -1988,7 +1844,13 @@ def render_overlay(
     obs: EdgeObservation,
     state: HazardState,
     config: ElevatedSafetyConfig,
-    classification: tuple[str, float | None, float | None, float | None, float] = ("none", None, None, None, 0.0),
+    classification: tuple[str, float | None, float | None, float | None, float] = (
+        "none",
+        None,
+        None,
+        None,
+        0.0,
+    ),
 ) -> np.ndarray:
     """ROI band + detection + geometric classification, for viewers/Rerun."""
     canvas = frame_bgr.copy()
@@ -2023,46 +1885,6 @@ def render_overlay(
         cv2.putText(canvas, text, (6, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(canvas, text, (6, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
         y += 18
-    return canvas
-
-
-def render_bottom_overlay(
-    frame_bgr: np.ndarray,
-    obstacles: list[FloorObstacle],
-    state: HazardState,
-    config: ElevatedSafetyConfig,
-) -> np.ndarray:
-    canvas = frame_bgr.copy()
-    height, width = canvas.shape[:2]
-    horizon_row = int(np.clip(config.bottom_model.horizon_y_ratio(), 0.02, 0.98) * height)
-    cv2.line(canvas, (0, horizon_row), (width, horizon_row), (255, 200, 0), 1)
-    for obstacle in obstacles:
-        x = int(obstacle.x_ratio * (width - 1))
-        y = int(obstacle.y_ratio * (height - 1))
-        near = obstacle.crosses_horizon and obstacle.distance_m <= float(
-            config.ground_stop_distance_m
-        )
-        color = (0, 0, 255) if near else ((0, 220, 220) if obstacle.crosses_horizon else (160, 160, 160))
-        cv2.circle(canvas, (x, y), 4, color, -1)
-        tall_tag = "X" if obstacle.crosses_horizon else "flat"
-        cv2.putText(
-            canvas,
-            f"{obstacle.distance_m:.2f} {tall_tag}",
-            (max(x - 24, 0), max(y - 6, 10)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.35,
-            (255, 255, 255),
-            1,
-            cv2.LINE_AA,
-        )
-    label = (
-        f"bottom ground_stop {state.ground_side} {state.ground_distance_m:.2f}m"
-        if state.ground_active and state.ground_distance_m is not None
-        else "bottom clear"
-    )
-    color = (0, 0, 255) if state.ground_active else (0, 200, 0)
-    cv2.putText(canvas, label, (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA)
-    cv2.putText(canvas, label, (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
     return canvas
 
 

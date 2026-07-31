@@ -261,14 +261,3 @@ def default_eye_right() -> CameraModel:
         hfov_deg=82.0,
         vfov_deg=66.0,
     )
-
-
-def default_bottom() -> CameraModel:
-    return CameraModel(
-        name="bottom",
-        height_m=0.127,
-        pitch_down_deg=3.6,
-        yaw_deg=0.0,
-        forward_offset_m=0.20,
-        lateral_offset_m=0.0,
-    )

@@ -17,8 +17,9 @@ import base64
 import json
 import logging
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any
 
 import cv2
 import numpy as np
@@ -54,7 +55,7 @@ def create_slam_pub_socket(zmq_context: zmq.Context, endpoint: str) -> zmq.Socke
     return socket
 
 
-def close_slam_pub_socket(socket: Optional[zmq.Socket]) -> None:
+def close_slam_pub_socket(socket: zmq.Socket | None) -> None:
     if socket is not None:
         socket.close(0)
 
@@ -100,7 +101,7 @@ class SlamInputPublisher:
     def publish(
         self,
         *,
-        socket: Optional[zmq.Socket],
+        socket: zmq.Socket | None,
         observation: dict[str, Any],
         frames: dict[str, np.ndarray],
         imu_samples: Iterable[IMUSample] | None = None,
@@ -122,8 +123,7 @@ class SlamInputPublisher:
             if not self._first_packet_announced:
                 self._first_packet_announced = True
                 print(
-                    "[SLAM] First stereo packet published: "
-                    f"{self._stereo_left_key}, {self._stereo_right_key}"
+                    f"[SLAM] First stereo packet published: {self._stereo_left_key}, {self._stereo_right_key}"
                 )
         except zmq.Again:
             logging.debug("Dropping SLAM input packet, no subscriber connected.")
@@ -139,7 +139,7 @@ class SlamInputPublisher:
         observation: dict[str, Any],
         frames: dict[str, np.ndarray],
         imu_samples: Iterable[IMUSample] | None = None,
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         left_key = self._stereo_left_key
         right_key = self._stereo_right_key
         required_keys = (left_key, right_key)
@@ -162,6 +162,16 @@ class SlamInputPublisher:
             if self._eye_only_mode
             else tuple(frames.keys())
         )
+        for cam_name in self._extra_camera_keys:
+            if not isinstance(frames.get(cam_name), np.ndarray):
+                self.log_warning_throttled(
+                    f"slam_missing_extra:{cam_name}",
+                    (
+                        f"SLAM auxiliary camera '{cam_name}' is configured but "
+                        "is not delivering image data; clients that require it "
+                        "will reject the stream."
+                    ),
+                )
         for cam_name in camera_keys:
             frame = frames.get(cam_name)
             if not isinstance(frame, np.ndarray):
@@ -259,9 +269,7 @@ def _serialize_imu_samples(imu_samples: Iterable[IMUSample] | None) -> list[dict
                 "mx": float(sample.mag_uT[0]),
                 "my": float(sample.mag_uT[1]),
                 "mz": float(sample.mag_uT[2]),
-                "temperature_c": (
-                    None if sample.temperature_c is None else float(sample.temperature_c)
-                ),
+                "temperature_c": (None if sample.temperature_c is None else float(sample.temperature_c)),
             }
         )
     return payload

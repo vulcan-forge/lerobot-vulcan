@@ -28,10 +28,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-
 from ldlidar_defaults import DEFAULT_LIDAR_FORWARD_ANGLE_DEG
 from ldlidar_direct_snapshot_client import DirectLidarFeed, _scan_to_local_points
-from sourccey_camera_geometry import default_bottom, default_eye_left, default_eye_right
+from sourccey_bottom_camera import default_bottom_camera_model
+from sourccey_camera_geometry import default_eye_left, default_eye_right
 from sourccey_elevated_safety import SlamCameraSubscriber, endpoint_from_remote_ip
 
 
@@ -295,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     models = {
         "front_left": default_eye_left(),
         "front_right": default_eye_right(),
-        "bottom": default_bottom(),
+        "bottom": default_bottom_camera_model(),
     }
     # The lidar sits ~0.229m ahead of robot center; each camera has its own
     # forward offset — correct the wall distance into each camera's frame.
@@ -304,7 +304,7 @@ def main(argv: list[str] | None = None) -> int:
     results: dict[str, dict] = {}
     frames: dict[str, np.ndarray] = {}
     eye_rows: dict[str, list[float]] = {}
-    for cam_name, model in models.items():
+    for cam_name in models:
         frame, age = subscriber.latest(cam_name)
         if frame is None:
             print(f"[calibrate] {cam_name}: no frames (skipping — enable it on the host?)")
