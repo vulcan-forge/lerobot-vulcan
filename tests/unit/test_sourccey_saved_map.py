@@ -23,6 +23,7 @@ from sourccey_saved_map_navigator import (  # noqa: E402
     _assemble_active_localization_cloud,
     _current_escape_turn_deg,
     _densify_transition_route,
+    _drop_reached_waypoint_prefix,
     _forward_command_above_stiction,
     _front_obstacle_escape_turn_deg,
     _global_localization_accepted,
@@ -34,10 +35,30 @@ from sourccey_saved_map_navigator import (  # noqa: E402
     _pose_consensus,
     _predictive_forward_collision,
     _remove_body_fixed_lidar_returns,
+    _route_boundary_reanchor_consensus,
     _simplify_saved_map_route,
     _stationary_correction_consensus,
     _straight_motion_step_is_consistent,
 )
+
+
+def test_reached_route_connectors_cannot_command_a_reverse_turn() -> None:
+    # Regression from the second outbound trip: collision replanning emitted
+    # two grid connectors behind the current centre. Both were already inside
+    # the follower's 16cm arrival radius, but the old follower calculated the
+    # first connector's ~180deg heading before checking arrival.
+    centre = np.array([2.895, 2.035])
+    route = [
+        np.array([2.825, 2.025]),
+        np.array([2.775, 2.075]),
+        np.array([2.875, 2.875]),
+    ]
+
+    actionable, dropped = _drop_reached_waypoint_prefix(route, centre)
+
+    assert dropped == 2
+    assert len(actionable) == 1
+    assert np.allclose(actionable[0], route[-1])
 
 
 def test_global_localization_accepts_strongly_supported_distinct_mode() -> None:
@@ -468,6 +489,35 @@ def test_stationary_consensus_rejects_single_large_pose_jump() -> None:
     ]
 
     assert _stationary_correction_consensus(candidates, seed, 7.0) is None
+
+
+def test_route_boundary_reanchor_fully_removes_consistent_global_drift() -> None:
+    seed = np.array([1.00, 2.00])
+    candidates = [
+        (np.array([1.20, 1.91]), 10.4, 0.82),
+        (np.array([1.19, 1.90]), 10.1, 0.79),
+        (np.array([1.21, 1.90]), 10.7, 0.85),
+        (np.array([1.20, 1.89]), 9.8, 0.76),
+    ]
+
+    consensus = _route_boundary_reanchor_consensus(candidates, seed, 7.0)
+
+    # A route boundary establishes a new global odometry origin. It must not
+    # retain 75% of the old, drifted pose like the gentle mid-route updater.
+    assert consensus is not None
+    assert np.allclose(consensus, [1.20, 1.90], atol=0.011)
+
+
+def test_route_boundary_reanchor_rejects_ambiguous_saved_map_modes() -> None:
+    seed = np.array([1.00, 2.00])
+    candidates = [
+        (np.array([1.20, 1.90]), 10.4, 0.82),
+        (np.array([0.82, 2.18]), 10.1, 0.79),
+        (np.array([1.18, 1.88]), 10.7, 0.85),
+        (np.array([0.80, 2.20]), 9.8, 0.76),
+    ]
+
+    assert _route_boundary_reanchor_consensus(candidates, seed, 7.0) is None
 
 
 def test_transition_route_preserves_geometry_with_short_keyframe_steps() -> None:

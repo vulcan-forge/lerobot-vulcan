@@ -144,6 +144,37 @@ def _stationary_correction_consensus(
     return None
 
 
+def _route_boundary_reanchor_consensus(
+    candidates: list[tuple[np.ndarray, float, float]],
+    seed_centre: np.ndarray,
+    minimum_score: float,
+) -> np.ndarray | None:
+    """Return one fully global pose for a new navigation command.
+
+    Unlike the gentle mid-route backend correction above, this runs only while
+    the base is stopped between commands.  Several fresh scans must agree with
+    the immutable saved map in both position and endpoint support.  Once they
+    do, their global consensus becomes the new odometry origin instead of
+    allowing the previous trip's rolling-submap drift to validate itself.
+    """
+    seed = np.asarray(seed_centre, dtype=np.float64)
+    usable = [
+        (np.asarray(centre, dtype=np.float64), float(score), float(support))
+        for centre, score, support in candidates
+        if float(score) >= float(minimum_score)
+        and float(support) >= 0.35
+        and float(np.hypot(*(np.asarray(centre, dtype=np.float64) - seed))) <= 0.35
+    ]
+    if len(usable) < 3:
+        return None
+    centres = np.asarray([item[0] for item in usable], dtype=np.float64)
+    consensus = np.median(centres, axis=0)
+    scatter = np.hypot(*(centres - consensus).T)
+    if float(np.percentile(scatter, 90.0)) > 0.06:
+        return None
+    return consensus
+
+
 def _densify_transition_route(
     start: np.ndarray,
     route: list[np.ndarray],
@@ -578,6 +609,34 @@ def _simplify_saved_map_route(
     return [points[index].copy() for index in kept[1:]]
 
 
+def _drop_reached_waypoint_prefix(
+    route: list[np.ndarray],
+    robot_centre_xy: np.ndarray,
+    reached_radius_m: float = 0.16,
+) -> tuple[list[np.ndarray], int]:
+    """Remove route-prefix points already reached by the robot centre.
+
+    A* and collision replans commonly emit one or two grid-connector points
+    only a few centimetres from the current pose.  They describe the start of
+    the polyline; they are not headings the chassis must face.  The follower
+    previously calculated and executed their heading *before* its 16cm
+    arrival check.  A connector just behind the robot could therefore command
+    a meaningless 180-degree turn into the obstacle that triggered the
+    replan.  Waypoint reachability is now an invariant at the route boundary.
+    """
+    centre = np.asarray(robot_centre_xy, dtype=np.float64).reshape(2)
+    first_actionable = 0
+    for point in route:
+        candidate = np.asarray(point, dtype=np.float64).reshape(2)
+        if float(np.hypot(*(candidate - centre))) > float(reached_radius_m):
+            break
+        first_actionable += 1
+    return [
+        np.asarray(point, dtype=np.float64).copy()
+        for point in route[first_actionable:]
+    ], first_actionable
+
+
 def _forward_command_above_stiction(
     requested: float,
     minimum_moving_command: float = 0.80,
@@ -863,9 +922,16 @@ class SavedMapNavigator:
         # Retain enough overlapping half-view scans to bridge a doorway turn
         # without consulting the ambiguous whole saved map. This remains a
         # small rolling front-end submap, not permanent occupancy.
-        self.local_odometry = RollingLocalSubmap(max_scans=16, max_points=10000)
+        # A 16-frame window covered only a couple of seconds of motion. At a
+        # far goal in a sparsely saved room, turning around could therefore
+        # discard every feature that anchored the arrival trajectory. Retain
+        # several seconds of overlapping scans so the return command starts
+        # from the same locally built geometry even when the immutable saved
+        # map has little structure in that room.
+        self.local_odometry = RollingLocalSubmap(max_scans=48, max_points=24000)
         self.global_tracking_cycle = 0
         self._strong_local_motion_relaxations = 0
+        self._endpoint_recheck_count = 0
         self._last_passage_commit_centre: np.ndarray | None = None
         # A LiDAR-measured centre/align/straight passage route remains
         # authoritative through shoulder warnings. Recovery must refresh that
@@ -1666,6 +1732,8 @@ class SavedMapNavigator:
         one-sided return before a shoulder reaches the hard box. Equal evidence
         on both sides is a valid narrow corridor and produces no bias.
         """
+        if self._edge_escape_anchor is not None:
+            return 0.0
         sample = self._fresh_forward_sample()
         if sample is None or not self.soft_collision_profile:
             return 0.0
@@ -2738,6 +2806,26 @@ class SavedMapNavigator:
             recovery_collision_sectors,
             step_deg=15.0,
         )
+        edge_escape_pending = False
+        if self._edge_escape_anchor is not None:
+            with self.pose_lock:
+                edge_now = self._centre(self.pose)
+            edge_progress = float(
+                np.hypot(*(edge_now - self._edge_escape_anchor))
+            )
+            if edge_progress >= 0.16:
+                self._edge_escape_anchor = None
+            else:
+                edge_escape_pending = True
+                immediate_turn = None
+                # Prevent every later one-sided fallback in this recovery
+                # from issuing another turn around the same physical edge.
+                recovery_collision_sectors = {"left", "right"}
+                print(
+                    "[saved-map] repeated edge trigger suppressed after only "
+                    f"{edge_progress:.2f}m localized progress; holding for a "
+                    "stationary replan instead of accumulating another turn."
+                )
 
         # SIMPLE EDGE AVOIDANCE: a predictive hit on exactly one shoulder is
         # not a localization or passage-planning problem. Stop, pivot once
@@ -2745,7 +2833,11 @@ class SavedMapNavigator:
         # LiDAR, and commit a short straight segment in that heading. Planning
         # from the end of that segment prevents the global follower from
         # immediately undoing the turn and steering back into the same edge.
-        if reason.startswith("predictive LiDAR path stop") and immediate_turn is not None:
+        if (
+            reason.startswith("predictive LiDAR path stop")
+            and immediate_turn is not None
+            and not edge_escape_pending
+        ):
             occupied_side = "left" if immediate_turn < 0.0 else "right"
             direction = "clockwise" if immediate_turn < 0.0 else "counterclockwise"
             print(
@@ -2799,6 +2891,7 @@ class SavedMapNavigator:
                         )
                         self.pending_collision_sectors = set()
                         self.path = [edge_start.copy(), *edge_route]
+                        self._edge_escape_anchor = edge_start.copy()
                         self.status_text = (
                             "Edge avoided—continuing through the open side"
                         )
@@ -3928,6 +4021,46 @@ class SavedMapNavigator:
             messagebox.showinfo("Busy", "Stop the current navigation command first.")
             return
         requested = self._world_xy(event.x, event.y)
+        # Route preparation includes sensor acquisition and, when necessary,
+        # a complete global angular localization.  Keep that work off Tk's UI
+        # thread and keep this same worker alive through route execution so a
+        # second click cannot overlap the reset/planning boundary.
+        self.stop_event.clear()
+        self.navigation_thread = threading.Thread(
+            target=self._prepare_navigation_command,
+            args=(requested,),
+            daemon=True,
+        )
+        self.navigation_thread.start()
+
+    def _prepare_navigation_command(self, requested: np.ndarray) -> None:
+        """Establish an observable global pose, plan, then execute one click."""
+        # A navigation command starts a new odometry session. First try the
+        # inexpensive stationary saved-map consensus. If one 180-degree LiDAR
+        # view is ambiguous, do not retain the previous trip's accumulated
+        # transform: acquire the same complete angular global localization
+        # used at application startup before any route is planned.
+        self.status_text = "Re-anchoring LiDAR pose before planning..."
+        boundary = self._route_boundary_reanchor("new route")
+        if boundary is None:
+            self.status_text = "Could not acquire a fresh route-boundary LiDAR scan"
+            return
+        if boundary == "needs_global":
+            self.localization_attempt += 1
+            print(
+                "[saved-map] route-boundary single-view geometry is ambiguous; "
+                "performing a complete angular global localization before "
+                "planning this command."
+            )
+            self._localize_worker()
+            if not self.localized:
+                print(
+                    "[saved-map] route command remains disabled because the "
+                    "complete global localization was not accepted."
+                )
+                return
+            self._reset_route_transient_state()
+
         with self.pose_lock:
             start = self._centre(self.pose)
         route, planning_radius = _plan_saved_map_route(
@@ -3943,10 +4076,7 @@ class SavedMapNavigator:
                 f"to click ({requested[0]:+.2f}, {requested[1]:+.2f}) even at "
                 f"the calibrated {planning_radius:.2f}m physical radius."
             )
-            messagebox.showwarning(
-                "No route",
-                "That point is not connected through the saved known-free map.",
-            )
+            self.status_text = "Clicked point is not connected through known free space"
             return
         if planning_radius < float(self.args.robot_radius_m) - 1e-6:
             print(
@@ -3964,17 +4094,226 @@ class SavedMapNavigator:
         self.pending_collision_world = np.empty((0, 2), dtype=np.float32)
         self.pending_collision_sectors = set()
         self.collision_replan_streak = 0
+        self._endpoint_recheck_count = 0
         # Passage replay suppression is local to one navigation command.  A
         # completed outbound/return trip must not make the next click inherit
         # the previous command's "already attempted here" memory.
         self._last_passage_commit_centre = None
         self._passage_route_active = False
+        self._edge_escape_anchor = None
         self.path = [start.copy(), *[np.asarray(point).copy() for point in route]]
         self.stop_event.clear()
-        self.navigation_thread = threading.Thread(
-            target=self._navigate_worker, args=(route,), daemon=True
+        self._navigate_worker(route)
+
+    def _reset_route_transient_state(self) -> None:
+        """Remove every obstacle/recovery decision owned by the previous trip."""
+        self.dynamic_obstacles_world = np.empty((0, 2), dtype=np.float32)
+        self.pending_collision_world = np.empty((0, 2), dtype=np.float32)
+        self.pending_collision_sectors = set()
+        self.collision_replan_streak = 0
+        self._endpoint_recheck_count = 0
+        self._last_passage_commit_centre = None
+        self._passage_route_active = False
+        self._edge_escape_anchor = None
+        self._soft_warning_side = None
+        self._soft_warning_bias = 0.0
+        self._soft_warning_last_seen_at = -math.inf
+        self._strong_local_motion_relaxations = 0
+        self.global_tracking_cycle = 0
+        with self._collision_confirmation_lock:
+            self._collision_confirmation.clear()
+        self.controller.clear_safety_latch()
+
+    def _fresh_route_boundary_keyframe(self) -> np.ndarray | None:
+        """Acquire one genuinely fresh, stationary LiDAR keyframe."""
+        after = self.feed.latest()[0]
+        for _ in range(3):
+            after, frame = self.feed.wait_for_frame_after(
+                after_frame_id=after,
+                timeout_s=0.8,
+                min_frame_advances=1,
+            )
+            if frame is None:
+                continue
+            local = _scan_local(frame, self.args)
+            if len(local) >= 30:
+                return local
+        return None
+
+    def _route_boundary_reanchor(self, context: str) -> str | None:
+        """Re-establish the saved-map/odometry transform between commands."""
+        self.controller.halt()
+        with self.pose_lock:
+            seed = self.pose
+            seed_centre = self._centre(seed)
+
+        frame_id = self.feed.latest()[0]
+        candidates: list[tuple[np.ndarray, float, float]] = []
+        for _ in range(5):
+            frame_id, frame = self.feed.wait_for_frame_after(
+                after_frame_id=frame_id,
+                timeout_s=0.8,
+                min_frame_advances=1,
+            )
+            if frame is None:
+                continue
+            local = _scan_local(frame, self.args)
+            if len(local) < 30:
+                continue
+            solved, score = _localize(
+                local, self.world, seed, self.args, 0.45, 4.0
+            )
+            solved = _pose_with_imu_heading(
+                solved,
+                seed.theta_deg,
+                self.lever_m,
+                self.forward_offset,
+            )
+            support = _endpoint_support_ratio(
+                _transform_points(local, solved),
+                self.world.reference(),
+                0.08,
+            )
+            candidates.append((self._centre(solved), score, support))
+
+        consensus = _route_boundary_reanchor_consensus(
+            candidates,
+            seed_centre,
+            float(self.args.localization_min_score),
         )
-        self.navigation_thread.start()
+        if consensus is not None:
+            correction_m = float(np.hypot(*(consensus - seed_centre)))
+            anchored = _lidar_pose_from_robot_centre(
+                consensus,
+                seed.theta_deg,
+                self.lever_m,
+                self.forward_offset,
+            )
+            with self.pose_lock:
+                self.pose = anchored
+            print(
+                f"[saved-map] route-boundary {context}: accepted saved-map "
+                f"re-anchor of {correction_m * 100:.1f}cm from "
+                f"{len(candidates)} stationary scan(s)."
+            )
+        else:
+            best_score = max((item[1] for item in candidates), default=-2.0)
+            best_support = max((item[2] for item in candidates), default=0.0)
+            print(
+                f"[saved-map] route-boundary {context}: saved-map consensus "
+                f"unavailable ({len(candidates)} scans, best match "
+                f"{best_score:.1f}, support {best_support:.0%}); a complete "
+                "angular global localization is required instead of retaining "
+                "the previous trip's pose."
+            )
+            return "needs_global"
+
+        # Always seed from a scan acquired after the consensus calculation.
+        # Candidate scans were evaluated at slightly different hypotheses and
+        # the old rolling history belongs to the completed command.
+        keyframe = self._fresh_route_boundary_keyframe()
+        if keyframe is None:
+            print(
+                f"[saved-map] route-boundary {context}: no fresh LiDAR "
+                "keyframe; the next command remains disabled."
+            )
+            return None
+        with self.pose_lock:
+            anchored_pose = self.pose
+        self.local_odometry.reset(keyframe, anchored_pose)
+        self._reset_route_transient_state()
+        print(
+            f"[saved-map] route-boundary {context}: rolling LiDAR submap "
+            "replaced with one fresh keyframe at the saved-map consensus pose."
+        )
+        return "saved_map"
+
+    def _stationary_local_pose_confirmation(self, context: str) -> bool:
+        """Confirm position against the recent session submap while stopped.
+
+        The permanent map can legitimately have weak support in a newly
+        observed room.  This front-end check instead matches several fresh,
+        stationary scans to the longer rolling LiDAR submap and accepts only
+        a tight spatial consensus.  It cannot jump to another globally
+        similar corridor because its search remains local and its correction
+        is bounded to 25cm.
+        """
+        self.controller.halt()
+        with self.pose_lock:
+            seed = self.pose
+            seed_centre = self._centre(seed)
+        reference = self.local_odometry.reference()
+        if len(reference) < 30:
+            return False
+
+        after = self.feed.latest()[0]
+        candidates: list[tuple[np.ndarray, np.ndarray, float, float]] = []
+        for _ in range(5):
+            after, frame = self.feed.wait_for_frame_after(
+                after_frame_id=after,
+                timeout_s=0.8,
+                min_frame_advances=1,
+            )
+            if frame is None:
+                continue
+            local = _scan_local(frame, self.args)
+            if len(local) < 30:
+                continue
+            solved, score, support = _localize_against_points(
+                local,
+                reference,
+                seed,
+                self.args,
+                0.30,
+                3.0,
+            )
+            solved = _pose_with_imu_heading(
+                solved,
+                seed.theta_deg,
+                self.lever_m,
+                self.forward_offset,
+            )
+            centre = self._centre(solved)
+            shift = float(np.hypot(*(centre - seed_centre)))
+            if score >= 4.0 and support >= 0.22 and shift <= 0.25:
+                candidates.append((centre, local, float(score), float(support)))
+
+        if len(candidates) < 3:
+            print(
+                f"[saved-map] stationary local pose confirmation for {context} "
+                f"kept the continuous pose ({len(candidates)}/5 supported scans)."
+            )
+            return False
+
+        centres = np.asarray([item[0] for item in candidates], dtype=np.float64)
+        consensus = np.median(centres, axis=0)
+        scatter = np.hypot(*(centres - consensus).T)
+        if float(np.percentile(scatter, 90.0)) > 0.08:
+            print(
+                f"[saved-map] stationary local pose confirmation for {context} "
+                "rejected spatially inconsistent scan matches."
+            )
+            return False
+
+        correction_m = float(np.hypot(*(consensus - seed_centre)))
+        confirmed = _lidar_pose_from_robot_centre(
+            consensus,
+            seed.theta_deg,
+            self.lever_m,
+            self.forward_offset,
+        )
+        with self.pose_lock:
+            self.pose = confirmed
+        # One representative stationary keyframe strengthens this location
+        # without flooding the rolling history with duplicate scans.
+        best = max(candidates, key=lambda item: (item[3], item[2]))
+        self.local_odometry.add(best[1], confirmed)
+        print(
+            f"[saved-map] stationary local pose confirmed for {context}: "
+            f"{len(candidates)}/5 scans, correction {correction_m * 100:.1f}cm, "
+            f"scatter p90 {float(np.percentile(scatter, 90.0)) * 100:.1f}cm."
+        )
+        return True
 
     def _stationary_saved_map_correction(self) -> bool:
         """Apply the slow global SLAM correction only while the base is stopped.
@@ -4081,6 +4420,14 @@ class SavedMapNavigator:
                 f"{float(self.args.drive_speed):.2f} is below drivetrain stiction; "
                 f"using {drive_command:.2f}."
             )
+        with self.pose_lock:
+            route_start = self._centre(self.pose)
+        route, dropped = _drop_reached_waypoint_prefix(route, route_start)
+        if dropped:
+            print(
+                f"[saved-map] discarded {dropped} already-reached route "
+                "connector waypoint(s) before calculating any turn."
+            )
         for waypoint_index, waypoint in enumerate(route, start=1):
             if self.stop_event.is_set():
                 return
@@ -4094,6 +4441,16 @@ class SavedMapNavigator:
             with self.pose_lock:
                 centre = self._centre(self.pose)
                 physical_heading = self.pose.theta_deg + self.forward_offset
+            waypoint_distance = float(
+                np.hypot(*(np.asarray(waypoint, dtype=np.float64) - centre))
+            )
+            if waypoint_distance <= 0.16:
+                print(
+                    f"[saved-map] waypoint {waypoint_index}/{len(route)} is "
+                    f"already reached ({waypoint_distance:.2f}m); skipping it "
+                    "without issuing a turn."
+                )
+                continue
             vector = np.asarray(waypoint) - centre
             desired_heading = math.degrees(math.atan2(vector[1], vector[0]))
             heading_error = (desired_heading - physical_heading + 180.0) % 360.0 - 180.0
@@ -4175,6 +4532,7 @@ class SavedMapNavigator:
             segment_start = centre.copy()
             last_progress_at = segment_started
             best_progress = 0.0
+            clear_no_progress_rescans = 0
             tracking_pause_active = False
             last_pose_update_at = segment_started
             print(
@@ -4204,13 +4562,67 @@ class SavedMapNavigator:
                     last_progress_at = now
                 if now - last_progress_at > 4.0:
                     self.controller.halt()
-                    reason = self.controller.safety_latched_reason()
+                    # A frozen pose is not proof of a blocked or stationary
+                    # chassis: a healthy scan can be rejected by the bounded
+                    # motion prior, leaving the progress watchdog looking at
+                    # an old pose. Stop, acquire one genuinely fresh scan, and
+                    # let live LiDAR safety decide. If the corridor is clear,
+                    # reseed local odometry at the stationary pose and resume
+                    # this same straight segment instead of terminating.
+                    fresh_id, fresh_frame = self.feed.wait_for_frame_after(
+                        after_frame_id=after,
+                        timeout_s=1.0,
+                        min_frame_advances=1,
+                    )
+                    if fresh_frame is not None:
+                        after = fresh_id
+                    live_reason = self._translation_safety()
+                    if live_reason is None and clear_no_progress_rescans < 3:
+                        clear_no_progress_rescans += 1
+                        if fresh_frame is not None:
+                            fresh_local = _scan_local(fresh_frame, self.args)
+                            if len(fresh_local) >= 30:
+                                with self.pose_lock:
+                                    stationary_pose = self.pose
+                                self.local_odometry.add(
+                                    fresh_local, stationary_pose
+                                )
+                        with self.pose_lock:
+                            segment_start = self._centre(self.pose)
+                        segment_started = time.monotonic()
+                        last_progress_at = segment_started
+                        last_pose_update_at = segment_started
+                        best_progress = 0.0
+                        weak = 0
+                        self.controller.clear_safety_latch()
+                        self.controller.drive_toward(
+                            drive_command,
+                            drive_heading + soft_heading_bias,
+                        )
+                        print(
+                            "[saved-map] forward-progress watchdog acquired a "
+                            "fresh LiDAR scan and the collision envelope is "
+                            f"CLEAR; resumed the same straight segment "
+                            f"({clear_no_progress_rescans}/3)."
+                        )
+                        continue
+                    if live_reason is not None:
+                        new_route, backup_failures = self._replan_after_collision(
+                            live_reason,
+                            backup_failures,
+                        )
+                        if new_route:
+                            return self._navigate_worker(
+                                new_route, backup_failures
+                            )
+                        return
                     transport_error = self.controller.command_error()
                     self.status_text = (
                         f"Waypoint {waypoint_index}: no physical forward progress"
                     )
-                    detail = reason or transport_error or (
-                        f"base did not move at command {drive_command:.2f}"
+                    detail = transport_error or (
+                        "three fresh LiDAR scans were clear but no localized "
+                        f"motion followed command {drive_command:.2f}"
                     )
                     print(f"[saved-map] {self.status_text} ({detail}); stopped.")
                     return
@@ -4302,7 +4714,7 @@ class SavedMapNavigator:
                     segment_direction,
                     maximum_forward_m=max(0.40, maximum_forward_step),
                     maximum_reverse_m=0.04,
-                    maximum_lateral_m=max(0.08, maximum_lateral_step),
+                    maximum_lateral_m=max(0.12, maximum_lateral_step),
                 )
                 if not local_valid and strong_local_evidence and relaxed_local_motion:
                     local_valid = True
@@ -4365,7 +4777,7 @@ class SavedMapNavigator:
                             segment_direction,
                             maximum_forward_m=max(0.48, maximum_forward_step),
                             maximum_reverse_m=0.04,
-                            maximum_lateral_m=max(0.08, maximum_lateral_step),
+                            maximum_lateral_m=max(0.12, maximum_lateral_step),
                         )
                     )
                     if recovered_valid:
@@ -4622,8 +5034,45 @@ class SavedMapNavigator:
             # are local to one obstruction, not cumulative over the mission.
             backup_failures = 0
             self.collision_replan_streak = 0
+            self._edge_escape_anchor = None
+        # Do not declare arrival solely from integrated moving odometry in a
+        # sparsely represented room. Confirm the endpoint against recent
+        # session LiDAR geometry while motionless. If that bounded consensus
+        # says the robot is still materially short, finish the remaining
+        # route instead of letting the next click inherit a wrong start pose.
+        self.controller.halt()
+        self._stationary_local_pose_confirmation("goal arrival")
+        if self.goal is not None:
+            with self.pose_lock:
+                confirmed_centre = self._centre(self.pose)
+            remaining = float(np.hypot(*(np.asarray(self.goal) - confirmed_centre)))
+            if remaining > 0.24 and self._endpoint_recheck_count < 2:
+                finish_route, finish_radius = _plan_saved_map_route(
+                    self.world,
+                    confirmed_centre,
+                    np.asarray(self.goal),
+                    float(self.args.robot_radius_m),
+                    float(self.args.physical_body_radius_m),
+                    extra_occupied_xy=self.dynamic_obstacles_world,
+                )
+                if finish_route:
+                    self._endpoint_recheck_count += 1
+                    self.path = [
+                        confirmed_centre.copy(),
+                        *[np.asarray(point).copy() for point in finish_route],
+                    ]
+                    print(
+                        "[saved-map] stationary endpoint confirmation found "
+                        f"{remaining:.2f}m still remaining; completing "
+                        f"{len(finish_route)} corrected waypoint(s) at radius "
+                        f"{finish_radius:.2f}m before declaring arrival."
+                    )
+                    return self._navigate_worker(finish_route, backup_failures)
         self.path = []
         self._passage_route_active = False
+        # One edge encounter may select one turn. Another turn is forbidden
+        # until rolling LiDAR verifies that the short escape translated away.
+        self._edge_escape_anchor: np.ndarray | None = None
         self.status_text = "Goal reached—click another known free point"
 
     def stop(self) -> None:
@@ -4631,6 +5080,7 @@ class SavedMapNavigator:
         self.controller.halt()
         self.path = []
         self._passage_route_active = False
+        self._edge_escape_anchor = None
         self.status_text = "Stopped"
 
     def close(self) -> None:

@@ -192,5 +192,12 @@
   "calibration_scans": 40,
   "created_unix_s": 1784749982.975734,
   "width_m": 0.508,
-  "length_m": 0.21589999999999998
+  "length_m": 0.21589999999999998,
+  "corner_radius_m": 0.2564780487804878,
+  "complete_box": true,
+  "completed_width_m": 0.5765593495934959,
+  "completed_front_m": 0.15239999999999998,
+  "completed_rear_m": 0.509,
+  "completed_length_m": 0.6614,
+  "completed_front_width_m": 0.5257593495934959
 }
