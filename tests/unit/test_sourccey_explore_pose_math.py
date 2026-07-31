@@ -43,6 +43,22 @@ def test_zero_exploration_budgets_are_unlimited() -> None:
     assert explore._budget_exhausted(20, 20)
 
 
+def test_rolling_local_submap_translation_preserves_scan_history() -> None:
+    submap = explore.RollingLocalSubmap(max_scans=4, max_points=1000)
+    local_a = np.asarray([[0.5, 0.0], [0.6, 0.1], [0.7, -0.1]] * 4, dtype=np.float32)
+    local_b = np.asarray([[0.4, 0.2], [0.5, 0.3], [0.6, 0.1]] * 4, dtype=np.float32)
+    submap.add(local_a, Pose2D(1.0, 2.0, 0.0))
+    submap.add(local_b, Pose2D(1.2, 2.1, 5.0))
+    before = submap.reference().copy()
+
+    submap.translate(np.asarray([0.10, -0.20]))
+
+    assert len(submap.scans) == 2
+    np.testing.assert_allclose(submap.reference(), before + [0.10, -0.20], atol=1e-6)
+    assert submap.scans[0].pose.x == pytest.approx(1.10)
+    assert submap.scans[0].pose.y == pytest.approx(1.80)
+
+
 def test_transient_planner_obstacle_does_not_mutate_slam_grid() -> None:
     grid = explore.OccupancyGrid(0.10)
     before = grid.L.copy()

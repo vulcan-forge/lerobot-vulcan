@@ -32,14 +32,49 @@ from sourccey_saved_map_navigator import (  # noqa: E402
     _occupancy_pose_consistency,
     _one_sided_escape_turn_deg,
     _plan_saved_map_route,
+    _points_after_body_turn,
+    _points_in_pose_frame,
     _pose_consensus,
     _predictive_forward_collision,
     _remove_body_fixed_lidar_returns,
     _route_boundary_reanchor_consensus,
+    _select_forward_clearance_turn,
     _simplify_saved_map_route,
     _stationary_correction_consensus,
     _straight_motion_step_is_consistent,
+    _submap_reanchor_is_credible,
+    _transform_points,
 )
+
+
+def test_points_in_pose_frame_is_inverse_of_world_transform() -> None:
+    pose = Pose2D(1.4, -0.8, 37.0)
+    local = np.asarray([[0.2, -0.3], [1.1, 0.4], [-0.5, 0.7]], dtype=np.float32)
+
+    world = _transform_points(local.copy(), pose)
+    recovered = _points_in_pose_frame(world, pose)
+
+    np.testing.assert_allclose(recovered, local, atol=1e-6)
+
+
+def test_recent_submap_reanchor_requires_geometry_support_and_bounded_innovation() -> None:
+    assert _submap_reanchor_is_credible(9.0, 0.42, 0.48, 1200, 7.0)
+    assert not _submap_reanchor_is_credible(9.0, 0.12, 0.48, 1200, 7.0)
+    assert not _submap_reanchor_is_credible(9.0, 0.42, 1.20, 1200, 7.0)
+    assert not _submap_reanchor_is_credible(9.0, 0.42, 0.48, 80, 7.0)
+
+
+def test_hypothetical_body_turn_accounts_for_lidar_lever_arm() -> None:
+    # A return 0.8m ahead of a LiDAR mounted 0.2m ahead of the body centre is
+    # 1.0m ahead of the pivot. After a +90deg body turn the stationary return
+    # is 1.0m to the robot's right and 0.2m behind the new LiDAR origin.
+    turned = _points_after_body_turn(
+        np.asarray([[0.8, 0.0]], dtype=np.float64),
+        90.0,
+        0.20,
+    )
+
+    np.testing.assert_allclose(turned, [[-0.20, -1.0]], atol=1e-7)
 
 
 def test_reached_route_connectors_cannot_command_a_reverse_turn() -> None:
@@ -567,6 +602,37 @@ def test_current_lidar_side_overrides_stale_persistent_turn_direction() -> None:
     assert _current_escape_turn_deg({"right"}, -1.0) == +15.0
     assert _current_escape_turn_deg(set(), -1.0) == -15.0
     assert _current_escape_turn_deg({"left", "right"}, +1.0) is None
+
+
+def test_route_alignment_cannot_reverse_a_one_sided_escape_turn() -> None:
+    profile = {
+        "ranges_m": [0.30] * 90,
+        "bin_size_deg": 4.0,
+        "noise_tolerance_m": 0.0,
+        "safety_margin_m": 0.0,
+        "min_violation_bins": 1,
+        "side_min_violation_bins": 1,
+        "min_violation_points": 2,
+        "side_min_violation_points": 2,
+    }
+    # Everything nearby is clear.  The global route would prefer a positive
+    # turn, but a left-side contact requires a negative/clockwise escape.  The
+    # planner may choose 5/10/15deg, never the opposite sign.
+    points = np.asarray([[1.50, -0.20], [1.50, 0.0], [1.50, 0.20]])
+
+    selected = _select_forward_clearance_turn(
+        points,
+        profile,
+        preferred_turn_deg=-15.0,
+        route_heading_error_deg=+20.0,
+        forward_probe_m=0.30,
+        lidar_offset_forward_m=0.0,
+        physical_body_radius_m=0.0,
+        self_mask_inset_m=0.0,
+    )
+
+    assert selected is not None
+    assert selected < 0.0
 
 
 def test_front_prediction_uses_clear_rotation_instead_of_false_no_route() -> None:

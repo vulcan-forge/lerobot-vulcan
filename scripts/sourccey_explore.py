@@ -1433,6 +1433,29 @@ class RollingLocalSubmap:
         self.clear()
         self.add(local_xy, pose)
 
+    def translate(self, delta_xy: np.ndarray) -> None:
+        """Move the complete local odometry frame without discarding history.
+
+        A saved-map backend correction changes the map-to-local-odometry
+        translation; it does not invalidate the relative geometry between the
+        recent scans.  Reprojecting every retained scan by the same bounded
+        translation preserves doorway/wall overlap across navigation commands
+        while keeping the rolling reference in the corrected map frame.
+        """
+
+        delta = np.asarray(delta_xy, dtype=np.float64).reshape(2)
+        if not np.all(np.isfinite(delta)) or float(np.hypot(*delta)) < 1e-9:
+            return
+        for scan in self.scans:
+            scan.pose = Pose2D(
+                float(scan.pose.x + delta[0]),
+                float(scan.pose.y + delta[1]),
+                float(scan.pose.theta_deg),
+            )
+            scan.world_xy = (
+                np.asarray(scan.world_xy, dtype=np.float64) + delta
+            ).astype(np.float32)
+
     def reference(self) -> np.ndarray:
         if not self.scans:
             return np.zeros((0, 2), dtype=np.float32)
