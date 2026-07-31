@@ -21,8 +21,10 @@ from sourccey_saved_map_navigator import (  # noqa: E402
     LivePassagePlan,
     SavedMapNavigator,
     _assemble_active_localization_cloud,
+    _current_escape_turn_deg,
     _densify_transition_route,
     _forward_command_above_stiction,
+    _front_obstacle_escape_turn_deg,
     _global_localization_accepted,
     _global_localization_position_seeds,
     _learn_body_fixed_lidar_returns,
@@ -505,6 +507,66 @@ def test_one_sided_collision_turns_away_but_two_sided_collision_does_not_guess()
     assert _one_sided_escape_turn_deg({"right"}) == 8.0
     assert _one_sided_escape_turn_deg({"left", "right"}) is None
     assert _one_sided_escape_turn_deg({"front"}) is None
+
+
+def test_current_lidar_side_overrides_stale_persistent_turn_direction() -> None:
+    # A previous right-side obstacle requested counterclockwise motion (+).
+    # Once a fresh scan shows a left-side obstacle, continuing + would turn
+    # directly toward it; current evidence must force clockwise motion (-).
+    assert _current_escape_turn_deg({"left"}, +1.0) == -15.0
+    assert _current_escape_turn_deg({"right"}, -1.0) == +15.0
+    assert _current_escape_turn_deg(set(), -1.0) == -15.0
+    assert _current_escape_turn_deg({"left", "right"}, +1.0) is None
+
+
+def test_front_prediction_uses_clear_rotation_instead_of_false_no_route() -> None:
+    # Field regression 2026-07-30 21:33: both 30deg probes were clear, but a
+    # +13deg front return bypassed the one-sided logic and terminated motion.
+    assert _front_obstacle_escape_turn_deg(
+        "collision box front would be reached (0.14m at +13deg, limit 0.16m)",
+        +8.4,
+        clockwise_clear=True,
+        counterclockwise_clear=True,
+    ) == -15.0
+    assert _front_obstacle_escape_turn_deg(
+        "collision box front would be reached (0.14m at -13deg, limit 0.16m)",
+        -8.4,
+        clockwise_clear=True,
+        counterclockwise_clear=True,
+    ) == +15.0
+    assert _front_obstacle_escape_turn_deg(
+        "collision box front would be reached",
+        +8.4,
+        clockwise_clear=True,
+        counterclockwise_clear=True,
+    ) == +15.0
+    assert _front_obstacle_escape_turn_deg(
+        "collision box front would be reached",
+        0.0,
+        clockwise_clear=False,
+        counterclockwise_clear=False,
+    ) is None
+
+
+def test_nearly_centred_front_prediction_follows_route_instead_of_desk_edge() -> None:
+    # Field regression 2026-07-30 22:38: after correctly turning clockwise
+    # around a clearly-left (+32deg) edge, a nearly centred +4deg return was
+    # incorrectly classified as another left edge.  Both pivots were clear
+    # and the route required +5.4deg, so the second clockwise turn drove the
+    # robot back toward the desk.  Near-centred evidence must follow the route.
+    assert _front_obstacle_escape_turn_deg(
+        "collision box front would be reached (0.13m at +4deg, limit 0.15m)",
+        +5.4,
+        clockwise_clear=True,
+        counterclockwise_clear=True,
+    ) == +15.0
+    # A genuinely lateral return still has priority over the route heading.
+    assert _front_obstacle_escape_turn_deg(
+        "collision box front would be reached (0.16m at +32deg, limit 0.17m)",
+        +5.4,
+        clockwise_clear=True,
+        counterclockwise_clear=True,
+    ) == -15.0
 
 
 def test_live_lidar_passage_freezes_centerline_waypoints_before_motion() -> None:
