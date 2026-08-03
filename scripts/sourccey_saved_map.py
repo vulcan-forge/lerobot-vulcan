@@ -76,6 +76,7 @@ def save_world_map(
     trail: list[np.ndarray] | None = None,
     sensor_config: dict | None = None,
     navigation_config: dict | None = None,
+    visual_color_landmarks: list[dict] | None = None,
 ) -> Path:
     """Atomically save the exact localization and occupancy state."""
     destination = Path(path).expanduser().resolve()
@@ -109,6 +110,10 @@ def save_world_map(
         "gold_scan_count": int(np.count_nonzero(gold)),
         "sensor_config": dict(sensor_config or {}),
         "navigation_config": dict(navigation_config or {}),
+        # JSON keeps this optional and backwards-compatible with existing
+        # maps.  These are appearance tie-breakers only; GOLD LiDAR remains
+        # the localization authority.
+        "visual_color_landmarks": list(visual_color_landmarks or []),
     }
     current = np.asarray(
         [current_pose.x, current_pose.y, current_pose.theta_deg], dtype=np.float64

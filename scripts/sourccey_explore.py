@@ -83,6 +83,7 @@ from sourccey_collision_box import (
     physical_body_self_return_mask as _physical_body_self_return_mask,
 )
 from sourccey_saved_map import DEFAULT_SAVED_MAP_PATH, save_world_map
+from sourccey_visual_color_anchors import bottom_upper_color_signature, color_signature
 from sourccey_spin_map import (
     _MAP_PALETTE,
     _abort,
@@ -4305,6 +4306,11 @@ def main() -> int:
             camera_keys: list[str] = []
             if str(args.panorama) == "on":
                 camera_keys.extend((cam_left_key, cam_right_key))
+                # The upper half of the downward-facing camera provides a
+                # cleaner long-range colour cue than the slanted eye cameras.
+                # It is optional: a missing bottom stream must not disable
+                # LiDAR mapping or the fused panorama.
+                camera_keys.append("bottom")
             if str(args.bottom_odometry) != "off":
                 camera_keys.append("bottom")
             cam_sub = SlamCameraSubscriber(
@@ -4354,6 +4360,12 @@ def main() -> int:
                 raise
             eye_mosaic = None
 
+    # Appearance keyframes are deliberately coarse and optional.  They are
+    # stored alongside accepted LiDAR poses and later used only to break ties
+    # between geometrically plausible headings in symmetric rooms.
+    visual_color_landmarks: list[dict[str, object]] = []
+    visual_last_keyframe_at = [-math.inf]
+
     def _log_panorama() -> None:
         if cam_sub is None or eye_mosaic is None:
             return
@@ -4362,7 +4374,46 @@ def main() -> int:
             right, _ar = cam_sub.latest(cam_right_key)
             if left is None or right is None:
                 return
-            rr.log("cameras/panorama", rr.Image(eye_mosaic.compose(left, right)[:, :, ::-1]))
+            panorama = eye_mosaic.compose(left, right)
+            rr.log("cameras/panorama", rr.Image(panorama[:, :, ::-1]))
+            now = time.monotonic()
+            # One keyframe per second is enough for a directional appearance
+            # cue and avoids turning the saved map into a video archive.
+            if now - visual_last_keyframe_at[0] < 1.0:
+                return
+            try:
+                pose = cur_pose
+                if not world_map.scans or not any(scan.gold for scan in world_map.scans):
+                    return
+            except (NameError, UnboundLocalError):
+                return
+            signature = color_signature(panorama)
+            bottom_frame, _bottom_age = cam_sub.latest("bottom")
+            bottom_signature = (
+                bottom_upper_color_signature(bottom_frame)
+                if bottom_frame is not None
+                else []
+            )
+            if not signature and not bottom_signature:
+                return
+            if visual_color_landmarks:
+                previous = visual_color_landmarks[-1]
+                prev_pose = np.asarray(previous.get("pose", ()), dtype=np.float64)
+                if prev_pose.shape == (3,) and np.hypot(float(pose.x) - prev_pose[0], float(pose.y) - prev_pose[1]) < 0.08:
+                    heading_delta = abs((float(pose.theta_deg) - prev_pose[2] + 180.0) % 360.0 - 180.0)
+                    if heading_delta < 12.0:
+                        return
+            visual_color_landmarks.append(
+                {
+                    "version": 1,
+                    "pose": [float(pose.x), float(pose.y), float(pose.theta_deg)],
+                    "signature": signature,
+                    "bottom_signature": bottom_signature,
+                }
+            )
+            if len(visual_color_landmarks) > 512:
+                del visual_color_landmarks[:-512]
+            visual_last_keyframe_at[0] = now
         except Exception:
             pass
 
@@ -8962,6 +9013,7 @@ def main() -> int:
                     "physical_body_radius_m": float(args.physical_body_radius_m),
                     "collision_self_mask_inset_m": float(args.collision_self_mask_inset_m),
                 },
+                visual_color_landmarks=visual_color_landmarks,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"[map] WARNING: could not save persistent map: {exc}")

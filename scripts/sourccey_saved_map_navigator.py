@@ -74,8 +74,17 @@ from sourccey_explore import (
     _translation_trajectory_is_safe,
     analyze_grid,
 )
-from sourccey_saved_map import DEFAULT_SAVED_MAP_PATH, SavedMap, load_saved_map
+from sourccey_saved_map import (
+    DEFAULT_SAVED_MAP_PATH,
+    SavedMap,
+    load_saved_map,
+)
 from sourccey_wander.imu_heading import ImuYawClient
+from sourccey_visual_color_anchors import (
+    best_landmark_score,
+    bottom_upper_color_signature,
+    color_signature,
+)
 
 from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import SourcceyClientConfig
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey_client import SourcceyClient
@@ -1008,6 +1017,7 @@ class SavedMapNavigator:
         self.localized = False
         self.localization_imu: float | None = None
         self.navigation_thread: threading.Thread | None = None
+        self.snapshot_thread: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.closing = False
         self.path: list[np.ndarray] = []
@@ -1074,6 +1084,18 @@ class SavedMapNavigator:
         # Tk discards images that have no live Python reference.  Retain the
         # current bottom-camera PhotoImage for as long as it is on the canvas.
         self._bottom_camera_photo: ImageTk.PhotoImage | None = None
+        self.eye_mosaic = None
+        self._visual_color_landmarks = list(self.saved.metadata.get("visual_color_landmarks") or [])
+        self._visual_color_enabled = False
+        self._bottom_color_enabled = any(
+            isinstance(landmark, dict) and bool(landmark.get("bottom_signature"))
+            for landmark in self._visual_color_landmarks
+        )
+        if self._visual_color_landmarks:
+            print(
+                f"[visual-anchor] loaded {len(self._visual_color_landmarks)} "
+                "fused-panorama color keyframe(s); LiDAR remains authoritative."
+            )
 
         self.feed = DirectLidarFeed(args.remote_ip, int(args.lidar_port))
         self.feed.start()
@@ -1084,7 +1106,7 @@ class SavedMapNavigator:
         self.imu.start()
         self.camera_subscriber = None
         self.ground_odometry = None
-        if str(args.bottom_odometry) != "off":
+        if str(args.bottom_odometry) != "off" or str(args.visual_color_anchors) == "on":
             try:
                 from sourccey_elevated_safety import (
                     SlamCameraSubscriber,
@@ -1094,37 +1116,63 @@ class SavedMapNavigator:
                 camera_endpoint = str(args.slam_input_endpoint or "").strip() or endpoint_from_remote_ip(
                     args.remote_ip
                 )
+                camera_keys = ["bottom"] if str(args.bottom_odometry) != "off" else []
+                if str(args.visual_color_anchors) == "on":
+                    camera_keys.extend(("front_left", "front_right", "bottom"))
                 self.camera_subscriber = SlamCameraSubscriber(
                     endpoint=camera_endpoint,
-                    camera_keys=("bottom",),
+                    camera_keys=tuple(dict.fromkeys(camera_keys)),
                 )
                 self.camera_subscriber.start()
-                bottom_health = wait_for_live_bottom_camera(
-                    self.camera_subscriber,
-                    timeout_s=5.0,
-                )
-                if not bottom_health.ready:
-                    if str(args.bottom_odometry) == "required":
-                        raise RuntimeError(
-                            "bottom-camera odometry is required but the live "
-                            f"stream failed its health check: {bottom_health.reason}"
-                        )
-                    print(
-                        "[saved-map] WARNING: bottom camera unavailable; using "
-                        "rolling LiDAR odometry + IMU yaw only "
-                        f"({bottom_health.reason})."
-                    )
-                else:
-                    self.ground_odometry = BottomCameraGroundOdometry(
+                if str(args.visual_color_anchors) == "on":
+                    try:
+                        from sourccey_eye_panorama import load_perception_mosaic
+
+                        if self.camera_subscriber.wait_for_frames(
+                            timeout_s=5.0,
+                            required=("front_left", "front_right"),
+                        ):
+                            self.eye_mosaic = load_perception_mosaic()
+                            self._visual_color_enabled = bool(self._visual_color_landmarks)
+                            print(
+                                "[visual-anchor] fused-panorama color tie-breaker "
+                                f"{'ENABLED' if self._visual_color_enabled else 'live; no stored keyframes'}; "
+                                "LiDAR remains authoritative."
+                            )
+                        if self._bottom_color_enabled:
+                            print(
+                                "[visual-anchor] bottom-camera upper-half color tie-breaker ENABLED; "
+                                "LiDAR remains authoritative."
+                            )
+                    except Exception as exc:
+                        print(f"[visual-anchor] fused panorama unavailable; disabled ({type(exc).__name__}: {exc}).")
+                if str(args.bottom_odometry) != "off":
+                    bottom_health = wait_for_live_bottom_camera(
                         self.camera_subscriber,
-                        self.imu,
+                        timeout_s=5.0,
                     )
-                    self.ground_odometry.start()
-                    print(
-                        "[saved-map] bottom-camera ground odometry ENABLED; "
-                        "floor flow supplies bounded translation priors only "
-                        f"({bottom_health.reason})."
-                    )
+                    if not bottom_health.ready:
+                        if str(args.bottom_odometry) == "required":
+                            raise RuntimeError(
+                                "bottom-camera odometry is required but the live "
+                                f"stream failed its health check: {bottom_health.reason}"
+                            )
+                        print(
+                            "[saved-map] WARNING: bottom camera unavailable; using "
+                            "rolling LiDAR odometry + IMU yaw only "
+                            f"({bottom_health.reason})."
+                        )
+                    else:
+                        self.ground_odometry = BottomCameraGroundOdometry(
+                            self.camera_subscriber,
+                            self.imu,
+                        )
+                        self.ground_odometry.start()
+                        print(
+                            "[saved-map] bottom-camera ground odometry ENABLED; "
+                            "floor flow supplies bounded translation priors only "
+                            f"({bottom_health.reason})."
+                        )
             except Exception as exc:
                 if self.camera_subscriber is not None:
                     with contextlib.suppress(Exception):
@@ -1198,10 +1246,15 @@ class SavedMapNavigator:
         ttk.Button(shell, text="STOP", command=self.stop).grid(
             row=1, column=1, sticky="ew", padx=4, pady=(8, 0)
         )
+        ttk.Button(
+            shell,
+            text="CAPTURE LiDAR → MAP",
+            command=self.capture_map_snapshot,
+        ).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(8, 0))
         self.status = ttk.Label(shell, text=self.status_text)
-        self.status.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(8, 0))
+        self.status.grid(row=2, column=0, columnspan=3, sticky="ew", padx=(0, 0), pady=(8, 0))
         ttk.Label(shell, text="Robot-frame collision evidence").grid(
-            row=1, column=3, sticky="ew", padx=(8, 0), pady=(8, 0)
+            row=2, column=3, sticky="ew", padx=(8, 0), pady=(8, 0)
         )
         self._compute_view()
         # Tk commonly reports a 1x1 canvas until the first real layout pass.
@@ -4025,6 +4078,146 @@ class SavedMapNavigator:
         self.navigation_thread = threading.Thread(target=self._localize_worker, daemon=True)
         self.navigation_thread.start()
 
+    def capture_map_snapshot(self) -> None:
+        """Capture the currently visible LiDAR scene and add new geometry.
+
+        This is deliberately a stationary, operator-triggered update.  The
+        saved GOLD reference is never modified: a snapshot is first registered
+        at the navigator's already accepted pose, then its world points are
+        compared with existing map geometry.  Only a genuinely novel view is
+        inserted as a provisional scan, so one bad click cannot poison future
+        relocalization.  The provisional scan still updates the live occupancy
+        grid and therefore becomes immediately visible and routable.
+        """
+        if self.closing:
+            return
+        if not self.localized:
+            self.status_text = "Capture refused: localize the robot first"
+            self.status.configure(text=self.status_text)
+            return
+        if self.navigation_thread is not None and self.navigation_thread.is_alive():
+            self.status_text = "Capture refused while navigation/relocalization is active"
+            self.status.configure(text=self.status_text)
+            return
+        if self.snapshot_thread is not None and self.snapshot_thread.is_alive():
+            self.status_text = "LiDAR capture already in progress"
+            self.status.configure(text=self.status_text)
+            return
+        self.stop_event.clear()
+        self.status_text = "Capturing stationary LiDAR snapshot..."
+        self.status.configure(text=self.status_text)
+        self.snapshot_thread = threading.Thread(
+            target=self._capture_map_snapshot_worker,
+            name="saved-map-snapshot",
+            daemon=True,
+        )
+        self.snapshot_thread.start()
+
+    @staticmethod
+    def _snapshot_novelty_ratio(world_points: np.ndarray, existing: np.ndarray) -> tuple[float, int]:
+        """Return the fraction/count of returns not already represented.
+
+        The comparison is intentionally tolerant (12 cm) and chunked so a
+        large accumulated map cannot create a quadratic memory spike.
+        """
+        points = np.asarray(world_points, dtype=np.float64).reshape((-1, 2))
+        reference = np.asarray(existing, dtype=np.float64).reshape((-1, 2))
+        if not len(points):
+            return 0.0, 0
+        if not len(reference):
+            return 1.0, len(points)
+        if len(reference) > 12000:
+            stride = max(1, len(reference) // 12000)
+            reference = reference[::stride]
+        nearest = np.full(len(points), np.inf, dtype=np.float64)
+        for start in range(0, len(points), 512):
+            batch = points[start : start + 512]
+            delta = batch[:, None, :] - reference[None, :, :]
+            nearest[start : start + len(batch)] = np.sqrt(
+                np.min(np.einsum("ijk,ijk->ij", delta, delta), axis=1)
+            )
+        novel = nearest > 0.12
+        return float(np.mean(novel)), int(np.count_nonzero(novel))
+
+    def _capture_map_snapshot_worker(self) -> None:
+        """Worker for :meth:`capture_map_snapshot`; never blocks the Tk loop."""
+        try:
+            self.controller.halt()
+            local = self._stationary_lidar_observation(frame_count=5)
+            if self.stop_event.is_set() or not len(local):
+                self.root.after(0, lambda: self._snapshot_finished("Capture failed: no fresh LiDAR returns"))
+                return
+            with self.pose_lock:
+                pose = Pose2D(float(self.pose.x), float(self.pose.y), float(self.pose.theta_deg))
+            world_points = _transform_points(local, pose)
+            existing_sets = [scan.world_xy for scan in self.world.scans if len(scan.world_xy)]
+            existing = np.concatenate(existing_sets, axis=0) if existing_sets else np.empty((0, 2))
+            novelty, novel_count = self._snapshot_novelty_ratio(world_points, existing)
+            if novel_count < 12 or novelty < 0.18:
+                self.root.after(
+                    0,
+                    lambda: self._snapshot_finished(
+                        f"Snapshot not added: geometry already mapped "
+                        f"({novel_count} novel returns, {novelty:.0%})"
+                    ),
+                )
+                return
+
+            def commit() -> None:
+                if self.closing:
+                    return
+                # Provisional geometry is intentionally excluded from GOLD;
+                # it improves the live map without becoming a localization
+                # target until a future exploration run validates it.
+                self.world.add(local.astype(np.float32, copy=False), pose, gold=False)
+                self.status_text = (
+                    f"Added LiDAR snapshot: {novel_count} novel returns "
+                    f"({novelty:.0%}); provisional map geometry"
+                )
+                print(
+                    f"[saved-map] manual LiDAR snapshot added at "
+                    f"({pose.x:+.2f}, {pose.y:+.2f}, {pose.theta_deg:+.1f}deg): "
+                    f"{len(local)} returns, {novel_count} novel ({novelty:.0%})."
+                )
+
+            self.root.after(0, commit)
+        except Exception as exc:
+            message = f"Capture failed: {type(exc).__name__}: {exc}"
+            self.root.after(0, lambda message=message: self._snapshot_finished(message))
+        finally:
+            self.controller.clear_safety_latch()
+
+    def _snapshot_finished(self, message: str) -> None:
+        if self.closing:
+            return
+        self.status_text = message
+        self.status.configure(text=self.status_text)
+
+    def _live_visual_color_signature(self) -> list[float]:
+        """Compose the calibrated fused eyes and return a coarse color cue."""
+        if not self._visual_color_enabled or self.camera_subscriber is None or self.eye_mosaic is None:
+            return []
+        try:
+            left, left_age = self.camera_subscriber.latest("front_left")
+            right, right_age = self.camera_subscriber.latest("front_right")
+            if left is None or right is None or (left_age or 99.0) > 1.0 or (right_age or 99.0) > 1.0:
+                return []
+            return color_signature(self.eye_mosaic.compose(left, right))
+        except Exception:
+            return []
+
+    def _live_bottom_color_signature(self) -> list[float]:
+        """Read the clean, long-range upper half of the bottom camera."""
+        if not self._bottom_color_enabled or self.camera_subscriber is None:
+            return []
+        try:
+            frame, age_s = self.camera_subscriber.latest("bottom")
+            if frame is None or (age_s or 99.0) > 1.0:
+                return []
+            return bottom_upper_color_signature(frame)
+        except Exception:
+            return []
+
     def _localize_worker(self, clearance_relocations: int = 0) -> None:
         self.controller.halt()
         self.localized = False
@@ -4187,6 +4380,8 @@ class SavedMapNavigator:
             self.lever_m,
             self.forward_offset,
         )
+        live_color = self._live_visual_color_signature()
+        live_bottom_color = self._live_bottom_color_signature()
         position_seeds = _global_localization_position_seeds(self.saved)
         self.status_text = (
             f"Relocalizing (attempt {attempt})—globally matching {len(captures)} angular views..."
@@ -4212,6 +4407,8 @@ class SavedMapNavigator:
         )
         modes = list(metadata.get("whole_map_modes") or [])
         if modes:
+            # First establish the geometry-only LiDAR ranking.  Appearance is
+            # allowed to break a near tie, never to rescue a weak LiDAR pose.
             for mode in modes:
                 candidate = Pose2D(
                     float(mode["x"]),
@@ -4230,6 +4427,52 @@ class SavedMapNavigator:
                 mode["endpoint_free"] = endpoint_free
                 mode["ray_occupied"] = ray_occ
                 mode["combined_score"] = float(mode["score"]) + quality
+                mode["base_combined_score"] = float(mode["combined_score"])
+            modes.sort(key=lambda mode: float(mode["base_combined_score"]), reverse=True)
+
+            # The bottom camera is the clean appearance authority.  Only if
+            # it cannot separate the LiDAR hypotheses do we consult the fuzzier
+            # fused eye panorama.
+            bottom_scores: list[float] = []
+            for mode in modes:
+                if live_bottom_color and self._bottom_color_enabled:
+                    bottom_visual = best_landmark_score(
+                        live_bottom_color,
+                        self._visual_color_landmarks,
+                        x=float(mode["x"]),
+                        y=float(mode["y"]),
+                        theta_deg=float(mode["theta_deg"]),
+                        signature_key="bottom_signature",
+                    )
+                else:
+                    bottom_visual = 0.0
+                mode["bottom_color_score"] = bottom_visual
+                bottom_scores.append(float(bottom_visual))
+                mode["combined_score"] = float(mode["base_combined_score"]) + (
+                    float(self.args.bottom_color_weight) * bottom_visual
+                )
+            modes.sort(key=lambda mode: float(mode["combined_score"]), reverse=True)
+
+            bottom_margin = (
+                float(bottom_scores[0] - bottom_scores[1])
+                if len(bottom_scores) > 1
+                else math.inf
+            )
+            if live_color and self._visual_color_landmarks and (
+                not live_bottom_color
+                or not self._bottom_color_enabled
+                or bottom_margin < float(self.args.bottom_color_decisive_margin)
+            ):
+                for mode in modes:
+                    visual = best_landmark_score(
+                        live_color,
+                        self._visual_color_landmarks,
+                        x=float(mode["x"]),
+                        y=float(mode["y"]),
+                        theta_deg=float(mode["theta_deg"]),
+                    )
+                    mode["visual_color_score"] = visual
+                    mode["combined_score"] += float(self.args.visual_color_weight) * visual
             modes.sort(key=lambda mode: float(mode["combined_score"]), reverse=True)
             winner = modes[0]
             solved = Pose2D(
@@ -4249,7 +4492,7 @@ class SavedMapNavigator:
             f"baseline {angular_baseline:.0f}deg, match {score:.1f}, "
             f"support {support:.1%}, distinct-mode margin "
             f"{winner_margin:.2f}, pose "
-            f"({solved.x:+.2f}, {solved.y:+.2f}, {solved.theta_deg:+.1f}deg)."
+                f"({solved.x:+.2f}, {solved.y:+.2f}, {solved.theta_deg:+.1f}deg)."
         )
         for mode_index, mode in enumerate(modes[:5], start=1):
             print(
@@ -4259,6 +4502,16 @@ class SavedMapNavigator:
                 f"{float(mode.get('combined_score', mode['score'])):.1f} at "
                 f"({float(mode['x']):+.2f}, "
                 f"{float(mode['y']):+.2f}, {float(mode['theta_deg']):+.1f}deg)."
+                + (
+                    f" visual {float(mode['visual_color_score']):.2f}."
+                    if "visual_color_score" in mode
+                    else ""
+                )
+                + (
+                    f" bottom-color {float(mode['bottom_color_score']):.2f}."
+                    if "bottom_color_score" in mode
+                    else ""
+                )
             )
         if not _global_localization_accepted(
             score,
@@ -5679,6 +5932,39 @@ def _parse_args() -> Namespace:
     parser.add_argument("--stitch-resolution-m", type=float, default=0.03)
     parser.add_argument("--match-max-points", type=int, default=700)
     parser.add_argument("--localization-min-score", type=float, default=7.0)
+    parser.add_argument(
+        "--visual-color-anchors",
+        choices=("on", "off"),
+        default="on",
+        help=(
+            "Use the calibrated fused eye panorama as a small color tie-breaker "
+            "between near-tied LiDAR localization modes (default: on)."
+        ),
+    )
+    parser.add_argument(
+        "--visual-color-weight",
+        type=float,
+        default=1.0,
+        help="Maximum contribution of a color landmark to a LiDAR mode score (default: 1.0).",
+    )
+    parser.add_argument(
+        "--bottom-color-weight",
+        type=float,
+        default=1.5,
+        help=(
+            "Maximum contribution of the bottom-camera upper-half color cue "
+            "to a LiDAR mode score (default: 1.5)."
+        ),
+    )
+    parser.add_argument(
+        "--bottom-color-decisive-margin",
+        type=float,
+        default=0.20,
+        help=(
+            "Bottom-camera color-score margin that suppresses the fuzzier eye "
+            "cue (default: 0.20)."
+        ),
+    )
     parser.add_argument(
         "--diagnostic-video-dir",
         default=str(Path("scripts") / "saved_map_diagnostics"),
