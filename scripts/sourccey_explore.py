@@ -75,6 +75,12 @@ from sourccey_bottom_camera import (
     BottomCameraGroundOdometry,
     wait_for_live_bottom_camera,
 )
+from sourccey_pose_graph import (
+    PoseGraph2D,
+    axis_snap_delta_deg,
+    dominant_axis_deg,
+    wall_direction_masses,
+)
 from sourccey_surface_motion import SurfaceMotionAtlas, ground_texture_signature
 from sourccey_collision_box import (
     DEFAULT_COLLISION_BOX_PATH,
@@ -1358,6 +1364,13 @@ class MapScan:
     pose: Pose2D  # solved LIDAR pose in the world frame
     world_xy: np.ndarray  # local points transformed by pose
     gold: bool  # True = part of the LOCALIZATION reference
+    # Pose-graph attachment: the scan rides rigidly on this node.  When the
+    # graph optimizer moves the node, the scan's pose/world points move by
+    # the same rigid delta and the grid is re-rendered.  node_id -1 = not
+    # attached (anchor-spin scans: the fixed gauge that everything else is
+    # optimized against).
+    node_id: int = -1
+    node_pose: Pose2D | None = None  # node pose at the moment of attachment
 
 
 class WorldMap:
@@ -1393,6 +1406,10 @@ class WorldMap:
         # smear the displayed occupancy map.
         self.max_gold_pose_step_m = 0.80
         self.max_moving_heading_step_deg = 55.0
+        # Bumped whenever the pose-graph optimizer retroactively moves scan
+        # poses.  Consumers caching anything derived from scan POSES (not
+        # just scan COUNT) must key on this as well.
+        self.pose_revision = 0
         # Optional external heading aligner, set by the explorer once the
         # anchor is validated.  Called with the candidate pose right before
         # the irreversible map write; returns the pose to commit.  This is
@@ -1487,7 +1504,7 @@ class WorldMap:
                         "stationary stop-scan-go captures."
                     )
                 return False
-            pose = self.heading_align(pose)
+            pose = self.heading_align(pose, local_xy)
         world = _transform_points(local_xy, pose)
         self.scans.append(MapScan(local_xy=local_xy, pose=pose, world_xy=world, gold=gold))
         robot_centre = _robot_centre_from_lidar_pose(pose, self.lidar_offset_m, self.forward_offset_deg)
@@ -1500,6 +1517,104 @@ class WorldMap:
         if gold:
             self._ref_cache = None
         return True
+
+    def attach_recent_scans_to_node(
+        self, node_id: int, node_pose: Pose2D, since_index: int
+    ) -> int:
+        """Bind scans committed since ``since_index`` to a pose-graph node.
+
+        The scans ride rigidly on the node from now on: when the optimizer
+        moves the node, ``apply_node_poses`` moves them by the same delta.
+        """
+        attached = 0
+        for index in range(max(0, int(since_index)), len(self.scans)):
+            scan = self.scans[index]
+            if scan.node_id >= 0:
+                continue
+            scan.node_id = int(node_id)
+            scan.node_pose = node_pose
+            attached += 1
+        return attached
+
+    def apply_node_poses(
+        self, node_poses: dict[int, tuple[float, float, float]]
+    ) -> float:
+        """Retroactively move attached scans to their nodes' optimized poses.
+
+        This is the heart of the pose-graph architecture: scan poses are no
+        longer irreversible facts — the grid and render points are re-derived
+        from the corrected scan list.  Anchor scans (node_id -1) never move;
+        they are the gauge.  Returns the largest position delta applied (m).
+        """
+        deltas: dict[int, tuple[np.ndarray, float, np.ndarray, Pose2D]] = {}
+        for node_id, (nx, ny, nth) in node_poses.items():
+            reference = next(
+                (s.node_pose for s in self.scans if s.node_id == node_id), None
+            )
+            if reference is None:
+                continue
+            d_theta = ((nth - float(reference.theta_deg) + 180.0) % 360.0) - 180.0
+            rad = math.radians(d_theta)
+            rot = np.asarray(
+                [[math.cos(rad), -math.sin(rad)], [math.sin(rad), math.cos(rad)]]
+            )
+            old_xy = np.asarray([float(reference.x), float(reference.y)])
+            new_xy = np.asarray([float(nx), float(ny)])
+            if float(np.hypot(*(new_xy - old_xy))) < 1e-4 and abs(d_theta) < 5e-3:
+                continue
+            deltas[node_id] = (rot, d_theta, new_xy - rot @ old_xy, Pose2D(nx, ny, nth))
+        if not deltas:
+            return 0.0
+        moved_max = 0.0
+        gold_touched = False
+        for index, scan in enumerate(self.scans):
+            entry = deltas.get(scan.node_id)
+            if entry is None:
+                continue
+            rot, d_theta, shift, new_node_pose = entry
+            old = np.asarray([float(scan.pose.x), float(scan.pose.y)])
+            new = rot @ old + shift
+            corrected = Pose2D(
+                float(new[0]), float(new[1]), float(scan.pose.theta_deg) + d_theta
+            )
+            moved_max = max(moved_max, float(np.hypot(*(new - old))))
+            self.scans[index] = MapScan(
+                local_xy=scan.local_xy,
+                pose=corrected,
+                world_xy=_transform_points(scan.local_xy, corrected),
+                gold=scan.gold,
+                node_id=scan.node_id,
+                node_pose=new_node_pose,
+            )
+            gold_touched = gold_touched or scan.gold
+        self._rebuild_grid_from_scans()
+        if gold_touched:
+            self._ref_cache = None
+        self.pose_revision += 1
+        return moved_max
+
+    def _rebuild_grid_from_scans(self) -> None:
+        """Re-render the occupancy grid from the (possibly re-posed) scans.
+
+        Planner marks (``mark_hits``) are not replayed: a re-render follows a
+        retroactive pose improvement, under which previously inserted marks'
+        world positions are exactly what was corrected.
+        """
+        rebuilt = OccupancyGrid(self.grid.res)
+        for scan in self.scans:
+            rebuilt.integrate_scan(
+                np.array([float(scan.pose.x), float(scan.pose.y)]),
+                scan.world_xy,
+                footprint_clear_m=0.0,
+            )
+            rebuilt.assert_free_disk(
+                _robot_centre_from_lidar_pose(
+                    scan.pose, self.lidar_offset_m, self.forward_offset_deg
+                ),
+                self.footprint_clear_m,
+            )
+        rebuilt.version = self.grid.version + 1
+        self.grid = rebuilt
 
     def reference(self, max_pts: int = 9000) -> np.ndarray:
         """Subsampled GOLD world points for scan-matching against."""
@@ -8593,6 +8708,313 @@ def main() -> int:
             imu_heading_ref["theta"] = None
         print(f"[localize] gyro heading reference re-zeroed ({reason}).")
 
+    # =======================================================================
+    # POSE GRAPH + MANHATTAN AXIS COMPASS — the professional core.
+    #
+    # Stationary keyframe poses are graph VARIABLES connected by measured
+    # constraints (odometry between stops, anisotropic scan-match fixes,
+    # absolute axis headings from the building's walls); the occupancy grid
+    # is a RENDERING of the optimized scan list, re-derived whenever poses
+    # improve.  The anchor spin is the fixed gauge.  Loop closures are
+    # deliberately absent for now: in a corridor of identical doorways a
+    # false closure warps the whole map, so closures wait until they can be
+    # multi-view verified against distinctive GOLD anchors.
+    # =======================================================================
+    building_axis: list[float | None] = [None]
+    _axis_estimate = dominant_axis_deg(world_map.reference())
+    if _axis_estimate is not None:
+        building_axis[0] = float(_axis_estimate[0])
+        print(
+            f"[graph] building axis locked from the anchor map: "
+            f"{building_axis[0]:.1f}deg (mod 90, wall mass {_axis_estimate[1]:.0%}); "
+            "stationary headings snap to it within 7deg — the walls, not the "
+            "gyro, are now the heading reference."
+        )
+    else:
+        print(
+            "[graph] anchor map has no dominant rectilinear axis; Manhattan "
+            "compass stays silent and the gyro remains the heading referee."
+        )
+
+    pose_graph = PoseGraph2D()
+    _anchor_node = pose_graph.add_node(
+        float(cur_pose.x),
+        float(cur_pose.y),
+        float(cur_pose.theta_deg),
+        fixed=True,  # the anchor is the gauge
+    )
+    graph_state: dict[str, object] = {
+        "last_node": _anchor_node,
+        "last_pose": cur_pose,
+        "axis_snap_count": 0,
+        # Scans below this index are anchor/gauge scans (or already attached);
+        # everything committed after it rides on the NEXT registered node.
+        "scans_watermark": len(world_map.scans),
+        # Cumulative driven distance at each node — the loop-closure
+        # guardrail's drift budget is proportional to this.
+        "node_odo": {_anchor_node: 0.0},
+    }
+
+    def _axis_snap_pose(pose: Pose2D, local_xy: np.ndarray | None) -> Pose2D | None:
+        """Manhattan compass: absolute heading from the building's walls.
+
+        Returns the snapped pose when this scan confidently sees rectilinear
+        structure within 7deg of the building axis; None when the compass has
+        nothing trustworthy to say (sparse view, non-Manhattan geometry, or a
+        disagreement too large to be drift).
+        """
+        if building_axis[0] is None or local_xy is None or len(local_xy) < 60:
+            return None
+        world = _transform_points(local_xy, pose)
+        delta = axis_snap_delta_deg(world, float(building_axis[0]), tolerance_deg=7.0)
+        if delta is None:
+            return None
+        snapped = _rotate_lidar_pose_about_robot_centre(
+            pose, float(delta), lever_m, forward_offset
+        )
+        count = int(graph_state["axis_snap_count"]) + 1
+        graph_state["axis_snap_count"] = count
+        if abs(delta) >= 0.5 and (count <= 5 or count % 10 == 0):
+            print(
+                f"[graph] axis compass: heading snapped {float(delta):+.1f}deg to the "
+                f"building axis (snap #{count})."
+            )
+        return snapped
+
+    def _scan_match_position_info(
+        world_pts: np.ndarray, mean_score: float
+    ) -> np.ndarray:
+        """2x2 world-frame position information for a stationary consensus.
+
+        Anisotropic by observability: a wall constrains translation
+        PERPENDICULAR to itself, so a corridor (walls parallel to axis0)
+        yields strong lateral information and weak along-corridor
+        information — the graph then lets odometry own the along-corridor
+        coordinate instead of letting a parallel-wall alias fight it.
+        """
+        sigma_base = float(np.clip(0.9 / max(4.0, float(mean_score)), 0.05, 0.25))
+        base_info = 1.0 / sigma_base**2
+        axis = building_axis[0]
+        masses = (
+            wall_direction_masses(world_pts, float(axis)) if axis is not None else None
+        )
+        if masses is None:
+            return np.eye(2) * base_info
+        mass_axis0, mass_axis1 = masses
+        # Walls parallel to axis1 constrain translation ALONG axis0.
+        strength = np.array([max(0.05, mass_axis1), max(0.05, mass_axis0)])
+        strength = strength / float(strength.max())
+        rad = math.radians(float(axis))
+        rot = np.array(
+            [[math.cos(rad), -math.sin(rad)], [math.sin(rad), math.cos(rad)]]
+        )
+        return rot @ np.diag(strength * base_info) @ rot.T
+
+    def _register_stationary_fix(
+        predicted_pose: Pose2D,
+        accepted_pose: Pose2D,
+        local_xy: np.ndarray | None,
+        mean_score: float,
+        *,
+        axis_locked: bool,
+        odometry_broken: bool = False,
+    ) -> None:
+        """Register an accepted stop as a graph node; optimize; re-render.
+
+        ``odometry_broken`` marks recovery fixes where the carried pose chain
+        is known-bad (tracking was lost): the between factor is then wide
+        open so the graph does not average a broken chain into good history.
+        """
+        nonlocal cur_pose
+        last_node = int(graph_state["last_node"])  # type: ignore[arg-type]
+        last_pose: Pose2D = graph_state["last_pose"]  # type: ignore[assignment]
+        # Odometry between stops, expressed in the previous node's frame.
+        d_world = np.array(
+            [
+                float(predicted_pose.x) - float(last_pose.x),
+                float(predicted_pose.y) - float(last_pose.y),
+            ]
+        )
+        rad = math.radians(float(last_pose.theta_deg))
+        rot_t = np.array(
+            [[math.cos(rad), math.sin(rad)], [-math.sin(rad), math.cos(rad)]]
+        )
+        d_local = rot_t @ d_world
+        d_theta = (
+            (float(predicted_pose.theta_deg) - float(last_pose.theta_deg) + 180.0)
+            % 360.0
+        ) - 180.0
+        distance = float(np.hypot(*d_world))
+        if odometry_broken:
+            sigma_xy, sigma_theta = max(0.50, distance), 25.0
+        else:
+            sigma_xy = 0.05 + 0.12 * distance
+            sigma_theta = 1.5 + 1.0 * distance
+        node = pose_graph.add_node(
+            float(accepted_pose.x),
+            float(accepted_pose.y),
+            float(accepted_pose.theta_deg),
+        )
+        pose_graph.add_between(
+            last_node,
+            node,
+            float(d_local[0]),
+            float(d_local[1]),
+            d_theta,
+            sigma_xy_m=sigma_xy,
+            sigma_theta_deg=sigma_theta,
+        )
+        world_pts = (
+            _transform_points(local_xy, accepted_pose)
+            if local_xy is not None and len(local_xy)
+            else np.zeros((0, 2))
+        )
+        pose_graph.add_pose_prior(
+            node,
+            float(accepted_pose.x),
+            float(accepted_pose.y),
+            float(accepted_pose.theta_deg),
+            position_info=_scan_match_position_info(world_pts, mean_score),
+            # The axis compass owns heading when it fired; otherwise the
+            # scan-match consensus heading is used at moderate confidence.
+            sigma_theta_deg=None if axis_locked else 3.0,
+        )
+        if axis_locked:
+            pose_graph.add_heading_prior(
+                node, float(accepted_pose.theta_deg), sigma_deg=1.0
+            )
+        node_odo: dict[int, float] = graph_state["node_odo"]  # type: ignore[assignment]
+        node_odo[node] = node_odo.get(last_node, 0.0) + distance
+        # ---- LOOP CLOSURE, odometry-gated -------------------------------
+        # Geometry PROPOSES, odometry DISPOSES.  A candidate is an old node
+        # (>=5 stops back — a revisit, not a continuation) that the current
+        # graph already places within 0.9m.  The guardrail: the scan-match
+        # correction implied by the closure must fit inside the accumulated
+        # drift budget (15cm + 3% of distance driven between the visits).
+        # A hallway that merely LOOKS like this one fails that budget — by
+        # our own odometry we KNOW it is not the same place — and is
+        # refused loudly instead of warping the map.
+        if local_xy is not None and len(local_xy) >= 60:
+            closure_candidate = None
+            closure_separation = 0.90
+            for cand in range(max(0, node - 4)):
+                cand_x, cand_y, _cand_th = pose_graph.node_pose_deg(cand)
+                separation = float(
+                    np.hypot(
+                        float(accepted_pose.x) - cand_x,
+                        float(accepted_pose.y) - cand_y,
+                    )
+                )
+                if separation < closure_separation:
+                    closure_candidate, closure_separation = cand, separation
+            if closure_candidate is not None:
+                cand_sets = [
+                    s.world_xy
+                    for s in world_map.scans
+                    if s.node_id == closure_candidate and len(s.world_xy)
+                ]
+                cand_pts = (
+                    np.concatenate(cand_sets, axis=0)
+                    if cand_sets
+                    else np.zeros((0, 2))
+                )
+                driven = abs(
+                    node_odo[node] - node_odo.get(closure_candidate, 0.0)
+                )
+                drift_gate = 0.15 + 0.03 * driven
+                if len(cand_pts) >= 150:
+                    solved_lc, score_lc, support_lc = _localize_against_points(
+                        local_xy,
+                        cand_pts,
+                        accepted_pose,
+                        args,
+                        search_xy_m=0.45,
+                        theta_window_deg=4.0,
+                    )
+                    innovation_lc = float(
+                        np.hypot(
+                            float(solved_lc.x) - float(accepted_pose.x),
+                            float(solved_lc.y) - float(accepted_pose.y),
+                        )
+                    )
+                    strong_lc = score_lc >= max(11.0, float(args.min_match_score))
+                    if (
+                        strong_lc
+                        and float(support_lc) >= 0.55
+                        and innovation_lc <= drift_gate
+                    ):
+                        cand_x, cand_y, cand_th = pose_graph.node_pose_deg(
+                            closure_candidate
+                        )
+                        rad_c = math.radians(cand_th)
+                        rot_c = np.array(
+                            [
+                                [math.cos(rad_c), math.sin(rad_c)],
+                                [-math.sin(rad_c), math.cos(rad_c)],
+                            ]
+                        )
+                        d_lc = rot_c @ np.array(
+                            [
+                                float(solved_lc.x) - cand_x,
+                                float(solved_lc.y) - cand_y,
+                            ]
+                        )
+                        pose_graph.add_between(
+                            closure_candidate,
+                            node,
+                            float(d_lc[0]),
+                            float(d_lc[1]),
+                            (
+                                (float(solved_lc.theta_deg) - cand_th + 180.0)
+                                % 360.0
+                            )
+                            - 180.0,
+                            sigma_xy_m=0.06,
+                            sigma_theta_deg=1.5,
+                        )
+                        print(
+                            f"[graph] loop closure: node {node} <-> node "
+                            f"{closure_candidate} (separation "
+                            f"{closure_separation * 100:.0f}cm, {driven:.1f}m "
+                            f"driven between visits): match {score_lc:.1f}, "
+                            f"support {float(support_lc):.0%}, innovation "
+                            f"{innovation_lc * 100:.0f}cm within the "
+                            f"{drift_gate * 100:.0f}cm odometry gate."
+                        )
+                    elif strong_lc and innovation_lc > drift_gate:
+                        print(
+                            "[graph] loop-closure candidate REFUSED by the "
+                            f"odometry guardrail: looks like node "
+                            f"{closure_candidate} (match {score_lc:.1f}) but "
+                            f"wants a {innovation_lc * 100:.0f}cm correction vs "
+                            f"the {drift_gate * 100:.0f}cm accumulated-drift "
+                            f"budget ({driven:.1f}m driven) — a similar-looking "
+                            "place, not the same place."
+                        )
+        # -----------------------------------------------------------------
+        world_map.attach_recent_scans_to_node(
+            node, accepted_pose, int(graph_state["scans_watermark"])  # type: ignore[arg-type]
+        )
+        graph_state["scans_watermark"] = len(world_map.scans)
+        pose_graph.optimize()
+        optimized = {
+            k: pose_graph.node_pose_deg(k) for k in range(len(pose_graph.nodes))
+        }
+        moved = world_map.apply_node_poses(optimized)
+        ox, oy, oth = optimized[node]
+        refined = Pose2D(ox, oy, oth)
+        refinement = float(np.hypot(ox - float(accepted_pose.x), oy - float(accepted_pose.y)))
+        if refinement > 0.005 or moved > 0.01:
+            print(
+                f"[graph] node {node} registered (odo {distance:.2f}m): "
+                f"{len(pose_graph.nodes)} nodes optimized, live pose refined "
+                f"{refinement * 100:.0f}cm, largest retroactive map correction "
+                f"{moved * 100:.0f}cm; grid re-rendered."
+            )
+        cur_pose = refined
+        graph_state["last_node"] = node
+        graph_state["last_pose"] = refined
+
     # Persistent-offset ledger (position twin of the heading drift escape).
     # A single stationary batch proposing a >cap correction is treated as a
     # possible alias and discarded.  But when TWO consecutive stationary
@@ -8606,7 +9028,20 @@ def main() -> int:
         "theta": None,
     }
 
-    def _imu_map_heading_align(pose: Pose2D) -> Pose2D:
+    def _imu_map_heading_align(pose: Pose2D, local_xy: np.ndarray | None = None) -> Pose2D:
+        # MANHATTAN COMPASS FIRST: when the scan confidently sees the
+        # building's rectilinear structure, the walls supply an absolute
+        # heading that cannot drift — strictly better than the gyro delta.
+        # The gyro ledger is re-synced to the snapped result so the veto
+        # machinery below stays consistent for the scans the compass cannot
+        # judge (sparse views, non-Manhattan corners).
+        snapped = _axis_snap_pose(pose, local_xy)
+        if snapped is not None:
+            yaw_now = imu.deg_fresh(wait_up_to_s=0.15, max_age_s=0.35)
+            if yaw_now is not None:
+                imu_heading_ref["imu"] = float(yaw_now)
+                imu_heading_ref["theta"] = float(snapped.theta_deg)
+            return snapped
         # FRESH yaw only: imu.deg() returns the last RECEIVED sample, which
         # lags real heading by seconds around pivots and stream hiccups.  One
         # stale pair poisons the ledger and then every alignment enforces the
@@ -8656,7 +9091,9 @@ def main() -> int:
 
     world_map.heading_align = _imu_map_heading_align
 
-    def _gyro_clamped_consensus(pose: Pose2D) -> Pose2D:
+    def _gyro_clamped_consensus(
+        pose: Pose2D, local_xy: np.ndarray | None = None
+    ) -> Pose2D:
         """Clamp an ACCEPTED consensus heading to the gyro expectation.
 
         Heading truth must be ONE value shared by the live pose and every
@@ -8669,6 +9106,17 @@ def main() -> int:
         re-synced) gyro expectation is an alias: keep the LiDAR position,
         refuse the rotated heading.
         """
+        # Manhattan compass first: an absolute wall-derived heading beats
+        # both the gyro expectation and the scan-match theta.
+        snapped = _axis_snap_pose(pose, local_xy)
+        if snapped is not None:
+            imu_heading_ref["clamp_streak"] = 0
+            imu_heading_ref["clamp_sign"] = 0
+            yaw_axis = imu.deg_fresh(wait_up_to_s=0.15, max_age_s=0.35)
+            if yaw_axis is not None:
+                imu_heading_ref["imu"] = float(yaw_axis)
+                imu_heading_ref["theta"] = float(snapped.theta_deg)
+            return snapped
         yaw_now = imu.deg_fresh(wait_up_to_s=0.15, max_age_s=0.35)
         if yaw_now is None:
             # LiDAR owns placement while the advisory sensor is stale — but
@@ -9501,6 +9949,12 @@ def main() -> int:
             )
             prior_centre = _robot_centre(cur_pose)
             consensus_centre = _robot_centre(consensus_pose)
+            predicted_pose_snapshot = cur_pose
+            representative_local = (
+                batch[max(inlier_indices, key=lambda i: float(batch[i][2]))][0]
+                if inlier_indices
+                else None
+            )
             position_correction = float(np.hypot(*(consensus_centre - prior_centre)))
             heading_correction = abs(
                 (float(consensus_pose.theta_deg) - float(cur_pose.theta_deg) + 180.0) % 360.0 - 180.0
@@ -9682,7 +10136,9 @@ def main() -> int:
                 # The base was stationary: every revolution belongs at one
                 # consensus pose. This prevents harmless solve-angle wobble
                 # from painting several rotated copies of the same walls.
-                consensus_pose = _gyro_clamped_consensus(consensus_pose)
+                consensus_pose = _gyro_clamped_consensus(
+                    consensus_pose, representative_local
+                )
                 cur_pose = consensus_pose
                 vp_pose_ok_last[0] = True
                 _record_surface_region_at_trusted_pose(cur_pose)
@@ -9729,6 +10185,14 @@ def main() -> int:
                         "[explore]   stationary batch localized but no keyframe was "
                         "accepted by the map-write firewall; map growth is held."
                     )
+                _register_stationary_fix(
+                    predicted_pose_snapshot,
+                    consensus_pose,
+                    representative_local,
+                    mean_sc,
+                    axis_locked=_axis_snap_pose(consensus_pose, representative_local)
+                    is not None,
+                )
             elif (
                 pose_recoverable
                 or strong_full_view_reanchor
@@ -9745,7 +10209,9 @@ def main() -> int:
                 # against the old room.  That is exactly how a healthy local
                 # track became a stale-map navigation failure at the unknown
                 # boundary.
-                consensus_pose = _gyro_clamped_consensus(consensus_pose)
+                consensus_pose = _gyro_clamped_consensus(
+                    consensus_pose, representative_local
+                )
                 cur_pose = consensus_pose
                 vp_pose_ok_last[0] = True
                 _record_surface_region_at_trusted_pose(cur_pose)
@@ -9821,6 +10287,17 @@ def main() -> int:
                     f"known support {mean_support:.1%}, correction "
                     f"{position_correction * 100:.0f}cm/{heading_correction:.1f}deg. "
                     "GOLD localization geometry was left unchanged."
+                )
+                _register_stationary_fix(
+                    predicted_pose_snapshot,
+                    consensus_pose,
+                    representative_local,
+                    mean_sc,
+                    axis_locked=_axis_snap_pose(consensus_pose, representative_local)
+                    is not None,
+                    # A re-anchor exists BECAUSE the carried chain needed a
+                    # large correction; widen the odometry edge accordingly.
+                    odometry_broken=position_correction > 0.25,
                 )
             else:
                 if position_correction > 0.15 or heading_correction > 5.0:
@@ -10218,6 +10695,7 @@ def main() -> int:
                 f"{scatter * 100:.0f}cm/{heading_scatter:.1f}deg."
             )
             return False
+        predicted_recovery_pose = cur_pose
         cur_pose = consensus
         _discard_translation_prior()
         vp_pose_ok_last[0] = True
@@ -10226,6 +10704,14 @@ def main() -> int:
             float(consensus.theta_deg), "continuity-constrained consensus accepted"
         )
         mean_score = float(np.mean([scores[index] for index in inliers]))
+        _register_stationary_fix(
+            predicted_recovery_pose,
+            consensus,
+            None,
+            mean_score,
+            axis_locked=False,
+            odometry_broken=True,
+        )
         mean_support = float(np.mean([supports[index] for index in inliers]))
         innovation = float(np.hypot(*(_robot_centre(consensus) - prior_centre)))
         if innovation <= 0.15 and heading_scatter <= 5.0:
@@ -10530,6 +11016,7 @@ def main() -> int:
                 f"{scatter * 100:.0f}cm/{heading_scatter:.1f}deg."
             )
             return False
+        predicted_recovery_pose = cur_pose
         cur_pose = consensus
         _discard_translation_prior()
         vp_pose_ok_last[0] = True
@@ -10555,6 +11042,15 @@ def main() -> int:
         )
         if landmark_added:
             _reset_local_odometry(accepted_locals[strongest], consensus)
+        _register_stationary_fix(
+            predicted_recovery_pose,
+            consensus,
+            accepted_locals[strongest],
+            float(np.mean([scores[i] for i in inliers])),
+            axis_locked=_axis_snap_pose(consensus, accepted_locals[strongest])
+            is not None,
+            odometry_broken=True,
+        )
         innovation = float(np.hypot(*(_robot_centre(consensus) - prior_centre)))
         imu_heading_error = abs(
             (float(consensus.theta_deg) - float(prior.theta_deg) + 180.0) % 360.0 - 180.0
@@ -11471,10 +11967,19 @@ def main() -> int:
         if not _pose_stays_beyond_completed_doorways(recovered_pose):
             print("[explore]   panorama solution crossed a completed doorway — rejected.")
             return False
+        predicted_recovery_pose = cur_pose
         cur_pose = recovered_pose
         _discard_translation_prior()
         _rezero_gyro_heading_reference(
             float(recovered_pose.theta_deg), "panorama re-anchor"
+        )
+        _register_stationary_fix(
+            predicted_recovery_pose,
+            recovered_pose,
+            None,
+            float(score),
+            axis_locked=False,
+            odometry_broken=True,
         )
         print(f"[explore]   pose RE-ANCHORED by panorama (match {score:.1f}).")
         return True
@@ -11733,7 +12238,9 @@ def main() -> int:
 
     def _match_support_mask(world_pts: np.ndarray) -> np.ndarray:
         res = float(args.novel_res_m)
-        key = len(world_map.scans)
+        # Key on pose_revision too: the graph optimizer can move scan poses
+        # without changing the scan count.
+        key = (len(world_map.scans), world_map.pose_revision)
         if _match_sup_cache[0] != key:
             occ_set = set()
             ref = world_map.reference(60000)
