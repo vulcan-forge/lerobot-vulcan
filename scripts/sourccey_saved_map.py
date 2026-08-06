@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,25 @@ import numpy as np
 FORMAT_NAME = "sourccey-slam-map"
 FORMAT_VERSION = 1
 DEFAULT_SAVED_MAP_PATH = Path(__file__).with_name("sourccey_saved_map.npz")
+_TIMESTAMPED_MAP_RE = re.compile(r"^sourccey_saved_map_(\d{8}_\d{6}(?:_\d{6})?)\.npz$")
+
+
+def latest_timestamped_saved_map(directory: str | Path | None = None) -> Path | None:
+    """Return the newest timestamped exploration map in *directory*.
+
+    Only files produced by the explorer's dated naming convention are
+    considered; navigator working copies and checkpoints are intentionally
+    excluded.
+    """
+    folder = Path(directory) if directory is not None else DEFAULT_SAVED_MAP_PATH.parent
+    candidates: list[tuple[str, Path]] = []
+    for path in folder.glob("sourccey_saved_map_*.npz"):
+        match = _TIMESTAMPED_MAP_RE.match(path.name)
+        if match:
+            candidates.append((match.group(1), path))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
 
 
 @dataclass(slots=True)
@@ -77,6 +97,7 @@ def save_world_map(
     sensor_config: dict | None = None,
     navigation_config: dict | None = None,
     visual_color_landmarks: list[dict] | None = None,
+    surface_motion_atlas: dict | None = None,
 ) -> Path:
     """Atomically save the exact localization and occupancy state."""
     destination = Path(path).expanduser().resolve()
@@ -114,6 +135,10 @@ def save_world_map(
         # maps.  These are appearance tie-breakers only; GOLD LiDAR remains
         # the localization authority.
         "visual_color_landmarks": list(visual_color_landmarks or []),
+        # Bottom-camera texture regions choose a conservative motion-prediction
+        # model between LiDAR scans.  This remains metadata: LiDAR geometry is
+        # still the only localization and occupancy authority.
+        "surface_motion_atlas": dict(surface_motion_atlas or {}),
     }
     current = np.asarray(
         [current_pose.x, current_pose.y, current_pose.theta_deg], dtype=np.float64

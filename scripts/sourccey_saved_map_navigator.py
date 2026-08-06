@@ -16,6 +16,7 @@ import argparse
 import contextlib
 import math
 import re
+import shutil
 import signal
 import sys
 import threading
@@ -40,6 +41,7 @@ from sourccey_bottom_camera import (
     BottomCameraGroundOdometry,
     wait_for_live_bottom_camera,
 )
+from sourccey_surface_motion import SurfaceMotionAtlas, ground_texture_signature
 from sourccey_collision_box import (
     DEFAULT_COLLISION_BOX_PATH,
     collision_box_rotation_violation,
@@ -77,14 +79,16 @@ from sourccey_explore import (
 from sourccey_saved_map import (
     DEFAULT_SAVED_MAP_PATH,
     SavedMap,
+    latest_timestamped_saved_map,
     load_saved_map,
+    save_world_map,
 )
-from sourccey_wander.imu_heading import ImuYawClient
 from sourccey_visual_color_anchors import (
     best_landmark_score,
     bottom_upper_color_signature,
     color_signature,
 )
+from sourccey_wander.imu_heading import ImuYawClient
 
 from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import SourcceyClientConfig
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey_client import SourcceyClient
@@ -140,14 +144,14 @@ def _stationary_correction_consensus(
     usable = [
         (np.asarray(centre, dtype=np.float64), float(score), float(support))
         for centre, score, support in candidates
-        if float(score) >= float(minimum_score) and float(support) >= 0.15
+        if float(score) >= float(minimum_score) + 1.0 and float(support) >= 0.65
     ]
     if not usable:
         return None
 
     nearest = min(usable, key=lambda item: float(np.hypot(*(item[0] - seed))))
     nearest_shift = float(np.hypot(*(nearest[0] - seed)))
-    if nearest_shift <= 0.25:
+    if nearest_shift <= 0.12:
         return 0.75 * seed + 0.25 * nearest[0], "blended"
 
     # Even three mutually consistent scans can agree on the same wrong mode
@@ -222,20 +226,21 @@ def _submap_reanchor_is_credible(
 ) -> bool:
     """Gate a rigid recent-submap to saved-map loop-closure correction.
 
-    A recent submap contains both mapped and newly observed surfaces, so it is
-    unreasonable to demand near-100% endpoint support.  It must nevertheless
-    contain substantial saved-map overlap, a normal matcher score, enough
-    geometry to disambiguate a wall, and a bounded innovation.  This accepts a
-    real drift correction without allowing a repetitive corridor to teleport
-    the robot across the map.
+    A recent submap contains both mapped and newly observed surfaces.  It can
+    therefore be excellent at tracking *relative* motion while still aligning
+    a repeated hallway wall to the wrong part of the permanent map.  Automatic
+    re-anchoring is consequently held to a much higher standard than ordinary
+    local odometry: strong permanent-map overlap, a comfortably good score,
+    and a small innovation only.  Larger changes require explicit full
+    relocalization rather than silently translating the entire local frame.
     """
 
     return (
         int(point_count) >= 180
-        and float(score) >= float(minimum_score)
-        and float(support) >= 0.22
+        and float(score) >= float(minimum_score) + 1.5
+        and float(support) >= 0.85
         and math.isfinite(float(innovation_m))
-        and float(innovation_m) <= 0.85
+        and float(innovation_m) <= 0.18
     )
 
 
@@ -418,6 +423,8 @@ def _global_localization_accepted(
     support: float,
     mode_margin: float,
     minimum_score: float,
+    endpoint_free: float | None = None,
+    ray_occupied: float | None = None,
 ) -> bool:
     """Joint confidence test for an active global-localization hypothesis.
 
@@ -426,6 +433,12 @@ def _global_localization_accepted(
     plus a clearly separated best mode is better evidence than whether an
     internal float landed one hundredth above or below a printed threshold.
     """
+    # A visible obstacle must not land in cells that the candidate pose says
+    # are free. Unknown cells remain acceptable for newly mapped geometry.
+    if endpoint_free is not None and float(endpoint_free) > 0.22:
+        return False
+    if ray_occupied is not None and float(ray_occupied) > 0.34:
+        return False
     ordinary = (
         float(score) >= float(minimum_score) - 0.25 and float(support) >= 0.35 and float(mode_margin) >= 0.35
     )
@@ -1004,7 +1017,76 @@ class SavedMapNavigator:
     def __init__(self, root: tk.Tk, args: Namespace) -> None:
         self.root = root
         self.args = args
-        self.saved = load_saved_map(args.map)
+        # Never mutate the map supplied by the user.  Navigator snapshots are
+        # provisional geometry and must be recoverable without destroying the
+        # last known-good exploration artifact.  The first run creates a
+        # sibling working copy; subsequent runs continue from that copy.
+        source_map = Path(args.map).expanduser().resolve()
+        created_working = False
+        if bool(getattr(args, "reset_working_map", False)):
+            working_map = source_map.with_name(
+                f"{source_map.stem}_navigator_working{source_map.suffix}"
+            )
+            shutil.copy2(source_map, working_map)
+            created_working = True
+            print(
+                f"[saved-map] reset writable working copy from {source_map}"
+            )
+        elif source_map.stem.endswith("_navigator_working"):
+            working_map = source_map
+        else:
+            working_map = source_map.with_name(
+                f"{source_map.stem}_navigator_working{source_map.suffix}"
+            )
+            if not working_map.exists():
+                shutil.copy2(source_map, working_map)
+                created_working = True
+                print(
+                    f"[saved-map] created writable working copy: {working_map}"
+                )
+        if created_working:
+            # Older navigator versions persisted provisional scans directly
+            # into the source map.  Those scans are useful for a planner only
+            # after they have been independently validated; they are not safe
+            # localization geometry.  Rebuild the initial working copy from
+            # GOLD scans so radial/ghost geometry cannot be carried forward.
+            source_saved = load_saved_map(source_map)
+            source_world = _restore_world_map(source_saved)
+            clean_world = WorldMap(
+                grid_res_m=source_world.grid.res,
+                footprint_clear_m=source_world.footprint_clear_m,
+                lidar_offset_m=source_world.lidar_offset_m,
+                forward_offset_deg=source_world.forward_offset_deg,
+            )
+            gold_count = 0
+            for scan in source_world.scans:
+                if not scan.gold:
+                    continue
+                clean_world.add(scan.local_xy, scan.pose, gold=True)
+                gold_count += 1
+            if gold_count:
+                save_world_map(
+                    working_map,
+                    clean_world,
+                    Pose2D(*map(float, source_saved.current_pose)),
+                    trail=[np.asarray(p, dtype=np.float64) for p in source_saved.trail_xy],
+                    sensor_config=source_saved.metadata.get("sensor_config", {}),
+                    navigation_config=source_saved.metadata.get("navigation_config", {}),
+                    visual_color_landmarks=source_saved.metadata.get("visual_color_landmarks", []),
+                    surface_motion_atlas=source_saved.metadata.get("surface_motion_atlas", {}),
+                )
+                removed = len(source_world.scans) - gold_count
+                if removed:
+                    print(
+                        f"[saved-map] excluded {removed} provisional scan(s) from "
+                        f"the new working copy; retained {gold_count} GOLD scan(s)."
+                    )
+        self.args.map = str(working_map)
+        print(
+            f"[saved-map] using writable map: {working_map} "
+            f"(source preserved: {source_map})"
+        )
+        self.saved = load_saved_map(working_map)
         for name, value in self.saved.metadata.get("sensor_config", {}).items():
             setattr(self.args, name, value)
         for name, value in self.saved.metadata.get("navigation_config", {}).items():
@@ -1013,8 +1095,20 @@ class SavedMapNavigator:
         self.forward_offset = float(self.saved.metadata["forward_offset_deg"])
         self.lever_m = float(self.saved.metadata["lidar_offset_m"])
         self.pose = Pose2D(*map(float, self.saved.current_pose))
+        map_path = Path(args.map).expanduser()
+        self._checkpoint_path = map_path.with_name(f"{map_path.stem}_navigator_checkpoint.npz")
+        self._startup_checkpoint_pose: Pose2D | None = None
+        self._startup_checkpoint_at = 0.0
+        self._arrival_checkpoint_pose: Pose2D | None = None
+        self._arrival_checkpoint_at = -math.inf
+        self._load_navigation_checkpoint()
         self.pose_lock = threading.Lock()
         self.localized = False
+        # Bounded live-LiDAR recovery region.  This is deliberately small:
+        # it is a local uncertainty bubble, not permission to search another
+        # room or a mirrored corridor.
+        self.localization_bubble_radius_m = 0.45
+        self.localization_bubble_pose: Pose2D | None = None
         self.localization_imu: float | None = None
         self.navigation_thread: threading.Thread | None = None
         self.snapshot_thread: threading.Thread | None = None
@@ -1022,6 +1116,9 @@ class SavedMapNavigator:
         self.closing = False
         self.path: list[np.ndarray] = []
         self.goal: np.ndarray | None = None
+        # Shift-clicked destinations are executed in insertion order.
+        self.goal_queue: list[np.ndarray] = []
+        self._goal_queue_lock = threading.Lock()
         self.status_text = "Connecting to robot sensors..."
         self._map_canvas_size = (0, 0)
         self.localization_attempt = 0
@@ -1086,11 +1183,28 @@ class SavedMapNavigator:
         self._bottom_camera_photo: ImageTk.PhotoImage | None = None
         self.eye_mosaic = None
         self._visual_color_landmarks = list(self.saved.metadata.get("visual_color_landmarks") or [])
+        self.surface_motion_atlas = SurfaceMotionAtlas.from_metadata(
+            self.saved.metadata.get("surface_motion_atlas")
+        )
+        self.surface_motion_atlas.similarity_threshold = float(args.surface_texture_similarity)
+        self._surface_texture_last_at = -math.inf
+        self._surface_prior_last_at = time.monotonic()
+        self._surface_prior_reference_pose: Pose2D | None = None
+        self._surface_prior_command_body = np.zeros(2, dtype=np.float64)
+        self._surface_prior_uncertainty_m = 0.0
+        self._surface_texture_enabled = str(args.surface_motion_calibration) == "on"
         self._visual_color_enabled = False
         self._bottom_color_enabled = any(
             isinstance(landmark, dict) and bool(landmark.get("bottom_signature"))
             for landmark in self._visual_color_landmarks
         )
+        # Appearance is a navigation-time consistency cue, not only a
+        # startup tie-breaker.  Keep the last accepted cue so a sudden
+        # mismatch can be reported and consumed by the next stationary LiDAR
+        # correction without allowing a single camera frame to move the pose.
+        self._last_navigation_bottom_color_score: float | None = None
+        self._last_navigation_bottom_color_check_at = 0.0
+        self._navigation_bottom_color_mismatch_count = 0
         if self._visual_color_landmarks:
             print(
                 f"[visual-anchor] loaded {len(self._visual_color_landmarks)} "
@@ -1106,7 +1220,11 @@ class SavedMapNavigator:
         self.imu.start()
         self.camera_subscriber = None
         self.ground_odometry = None
-        if str(args.bottom_odometry) != "off" or str(args.visual_color_anchors) == "on":
+        if (
+            str(args.bottom_odometry) != "off"
+            or str(args.visual_color_anchors) == "on"
+            or self._surface_texture_enabled
+        ):
             try:
                 from sourccey_elevated_safety import (
                     SlamCameraSubscriber,
@@ -1116,7 +1234,9 @@ class SavedMapNavigator:
                 camera_endpoint = str(args.slam_input_endpoint or "").strip() or endpoint_from_remote_ip(
                     args.remote_ip
                 )
-                camera_keys = ["bottom"] if str(args.bottom_odometry) != "off" else []
+                camera_keys = ["bottom"] if (
+                    str(args.bottom_odometry) != "off" or self._surface_texture_enabled
+                ) else []
                 if str(args.visual_color_anchors) == "on":
                     camera_keys.extend(("front_left", "front_right", "bottom"))
                 self.camera_subscriber = SlamCameraSubscriber(
@@ -1173,6 +1293,19 @@ class SavedMapNavigator:
                             "floor flow supplies bounded translation priors only "
                             f"({bottom_health.reason})."
                         )
+                if self._surface_texture_enabled:
+                    health = wait_for_live_bottom_camera(self.camera_subscriber, timeout_s=2.0)
+                    if health.ready:
+                        print(
+                            f"[surface] loaded {len(self.surface_motion_atlas.models)} saved ground "
+                            "surface calibration model(s); LiDAR will validate every use."
+                        )
+                    else:
+                        self._surface_texture_enabled = False
+                        print(
+                            "[surface] WARNING: ground-texture motion predictor disabled; "
+                            f"bottom camera is not live ({health.reason})."
+                        )
             except Exception as exc:
                 if self.camera_subscriber is not None:
                     with contextlib.suppress(Exception):
@@ -1220,6 +1353,7 @@ class SavedMapNavigator:
         self.canvas = tk.Canvas(shell, width=900, height=760, background="#10170f")
         self.canvas.grid(row=0, column=0, columnspan=3, sticky="nsew")
         self.canvas.bind("<Button-1>", self._click_goal)
+        self.root.bind("<Return>", self._commit_queued_goals)
         diagnostic_panel = ttk.Frame(shell)
         diagnostic_panel.grid(row=0, column=3, sticky="ne", padx=(8, 0))
         self.collision_canvas = tk.Canvas(
@@ -1365,6 +1499,81 @@ class SavedMapNavigator:
             measurement,
         )
 
+    def _observe_surface_texture(self) -> int | None:
+        """Classify the floor beneath the robot; never infer a pose from it."""
+        if not self._surface_texture_enabled or self.camera_subscriber is None:
+            return None
+        now = time.monotonic()
+        if now - self._surface_texture_last_at < 0.25:
+            return self.surface_motion_atlas.current_surface_id
+        try:
+            frame, age_s = self.camera_subscriber.latest("bottom")
+            if frame is None or age_s is None or float(age_s) > 0.75:
+                return self.surface_motion_atlas.current_surface_id
+            surface_id, changed, similarity = self.surface_motion_atlas.observe_texture(
+                ground_texture_signature(frame)
+            )
+            self._surface_texture_last_at = now
+            if changed and surface_id is not None:
+                print(
+                    f"[surface] navigation texture {'new' if similarity >= 0.999 else 'changed'} "
+                    f"to surface {surface_id} (similarity {similarity:.2f}); LiDAR still owns pose."
+                )
+            return surface_id
+        except Exception:
+            return self.surface_motion_atlas.current_surface_id
+
+    def _reset_surface_motion_prior(self, pose: Pose2D | None = None) -> None:
+        self._surface_prior_last_at = time.monotonic()
+        self._surface_prior_reference_pose = pose
+        self._surface_prior_command_body = np.zeros(2, dtype=np.float64)
+        self._surface_prior_uncertainty_m = 0.0
+
+    def _apply_surface_motion_prediction(self, pose: Pose2D, forward_command: float) -> Pose2D:
+        """Use a saved texture scale only to seed the next local LiDAR solve."""
+        if not self._surface_texture_enabled:
+            return pose
+        now = time.monotonic()
+        elapsed = min(0.16, max(0.0, now - self._surface_prior_last_at))
+        self._surface_prior_last_at = now
+        if elapsed <= 1e-3 or abs(float(forward_command)) <= 1e-4:
+            return pose
+        self._observe_surface_texture()
+        baseline = 0.45 * elapsed * float(forward_command)
+        body_prediction, uncertainty = self.surface_motion_atlas.predict_body_translation(baseline, 0.0)
+        heading = math.radians(float(pose.theta_deg) + self.forward_offset)
+        centre = self._centre(pose) + np.asarray(
+            [
+                math.cos(heading) * body_prediction[0] - math.sin(heading) * body_prediction[1],
+                math.sin(heading) * body_prediction[0] + math.cos(heading) * body_prediction[1],
+            ],
+            dtype=np.float64,
+        )
+        if self._surface_prior_reference_pose is None:
+            self._surface_prior_reference_pose = pose
+        self._surface_prior_command_body += np.asarray([baseline, 0.0], dtype=np.float64)
+        self._surface_prior_uncertainty_m = min(0.35, self._surface_prior_uncertainty_m + float(uncertainty))
+        return _lidar_pose_from_robot_centre(centre, pose.theta_deg, self.lever_m, self.forward_offset)
+
+    def _learn_surface_motion_from_lidar(self, pose: Pose2D) -> None:
+        """Update a texture model exclusively from an accepted LiDAR pose."""
+        reference = self._surface_prior_reference_pose
+        if reference is None or float(np.hypot(*self._surface_prior_command_body)) < 0.04:
+            self._reset_surface_motion_prior(pose)
+            return
+        delta = self._centre(pose) - self._centre(reference)
+        heading = math.radians(float(reference.theta_deg) + self.forward_offset)
+        actual_forward = math.cos(heading) * delta[0] + math.sin(heading) * delta[1]
+        actual_left = -math.sin(heading) * delta[0] + math.cos(heading) * delta[1]
+        self.surface_motion_atlas.update_from_lidar(
+            float(self._surface_prior_command_body[0]),
+            float(self._surface_prior_command_body[1]),
+            actual_forward,
+            actual_left,
+            turn_delta_deg=(float(pose.theta_deg) - float(reference.theta_deg) + 180.0) % 360.0 - 180.0,
+        )
+        self._reset_surface_motion_prior(pose)
+
     def _record_ground_prior_result(self, measurement: object, *, accepted: bool) -> None:
         """Expose whether floor flow actually helped a LiDAR pose update."""
 
@@ -1415,6 +1624,57 @@ class SavedMapNavigator:
             return
         print("[saved-map] live sensors ready; starting automatic relocalization.")
         self.relocalize()
+
+    def _load_navigation_checkpoint(self) -> None:
+        """Load the last verified target pose as a localization search seed."""
+        try:
+            if not self._checkpoint_path.exists():
+                return
+            with np.load(self._checkpoint_path, allow_pickle=False) as data:
+                pose = np.asarray(data["pose"], dtype=np.float64).reshape(3)
+                saved_at = float(np.asarray(data["saved_at"]).item())
+            if not np.all(np.isfinite(pose)):
+                return
+            self._startup_checkpoint_pose = Pose2D(*map(float, pose))
+            self._startup_checkpoint_at = saved_at
+            age_s = max(0.0, time.time() - saved_at)
+            print(
+                f"[saved-map] loaded target-arrival checkpoint at "
+                f"({pose[0]:+.2f}, {pose[1]:+.2f}), age {age_s:.0f}s; "
+                "using it only as a LiDAR search seed."
+            )
+        except Exception as exc:
+            print(f"[saved-map] navigation checkpoint ignored ({type(exc).__name__}: {exc}).")
+
+    def _save_navigation_checkpoint(self, context: str) -> bool:
+        """Persist a stationary target pose without modifying permanent map geometry."""
+        try:
+            with self.pose_lock:
+                pose = self.pose
+            frame_id, frame = self.feed.latest()
+            local = _scan_local(frame, self.args) if frame is not None else np.empty((0, 2))
+            if len(local) < 30:
+                return False
+            temporary = self._checkpoint_path.with_suffix(".tmp.npz")
+            np.savez_compressed(
+                temporary,
+                pose=np.asarray([pose.x, pose.y, pose.theta_deg], dtype=np.float64),
+                local_scan=np.asarray(local, dtype=np.float32),
+                saved_at=np.asarray(time.time(), dtype=np.float64),
+                frame_id=np.asarray(int(frame_id), dtype=np.int64),
+            )
+            temporary.replace(self._checkpoint_path)
+            self._arrival_checkpoint_pose = pose
+            self._arrival_checkpoint_at = time.monotonic()
+            print(
+                f"[saved-map] {context}: saved stationary LiDAR target checkpoint "
+                f"({pose.x:+.2f}, {pose.y:+.2f}, {pose.theta_deg:+.1f}deg), "
+                f"{len(local)} returns."
+            )
+            return True
+        except Exception as exc:
+            print(f"[saved-map] target checkpoint unavailable ({type(exc).__name__}: {exc}).")
+            return False
 
     def _compute_view(self) -> None:
         known = self.world.grid.occupied() | self.world.grid.free()
@@ -1492,11 +1752,52 @@ class SavedMapNavigator:
                 outline="",
                 tags="dynamic",
             )
+        with self._goal_queue_lock:
+            queued_goals = [point.copy() for point in self.goal_queue]
+        for queue_index, queued in enumerate(queued_goals, start=1):
+            qx, qy = self._screen(queued)
+            self.canvas.create_oval(
+                qx - 6,
+                qy - 6,
+                qx + 6,
+                qy + 6,
+                fill="#ffd34d",
+                outline="white",
+                width=1,
+                tags="dynamic",
+            )
+            self.canvas.create_text(
+                qx,
+                qy - 12,
+                text=str(queue_index),
+                fill="#ffd34d",
+                tags="dynamic",
+            )
         with self.pose_lock:
             pose = self.pose
         centre = self._centre(pose)
         cx, cy = self._screen(centre)
         colour = "#42d7ff" if self.localized else "#ffb52e"
+        # Keep the last trusted map pose visible as a bounded uncertainty
+        # bubble.  During a weak-track episode this is the only region in
+        # which the live scan is allowed to refit; it is deliberately not a
+        # global-search indicator.
+        bubble_pose = pose if self.localized else self.localization_bubble_pose
+        if bubble_pose is not None:
+            bubble_centre = self._centre(bubble_pose)
+            bubble_radius = float(self.localization_bubble_radius_m)
+            bx0, by0 = self._screen(bubble_centre - bubble_radius)
+            bx1, by1 = self._screen(bubble_centre + bubble_radius)
+            self.canvas.create_oval(
+                bx0,
+                by0,
+                bx1,
+                by1,
+                outline="#4fc3ff" if self.localized else "#ffb52e",
+                width=2,
+                dash=(5, 4),
+                tags="dynamic",
+            )
         self.canvas.create_oval(
             cx - 9,
             cy - 9,
@@ -1922,6 +2223,7 @@ class SavedMapNavigator:
         live_sample = self._fresh_forward_sample()
         live_frame_id = None
         live_points = np.empty((0, 2), dtype=np.float64)
+        live_display_points = np.empty((0, 2), dtype=np.float64)
         live_hit = None
         if live_sample is not None:
             live_frame_id, live_points = live_sample
@@ -1932,6 +2234,18 @@ class SavedMapNavigator:
                 physical_body_radius_m=float(self.args.physical_body_radius_m),
                 self_mask_inset_m=float(self.args.collision_self_mask_inset_m),
             )
+        # Keep collision testing filtered, but render the raw current scan so
+        # the operator can see every return (including isolated/small objects
+        # that are intentionally ignored by the collision classifier).
+        raw_frame_id, raw_frame = self.feed.latest()
+        if raw_frame is not None:
+            raw_local = _scan_local(raw_frame, self.args)
+            if len(raw_local):
+                live_display_points = _to_forward_frame(raw_local, self.forward_offset)
+                if live_frame_id is None:
+                    live_frame_id = int(raw_frame_id)
+        if not len(live_display_points):
+            live_display_points = live_points
         canvas.create_text(
             10,
             10,
@@ -1956,7 +2270,22 @@ class SavedMapNavigator:
         plot_size = max(100.0, min(float(width - 20), plot_bottom - plot_top))
         cx = float(width) / 2.0
         cy = plot_top + plot_size / 2.0
-        extent_m = 1.25
+        # The old 1.25m viewport hid most of the live scan, making a clear
+        # hallway/pillar appear to be only a few isolated returns. Fit the
+        # diagnostic to the complete current return set (and frozen stop set)
+        # while retaining a useful minimum zoom around the robot.
+        display_sets = [live_display_points]
+        if diagnostic is not None:
+            display_sets.append(np.asarray(diagnostic.points_forward_xy, dtype=np.float64))
+        display_points = [points for points in display_sets if len(points)]
+        if display_points:
+            all_display = np.concatenate(display_points, axis=0)
+            max_display_range = float(
+                np.nanmax(np.hypot(all_display[:, 0] + self.lever_m, all_display[:, 1]))
+            )
+        else:
+            max_display_range = 0.0
+        extent_m = min(6.0, max(1.5, max_display_range * 1.10))
         scale = 0.5 * plot_size / extent_m
 
         def screen_from_lidar(points_xy: np.ndarray) -> np.ndarray:
@@ -2015,7 +2344,7 @@ class SavedMapNavigator:
         # initiated recovery remains useful forensic evidence.
         if diagnostic is not None:
             frozen_points = diagnostic.points_forward_xy
-            frozen_near = np.hypot(frozen_points[:, 0] + self.lever_m, frozen_points[:, 1]) <= extent_m
+            frozen_near = np.isfinite(frozen_points).all(axis=1)
             frozen_pixels = screen_from_lidar(frozen_points[frozen_near])
             frozen_hit_near = diagnostic.hit_mask[frozen_near]
             for pixel, is_hit in zip(frozen_pixels, frozen_hit_near, strict=False):
@@ -2030,28 +2359,41 @@ class SavedMapNavigator:
                     outline="",
                 )
 
-        live_near = np.hypot(live_points[:, 0] + self.lever_m, live_points[:, 1]) <= extent_m
-        live_pixels = screen_from_lidar(live_points[live_near])
+        live_near = np.isfinite(live_display_points).all(axis=1)
+        live_pixels = screen_from_lidar(live_display_points[live_near])
+        for pixel in live_pixels:
+            canvas.create_oval(
+                pixel[0] - 1,
+                pixel[1] - 1,
+                pixel[0] + 1,
+                pixel[1] + 1,
+                fill="#55ef75",
+                outline="",
+            )
+        # Overlay collision hits from the filtered safety set in orange.
+        live_collision_near = np.isfinite(live_points).all(axis=1)
+        live_collision_pixels = screen_from_lidar(live_points[live_collision_near])
         live_hit_mask = np.zeros(len(live_points), dtype=bool)
         if live_hit is not None:
             live_hit_mask = np.asarray(live_hit[0], dtype=bool)
-        live_hit_near = live_hit_mask[live_near]
-        for pixel, is_hit in zip(live_pixels, live_hit_near, strict=False):
-            radius = 3 if bool(is_hit) else 1
-            colour = "#ffb000" if bool(is_hit) else "#55ef75"
+        live_hit_near = live_hit_mask[live_collision_near]
+        for pixel, is_hit in zip(live_collision_pixels, live_hit_near, strict=False):
+            if not bool(is_hit):
+                continue
             canvas.create_oval(
-                pixel[0] - radius,
-                pixel[1] - radius,
-                pixel[0] + radius,
-                pixel[1] + radius,
-                fill=colour,
+                pixel[0] - 3,
+                pixel[1] - 3,
+                pixel[0] + 3,
+                pixel[1] + 3,
+                fill="#ffb000",
                 outline="",
             )
 
         if diagnostic is None:
             detail_text = (
                 f"LIVE frame {live_frame_id if live_frame_id is not None else 'n/a'}: "
-                f"{live_status}\nLAST STOP: none yet"
+                f"{live_status} | {len(live_display_points)} raw returns, "
+                f"range {max_display_range:.2f}m\nLAST STOP: none yet"
             )
         else:
             age = max(0.0, time.time() - diagnostic.captured_at)
@@ -2068,7 +2410,8 @@ class SavedMapNavigator:
             )
             detail_text = (
                 f"LIVE frame {live_frame_id if live_frame_id is not None else 'n/a'}: "
-                f"{live_status}\n"
+                f"{live_status} | {len(live_display_points)} raw returns, "
+                f"range {max_display_range:.2f}m\n"
                 f"LAST STOP frame {diagnostic.frame_id}: frozen {age:.1f}s ago | "
                 f"{diagnostic.kind}\n"
                 f"centre ({diagnostic.robot_centre_xy[0]:+.2f}, "
@@ -2093,7 +2436,7 @@ class SavedMapNavigator:
             fill="#aebbc0",
             width=width - 20,
             text=(
-                "green=LIVE  orange=live trigger  purple=frozen scan  "
+                "green=LIVE raw returns  orange=live safety trigger  purple=frozen scan  "
                 "red=frozen trigger\ncyan=hard box  yellow=soft warning  white=forward"
             ),
         )
@@ -2454,11 +2797,189 @@ class SavedMapNavigator:
             self.controller.halt()
             self.controller.clear_safety_latch()
 
+    def _recover_localization_one_sided_collision(
+        self,
+        blocked_side: str,
+    ) -> bool:
+        """Perform the sole startup-collision recovery contract.
+
+        For a one-sided pivot collision, inspect the other rotational side,
+        strafe one physical body radius away from the contacted side, and let
+        live collision safety interrupt the move.  An interrupted strafe gets
+        exactly one LiDAR-guarded reverse of one body radius.  There is no
+        temporary map, diagonal route, secondary turn, or retry policy here.
+        """
+        if blocked_side not in {"left", "right"}:
+            return False
+        # Robot frame is +left in y.  Move right for a left contact and left
+        # for a right contact; the matching turn direction checks that same
+        # open side before any translation is commanded.
+        open_sign = -1.0 if blocked_side == "left" else 1.0
+        radius = float(self.args.physical_body_radius_m)
+        open_reason = self._rotation_safety(open_sign * 20.0)
+        if open_reason is not None:
+            print(
+                f"[saved-map] {blocked_side} collision: opposite side is not "
+                f"clear ({open_reason}); one-sided recovery is not authorized."
+            )
+            return False
+
+        # Do not call ``_strafe_away_from_side`` here.  That routine is for an
+        # already-localized navigator: it tests progress against ``self.pose``
+        # and the rolling submap.  At startup those are deliberately unknown
+        # or stale, so using them made a real sideways move look like zero
+        # motion and prevented the next localization sweep from ever running.
+        #
+        # This is intentionally the entire unlocalized recovery policy:
+        #
+        #   one-side pivot contact -> strafe one body radius to the open side
+        #   strafe meets a new obstruction -> reverse one body radius
+        #   then restart localization.
+        #
+        # The move is guarded from fresh LiDAR in short forward-time slices.
+        # It does not use the saved-map pose, a temporary map, a turn fallback,
+        # diagonal translation, or inferred wheel/local odometry.
+        def guarded_body_move(
+            delta_body: np.ndarray,
+            *,
+            label: str,
+            ignore_contact_side: str | None = None,
+        ) -> str:
+            """Return ``completed``, ``blocked``, or ``unavailable``.
+
+            ``delta_body`` is [forward, left] in metres.  Each new LiDAR
+            frame validates only the next small slice, allowing a move away
+            from an existing shoulder contact without pretending that the
+            existing contact itself makes the opposite-side escape unsafe.
+            """
+            requested = np.asarray(delta_body, dtype=np.float64)
+            distance = float(np.hypot(*requested))
+            if distance < 1e-6:
+                return "completed"
+            initial_yaw = self.imu.deg()
+            if initial_yaw is None:
+                print(f"[saved-map] {label} skipped: IMU heading is unavailable.")
+                return "unavailable"
+            unit = requested / distance
+            speed = max(0.35, abs(float(self.args.drive_speed)))
+            command = _startup_escape_velocity(unit, speed)
+            after = int(self.feed.latest()[0])
+            moved_budget = 0.0
+            # A 5 cm checked slice is deliberately smaller than the robot
+            # radius.  This makes a newly encountered obstacle stop the
+            # strafe before the robot can carry its shoulder into it.
+            slice_m = 0.05
+
+            def is_new_contact(points_xy: np.ndarray) -> bool:
+                """Distinguish the original side contact from a new obstacle.
+
+                The shoulder that stopped the pivot is expected to remain in
+                the current collision envelope briefly while the robot slides
+                away from it.  Treating that known contact as a newly blocked
+                strafe was the reason the prior code immediately backed out.
+                Only another sector (front, rear, or the opposite side) may
+                invoke the one permitted reverse.
+                """
+                direct = collision_box_violation(
+                    points_xy,
+                    self.collision_profile,
+                    lidar_offset_forward_m=self.lever_m,
+                    physical_body_radius_m=float(self.args.physical_body_radius_m),
+                    self_mask_inset_m=float(self.args.collision_self_mask_inset_m),
+                )
+                return direct is not None and str(direct[1]) != ignore_contact_side
+
+            self.controller.clear_safety_latch()
+            try:
+                while moved_budget < distance - 1e-6 and not self.stop_event.is_set():
+                    remaining = min(slice_m, distance - moved_budget)
+                    self.controller.translate_body(
+                        float(command[0]), float(command[1]), float(initial_yaw)
+                    )
+                    slice_deadline = time.monotonic() + max(0.12, remaining / speed * 1.35)
+                    frame_seen = False
+                    while time.monotonic() < slice_deadline and not self.stop_event.is_set():
+                        # ``BaseController`` does not run the ordinary drive
+                        # safety callback for mecanum translation, so this
+                        # explicit fresh-frame loop is the authority here.
+                        frame_id, frame = self.feed.wait_for_frame_after(
+                            after_frame_id=after,
+                            timeout_s=0.16,
+                            min_frame_advances=1,
+                        )
+                        if frame is None:
+                            continue
+                        after = int(frame_id)
+                        frame_seen = True
+                        live = self._fresh_forward_sample()
+                        if live is None:
+                            continue
+                        _live_id, live_points = live
+                        next_slice = min(slice_m, max(0.01, distance - moved_budget))
+                        slice_safe = _translation_trajectory_is_safe(
+                            live_points,
+                            self.collision_profile,
+                            unit * next_slice,
+                            lidar_offset_forward_m=self.lever_m,
+                            physical_body_radius_m=float(self.args.physical_body_radius_m),
+                            self_mask_inset_m=float(self.args.collision_self_mask_inset_m),
+                        )
+                        if not slice_safe and is_new_contact(live_points):
+                            print(
+                                f"[saved-map] {label} met a new LiDAR obstacle "
+                                f"after {moved_budget:.2f}m."
+                            )
+                            return "blocked"
+                    self.controller.halt()
+                    if not frame_seen:
+                        print(f"[saved-map] {label} stopped: LiDAR did not advance.")
+                        return "unavailable"
+                    moved_budget += remaining
+            finally:
+                self.controller.halt()
+                self.controller.clear_safety_latch()
+            print(
+                f"[saved-map] {label} completed its commanded {distance:.2f}m "
+                "under fresh LiDAR slice checks."
+            )
+            return "completed"
+
+        print(
+            f"[saved-map] {blocked_side} collision: opposite side is clear; "
+            f"strafing exactly one physical radius ({radius:.2f}m) toward it."
+        )
+        strafe_result = guarded_body_move(
+            np.asarray([0.0, open_sign * radius], dtype=np.float64),
+            label="open-side radius strafe",
+            ignore_contact_side=blocked_side,
+        )
+        if strafe_result == "completed":
+            print("[saved-map] open-side strafe complete; restarting localization.")
+            return True
+        if strafe_result != "blocked":
+            return False
+
+        # This is the *only* reverse in startup recovery.  It is reached only
+        # after a previously-clear open-side strafe has encountered a distinct
+        # new LiDAR obstruction, exactly as described above.
+        print(
+            "[saved-map] open-side strafe encountered a new obstacle; reversing "
+            f"one physical radius ({radius:.2f}m) before restarting localization."
+        )
+        reverse_result = guarded_body_move(
+            np.asarray([-radius, 0.0], dtype=np.float64),
+            label="post-strafe radius reverse",
+        )
+        if reverse_result == "completed":
+            print("[saved-map] post-strafe reverse complete; restarting localization.")
+            return True
+        return False
+
     def _unlocalized_strafe_away_from_side(
         self,
         lateral_sign: float,
         blocked_rotation_deg: float,
-        distance_m: float = 0.12,
+        distance_m: float = 0.30,
     ) -> bool:
         """Create pivot clearance before a saved-map pose is available.
 
@@ -2472,7 +2993,6 @@ class SavedMapNavigator:
         acquisition at the new physical position.
         """
         sign = math.copysign(1.0, float(lateral_sign))
-        requested_delta = np.asarray([0.0, sign * float(distance_m)], dtype=np.float64)
         sample = self._fresh_forward_sample()
         if sample is None:
             return False
@@ -2483,6 +3003,44 @@ class SavedMapNavigator:
             "physical_body_radius_m": float(self.args.physical_body_radius_m),
             "self_mask_inset_m": float(self.args.collision_self_mask_inset_m),
         }
+
+        # The recovery contract is intentionally simple: verify the opposite
+        # side, then move exactly one physical robot radius away from the
+        # contacted side.  Side clearance is diagnostic only; it must not
+        # inflate the requested move into a different recovery behavior.
+        point_forward = np.asarray(points[:, 0], dtype=np.float64)
+        point_lateral = np.asarray(points[:, 1], dtype=np.float64)
+        side_mask = (
+            # Ignore the robot/chassis return band; use the outer shoulder
+            # returns that actually define the rotational obstruction.
+            ((point_lateral * sign) > 0.20)
+            & (np.abs(point_forward) < 0.60)
+        )
+        if np.any(side_mask):
+            side_clearance = float(np.min(np.abs(np.asarray(points[side_mask, 1]))))
+            print(
+                f"[saved-map] side clearance {side_clearance:.2f}m; "
+                f"commanding the configured one-radius escape {distance_m:.2f}m."
+            )
+        escape_axis = np.asarray([0.0, sign], dtype=np.float64)
+        requested_delta = escape_axis * float(distance_m)
+
+        # Confirm the opposite rotational side before committing to the
+        # lateral escape.  This is an observation only; it never authorizes a
+        # second recovery strategy.
+        opposite_turn = sign * 20.0
+        opposite_reason = self._rotation_safety(opposite_turn)
+        if opposite_reason is None:
+            print(
+                f"[saved-map] opposite side verified clear for a {opposite_turn:+.0f}deg "
+                "check; proceeding with the radius-length lateral escape."
+            )
+        else:
+            print(
+                f"[saved-map] opposite side is not verified clear: {opposite_reason}; "
+                "the one-sided escape is not authorized."
+            )
+            return False
 
         # A pivot-only obstruction can leave the current (unrotated)
         # translation envelope completely clear.  In that case the normal
@@ -2501,11 +3059,38 @@ class SavedMapNavigator:
             **geometry,
         )
         if not escape_safe and not trajectory_safe:
-            print(
-                "[saved-map] outward localization relocation rejected: the "
-                "live LiDAR lateral swept volume is occupied."
+            # If the front/side corner is occupied, test the physically useful
+            # diagonal escape: a short backward component plus motion toward
+            # the open side.  This is the mecanum equivalent of backing out of
+            # a corner instead of repeatedly trying the blocked lateral line.
+            diagonal_axis = np.asarray([-1.0, sign], dtype=np.float64)
+            diagonal_axis /= np.linalg.norm(diagonal_axis)
+            diagonal_delta = diagonal_axis * float(distance_m)
+            diagonal_safe = _translation_trajectory_is_safe(
+                points,
+                self.collision_profile,
+                diagonal_delta,
+                **geometry,
             )
-            return False
+            if diagonal_safe:
+                escape_axis = diagonal_axis
+                requested_delta = diagonal_delta
+                print(
+                    "[saved-map] lateral escape is blocked; using a guarded "
+                    f"backward/open-side diagonal ({escape_axis[0]:+.2f}, "
+                    f"{escape_axis[1]:+.2f}) instead."
+                )
+            else:
+                # The opposite-side LiDAR check is the authorization for the
+                # strafe.  Do not cancel the command merely because the full
+                # predicted swept volume is conservative; the live controller
+                # will stop on an actual return and the caller will reverse one
+                # body radius from that new obstruction.
+                print(
+                    "[saved-map] predictive lateral and diagonal checks are "
+                    "conservative; issuing the verified open-side strafe under "
+                    "live collision protection."
+                )
 
         def blocked_pivot_hit(cloud_xy: np.ndarray):
             result = collision_box_rotation_violation(
@@ -2523,17 +3108,63 @@ class SavedMapNavigator:
         if initial_yaw is None:
             return False
 
-        command_xy = _startup_escape_velocity(
-            requested_delta,
-            abs(float(self.args.drive_speed)),
-        )
-        self.controller.clear_safety_latch()
-        self.controller.translate_body(float(command_xy[0]), float(command_xy[1]), float(initial_yaw))
-        started_at = time.monotonic()
         best_gain = 0.0
         clear_frames = 0
         try:
-            while time.monotonic() - started_at < 1.35 and not self.stop_event.is_set():
+            # Execute the body-length escape as short, independently checked
+            # lateral segments.  A full-distance swept-volume test is too
+            # conservative near a shoulder and can reject a path that is
+            # safe once the robot has moved a few centimetres away.
+            total_distance = abs(float(distance_m))
+            moved_distance = 0.0
+            segment_distance = min(0.10, total_distance)
+            while moved_distance < total_distance - 1e-3 and not self.stop_event.is_set():
+                remaining = min(segment_distance, total_distance - moved_distance)
+                segment_delta = escape_axis * remaining
+                first = self._fresh_forward_sample()
+                if first is None:
+                    return False
+                after, _segment_points = first
+                command_xy = _startup_escape_velocity(
+                    segment_delta,
+                    abs(float(self.args.drive_speed)),
+                )
+                self.controller.clear_safety_latch()
+                self.controller.translate_body(
+                    float(command_xy[0]), float(command_xy[1]), float(initial_yaw)
+                )
+                segment_started = time.monotonic()
+                segment_complete = False
+                try:
+                    # Give the drivetrain enough time to overcome stiction;
+                    # the segment remains bounded by fresh LiDAR safety.
+                    while time.monotonic() - segment_started < 0.75 and not self.stop_event.is_set():
+                        if self.controller.safety_latched_reason():
+                            print(
+                                "[saved-map] escape segment stopped by live safety: "
+                                f"{self.controller.safety_latched_reason()}"
+                            )
+                            return self._reverse_escape_from_collision(
+                                distance_m=float(self.args.physical_body_radius_m)
+                            )
+                        frame_id, frame = self.feed.wait_for_frame_after(
+                            after_frame_id=int(after), timeout_s=0.30, min_frame_advances=1
+                        )
+                        if frame is None:
+                            continue
+                        after = int(frame_id)
+                        segment_complete = True
+                        break
+                finally:
+                    self.controller.halt()
+                    self.controller.clear_safety_latch()
+                if not segment_complete:
+                    print(
+                        "[saved-map] escape segment produced no fresh LiDAR "
+                        f"completion after {moved_distance:.2f}m."
+                    )
+                    return False
+                moved_distance += remaining
                 frame_id, frame = self.feed.wait_for_frame_after(
                     after_frame_id=int(after),
                     timeout_s=0.45,
@@ -2546,7 +3177,6 @@ class SavedMapNavigator:
                 if fresh is None:
                     return False
                 _fresh_id, fresh_points = fresh
-                elapsed = time.monotonic() - started_at
                 pivot_hit = blocked_pivot_hit(fresh_points)
                 if pivot_hit is None:
                     clear_frames += 1
@@ -2560,19 +3190,14 @@ class SavedMapNavigator:
                             float(pivot_hit[3]) - initial_distance,
                         )
 
-                remaining_fraction = max(0.20, 1.0 - elapsed / 1.35)
-                if not _translation_trajectory_is_safe(
-                    fresh_points,
-                    self.collision_profile,
-                    requested_delta * remaining_fraction,
-                    **geometry,
-                ):
-                    print(
-                        "[saved-map] outward localization relocation stopped: "
-                        "a fresh LiDAR frame closed the remaining lateral path."
-                    )
-                    return False
-                if elapsed >= 0.45 and (best_gain >= 0.025 or clear_frames >= 2):
+                # A couple of clear frames alone are not proof that the robot
+                # moved away from the obstruction: a transient gap (or a
+                # filtered return) can make the same constrained pose look
+                # clear for one or two frames.  Require measurable geometric
+                # improvement as well as persistence before restarting the
+                # localization sweep.  Otherwise the caller must consume the
+                # interrupted scans as a temporary map and plan an escape.
+                if best_gain >= 0.020 and clear_frames >= 2 and moved_distance >= 0.16:
                     print(
                         "[saved-map] unlocalized lateral relocation verified "
                         "against the formerly blocked rotational sweep "
@@ -2580,7 +3205,7 @@ class SavedMapNavigator:
                         f"clear frames {clear_frames})."
                     )
                     return True
-            if best_gain >= 0.020:
+            if best_gain >= 0.020 and moved_distance >= 0.16:
                 print(
                     "[saved-map] unlocalized lateral relocation accepted at "
                     f"deadline with {best_gain * 100.0:.1f}cm of measured "
@@ -2588,14 +3213,250 @@ class SavedMapNavigator:
                 )
                 return True
             print(
-                "[saved-map] outward localization relocation command ended "
-                "without enough rotational-sweep clearance change "
-                f"({best_gain * 100.0:.1f}cm; clear frames {clear_frames})."
+                "[saved-map] one-radius strafe did not establish rotational "
+                "clearance; pausing it and reversing one body radius. "
+                f"(gain {best_gain * 100.0:.1f}cm; clear frames {clear_frames})."
             )
-            return False
+            return self._reverse_escape_from_collision(
+                distance_m=float(self.args.physical_body_radius_m)
+            )
         finally:
             self.controller.halt()
             self.controller.clear_safety_latch()
+
+    def _unlocalized_temporary_map_escape(
+        self,
+        captures: list[tuple[np.ndarray, float]],
+        initial_yaw: float,
+    ) -> bool:
+        """Escape a blocked localization fan from its accumulated LiDAR map.
+
+        The active localization pose is intentionally unknown, so a global
+        saved-map plan cannot be used to recover it.  The interrupted fan is
+        nevertheless a valid *local* map: each scan is aligned by the IMU
+        yaw delta and expressed in the first robot frame.  We score that
+        temporary cloud for the widest observed opening, verify the selected
+        turn and short translation against a fresh LiDAR frame, execute one
+        bounded primitive, and let the caller reacquire a complete panorama.
+        This is deliberately one-shot; it prevents the old left/right
+        thrashing loop.  Sparse or contradictory evidence falls back to a
+        short guarded reverse instead of guessing a heading.
+        """
+
+        def _guarded_translate(distance_m: float, hold_yaw: float | None = None) -> bool:
+            sample = self._fresh_forward_sample()
+            if sample is None:
+                return False
+            _frame_id, points = sample
+            delta = np.asarray([float(distance_m), 0.0], dtype=np.float64)
+            geometry = {
+                "lidar_offset_forward_m": self.lever_m,
+                "physical_body_radius_m": float(self.args.physical_body_radius_m),
+                "self_mask_inset_m": float(self.args.collision_self_mask_inset_m),
+            }
+            if not _translation_trajectory_is_safe(
+                points,
+                self.collision_profile,
+                delta,
+                **geometry,
+            ):
+                return False
+            speed = max(0.20, abs(float(self.args.drive_speed)))
+            command = _startup_escape_velocity(delta, speed)
+            after = int(self.feed.latest()[0])
+            self.controller.clear_safety_latch()
+            yaw_hold = float(initial_yaw if hold_yaw is None else hold_yaw)
+            self.controller.translate_body(float(command[0]), float(command[1]), yaw_hold)
+            started = time.monotonic()
+            deadline = started + max(0.75, min(2.0, abs(float(distance_m)) / speed * 1.6))
+            fresh_count = 0
+            try:
+                while time.monotonic() < deadline and not self.stop_event.is_set():
+                    if self.controller.safety_latched_reason():
+                        return False
+                    frame_id, frame = self.feed.wait_for_frame_after(
+                        after_frame_id=after,
+                        timeout_s=0.45,
+                        min_frame_advances=1,
+                    )
+                    if frame is None:
+                        continue
+                    after = int(frame_id)
+                    fresh = self._fresh_forward_sample()
+                    if fresh is None:
+                        continue
+                    _fresh_id, fresh_points = fresh
+                    remaining = max(0.02, abs(float(distance_m)))
+                    if not _translation_trajectory_is_safe(
+                        fresh_points,
+                        self.collision_profile,
+                        np.asarray([math.copysign(remaining, distance_m), 0.0]),
+                        **geometry,
+                    ):
+                        return False
+                    fresh_count += 1
+                return fresh_count >= 2
+            finally:
+                self.controller.halt()
+                self.controller.clear_safety_latch()
+
+        # Build the temporary map in the same frame used by the localization
+        # matcher.  A single view is not enough to infer an opening, but it is
+        # still enough to make a conservative reverse attempt below.
+        cloud = _assemble_active_localization_cloud(
+            captures,
+            self.lever_m,
+            self.forward_offset,
+        )
+        cloud = _filter_isolated_lidar_specks(np.asarray(cloud, dtype=np.float32))
+        if len(cloud) >= 40 and len(captures) >= 3:
+            vectors = np.asarray(cloud, dtype=np.float64)
+            ranges = np.hypot(vectors[:, 0], vectors[:, 1])
+            angles = np.degrees(np.arctan2(vectors[:, 1], vectors[:, 0]))
+            candidates: list[tuple[float, float, float]] = []
+            # Favor the forward hemisphere, but permit a side opening when the
+            # chassis is facing a wall.  Unknown angular bins are not treated
+            # as free: they must be backed by a fresh live scan below.
+            for angle in np.arange(-120.0, 121.0, 15.0):
+                delta = (angles - float(angle) + 180.0) % 360.0 - 180.0
+                in_sector = np.abs(delta) <= 18.0
+                support = int(np.count_nonzero(in_sector & (ranges <= 2.0)))
+                if support < 2:
+                    continue
+                clearance = float(np.percentile(ranges[in_sector], 20.0))
+                target_distance = min(0.55, max(0.30, clearance - 0.16))
+                if target_distance < 0.28:
+                    continue
+                # Prefer wide openings and modest turns; a reverse is a last
+                # resort, not the primary response to a visible side gap.
+                score = target_distance - 0.0030 * abs(float(angle))
+                candidates.append((score, float(angle), target_distance))
+            candidates.sort(reverse=True)
+            if candidates:
+                _score, chosen_angle, chosen_distance = candidates[0]
+                live = self._fresh_forward_sample()
+                current_yaw = self.imu.deg()
+                target_yaw = float(initial_yaw) + chosen_angle
+                relative_turn = (
+                    None
+                    if current_yaw is None
+                    else target_yaw - float(current_yaw)
+                )
+                if live is not None and relative_turn is not None and self._rotation_safety(relative_turn) is None:
+                    live_id, live_points = live
+                    geometry = {
+                        "lidar_offset_forward_m": self.lever_m,
+                        "physical_body_radius_m": float(self.args.physical_body_radius_m),
+                        "self_mask_inset_m": float(self.args.collision_self_mask_inset_m),
+                    }
+                    if _translation_trajectory_is_safe(
+                        live_points,
+                        self.collision_profile,
+                        np.asarray(
+                            [chosen_distance * math.cos(math.radians(chosen_angle)),
+                             chosen_distance * math.sin(math.radians(chosen_angle))],
+                            dtype=np.float64,
+                        ),
+                        **geometry,
+                    ):
+                        print(
+                            f"[saved-map] temporary localization map fused "
+                            f"{len(captures)} view(s)/{len(cloud)} returns; "
+                            f"selected opening {chosen_angle:+.0f}deg, "
+                            f"escape {chosen_distance:.2f}m."
+                        )
+                        self.controller.clear_safety_latch()
+                        self.controller.rotate_to(target_yaw)
+                        deadline = time.monotonic() + 8.0
+                        reached = False
+                        while time.monotonic() < deadline and not self.stop_event.is_set():
+                            yaw = self.imu.deg()
+                            if yaw is not None and abs(target_yaw - float(yaw)) <= 3.0:
+                                reached = True
+                                break
+                            if self.controller.safety_latched_reason():
+                                break
+                            time.sleep(0.05)
+                        self.controller.halt()
+                        if reached:
+                            # The translation primitive is now expressed in
+                            # the newly selected body frame.
+                            translate_yaw = self.imu.deg()
+                            if translate_yaw is not None and _guarded_translate(
+                                chosen_distance,
+                                float(translate_yaw),
+                            ):
+                                print(
+                                    "[saved-map] temporary-map escape completed; "
+                                    "restarting the complete localization spin."
+                                )
+                                return True
+                        print(
+                            "[saved-map] temporary-map opening was not executable; "
+                            "checking the live LiDAR for a one-sided forward escape "
+                            "before any reverse."
+                        )
+
+        # Sparse scans, no supported opening, or a failed guarded opening do
+        # not justify immediately reversing.  First use the current LiDAR
+        # safety model to select an actually open rotational side, turn only
+        # in that direction, and make a short forward escape.  This handles
+        # the common case where one shoulder blocks the sweep but the other
+        # side is visibly open; reversing in that situation moves away from
+        # the opening and needlessly repeats the constrained pose.
+        live_turn_yaw = self.imu.deg()
+        if live_turn_yaw is not None:
+            for turn_sign in (-1.0, 1.0):
+                safety_reason = self._rotation_safety(turn_sign * 20.0)
+                if safety_reason is not None:
+                    print(
+                        f"[saved-map] open-side turn {turn_sign * 20.0:+.0f}deg "
+                        f"rejected by live LiDAR: {safety_reason}"
+                    )
+                    continue
+                target_yaw = float(live_turn_yaw) + turn_sign * 20.0
+                self.controller.clear_safety_latch()
+                self.controller.rotate_to(target_yaw)
+                deadline = time.monotonic() + 5.0
+                reached = False
+                while time.monotonic() < deadline and not self.stop_event.is_set():
+                    yaw = self.imu.deg()
+                    if yaw is not None and abs(float(yaw) - target_yaw) <= 3.0:
+                        reached = True
+                        break
+                    if self.controller.safety_latched_reason():
+                        break
+                    time.sleep(0.05)
+                self.controller.halt()
+                if not reached:
+                    print(
+                        f"[saved-map] open-side turn {turn_sign * 20.0:+.0f}deg "
+                        "did not reach its measured heading; no reverse yet."
+                    )
+                    continue
+                escape_yaw = self.imu.deg() or target_yaw
+                if _guarded_translate(0.30, float(escape_yaw)):
+                    print(
+                        "[saved-map] temporary-map evidence was sparse; "
+                        f"used the live open-side turn ({turn_sign * 20.0:+.0f}deg) "
+                        "and a guarded 0.30m forward escape before reacquiring the spin."
+                    )
+                    return True
+                print(
+                    f"[saved-map] open-side turn {turn_sign * 20.0:+.0f}deg "
+                    "completed but its guarded forward escape was blocked; "
+                    "leaving the localization state unchanged; no reverse fallback."
+                )
+                # Do not try the other direction after a completed turn and
+                # failed translation; that would recreate the old thrashing
+                # behavior.  The fresh scan is now consumed by the fallback.
+                break
+
+            print(
+                "[saved-map] temporary localization escape had insufficient map "
+                "support; no reverse fallback is permitted and no escape was verified."
+            )
+        return False
 
     def _stationary_lidar_observation(
         self,
@@ -3131,6 +3992,76 @@ class SavedMapNavigator:
         )
         return False
 
+    def _reverse_escape_from_collision(self, distance_m: float = 0.24) -> bool:
+        """Make one short, LiDAR-guarded reverse when the forward throat is closed.
+
+        This is a bounded recovery primitive, not a second navigation mode:
+        the live scan must prove the complete rearward swept volume is clear,
+        the command is held to the current IMU heading, and any fresh hard
+        collision immediately stops it.  The caller replans from the new
+        pose afterward, so the destination is never discarded.
+        """
+        sample = self._fresh_forward_sample()
+        if sample is None:
+            return False
+        _frame_id, points = sample
+        geometry = {
+            "lidar_offset_forward_m": self.lever_m,
+            "physical_body_radius_m": float(self.args.physical_body_radius_m),
+            "self_mask_inset_m": float(self.args.collision_self_mask_inset_m),
+        }
+
+        delta = np.asarray([-abs(float(distance_m)), 0.0], dtype=np.float64)
+        if not _translation_trajectory_is_safe(
+            points,
+            self.collision_profile,
+            delta,
+            **geometry,
+        ):
+            print("[saved-map] guarded reverse rejected by the current LiDAR swept path.")
+            return False
+        hold_yaw = self.imu.deg()
+        if hold_yaw is None:
+            return False
+        command = _startup_escape_velocity(delta, max(0.20, abs(float(self.args.drive_speed))))
+        after = int(self.feed.latest()[0])
+        self.controller.clear_safety_latch()
+        self.controller.translate_body(float(command[0]), float(command[1]), float(hold_yaw))
+        started = time.monotonic()
+        deadline = started + max(0.70, min(1.8, abs(float(distance_m)) / max(0.20, abs(float(self.args.drive_speed))) * 1.6))
+        fresh_count = 0
+        try:
+            while time.monotonic() < deadline and not self.stop_event.is_set():
+                if self.controller.safety_latched_reason():
+                    return False
+                frame_id, frame = self.feed.wait_for_frame_after(
+                    after_frame_id=after,
+                    timeout_s=0.45,
+                    min_frame_advances=1,
+                )
+                if frame is None:
+                    continue
+                after = int(frame_id)
+                fresh = self._fresh_forward_sample()
+                if fresh is None:
+                    continue
+                _fresh_id, fresh_points = fresh
+                if not _translation_trajectory_is_safe(
+                    fresh_points,
+                    self.collision_profile,
+                    delta,
+                    **geometry,
+                ):
+                    return False
+                fresh_count += 1
+            if fresh_count >= 2:
+                print(f"[saved-map] guarded reverse escape completed {abs(float(distance_m)):.2f}m window.")
+                return True
+            return False
+        finally:
+            self.controller.halt()
+            self.controller.clear_safety_latch()
+
     def _replan_after_collision(
         self,
         reason: str,
@@ -3261,6 +4192,8 @@ class SavedMapNavigator:
         if float(np.hypot(*(np.asarray(self.goal) - corrected_centre))) <= 0.22:
             self.path = []
             self.goal = None
+            self._stationary_local_pose_confirmation("collision-recovery goal arrival")
+            self._save_navigation_checkpoint("collision-recovery goal arrival")
             self.status_text = "Goal reached—click another known free point"
             print(
                 "[saved-map] stationary LiDAR consensus confirms the robot is "
@@ -3974,6 +4907,7 @@ class SavedMapNavigator:
         # those are consumed the base remains safely stopped until fresh LiDAR
         # makes a route available; this avoids both shutdown and endless spin.
         motion_attempts = 0
+        reverse_attempted = False
         last_report_at = -math.inf
         while not self.stop_event.is_set() and self.goal is not None:
             self.controller.halt()
@@ -4045,6 +4979,30 @@ class SavedMapNavigator:
                 if moved:
                     motion_attempts += 1
                     continue
+
+            # When the accumulated local scan cannot expose a usable forward
+            # opening, retreat once instead of repeatedly pivoting at the same
+            # contact.  A rearward trajectory is accepted only when the live
+            # LiDAR proves the complete swept footprint is clear; after the
+            # move this loop re-observes and replans from the new pose.
+            both_sides_blocked = {"left", "right"}.issubset(live_sectors)
+            if (
+                not reverse_attempted
+                and current_reason is not None
+                and (both_sides_blocked or live_turn is None)
+            ):
+                reverse_attempted = True
+                print(
+                    "[saved-map] no one-sided escape was available; trying one "
+                    "guarded reverse to leave the contact envelope before replanning."
+                )
+                if self._reverse_escape_from_collision(0.24):
+                    motion_attempts += 1
+                    continue
+                print(
+                    "[saved-map] guarded reverse was not physically clear; "
+                    "holding position for a fresh local scan."
+                )
 
             now = time.monotonic()
             self.status_text = (
@@ -4143,12 +5101,77 @@ class SavedMapNavigator:
         """Worker for :meth:`capture_map_snapshot`; never blocks the Tk loop."""
         try:
             self.controller.halt()
+            # A manual capture is a map mutation.  Do not project fresh points
+            # with a stale/ambiguous pose: first obtain a stationary consensus
+            # from the rolling LiDAR submap, bounded to the current location.
+            # This is the guard that prevents a correct scan from being added
+            # to an unrelated room after localization drift.
+            with self.pose_lock:
+                pose_before = Pose2D(
+                    float(self.pose.x),
+                    float(self.pose.y),
+                    float(self.pose.theta_deg),
+                )
+            if not self._stationary_local_pose_confirmation("manual map snapshot"):
+                self.root.after(
+                    0,
+                    lambda: self._snapshot_finished(
+                        "Snapshot refused: current LiDAR pose was not verified; "
+                        "no geometry was written"
+                    ),
+                )
+                print(
+                    "[saved-map] manual LiDAR snapshot refused: stationary "
+                    "pose consensus was not verified; preserving map integrity."
+                )
+                return
+            # Re-check the accepted pose with fresh LiDAR, but keep this
+            # registration local to the current pose.  The old implementation
+            # called the full stationary backend loop-closure here.  That
+            # search was allowed to reject a valid partial view (for example,
+            # two visible hallway walls) even though the navigator already
+            # knew where the robot was.  It also made a clean operator
+            # snapshot depend on seeing a complete permanent-map anchor.
+            # Snapshot registration now uses the same small, bounded local
+            # LiDAR check used by the front end; it never searches another
+            # room or applies a large global correction.
+            if not self._snapshot_pose_relocalization():
+                self.root.after(
+                    0,
+                    lambda: self._snapshot_finished(
+                        "Snapshot refused: fresh LiDAR pose check was not stable; "
+                        "hold still and try again"
+                    ),
+                )
+                print(
+                    "[saved-map] manual LiDAR snapshot refused: fresh local "
+                    "pose check was not spatially consistent."
+                )
+                return
+            with self.pose_lock:
+                pose = Pose2D(
+                    float(self.pose.x),
+                    float(self.pose.y),
+                    float(self.pose.theta_deg),
+                )
+            pose_shift = float(np.hypot(pose.x - pose_before.x, pose.y - pose_before.y))
+            if pose_shift > 0.25:
+                self.root.after(
+                    0,
+                    lambda: self._snapshot_finished(
+                        f"Snapshot refused: pose correction was {pose_shift:.2f}m; "
+                        "try again while stationary"
+                    ),
+                )
+                print(
+                    f"[saved-map] manual LiDAR snapshot refused: stationary "
+                    f"correction {pose_shift:.2f}m exceeded the 0.25m bound."
+                )
+                return
             local = self._stationary_lidar_observation(frame_count=5)
             if self.stop_event.is_set() or not len(local):
                 self.root.after(0, lambda: self._snapshot_finished("Capture failed: no fresh LiDAR returns"))
                 return
-            with self.pose_lock:
-                pose = Pose2D(float(self.pose.x), float(self.pose.y), float(self.pose.theta_deg))
             world_points = _transform_points(local, pose)
             existing_sets = [scan.world_xy for scan in self.world.scans if len(scan.world_xy)]
             existing = np.concatenate(existing_sets, axis=0) if existing_sets else np.empty((0, 2))
@@ -4170,14 +5193,29 @@ class SavedMapNavigator:
                 # it improves the live map without becoming a localization
                 # target until a future exploration run validates it.
                 self.world.add(local.astype(np.float32, copy=False), pose, gold=False)
+                # Persist the provisional scan immediately. Previously this
+                # only changed the in-memory WorldMap, so it disappeared as
+                # soon as the navigator closed or the map was reloaded.
+                save_world_map(
+                    self.args.map,
+                    self.world,
+                    pose,
+                    trail=list(self.saved.trail_xy),
+                    sensor_config=self.saved.metadata.get("sensor_config", {}),
+                    navigation_config=self.saved.metadata.get("navigation_config", {}),
+                    visual_color_landmarks=self.saved.metadata.get("visual_color_landmarks", []),
+                    surface_motion_atlas=self.surface_motion_atlas.to_metadata(),
+                )
+                self._compute_view()
+                self._draw_map()
                 self.status_text = (
-                    f"Added LiDAR snapshot: {novel_count} novel returns "
+                    f"Added and saved LiDAR snapshot: {novel_count} novel returns "
                     f"({novelty:.0%}); provisional map geometry"
                 )
                 print(
                     f"[saved-map] manual LiDAR snapshot added at "
                     f"({pose.x:+.2f}, {pose.y:+.2f}, {pose.theta_deg:+.1f}deg): "
-                    f"{len(local)} returns, {novel_count} novel ({novelty:.0%})."
+                    f"{len(local)} returns, {novel_count} novel ({novelty:.0%}); map saved."
                 )
 
             self.root.after(0, commit)
@@ -4186,6 +5224,96 @@ class SavedMapNavigator:
             self.root.after(0, lambda message=message: self._snapshot_finished(message))
         finally:
             self.controller.clear_safety_latch()
+
+    def _snapshot_pose_relocalization(self) -> bool:
+        """Verify the snapshot pose with a small fresh LiDAR registration.
+
+        This is intentionally not a global relocalization pass.  The robot is
+        already localized when the operator presses the capture button, so a
+        snapshot must be attached near that accepted pose, not re-selected
+        from a symmetric room elsewhere in the map.  Three fresh stationary
+        scans are matched within a 35 cm translation window, their centres are
+        required to agree, and the median pose is used for the snapshot.  If
+        the permanent map is only partly visible, the previously confirmed
+        rolling-submap pose remains valid; only an inconsistent fresh set is
+        rejected.
+        """
+        with self.pose_lock:
+            seed = Pose2D(float(self.pose.x), float(self.pose.y), float(self.pose.theta_deg))
+        seed_centre = self._centre(seed)
+        after = self.feed.latest()[0]
+        candidates: list[tuple[np.ndarray, Pose2D, float, float]] = []
+        for _ in range(3):
+            after, frame = self.feed.wait_for_frame_after(
+                after_frame_id=after,
+                timeout_s=0.9,
+                min_frame_advances=1,
+            )
+            if frame is None:
+                continue
+            local = _scan_local(frame, self.args)
+            if len(local) < 30:
+                continue
+            solved, score = _localize(
+                local,
+                self.world,
+                seed,
+                self.args,
+                0.35,
+                3.0,
+            )
+            solved = _pose_with_imu_heading(
+                solved,
+                seed.theta_deg,
+                self.lever_m,
+                self.forward_offset,
+            )
+            centre = self._centre(solved)
+            shift = float(np.hypot(*(centre - seed_centre)))
+            support = _endpoint_support_ratio(
+                _transform_points(local, solved),
+                self.world.reference(),
+                0.10,
+            )
+            if score >= float(self.args.localization_min_score) and support >= 0.20 and shift <= 0.35:
+                candidates.append((centre, solved, float(score), float(support)))
+
+        if len(candidates) < 2:
+            print(
+                "[saved-map] snapshot LiDAR pose check: no stable permanent-map "
+                f"consensus ({len(candidates)}/3); retaining the already "
+                "confirmed local pose."
+            )
+            # The stationary rolling-submap confirmation immediately before
+            # this method is still a valid bounded pose check.  A partial or
+            # newly mapped view must not be rejected merely because the saved
+            # map has no complete wall anchor in the current 180deg view.
+            return True
+
+        centres = np.asarray([item[0] for item in candidates], dtype=np.float64)
+        consensus = np.median(centres, axis=0)
+        scatter = np.hypot(*(centres - consensus).T)
+        if float(np.percentile(scatter, 90.0)) > 0.10:
+            return False
+        best = min(
+            candidates,
+            key=lambda item: float(np.hypot(*(item[0] - consensus))),
+        )
+        confirmed = _lidar_pose_from_robot_centre(
+            consensus,
+            seed.theta_deg,
+            self.lever_m,
+            self.forward_offset,
+        )
+        with self.pose_lock:
+            self.pose = confirmed
+        print(
+            "[saved-map] snapshot LiDAR pose check: "
+            f"{len(candidates)}/3 agreed at ({confirmed.x:+.2f}, "
+            f"{confirmed.y:+.2f}), match {best[2]:.1f}, "
+            f"support {best[3]:.0%}; registering snapshot here."
+        )
+        return True
 
     def _snapshot_finished(self, message: str) -> None:
         if self.closing:
@@ -4218,6 +5346,356 @@ class SavedMapNavigator:
         except Exception:
             return []
 
+    def _bottom_color_score_at_pose(
+        self,
+        pose: Pose2D,
+        signature: list[float] | None = None,
+    ) -> float:
+        """Score the live bottom-camera cue against saved map keyframes.
+
+        The score is deliberately bounded to nearby saved keyframes.  A
+        distant color coincidence is not a localization measurement; it is
+        only useful for distinguishing two LiDAR hypotheses that already
+        agree geometrically.
+        """
+        live = signature if signature is not None else self._live_bottom_color_signature()
+        if not live or not self._bottom_color_enabled:
+            return 0.0
+        return float(
+            best_landmark_score(
+                live,
+                self._visual_color_landmarks,
+                x=float(pose.x),
+                y=float(pose.y),
+                theta_deg=float(pose.theta_deg),
+                signature_key="bottom_signature",
+            )
+        )
+
+    def _bottom_color_landmark_near_pose(self, pose: Pose2D, radius_m: float = 0.75) -> bool:
+        """Return whether appearance data actually covers this map pose."""
+        x = float(pose.x)
+        y = float(pose.y)
+        radius = max(0.05, float(radius_m))
+        for landmark in self._visual_color_landmarks:
+            try:
+                landmark_pose = np.asarray(landmark["pose"], dtype=np.float64).reshape(3)
+                if (
+                    math.hypot(float(landmark_pose[0]) - x, float(landmark_pose[1]) - y) <= radius
+                    and landmark.get("bottom_signature")
+                ):
+                    return True
+            except (KeyError, TypeError, ValueError):
+                continue
+        return False
+
+    def _navigation_bottom_color_check(self, pose: Pose2D, *, force: bool = False) -> float | None:
+        """Observe saved bottom-color landmarks while a route is executing.
+
+        This is intentionally a *guard* around LiDAR/IMU odometry.  It never
+        teleports the robot or overrides a valid scan match.  When the live
+        appearance drops sharply from a nearby saved landmark, the next
+        stationary backend correction is told about the mismatch and can use
+        the saved color cue to reject a mirrored LiDAR mode.
+        """
+        if not self._bottom_color_enabled or self.camera_subscriber is None:
+            return None
+        now = time.monotonic()
+        if not force and now - self._last_navigation_bottom_color_check_at < 1.25:
+            return self._last_navigation_bottom_color_score
+        signature = self._live_bottom_color_signature()
+        if not signature:
+            return None
+        score = self._bottom_color_score_at_pose(pose, signature)
+        previous = self._last_navigation_bottom_color_score
+        covered = self._bottom_color_landmark_near_pose(pose)
+        if covered and previous is not None and previous >= 0.50 and score < previous - 0.22:
+            self._navigation_bottom_color_mismatch_count += 1
+        elif not covered or score >= 0.35 or previous is None:
+            self._navigation_bottom_color_mismatch_count = 0
+        self._last_navigation_bottom_color_score = score
+        self._last_navigation_bottom_color_check_at = now
+        if force or self._navigation_bottom_color_mismatch_count:
+            print(
+                "[visual-anchor] navigation bottom-color check: "
+                f"score {score:.2f}"
+                + (", covered" if covered else ", no saved landmark nearby")
+                + (f" (previous {previous:.2f})" if previous is not None else "")
+                + (
+                    f", mismatch {self._navigation_bottom_color_mismatch_count}/2"
+                    if self._navigation_bottom_color_mismatch_count
+                    else ""
+                )
+                + "; LiDAR/IMU pose remains authoritative."
+            )
+        return score
+
+    def _bounded_live_lidar_refit(self, local_scan: np.ndarray, seed_pose: Pose2D) -> Pose2D | None:
+        """Refit one weak live scan inside the last trusted pose bubble.
+
+        This is intentionally a small, deterministic recovery search.  It
+        cannot jump to another room or a mirrored hallway: translation is
+        limited to the uncertainty bubble and heading to the last heading
+        plus/minus 45 degrees.  The saved occupancy grid's negative evidence
+        is checked again before the result is accepted.
+        """
+        local = np.asarray(local_scan, dtype=np.float32).reshape((-1, 2))
+        if len(local) < 40:
+            return None
+        bubble_seed = self.localization_bubble_pose or seed_pose
+        seed_centre = self._centre(bubble_seed)
+        sensor_pose = _lidar_pose_from_robot_centre(
+            np.zeros(2, dtype=np.float64),
+            0.0,
+            self.lever_m,
+            self.forward_offset,
+        )
+        centre_scan = _transform_points(local, sensor_pose).astype(np.float32, copy=False)
+        bounded_initial = Pose2D(
+            float(seed_centre[0]), float(seed_centre[1]), float(bubble_seed.theta_deg)
+        )
+        try:
+            solved_centre, metadata = _search_pose(
+                snapshot_points_xy=centre_scan,
+                global_points_xy=self.world.reference(),
+                initial_pose=bounded_initial,
+                resolution_m=float(self.args.stitch_resolution_m),
+                search_xy_m=float(self.localization_bubble_radius_m),
+                coarse_angle_step_deg=5.0,
+                fine_angle_step_deg=0.5,
+                theta_window_deg=45.0,
+                max_translation_from_initial_m=float(self.localization_bubble_radius_m),
+                prior_pose=bounded_initial,
+                prior_translation_weight=0.0,
+                prior_theta_weight=0.0,
+                allow_whole_map_search=False,
+                force_whole_map_search=False,
+                whole_map_seed_count=1,
+                whole_map_refine_count=1,
+            )
+        except (RuntimeError, ValueError, TypeError, FloatingPointError) as exc:
+            print(f"[saved-map] bounded live-LiDAR refit unavailable: {exc}")
+            return None
+
+        candidate_centre = np.asarray([solved_centre.x, solved_centre.y], dtype=np.float64)
+        shift = float(np.hypot(*(candidate_centre - seed_centre)))
+        heading_error = abs(
+            (float(solved_centre.theta_deg) - float(bubble_seed.theta_deg) + 180.0) % 360.0 - 180.0
+        )
+        score = float(metadata.get("score") or 0.0)
+        candidate_lidar = _lidar_pose_from_robot_centre(
+            candidate_centre,
+            solved_centre.theta_deg,
+            self.lever_m,
+            self.forward_offset,
+        )
+        quality, _endpoint_occupied, endpoint_free, ray_occupied = _occupancy_pose_consistency(
+            self.saved,
+            [(local, 0.0)],
+            candidate_lidar,
+            self.lever_m,
+            self.forward_offset,
+        )
+        support = _endpoint_support_ratio(
+            _transform_points(centre_scan, solved_centre),
+            self.world.reference(),
+            0.08,
+        )
+        minimum_score = max(5.0, float(self.args.localization_min_score) - 1.5)
+        if (
+            score < minimum_score
+            or support < 0.28
+            or shift > float(self.localization_bubble_radius_m) + 1e-6
+            or heading_error > 45.0 + 1e-6
+            or endpoint_free > 0.50
+            or ray_occupied > 0.60
+        ):
+            print(
+                "[saved-map] bounded live-LiDAR refit rejected: "
+                f"match {score:.1f}, support {support:.0%}, shift {shift:.2f}m, "
+                f"heading {heading_error:.1f}deg, free={endpoint_free:.0%}, "
+                f"rays={ray_occupied:.0%}."
+            )
+            return None
+        print(
+            "[saved-map] bounded live-LiDAR refit accepted inside localization bubble: "
+            f"match {score:.1f}, support {support:.0%}, shift {shift:.2f}m, "
+            f"heading {heading_error:.1f}deg, occupancy quality {quality:.2f}."
+        )
+        return candidate_lidar
+
+    def _accept_localized_pose(
+        self,
+        solved: Pose2D,
+        *,
+        score: float,
+        support: float,
+        captures: list[tuple[np.ndarray, float]],
+        initial_yaw: float,
+        return_yaw: float,
+        angular_baseline: float,
+        attempt: int,
+    ) -> None:
+        """Commit one LiDAR-accepted robot-centre pose and seed tracking."""
+        solved_lidar = _lidar_pose_from_robot_centre(
+            np.asarray([solved.x, solved.y], dtype=np.float64),
+            solved.theta_deg,
+            self.lever_m,
+            self.forward_offset,
+        )
+        solved_lidar = _rotate_lidar_pose_about_robot_centre(
+            solved_lidar,
+            float(return_yaw) - float(initial_yaw),
+            self.lever_m,
+            self.forward_offset,
+        )
+        with self.pose_lock:
+            self.pose = solved_lidar
+        seed_after = self.feed.latest()[0]
+        _frame_id, seed_frame = self.feed.wait_for_frame_after(
+            after_frame_id=seed_after,
+            timeout_s=1.5,
+            min_frame_advances=1,
+        )
+        seed_local = _scan_local(seed_frame, self.args) if seed_frame is not None else captures[0][0]
+        self.local_odometry.reset(seed_local, solved_lidar)
+        self._saved_map_anchor_failures = 0
+        self._discard_ground_translation()
+        self.global_tracking_cycle = 0
+        self.localization_imu = float(return_yaw)
+        self.localized = self.localization_imu is not None
+        self.localization_bubble_pose = Pose2D(
+            float(self.pose.x), float(self.pose.y), float(self.pose.theta_deg)
+        )
+        self.body_fixed_lidar_returns = _learn_body_fixed_lidar_returns(
+            captures,
+            self.forward_offset,
+        )
+        print(
+            "[saved-map] learned body-fixed LiDAR self-filter: "
+            f"{len(self.body_fixed_lidar_returns)} persistent angular bin(s); "
+            "these chassis returns are excluded from collision safety only."
+        )
+        solved_centre = self._centre(solved_lidar)
+        self.status_text = (
+            f"Localized robot centre at ({solved_centre[0]:+.2f}, "
+            f"{solved_centre[1]:+.2f}), "
+            f"heading {solved_lidar.theta_deg:+.1f}deg; "
+            f"{len(captures)} views/{angular_baseline:.0f}deg, match {score:.1f}, "
+            f"support {support:.0%}—click waypoints; press Enter to navigate"
+            if self.localized
+            else "IMU unavailable—motion disabled"
+        )
+        print(f"[saved-map] {self.status_text}")
+
+    def _try_stationary_view_localization(
+        self,
+        local_scan: np.ndarray,
+        *,
+        initial_yaw: float,
+        reference: np.ndarray,
+        attempt: int,
+    ) -> bool:
+        """Try the cheapest localization hypothesis before commanding a turn."""
+        local = np.asarray(local_scan, dtype=np.float32).reshape((-1, 2))
+        if len(local) < 80:
+            return False
+        # _search_pose expects points about the robot centre. Convert this one
+        # LiDAR view using the calibrated lever arm before matching it.
+        sensor_pose = _lidar_pose_from_robot_centre(
+            np.zeros(2, dtype=np.float64),
+            0.0,
+            self.lever_m,
+            self.forward_offset,
+        )
+        centre_scan = _transform_points(local, sensor_pose).astype(np.float32, copy=False)
+        captures = [(local, 0.0)]
+        position_seeds = _global_localization_position_seeds(self.saved)
+        if self._startup_checkpoint_pose is not None:
+            position_seeds = np.concatenate(
+                [position_seeds, np.asarray([self._centre(self._startup_checkpoint_pose)], dtype=np.float32)],
+                axis=0,
+            )
+        solved, metadata = _search_pose(
+            snapshot_points_xy=centre_scan,
+            global_points_xy=reference,
+            initial_pose=self.pose,
+            resolution_m=float(self.args.stitch_resolution_m),
+            search_xy_m=0.50,
+            coarse_angle_step_deg=10.0,
+            fine_angle_step_deg=0.75,
+            theta_window_deg=180.0,
+            whole_map_theta_center_deg=float(self.pose.theta_deg),
+            whole_map_theta_window_deg=180.0,
+            max_translation_from_initial_m=None,
+            prior_pose=None,
+            allow_whole_map_search=True,
+            force_whole_map_search=True,
+            whole_map_seed_count=64,
+            whole_map_refine_count=20,
+            whole_map_position_seeds_xy=position_seeds,
+        )
+        modes = list(metadata.get("whole_map_modes") or [])
+        if not modes:
+            return False
+        live_bottom = self._live_bottom_color_signature()
+        live_color = self._live_visual_color_signature()
+        for mode in modes:
+            candidate = Pose2D(float(mode["x"]), float(mode["y"]), float(mode["theta_deg"]))
+            quality, _endpoint_occupied, endpoint_free, ray_occupied = _occupancy_pose_consistency(
+                self.saved,
+                captures,
+                candidate,
+                self.lever_m,
+                self.forward_offset,
+            )
+            # Keep the live-LiDAR negative evidence with the candidate. A
+            # pillar that is present now but absent from a clear-room pose
+            # must disqualify that pose even when point-cloud correlation is
+            # otherwise high.
+            mode["endpoint_free"] = float(endpoint_free)
+            mode["ray_occupied"] = float(ray_occupied)
+            mode["combined_score"] = float(mode["score"]) + float(quality)
+            if live_bottom and self._bottom_color_enabled:
+                mode["combined_score"] += float(self.args.bottom_color_weight) * best_landmark_score(
+                    live_bottom,
+                    self._visual_color_landmarks,
+                    x=float(candidate.x),
+                    y=float(candidate.y),
+                    theta_deg=float(candidate.theta_deg),
+                    signature_key="bottom_signature",
+                )
+            if live_color and self._visual_color_landmarks:
+                mode["combined_score"] += 0.35 * float(self.args.visual_color_weight) * best_landmark_score(
+                    live_color,
+                    self._visual_color_landmarks,
+                    x=float(candidate.x),
+                    y=float(candidate.y),
+                    theta_deg=float(candidate.theta_deg),
+                )
+        modes.sort(key=lambda mode: float(mode["combined_score"]), reverse=True)
+        winner = modes[0]
+        solved = Pose2D(float(winner["x"]), float(winner["y"]), float(winner["theta_deg"]))
+        score = float(winner["score"])
+        support = _endpoint_support_ratio(_transform_points(centre_scan, solved), reference, 0.08)
+        margin = float(modes[0]["combined_score"]) - (
+            float(modes[1]["combined_score"]) if len(modes) > 1 else -math.inf
+        )
+        print(
+            f"[saved-map] stationary LiDAR localization: match {score:.1f}, "
+            f"support {support:.0%}, mode margin {margin:.2f}."
+        )
+        # A single stationary scan is not independent evidence of pose.  A
+        # hallway's two parallel edges can produce an excellent point-cloud
+        # score at the wrong room/heading, exactly the false-positive this
+        # fast path used to admit.  Require the normal multi-view angular
+        # acquisition so the current live LiDAR can disprove mirrored modes.
+        print(
+            "[saved-map] stationary one-view match retained only as a seed; "
+            "requiring multi-view LiDAR geometry before accepting localization."
+        )
+        return False
+
     def _localize_worker(self, clearance_relocations: int = 0) -> None:
         self.controller.halt()
         self.localized = False
@@ -4249,11 +5727,29 @@ class SavedMapNavigator:
             captures.append((local, float(yaw) - float(initial_yaw)))
             return True
 
+        # Use the stationary LiDAR view that is already in front of the robot
+        # before commanding any rotation.  Previously this check was
+        # unreachable because ``captures`` had just been initialized empty,
+        # so localization always began with a sweep and could ignore the
+        # current pillar/obstacle evidence.
         capture_view()
-        # Choose one safe direction, then acquire a complete monotonic sweep. Unlike the
+        if captures and self._try_stationary_view_localization(
+            captures[0][0],
+            initial_yaw=initial_yaw,
+            reference=reference,
+            attempt=attempt,
+        ):
+            return
+        print(
+            "[saved-map] stationary view was ambiguous; starting one slow "
+            "180deg LiDAR localization sweep."
+        )
+        # Choose one safe direction, then acquire one monotonic half sweep. Unlike the
         # explorer, saved-map localization has no trusted pose yet; all motion
         # safety is therefore evaluated directly in the calibrated body frame.
-        step_deg = 30.0
+        step_deg = 20.0
+        sweep_steps = 9
+        required_sweep_deg = 160.0
         direction = 0.0
         if self._rotation_safety(step_deg) is None:
             direction = 1.0
@@ -4265,7 +5761,7 @@ class SavedMapNavigator:
             )
             return
 
-        for step in range(1, 13):
+        for step in range(1, sweep_steps + 1):
             target = float(initial_yaw) + direction * step_deg * step
             self.pending_collision_sectors = set()
             self.controller.clear_safety_latch()
@@ -4310,13 +5806,11 @@ class SavedMapNavigator:
                     )
                     print(
                         f"[saved-map] localization pivot is constrained on the "
-                        f"{contacted_side}; translating 0.12m away before "
+                        f"{contacted_side}; checking the opposite side, then "
+                        "strafing one physical robot radius away before "
                         "restarting the complete 360deg acquisition."
                     )
-                    if self._unlocalized_strafe_away_from_side(
-                        lateral_sign,
-                        direction * step_deg,
-                    ):
+                    if self._recover_localization_one_sided_collision(contacted_side):
                         self.pending_collision_sectors = set()
                         print(
                             "[saved-map] outward relocation succeeded; "
@@ -4325,9 +5819,15 @@ class SavedMapNavigator:
                         )
                         return self._localize_worker(clearance_relocations + 1)
                     print(
-                        "[saved-map] outward relocation was not verified by "
-                        "fresh LiDAR; retaining the normal safe-stop path."
+                        "[saved-map] one-sided strafe/reverse recovery could not "
+                        "complete under fresh LiDAR slice checks; discarding the "
+                        "interrupted fan and retaining the safe-stop state."
                     )
+                print(
+                    "[saved-map] no further localization recovery is permitted: "
+                    "only the open-side radius strafe and its collision-triggered "
+                    "radius reverse are enabled."
+                )
                 break
             time.sleep(0.18)
             capture_view()
@@ -4337,10 +5837,14 @@ class SavedMapNavigator:
             )
 
         sweep_yaw = self.imu.deg()
-        completed_full_sweep = sweep_yaw is not None and abs(float(sweep_yaw) - float(initial_yaw)) >= 350.0
+        completed_full_sweep = (
+            sweep_yaw is not None
+            and abs(float(sweep_yaw) - float(initial_yaw)) >= required_sweep_deg
+        )
         if completed_full_sweep:
-            # One complete revolution is already the original physical
-            # heading. Do not command an unnecessary reverse revolution.
+            # The half-sweep is intentionally retained at its measured final
+            # heading; rotating back would waste the clean data and create the
+            # double-spin startup behavior this path is designed to remove.
             returned_to_start = True
             return_yaw = sweep_yaw
         else:
@@ -4383,6 +5887,13 @@ class SavedMapNavigator:
         live_color = self._live_visual_color_signature()
         live_bottom_color = self._live_bottom_color_signature()
         position_seeds = _global_localization_position_seeds(self.saved)
+        if self._startup_checkpoint_pose is not None:
+            checkpoint_centre = self._centre(self._startup_checkpoint_pose)
+            position_seeds = np.concatenate(
+                [position_seeds, np.asarray([checkpoint_centre], dtype=np.float32)],
+                axis=0,
+            )
+            print("[saved-map] target-arrival checkpoint added to LiDAR position seeds.")
         self.status_text = (
             f"Relocalizing (attempt {attempt})—globally matching {len(captures)} angular views..."
         )
@@ -4487,12 +5998,16 @@ class SavedMapNavigator:
         runner_up_score = float(modes[1]["combined_score"]) if len(modes) > 1 else -math.inf
         winner_margin = combined_score - runner_up_score
         support = _endpoint_support_ratio(_transform_points(panorama, solved), reference, 0.08)
+        winner_endpoint_free = float(modes[0].get("endpoint_free", 1.0)) if modes else 1.0
+        winner_ray_occupied = float(modes[0].get("ray_occupied", 1.0)) if modes else 1.0
         print(
             f"[saved-map] active global localization: {len(captures)} views, "
             f"baseline {angular_baseline:.0f}deg, match {score:.1f}, "
             f"support {support:.1%}, distinct-mode margin "
-            f"{winner_margin:.2f}, pose "
-                f"({solved.x:+.2f}, {solved.y:+.2f}, {solved.theta_deg:+.1f}deg)."
+                f"{winner_margin:.2f}, pose "
+                f"({solved.x:+.2f}, {solved.y:+.2f}, {solved.theta_deg:+.1f}deg), "
+                f"live-LiDAR free-conflict {winner_endpoint_free:.0%}, "
+                f"ray-conflict {winner_ray_occupied:.0%}."
         )
         for mode_index, mode in enumerate(modes[:5], start=1):
             print(
@@ -4518,6 +6033,8 @@ class SavedMapNavigator:
             support,
             winner_margin,
             float(self.args.localization_min_score),
+            endpoint_free=winner_endpoint_free,
+            ray_occupied=winner_ray_occupied,
         ):
             self.status_text = (
                 f"Relocalization attempt {attempt} rejected: match {score:.1f}, "
@@ -4558,6 +6075,9 @@ class SavedMapNavigator:
         self.global_tracking_cycle = 0
         self.localization_imu = float(return_yaw)
         self.localized = self.localization_imu is not None
+        self.localization_bubble_pose = Pose2D(
+            float(self.pose.x), float(self.pose.y), float(self.pose.theta_deg)
+        )
         self.body_fixed_lidar_returns = _learn_body_fixed_lidar_returns(
             captures,
             self.forward_offset,
@@ -4573,7 +6093,7 @@ class SavedMapNavigator:
             f"{solved_centre[1]:+.2f}), "
             f"heading {solved.theta_deg:+.1f}deg; "
             f"{len(captures)} views/{angular_baseline:.0f}deg, match {score:.1f}, "
-            f"support {support:.0%}—click a known free point"
+            f"support {support:.0%}—click waypoints; press Enter to navigate"
             if self.localized
             else "IMU unavailable—motion disabled"
         )
@@ -4583,14 +6103,50 @@ class SavedMapNavigator:
         if not self.localized:
             messagebox.showwarning("Not localized", "Relocalize before commanding motion.")
             return
-        if self.navigation_thread is not None and self.navigation_thread.is_alive():
-            messagebox.showinfo("Busy", "Stop the current navigation command first.")
-            return
         requested = self._world_xy(event.x, event.y)
-        # Route preparation includes sensor acquisition and, when necessary,
-        # a complete global angular localization.  Keep that work off Tk's UI
-        # thread and keep this same worker alive through route execution so a
-        # second click cannot overlap the reset/planning boundary.
+        busy = self.navigation_thread is not None and self.navigation_thread.is_alive()
+        with self._goal_queue_lock:
+            was_empty = not self.goal_queue
+            self.goal_queue.append(np.asarray(requested, dtype=np.float64).copy())
+            queue_size = len(self.goal_queue)
+        if not busy and was_empty:
+            self.goal = None
+        if busy:
+            self.status_text = f"Waypoint {queue_size} added—current route continues; press Enter for new queued points"
+        else:
+            self.status_text = f"Waypoint {queue_size} marked—press Enter to finalize and navigate"
+
+    def _commit_queued_goals(self, _event=None) -> str:
+        """Commit the numbered click list and begin navigating waypoint 1."""
+        if not self.localized:
+            self.status_text = "Relocalize before committing waypoints"
+            return "break"
+        if self.navigation_thread is not None and self.navigation_thread.is_alive():
+            self.status_text = "Navigation already active; queued waypoints remain"
+            return "break"
+        with self._goal_queue_lock:
+            if not self.goal_queue:
+                self.status_text = "No waypoints marked—click the map first"
+                return "break"
+            requested = self.goal_queue.pop(0)
+        self.stop_event.clear()
+        self.navigation_thread = threading.Thread(
+            target=self._prepare_navigation_command,
+            args=(requested,),
+            daemon=True,
+        )
+        self.navigation_thread.start()
+        return "break"
+
+    def _start_next_queued_goal(self) -> None:
+        """Launch the next queued target after the previous one arrives."""
+        if self.closing or self.stop_event.is_set():
+            return
+        with self._goal_queue_lock:
+            if not self.goal_queue:
+                return
+            requested = self.goal_queue.pop(0)
+        self.status_text = "Previous target reached—preparing the next queued target..."
         self.stop_event.clear()
         self.navigation_thread = threading.Thread(
             target=self._prepare_navigation_command,
@@ -4612,19 +6168,11 @@ class SavedMapNavigator:
             self.status_text = "Could not acquire a fresh route-boundary LiDAR scan"
             return
         if boundary == "needs_global":
-            self.localization_attempt += 1
             print(
-                "[saved-map] route-boundary single-view geometry is ambiguous; "
-                "performing a complete angular global localization before "
-                "planning this command."
+                "[saved-map] route-boundary permanent-map geometry is weak or "
+                "unmapped; retaining the continuous rolling LiDAR/IMU pose "
+                "instead of starting a recovery spin."
             )
-            self._localize_worker()
-            if not self.localized:
-                print(
-                    "[saved-map] route command remains disabled because the "
-                    "complete global localization was not accepted."
-                )
-                return
             self._reset_route_transient_state()
 
         with self.pose_lock:
@@ -4713,6 +6261,23 @@ class SavedMapNavigator:
             seed = self.pose
             seed_centre = self._centre(seed)
         now = time.monotonic()
+        if self._arrival_checkpoint_pose is not None and now - self._arrival_checkpoint_at <= 300.0:
+            checkpoint_centre = self._centre(self._arrival_checkpoint_pose)
+            checkpoint_drift = float(np.hypot(*(checkpoint_centre - seed_centre)))
+            if checkpoint_drift <= 0.30:
+                # Bottom-camera flow can integrate a small stationary bias
+                # while the robot is stopped at a target. Restore the verified
+                # target pose before route-boundary matching rather than
+                # turning that bias into a needless global relocalization.
+                seed = self._arrival_checkpoint_pose
+                seed_centre = checkpoint_centre
+                with self.pose_lock:
+                    self.pose = seed
+                print(
+                    f"[saved-map] route-boundary {context}: restored the "
+                    f"stationary target checkpoint after {checkpoint_drift * 100:.1f}cm "
+                    "of stopped-sensor drift; no global relocalization needed."
+                )
         recent_local_confirmation = (
             self._last_local_pose_confirmation_centre is not None
             and self._saved_map_anchor_failures < 2
@@ -4727,9 +6292,27 @@ class SavedMapNavigator:
             )
             <= 0.20
         )
+        recent_arrival_checkpoint = (
+            self._arrival_checkpoint_pose is not None
+            and now - self._arrival_checkpoint_at <= 300.0
+            and float(
+                np.hypot(
+                    *(self._centre(self._arrival_checkpoint_pose) - seed_centre)
+                )
+            )
+            <= 0.05
+        )
+        if recent_arrival_checkpoint:
+            # The robot has not moved since the verified target snapshot;
+            # do not let a weak repeated room scan invent a new pose.
+            recent_local_confirmation = True
 
         frame_id = self.feed.latest()[0]
         candidates: list[tuple[np.ndarray, float, float]] = []
+        candidate_poses: list[Pose2D] = []
+        live_bottom_color = self._live_bottom_color_signature()
+        seed_bottom_score = self._bottom_color_score_at_pose(seed, live_bottom_color)
+        self._navigation_bottom_color_check(seed, force=True)
         for _ in range(5):
             frame_id, frame = self.feed.wait_for_frame_after(
                 after_frame_id=frame_id,
@@ -4754,6 +6337,42 @@ class SavedMapNavigator:
                 0.08,
             )
             candidates.append((self._centre(solved), score, support))
+            candidate_poses.append(solved)
+
+        candidate_bottom_scores = [
+            self._bottom_color_score_at_pose(pose, live_bottom_color)
+            for pose in candidate_poses
+        ]
+        preferred_bottom_centre: np.ndarray | None = None
+        color_reject = False
+        if live_bottom_color and self._bottom_color_enabled and candidate_bottom_scores:
+            reliable = [
+                index
+                for index, (item, color_score) in enumerate(
+                    zip(candidates, candidate_bottom_scores, strict=True)
+                )
+                if float(item[1]) >= float(self.args.localization_min_score)
+                and float(item[2]) >= 0.35
+                and float(color_score) >= 0.45
+                and float(color_score) >= seed_bottom_score + 0.10
+            ]
+            if len(reliable) >= 2:
+                color_centres = np.asarray([candidates[index][0] for index in reliable])
+                color_consensus = np.median(color_centres, axis=0)
+                color_scatter = np.hypot(*(color_centres - color_consensus).T)
+                if float(np.percentile(color_scatter, 90.0)) <= 0.10:
+                    preferred_bottom_centre = color_consensus
+            best_bottom_score = max(candidate_bottom_scores, default=0.0)
+            color_reject = (
+                seed_bottom_score >= 0.45
+                and best_bottom_score + 0.18 < seed_bottom_score
+            )
+            print(
+                "[visual-anchor] route-boundary bottom-color check: "
+                f"current {seed_bottom_score:.2f}, best {best_bottom_score:.2f}, "
+                f"reliable {len(reliable)}/{len(candidate_bottom_scores)}; "
+                "LiDAR remains authoritative."
+            )
 
         consensus = _route_boundary_reanchor_consensus(
             candidates,
@@ -4762,6 +6381,21 @@ class SavedMapNavigator:
         )
         applied_delta = np.zeros(2, dtype=np.float64)
         if consensus is not None:
+            if color_reject:
+                print(
+                    f"[visual-anchor] route-boundary {context}: rejected the "
+                    "saved-map correction because its bottom-camera appearance "
+                    f"({max(candidate_bottom_scores, default=0.0):.2f}) disagrees "
+                    f"with the current pose ({seed_bottom_score:.2f}); retaining "
+                    "the continuous LiDAR/IMU pose."
+                )
+                consensus = seed_centre.copy()
+            elif preferred_bottom_centre is not None:
+                consensus = 0.75 * seed_centre + 0.25 * preferred_bottom_centre
+                print(
+                    f"[visual-anchor] route-boundary {context}: bottom-camera "
+                    "landmarks selected the LiDAR-consistent local mode."
+                )
             correction_m = float(np.hypot(*(consensus - seed_centre)))
             if recent_local_confirmation and correction_m > 0.12:
                 print(
@@ -4925,10 +6559,12 @@ class SavedMapNavigator:
         self.local_odometry.add(best[1], confirmed)
         self._last_local_pose_confirmation_at = time.monotonic()
         self._last_local_pose_confirmation_centre = consensus.copy()
+        bottom_score = self._navigation_bottom_color_check(confirmed, force=True)
         print(
             f"[saved-map] stationary local pose confirmed for {context}: "
             f"{len(candidates)}/5 scans, correction {correction_m * 100:.1f}cm, "
-            f"scatter p90 {float(np.percentile(scatter, 90.0)) * 100:.1f}cm."
+            f"scatter p90 {float(np.percentile(scatter, 90.0)) * 100:.1f}cm"
+            + (f", bottom-color {bottom_score:.2f}." if bottom_score is not None else ".")
         )
         return True
 
@@ -4947,7 +6583,11 @@ class SavedMapNavigator:
         seed_centre = self._centre(seed)
         frame_id = self.feed.latest()[0]
         candidates: list[tuple[np.ndarray, float, float]] = []
+        candidate_poses: list[Pose2D] = []
         accepted_locals: list[np.ndarray] = []
+        live_bottom_color = self._live_bottom_color_signature()
+        seed_bottom_score = self._bottom_color_score_at_pose(seed, live_bottom_color)
+        self._navigation_bottom_color_check(seed, force=True)
         for _ in range(3):
             frame_id, frame = self.feed.wait_for_frame_after(
                 after_frame_id=frame_id,
@@ -4967,7 +6607,41 @@ class SavedMapNavigator:
                 0.08,
             )
             candidates.append((self._centre(solved), score, support))
+            candidate_poses.append(solved)
             accepted_locals.append(local)
+
+        candidate_bottom_scores = [
+            self._bottom_color_score_at_pose(pose, live_bottom_color)
+            for pose in candidate_poses
+        ]
+        preferred_bottom_centre: np.ndarray | None = None
+        if live_bottom_color and self._bottom_color_enabled and candidate_bottom_scores:
+            # Color can only choose between already-supported, local LiDAR
+            # hypotheses.  Require two agreeing candidates before using it;
+            # this prevents one noisy frame from moving the map pose.
+            reliable = [
+                index
+                for index, (item, color_score) in enumerate(
+                    zip(candidates, candidate_bottom_scores, strict=True)
+                )
+                if float(item[1]) >= float(self.args.localization_min_score)
+                and float(item[2]) >= 0.15
+                and float(color_score) >= 0.45
+                and float(color_score) >= seed_bottom_score + 0.10
+            ]
+            if len(reliable) >= 2:
+                color_centres = np.asarray([candidates[index][0] for index in reliable])
+                color_consensus = np.median(color_centres, axis=0)
+                color_scatter = np.hypot(*(color_centres - color_consensus).T)
+                if float(np.percentile(color_scatter, 90.0)) <= 0.10:
+                    preferred_bottom_centre = color_consensus
+            print(
+                "[visual-anchor] navigation bottom-color candidates: "
+                f"current {seed_bottom_score:.2f}, "
+                f"best {max(candidate_bottom_scores, default=0.0):.2f}, "
+                f"reliable {len(reliable)}/{len(candidate_bottom_scores)}; "
+                "LiDAR remains authoritative."
+            )
 
         # BACK END: register the complete recent LiDAR submap as one rigid
         # object. Individual half-scans become weak or ambiguous at a doorway,
@@ -5002,18 +6676,29 @@ class SavedMapNavigator:
             )
             submap_centre = self._centre(submap_pose)
             innovation = float(np.hypot(*(submap_centre - seed_centre)))
+            submap_bottom_score = self._bottom_color_score_at_pose(submap_pose, live_bottom_color)
+            bottom_reanchor_ok = not (
+                live_bottom_color
+                and self._bottom_color_enabled
+                and seed_bottom_score >= 0.45
+                and submap_bottom_score + 0.18 < seed_bottom_score
+            )
             if _submap_reanchor_is_credible(
                 submap_score,
                 submap_support,
                 innovation,
                 len(submap_local),
                 float(self.args.localization_min_score),
-            ):
+            ) and bottom_reanchor_ok:
                 # Apply a strong but bounded backend correction. A large
                 # credible innovation is removed over successive stationary
                 # waypoints rather than teleporting the front end in one step.
                 raw_delta = submap_centre - seed_centre
-                applied_m = min(0.35, innovation)
+                # A stationary local correction may trim accumulated slip;
+                # it may not jump a hallway-length mode on the strength of
+                # one view.  Anything larger is left for explicit global
+                # localization, where all angular evidence is considered.
+                applied_m = min(0.12, innovation)
                 correction_delta = (
                     raw_delta * (applied_m / innovation)
                     if innovation > 1e-9
@@ -5036,10 +6721,27 @@ class SavedMapNavigator:
                     "[saved-map] stationary recent-submap loop closure "
                     f"anchored {len(submap_local)} points to the saved map: "
                     f"match {submap_score:.1f}, support {submap_support:.0%}, "
-                    f"innovation {innovation * 100:.1f}cm, applied "
+                    f"innovation {innovation * 100:.1f}cm, bottom-color "
+                    f"{submap_bottom_score:.2f}, applied "
                     f"{applied_m * 100:.1f}cm ({time.monotonic() - started:.2f}s)."
                 )
                 return True
+            elif (
+                _submap_reanchor_is_credible(
+                    submap_score,
+                    submap_support,
+                    innovation,
+                    len(submap_local),
+                    float(self.args.localization_min_score),
+                )
+                and not bottom_reanchor_ok
+            ):
+                print(
+                    "[visual-anchor] rejected stationary submap correction: "
+                    f"bottom-color candidate {submap_bottom_score:.2f} is below "
+                    f"current pose {seed_bottom_score:.2f}; retaining LiDAR/IMU "
+                    "trajectory until another supported scan agrees."
+                )
 
         decision = _stationary_correction_consensus(
             candidates,
@@ -5048,6 +6750,9 @@ class SavedMapNavigator:
         )
         if decision is not None:
             corrected_centre, correction_kind = decision
+            if preferred_bottom_centre is not None:
+                corrected_centre = 0.75 * seed_centre + 0.25 * preferred_bottom_centre
+                correction_kind = "bottom-color-guided blended"
             correction_m = float(np.hypot(*(corrected_centre - seed_centre)))
             correction_delta = corrected_centre - seed_centre
             corrected = _lidar_pose_from_robot_centre(
@@ -5098,6 +6803,7 @@ class SavedMapNavigator:
         # Relocalization and any preceding pivot own the initial pose. Camera
         # flow accumulated before this route must not leak into its first seed.
         self._discard_ground_translation()
+        self._reset_surface_motion_prior()
         imu_anchor = self.imu.deg()
         if imu_anchor is None:
             self.status_text = "IMU unavailable—navigation cancelled"
@@ -5145,6 +6851,8 @@ class SavedMapNavigator:
             heading_error = (desired_heading - physical_heading + 180.0) % 360.0 - 180.0
             turn_target = float(imu_anchor) + heading_error
             self.controller.clear_safety_latch()
+            with self.pose_lock:
+                self._reset_surface_motion_prior(self.pose)
             self.controller.rotate_to(turn_target)
             deadline = time.monotonic() + 12.0
             turn_reached = False
@@ -5183,6 +6891,8 @@ class SavedMapNavigator:
                 )
             imu_anchor = yaw_after
             self._discard_ground_translation()
+            with self.pose_lock:
+                self._reset_surface_motion_prior(self.pose)
 
             # The sensor sees only one hemisphere.  A substantial waypoint
             # turn can therefore replace nearly the entire visible scene even
@@ -5224,6 +6934,14 @@ class SavedMapNavigator:
                 f"driving {float(np.hypot(*(np.asarray(waypoint) - centre))):.2f}m "
                 f"with forward command {drive_command:.2f}."
             )
+            # Establish a navigation-time appearance baseline at every new
+            # straight segment.  This is a cue for later LiDAR correction,
+            # never a replacement for the rolling LiDAR/IMU front end.
+            self._navigation_bottom_color_mismatch_count = 0
+            self._last_navigation_bottom_color_check_at = 0.0
+            with self.pose_lock:
+                segment_pose = self.pose
+            self._navigation_bottom_color_check(segment_pose, force=True)
             while not self.stop_event.is_set():
                 collision_reason = self.controller.safety_latched_reason()
                 if collision_reason:
@@ -5240,6 +6958,42 @@ class SavedMapNavigator:
                 if float(np.hypot(*(np.asarray(waypoint) - centre))) <= 0.16:
                     break
                 now = time.monotonic()
+                self._navigation_bottom_color_check(current_pose)
+                if self._navigation_bottom_color_mismatch_count >= 2:
+                    # A nearby saved color landmark changed sharply while the
+                    # route was still using the same segment.  Stop once,
+                    # verify with several fresh LiDAR scans, and resume the
+                    # same goal; never spin or let color alone move the pose.
+                    self.controller.halt()
+                    print(
+                        "[visual-anchor] navigation bottom-color mismatch "
+                        "persisted for two checks; holding for stationary "
+                        "LiDAR correction before continuing."
+                    )
+                    anchored = self._stationary_saved_map_correction()
+                    self._navigation_bottom_color_mismatch_count = 0
+                    if anchored:
+                        with self.pose_lock:
+                            segment_start = self._centre(self.pose)
+                        last_progress_at = time.monotonic()
+                        segment_started = last_progress_at
+                        best_progress = 0.0
+                        self.controller.clear_safety_latch()
+                        self.controller.drive_toward(
+                            drive_command,
+                            drive_heading + soft_heading_bias,
+                        )
+                        print(
+                            "[visual-anchor] bottom-color/LiDAR navigation "
+                            "check accepted; resumed the current straight "
+                            "segment without replanning."
+                        )
+                        continue
+                    self.controller.clear_safety_latch()
+                    self.controller.drive_toward(
+                        drive_command,
+                        drive_heading + soft_heading_bias,
+                    )
                 progress = float(np.hypot(*(centre - segment_start)))
                 if progress > best_progress + 0.02:
                     best_progress = progress
@@ -5329,7 +7083,11 @@ class SavedMapNavigator:
                 if len(local) < 30:
                     continue
                 pose_before_ground = current_pose
-                propagated_pose, ground_motion = self._apply_ground_translation_prior(current_pose)
+                surface_predicted_pose = self._apply_surface_motion_prediction(
+                    current_pose,
+                    drive_command,
+                )
+                propagated_pose, ground_motion = self._apply_ground_translation_prior(surface_predicted_pose)
                 yaw = _imu_yaw_for_scan(self.imu, frame)
                 pose_seed = propagated_pose if ground_motion is not None else current_pose
                 theta_seed = pose_seed.theta_deg + (
@@ -5383,30 +7141,45 @@ class SavedMapNavigator:
                 strong_local_evidence = (
                     local_score >= float(self.args.localization_min_score) + 2.0 and local_support >= 0.55
                 )
-                relaxed_local_motion = _straight_motion_step_is_consistent(
-                    local_step,
-                    segment_direction,
-                    maximum_forward_m=max(0.40, maximum_forward_step),
-                    maximum_reverse_m=0.04,
-                    maximum_lateral_m=max(0.12, maximum_lateral_step),
-                )
-                if not local_valid and strong_local_evidence and relaxed_local_motion:
+                if not local_valid and strong_local_evidence:
+                    # A high-quality live scan is stronger evidence than the
+                    # guessed translation prior.  In particular, a scan can
+                    # report a negative along-track shift after a heading
+                    # correction even while the robot is visibly on the same
+                    # hallway segment. Do not throw that scan away and then
+                    # declare tracking lost. Keep its LiDAR heading/geometry,
+                    # but clamp only its translation to the currently active
+                    # forward path corridor so it cannot teleport backwards
+                    # or sideways.
+                    direction_norm = max(1e-9, float(np.hypot(*segment_direction)))
+                    direction_unit = segment_direction / direction_norm
+                    lateral_unit = np.asarray(
+                        [-direction_unit[1], direction_unit[0]],
+                        dtype=np.float64,
+                    )
+                    along = float(local_step @ direction_unit)
+                    lateral = float(local_step @ lateral_unit)
+                    bounded_along = float(np.clip(along, 0.0, max(0.20, maximum_forward_step)))
+                    bounded_lateral = float(
+                        np.clip(lateral, -max(0.08, maximum_lateral_step), max(0.08, maximum_lateral_step))
+                    )
+                    bounded_centre = self._centre(pose_before_ground) + (
+                        direction_unit * bounded_along + lateral_unit * bounded_lateral
+                    )
+                    solved_local = _lidar_pose_from_robot_centre(
+                        bounded_centre,
+                        solved_local.theta_deg,
+                        self.lever_m,
+                        self.forward_offset,
+                    )
                     local_valid = True
                     self._strong_local_motion_relaxations += 1
-                    if self._strong_local_motion_relaxations <= 3:
-                        direction_norm = max(1e-9, float(np.hypot(*segment_direction)))
-                        direction_unit = segment_direction / direction_norm
-                        lateral_unit = np.asarray(
-                            [-direction_unit[1], direction_unit[0]],
-                            dtype=np.float64,
-                        )
+                    if self._strong_local_motion_relaxations <= 6:
                         print(
-                            "[saved-map] preserving strong rolling-local LiDAR "
-                            f"odometry (match {local_score:.1f}, support "
-                            f"{local_support:.0%}): step "
-                            f"{float(local_step @ direction_unit):+.2f}m along/"
-                            f"{float(local_step @ lateral_unit):+.2f}m lateral "
-                            "passed the bounded recovery motion prior."
+                            "[saved-map] preserving strong live LiDAR track "
+                            f"(match {local_score:.1f}, support {local_support:.0%}); "
+                            f"clamped inferred {along:+.2f}m along/{lateral:+.2f}m lateral "
+                            f"to {bounded_along:+.2f}m/{bounded_lateral:+.2f}m on the route."
                         )
 
                 # FRONT END: never run the expensive saved-map search in this
@@ -5545,6 +7318,19 @@ class SavedMapNavigator:
 
                 if candidate is None:
                     weak += 1
+                    # Before declaring the rolling tracker lost, refit the
+                    # current scan only inside the last trusted uncertainty
+                    # bubble and heading window.  This preserves continuity
+                    # without allowing a distant/mirrored global jump.
+                    if weak in (2, 5):
+                        bounded = self._bounded_live_lidar_refit(local, current_pose)
+                        if bounded is not None:
+                            candidate = bounded
+                            source = "bounded-bubble"
+                            weak = 0
+                            with self.pose_lock:
+                                self.pose = candidate
+                            self.local_odometry.reset(local, candidate)
                     direction_norm = max(1e-9, float(np.hypot(*segment_direction)))
                     direction_unit = segment_direction / direction_norm
                     lateral_unit = np.asarray(
@@ -5572,7 +7358,19 @@ class SavedMapNavigator:
                             candidate = self.pose
                         source = "stationary-backend"
                         self.local_odometry.add(local, candidate)
-                    if weak >= 8:
+                    if weak >= 8 and candidate is None:
+                        # One last bounded refit is permitted at the loss
+                        # boundary.  If it fails, stop safely; never launch a
+                        # whole-map search from a moving, uncertain pose.
+                        bounded = self._bounded_live_lidar_refit(local, current_pose)
+                        if bounded is not None:
+                            candidate = bounded
+                            source = "bounded-bubble-final"
+                            weak = 0
+                            with self.pose_lock:
+                                self.pose = candidate
+                            self.local_odometry.reset(local, candidate)
+                    if weak >= 8 and candidate is None:
                         if ground_motion is not None:
                             self._record_ground_prior_result(ground_motion, accepted=False)
                         self.controller.halt()
@@ -5602,7 +7400,13 @@ class SavedMapNavigator:
                 weak = 0
                 with self.pose_lock:
                     self.pose = candidate
+                    if self.localized:
+                        self.localization_bubble_pose = Pose2D(
+                            float(candidate.x), float(candidate.y), float(candidate.theta_deg)
+                        )
+                self._navigation_bottom_color_check(candidate)
                 self.local_odometry.add(local, candidate)
+                self._learn_surface_motion_from_lidar(candidate)
                 last_pose_update_at = time.monotonic()
                 imu_anchor = yaw if yaw is not None else imu_anchor
                 candidate_centre = self._centre(candidate)
@@ -5675,6 +7479,15 @@ class SavedMapNavigator:
             ):
                 anchored = self._stationary_saved_map_correction()
                 if not anchored and self._saved_map_anchor_failures >= 3:
+                    # Weak permanent-map support is expected in a newly
+                    # observed room. Keep the rolling LiDAR/IMU trajectory;
+                    # never launch an automatic recovery spin here.
+                    self.controller.halt()
+                    self.status_text = "Permanent-map support weak; continuing on rolling LiDAR/IMU pose"
+                    print(f"[saved-map] {self.status_text}.")
+                    self._saved_map_anchor_failures = 0
+                    tracking_pause_active = True
+                    continue
                     # Do not continue executing global coordinates after the
                     # front end has repeatedly failed to observe the global
                     # frame. A drifting rolling submap can remain internally
@@ -5733,6 +7546,7 @@ class SavedMapNavigator:
         # route instead of letting the next click inherit a wrong start pose.
         self.controller.halt()
         self._stationary_local_pose_confirmation("goal arrival")
+        self._save_navigation_checkpoint("goal arrival")
         if self.goal is not None:
             with self.pose_lock:
                 confirmed_centre = self._centre(self.pose)
@@ -5764,11 +7578,20 @@ class SavedMapNavigator:
         # One edge encounter may select one turn. Another turn is forbidden
         # until rolling LiDAR verifies that the short escape translated away.
         self._edge_escape_anchor: np.ndarray | None = None
-        self.status_text = "Goal reached—click another known free point"
+        with self._goal_queue_lock:
+            has_next = bool(self.goal_queue)
+        if has_next:
+            self.status_text = "Goal reached—starting the next queued target"
+            # Let this worker unwind before starting the next route worker.
+            self.root.after(0, self._start_next_queued_goal)
+        else:
+            self.status_text = "Goal reached—click another known free point"
 
     def stop(self) -> None:
         self.stop_event.set()
         self.controller.halt()
+        with self._goal_queue_lock:
+            self.goal_queue.clear()
         self.path = []
         self._passage_route_active = False
         self._edge_escape_anchor = None
@@ -5841,7 +7664,19 @@ def _parse_args() -> Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--remote-ip", required=True)
     parser.add_argument("--robot-id", default="sourccey_client")
-    parser.add_argument("--map", default=str(DEFAULT_SAVED_MAP_PATH))
+    parser.add_argument(
+        "--map",
+        default=None,
+        help="Saved map to open; omitted selects the newest timestamped explorer map.",
+    )
+    parser.add_argument(
+        "--reset-working-map",
+        action="store_true",
+        help=(
+            "Recreate the writable navigator map from --map before starting; "
+            "the source map is never modified."
+        ),
+    )
     parser.add_argument("--lidar-port", type=int, default=8765)
     parser.add_argument("--imu-yaw-port", type=int, default=8770)
     parser.add_argument("--imu-yaw-sign", type=float, default=1.0)
@@ -5942,6 +7777,21 @@ def _parse_args() -> Namespace:
         ),
     )
     parser.add_argument(
+        "--surface-motion-calibration",
+        choices=("on", "off"),
+        default="on",
+        help=(
+            "Use the saved bottom-camera floor-texture/LiDAR motion calibration "
+            "as a bounded pose-search prior (default: on). LiDAR remains authoritative."
+        ),
+    )
+    parser.add_argument(
+        "--surface-texture-similarity",
+        type=float,
+        default=0.88,
+        help="Texture similarity required to reuse a learned floor surface (default: 0.88).",
+    )
+    parser.add_argument(
         "--visual-color-weight",
         type=float,
         default=1.0,
@@ -5980,6 +7830,12 @@ def _parse_args() -> Namespace:
         help="Frame rate for the automatic robot-frame diagnostic MP4.",
     )
     args = parser.parse_args()
+    if not 0.50 <= float(args.surface_texture_similarity) <= 0.99:
+        parser.error("--surface-texture-similarity must be in [0.50, 0.99]")
+    if args.map is None:
+        latest = latest_timestamped_saved_map(DEFAULT_SAVED_MAP_PATH.parent)
+        args.map = str(latest or DEFAULT_SAVED_MAP_PATH)
+        print(f"[saved-map] automatic map selection: {args.map}")
     # _localize accesses this only through optional getattr paths today; keep a
     # complete explicit navigation matcher contract for future changes.
     args.track_search_xy_m = 0.45

@@ -355,28 +355,44 @@ def _score_candidates_batch_cuda(
         n_picks = torch.div(m_ok + stride - 1, stride, rounding_mode="floor")
         max_picks = int(n_picks.max().item())
         if max_picks:
-            pick_ord = (
-                torch.arange(max_picks, device=device, dtype=torch.int64)[None, :]
-                * stride[:, None]
-            )
-            pick_valid = pick_ord < m_ok[:, None]
-            targets = torch.minimum(pick_ord, m_ok[:, None] - 1) + 1
-            cumulative = torch.cumsum(known_ok.to(torch.int64), dim=1)
-            pick_cols = torch.argmax(
-                (cumulative[:, None, :] == targets[:, :, None]).to(torch.int8),
-                dim=2,
-            )
-            rows = torch.arange(len(ok_idx), device=device)[:, None]
-            picked = cand_t[ok_idx][rows, pick_cols]
-            nearest_sq = torch.sum(
-                (picked[:, :, None, :] - global_t[None, None, :, :]) ** 2,
-                dim=3,
-            ).amin(dim=2)
-            sums = torch.where(pick_valid, nearest_sq, 0.0).sum(dim=1)
-            nearest_mean = torch.sqrt(
-                torch.clamp(sums, min=0.0)
-                / n_picks.to(torch.float32)
-            )
+            n_ok = int(len(ok_idx))
+            n_global = int(global_t.shape[0])
+            pick_ord_row = torch.arange(max_picks, device=device, dtype=torch.int64)
+            # Process candidate rows in chunks so no intermediate exceeds a
+            # fixed element budget: the pick-column comparison is rows x picks
+            # x points, and the distance difference tensor is rows x picks x
+            # global x 2. The old single-shot version scaled with candidates,
+            # picks, AND map size at once, which OOMed the GPU on wide
+            # searches over large maps (and the failed multi-GB allocation
+            # exhausted WDDM host commit, killing the CPU fallback too).
+            budget = 16_000_000
+            per_row = max(1, max_picks * max(2 * n_global, n_pts))
+            rows_per_chunk = max(1, budget // per_row)
+            nearest_mean = torch.zeros(n_ok, dtype=torch.float32, device=device)
+            for start in range(0, n_ok, rows_per_chunk):
+                sel = ok_idx[start : start + rows_per_chunk]
+                m_sel = m_ok[start : start + rows_per_chunk]
+                pick_ord = pick_ord_row[None, :] * stride[start : start + rows_per_chunk, None]
+                pick_valid = pick_ord < m_sel[:, None]
+                targets = torch.minimum(pick_ord, m_sel[:, None] - 1) + 1
+                cumulative = torch.cumsum(
+                    known_ok[start : start + rows_per_chunk].to(torch.int64), dim=1
+                )
+                pick_cols = torch.argmax(
+                    (cumulative[:, None, :] == targets[:, :, None]).to(torch.int8),
+                    dim=2,
+                )
+                rows = torch.arange(len(sel), device=device)[:, None]
+                picked = cand_t[sel][rows, pick_cols]
+                nearest_sq = torch.sum(
+                    (picked[:, :, None, :] - global_t[None, None, :, :]) ** 2,
+                    dim=3,
+                ).amin(dim=2)
+                sums = torch.where(pick_valid, nearest_sq, 0.0).sum(dim=1)
+                nearest_mean[start : start + rows_per_chunk] = torch.sqrt(
+                    torch.clamp(sums, min=0.0)
+                    / n_picks[start : start + rows_per_chunk].to(torch.float32)
+                )
 
     base_score = (
         exact_hit_ratio * 12.0
@@ -459,6 +475,19 @@ def _score_candidates_batch(
         except Exception as exc:
             _CANDIDATE_SCORING_DEVICE = "cpu"
             _CUDA_SCORING_CACHE = None
+            # Dropping the cache reference is not enough: torch's caching
+            # allocator still holds the (WDDM host-committed) GPU memory, and
+            # after a CUDA OOM that commit can starve the CPU fallback of even
+            # single-digit-MB numpy allocations. Return it to the OS first.
+            try:
+                import gc
+
+                import torch
+
+                gc.collect()
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
             if not _CUDA_FALLBACK_WARNED:
                 print(f"[matcher] CUDA scoring failed ({exc}); falling back to CPU.")
                 _CUDA_FALLBACK_WARNED = True
@@ -521,7 +550,10 @@ def _score_candidates_batch(
             g_f64 = global_sampled_xy.astype(np.float64)
             g_norm_sq = np.sum(g_f64 * g_f64, axis=1)
             nearest_sq = np.empty((n_ok, max_picks), dtype=np.float64)
-            chunk = max(1, 2048 // max(1, max_picks // 24))
+            # Chunk so the d2 intermediate (chunk x picks x global float64)
+            # stays ~32MB. The old divisor ignored the global point count, so
+            # a large map made each chunk allocate gigabytes.
+            chunk = max(1, 4_000_000 // max(1, max_picks * len(g_f64)))
             for start in range(0, n_ok, chunk):
                 p = picked_f64[start : start + chunk]
                 p_norm_sq = np.sum(p * p, axis=2)
