@@ -366,13 +366,7 @@ all = [
     "lerobot[fastwam]",
     "lerobot[groot]",
     "lerobot[xvla]",
-<<<<<<< HEAD
     "lerobot[evo1]",
-||||||| bd22407d9
-=======
-    "lerobot[siva]",
-    "lerobot[siva2]",
->>>>>>> origin/vulcan-main
     "lerobot[hilserl]",
     "lerobot[vla_jepa]",
     "lerobot[lingbot_va]",

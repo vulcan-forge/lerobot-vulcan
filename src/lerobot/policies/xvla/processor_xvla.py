@@ -23,6 +23,8 @@ import torch
 
 from lerobot.configs import PipelineFeatureType, PolicyFeature
 from lerobot.lerobot_types import EnvTransition, TransitionKey
+from lerobot.policies.xvla.configuration_xvla import XVLAConfig
+from lerobot.policies.xvla.utils import rotate6d_to_axis_angle
 from lerobot.processor import (
     ObservationProcessorStep,
     PolicyAction,
@@ -34,6 +36,7 @@ from lerobot.processor import (
     make_policy_processor_pipelines,
 )
 from lerobot.utils.constants import (
+    IMAGENET_STATS,
     OBS_IMAGES,
     OBS_PREFIX,
     OBS_STATE,

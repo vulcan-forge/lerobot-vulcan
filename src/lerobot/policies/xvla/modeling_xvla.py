@@ -26,23 +26,21 @@ import os
 import re
 from collections import deque
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor, nn
 
-from lerobot.configs.policies import PreTrainedConfig
-from lerobot.policies.pretrained import PreTrainedPolicy, T
-from lerobot.policies.utils import populate_queues
+from lerobot.configs import PreTrainedConfig
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE_TOKENS, OBS_STATE
+from lerobot.utils.import_utils import _transformers_available, require_package
 
 from ..common.vla_utils import pad_vector, resize_with_pad
 from ..pretrained import PreTrainedPolicy, T
 from ..utils import populate_queues
 from .action_hub import build_action_space
-from .configuration_florence2 import Florence2Config
 from .configuration_xvla import XVLAConfig
 from .florence_cache import FlorenceFeatureCache
-from .modeling_florence2 import Florence2ForConditionalGeneration
 from .soft_transformer import SoftPromptedTransformer
 
 # Florence2 config and modeling depend on transformers
@@ -51,6 +49,35 @@ if TYPE_CHECKING or _transformers_available:
 else:
     Florence2Config = None
     Florence2Model = None
+
+
+def _make_cache_signature(config: XVLAConfig, vlm: nn.Module) -> str:
+    """Fingerprint cache-boundary settings and representative loaded Florence weights."""
+    signature_config = {
+        "florence_config": config.florence_config,
+        "tokenizer_name": config.tokenizer_name,
+        "tokenizer_max_length": config.tokenizer_max_length,
+        "tokenizer_padding_side": config.tokenizer_padding_side,
+        "pad_language_to": config.pad_language_to,
+        "resize_imgs_with_padding": config.resize_imgs_with_padding,
+        "num_image_views": config.num_image_views,
+        "image_features": list(config.image_features),
+        "dtype": config.dtype,
+    }
+    digest = hashlib.sha256(json.dumps(signature_config, sort_keys=True, default=str).encode())
+    for name, parameter in vlm.named_parameters():
+        digest.update(name.encode())
+        digest.update(str(tuple(parameter.shape)).encode())
+        digest.update(str(parameter.dtype).encode())
+        flattened = parameter.detach().reshape(-1)
+        if flattened.numel() > 0:
+            indices = torch.tensor(
+                [0, flattened.numel() // 2, flattened.numel() - 1],
+                device=flattened.device,
+            ).unique()
+            sample = flattened.index_select(0, indices).float().cpu().numpy()
+            digest.update(sample.tobytes())
+    return digest.hexdigest()
 
 
 class XVLAModel(nn.Module):
@@ -379,6 +406,7 @@ class XVLAPolicy(PreTrainedPolicy):
     name = "xvla"
 
     def __init__(self, config: XVLAConfig, **kwargs):
+        require_package("transformers", extra="xvla")
         super().__init__(config)
         config.validate_features()
         florence_config = config.get_florence_config()
