@@ -13,23 +13,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from functools import cached_property
-import time
-from typing import Any
 import logging
+import time
+from functools import cached_property
+from typing import Any
 
 import numpy as np
+
 from lerobot.cameras.utils import make_cameras_from_configs
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.motors.feetech.feetech import FeetechMotorsBus, OperatingMode
 from lerobot.motors.motors_bus import Motor, MotorNormMode
 from lerobot.robots.robot import Robot
-from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import SourcceyFollowerCalibrator
-from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import SourcceyFollowerConfig
+from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower import (
+    SourcceyFollowerConfig,
+    sourccey_arm_motor_ids,
+)
+from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_calibrator import (
+    SourcceyFollowerCalibrator,
+)
 from lerobot.robots.sourccey.sourccey.sourccey_follower.sourccey_follower_safety import SourcceyFollowerSafety
 from lerobot.robots.utils import ensure_safe_goal_position
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 logger = logging.getLogger(__name__)
+
 
 class SourcceyFollower(Robot):
     config_class = SourcceyFollowerConfig
@@ -40,9 +47,7 @@ class SourcceyFollower(Robot):
         self.config = config
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
 
-        motor_ids = [1, 2, 3, 4, 5, 6]
-        if self.config.orientation == "right":
-            motor_ids = [7, 8, 9, 10, 11, 12]
+        motor_ids = sourccey_arm_motor_ids(self.config.orientation)
 
         self.bus = FeetechMotorsBus(
             port=self.config.port,
@@ -59,12 +64,8 @@ class SourcceyFollower(Robot):
         self.cameras = make_cameras_from_configs(config.cameras)
 
         # Initialize calibrator
-        self.calibrator = SourcceyFollowerCalibrator(
-            robot=self
-        )
-        self.safety = SourcceyFollowerSafety(
-            robot = self
-        )
+        self.calibrator = SourcceyFollowerCalibrator(robot=self)
+        self.safety = SourcceyFollowerSafety(robot=self)
 
         # Track last warning time for throttling
         self._last_write_warning_time = 0.0
@@ -128,7 +129,7 @@ class SourcceyFollower(Robot):
         logger.info(f"{self} connected.")
 
     def disconnect(self) -> None:
-         # Make disconnect idempotent: calling it twice should be harmless.
+        # Make disconnect idempotent: calling it twice should be harmless.
         if not self.is_connected:
             logger.info(f"{self} is not connected. Skipping disconnect.")
             return
@@ -171,18 +172,7 @@ class SourcceyFollower(Robot):
                 self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
                 self.bus.write("Protection_Current", motor, 400)  # 50% of max current to avoid burnout
                 self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
-            elif motor == "shoulder_lift":
-                self.bus.write("P_Coefficient", motor, 12)
-                self.bus.write("I_Coefficient", motor, 0)
-                self.bus.write("D_Coefficient", motor, 48)  # Optimal damping (64 was too high)
-                self.bus.write("Max_Torque_Limit", motor, 2000)
-                self.bus.write("Protection_Current", motor, 4200)  # 4.2A for STS3250
-                self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
-                self.bus.write("Minimum_Startup_Force", motor, 10)
-                self.bus.write("CW_Dead_Zone", motor, 2)
-                self.bus.write("CCW_Dead_Zone", motor, 2)
-                self.bus.write("Acceleration", motor, 180)
-            elif motor == "elbow_flex":
+            elif motor == "shoulder_lift" or motor == "elbow_flex":
                 self.bus.write("P_Coefficient", motor, 12)
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 48)  # Optimal damping (64 was too high)
@@ -266,7 +256,9 @@ class SourcceyFollower(Robot):
             current_time = time.time()
             # Only log warning if enough time has passed since last warning
             if current_time - self._last_write_warning_time >= self._write_warning_throttle_interval:
-                logger.warning(f"Status packet error during sync_read / sync_write in {self}: {e}. Returning present position.")
+                logger.warning(
+                    f"Status packet error during sync_read / sync_write in {self}: {e}. Returning present position."
+                )
                 self._last_write_warning_time = current_time
             # Return present position instead of goal position when write fails
             fallback_pos = present_pos if present_pos is not None else goal_pos
@@ -292,4 +284,3 @@ class SourcceyFollower(Robot):
             goal_pos = self.safety.apply_step_safety(goal_pos, present_pos)
 
         return goal_pos
-
