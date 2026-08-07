@@ -21,8 +21,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from lerobot.configs import FeatureType, NormalizationMode, PolicyFeature, PreTrainedConfig
-from lerobot.optim import CosineDecayWithWarmupSchedulerConfig, XVLAAdamWConfig
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
+from lerobot.optim.optimizers import XVLAAdamWConfig
+from lerobot.optim.schedulers import CosineDecayWithWarmupSchedulerConfig
 from lerobot.utils.constants import OBS_IMAGES
 
 # Conditional import for type checking and lazy loading
@@ -136,6 +138,12 @@ class XVLAConfig(PreTrainedConfig):
     train_policy_transformer: bool = True  # Allow policy transformer to train
     train_soft_prompts: bool = True  # Allow soft prompts to train
 
+    # Training-only, lazy cache for deterministic outputs of the frozen Florence
+    # backbone. Evaluation and rollout continue to run Florence online because
+    # robot observations do not have stable dataset indices.
+    cache_florence_features: bool = False
+    florence_cache_path: str | None = None
+
     # Training presets
     optimizer_lr: float = 1e-4
     optimizer_betas: tuple[float, float] = (0.9, 0.99)
@@ -163,6 +171,14 @@ class XVLAConfig(PreTrainedConfig):
             raise ValueError("`num_image_views` must be > 0 when specified.")
         if self.dtype not in ["bfloat16", "float32"]:
             raise ValueError(f"Invalid dtype: {self.dtype}")
+        if self.cache_florence_features:
+            if not self.florence_cache_path:
+                raise ValueError("`florence_cache_path` is required when `cache_florence_features=True`.")
+            if not self.freeze_vision_encoder or not self.freeze_language_encoder:
+                raise ValueError(
+                    "Florence caching requires both `freeze_vision_encoder=True` and "
+                    "`freeze_language_encoder=True`."
+                )
         self._florence_config_obj: Florence2Config | None = None
 
     def get_florence_config(self) -> Florence2Config:

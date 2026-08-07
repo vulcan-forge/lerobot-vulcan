@@ -1,3 +1,4 @@
+```
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -170,9 +171,55 @@ outputs/
 *.mo
 *.pot
 
+# Cython debug symbols
+cython_debug/
+CLAUDE.md
+.claude/settings.local.json
+
+# CAD / 3D files
+*.stl
+*.step
+*.stp
+*.igs
+*.iges
+*.obj
+*.fbx
+*.dae
+
+# Images / Media
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tif
+*.tiff
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.mp3
+*.wav
+
+# Archives
+*.zip
+*.tar
+*.gz
+*.7z
+*.rar
+
+# Documents
+*.pdf
+*.docx
+*.pptx
+*.xlsx
+
+
 # Dev folders
 .cache/*
-*.stl
 *.urdf
 *.xml
 *.part
+
+# Training Logs
+training_logs/

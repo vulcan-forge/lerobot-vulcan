@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import builtins
+import copy
 import logging
 from collections import deque
 from pathlib import Path

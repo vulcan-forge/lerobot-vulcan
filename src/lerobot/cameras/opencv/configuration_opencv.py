@@ -51,6 +51,11 @@ class OpenCVCameraConfig(CameraConfig):
         warmup_s: Time reading frames before returning from connect (in seconds)
         fourcc: FOURCC code for video format (e.g., "MJPG", "YUYV", "I420"). Defaults to None (auto-detect).
         backend: OpenCV backend identifier (https://docs.opencv.org/3.4/d4/d15/group__videoio__flags__base.html). Defaults to ANY.
+        auto_reconnect: Re-open the capture automatically after repeated read failures.
+        max_consecutive_read_failures: Number of consecutive failed reads before forcing a reopen.
+        fast_reconnect_interval_s: Delay between reconnect attempts during the initial fast retry burst.
+        fast_reconnect_window_s: Duration of the initial fast retry burst before falling back to the steady interval.
+        reconnect_interval_s: Steady-state delay between reconnect attempts once the fast retry burst expires.
 
     Note:
         - Only 3-channel color output (RGB/BGR) is currently supported.
@@ -64,6 +69,11 @@ class OpenCVCameraConfig(CameraConfig):
     warmup_s: int = 1
     fourcc: str | None = None
     backend: Cv2Backends = Cv2Backends.ANY
+    auto_reconnect: bool = False
+    max_consecutive_read_failures: int = 10
+    fast_reconnect_interval_s: float = 0.25
+    fast_reconnect_window_s: float = 0.0
+    reconnect_interval_s: float = 0.25
 
     def __post_init__(self) -> None:
         self.color_mode = ColorMode(self.color_mode)
@@ -73,4 +83,25 @@ class OpenCVCameraConfig(CameraConfig):
         if self.fourcc is not None and (not isinstance(self.fourcc, str) or len(self.fourcc) != 4):
             raise ValueError(
                 f"`fourcc` must be a 4-character string (e.g., 'MJPG', 'YUYV'), but '{self.fourcc}' is provided."
+            )
+
+        if self.max_consecutive_read_failures < 1:
+            raise ValueError(
+                "`max_consecutive_read_failures` must be at least 1, "
+                f"but {self.max_consecutive_read_failures} is provided."
+            )
+
+        if self.fast_reconnect_interval_s < 0:
+            raise ValueError(
+                f"`fast_reconnect_interval_s` must be non-negative, but {self.fast_reconnect_interval_s} is provided."
+            )
+
+        if self.fast_reconnect_window_s < 0:
+            raise ValueError(
+                f"`fast_reconnect_window_s` must be non-negative, but {self.fast_reconnect_window_s} is provided."
+            )
+
+        if self.reconnect_interval_s < 0:
+            raise ValueError(
+                f"`reconnect_interval_s` must be non-negative, but {self.reconnect_interval_s} is provided."
             )

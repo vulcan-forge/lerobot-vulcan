@@ -137,7 +137,7 @@ class BiSOFollower(BimanualMixin, Robot):
         left_action = {
             key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")
         }
-        # Remove "right_" prefix
+
         right_action = {
             key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")
         }

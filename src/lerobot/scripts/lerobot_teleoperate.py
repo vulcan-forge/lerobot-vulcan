@@ -101,6 +101,7 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
+from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import SourcceyClientConfig  # noqa: F401
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
@@ -121,6 +122,13 @@ from lerobot.teleoperators import (  # noqa: F401
     so_leader,
     unitree_g1,
 )
+from lerobot.teleoperators.keyboard import KeyboardTeleop
+from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourccey_leader import (  # noqa: F401
+    BiSourcceyLeaderConfig,
+)
+from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.config_sourccey_leader import (  # noqa: F401
+    SourcceyLeaderConfig,
+)
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
@@ -136,6 +144,9 @@ class TeleoperateConfig:
     # TODO: pepijn, steven: if more robots require multiple teleoperators (like lekiwi) its good to make this possibele in teleop.py and record.py with List[Teleoperator]
     teleop: TeleoperatorConfig
     robot: RobotConfig
+    # Optional keyboard teleoperator to combine with the main teleop.
+    # Useful for robots that split arm/base control, such as sourccey_client.
+    teleop_keyboard: TeleoperatorConfig | None = None
     # Limit the maximum frames per second.
     fps: int = 60
     teleop_time_s: float | None = None
@@ -150,10 +161,77 @@ class TeleoperateConfig:
     display_port: int | None = None
     # Whether to display compressed (JPEG) images instead of raw frames
     display_compressed_images: bool = False
+    # If teleop connection fails (e.g. leader arm ports unplugged), continue only if
+    # the teleoperator can still provide a safe default action while disconnected.
+    allow_default_action_fallback_on_teleop_connect_error: bool = True
+
+
+"""
+Teleoperator and Keyboard connection Helpers
+"""
+def connect_teleop(
+    teleop: Teleoperator,
+) -> bool:
+    """
+    Try connecting the teleoperator.
+
+    Returns:
+        bool: True if teleop connected, False if we intentionally fall back to
+        disconnected default actions.
+    """
+    try:
+        teleop.connect()
+        return True
+    except Exception as exc:
+        logging.warning(
+            "Teleop connect failed (%s). Continuing with disconnected default actions.",
+            exc,
+        )
+        return False
+
+def connect_keyboard(teleop_keyboard: KeyboardTeleop) -> bool:
+    """
+    Try connecting the keyboard teleoperator.
+
+    Returns:
+        bool: True if keyboard teleop connected, False if we intentionally fall back to
+        disconnected default actions.
+    """
+    try:
+        teleop_keyboard.connect()
+        return True
+    except Exception as exc:
+        logging.warning(
+            "Keyboard teleop connect failed (%s). Continuing without keyboard base control.",
+            exc,
+        )
+        return False
+
+def _get_keyboard_base_action(
+    robot: Robot, obs: RobotObservation, teleop_keyboard: KeyboardTeleop | None
+) -> RobotAction:
+    if teleop_keyboard is None or not teleop_keyboard.is_connected:
+        return {}
+
+    if hasattr(robot, "on_key_down"):
+        for key_char in teleop_keyboard.pop_key_down_edges():
+            robot.on_key_down(key_char)
+
+    keyboard_action = teleop_keyboard.get_action()
+    z_pos = obs.get("z.pos")
+
+    if (z_pos is not None) and (isinstance(z_pos, (int, float))):
+        return robot._from_keyboard_to_base_action(
+            keyboard_action, z_pos
+        )
+    else:
+        return robot._from_keyboard_to_base_action(keyboard_action)
+
 
 
 def teleop_loop(
     teleop: Teleoperator,
+    teleop_keyboard: KeyboardTeleop | None,
     robot: Robot,
     fps: int,
     teleop_action_processor: RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction],
@@ -171,6 +249,7 @@ def teleop_loop(
 
     Args:
         teleop: The teleoperator device instance providing control actions.
+        teleop_keyboard: Optional keyboard teleoperator for base control.
         robot: The robot instance being controlled.
         fps: The target frequency for the control loop in frames per second.
         display_data: If True, fetches robot observations and displays them in the console and the
@@ -198,7 +277,13 @@ def teleop_loop(
             teleop.send_feedback(obs)
 
         # Get teleop action
-        raw_action = teleop.get_action()
+        raw_teleop_action = teleop.get_action()
+        raw_keyboard_action = _get_keyboard_base_action(
+            robot=robot,
+            obs=obs,
+            teleop_keyboard=teleop_keyboard,
+        )
+        raw_action = {**raw_teleop_action, **raw_keyboard_action} if raw_keyboard_action else raw_teleop_action
 
         # Process teleop action through pipeline
         teleop_action = teleop_action_processor((raw_action, obs))
@@ -252,15 +337,24 @@ def teleoperate(cfg: TeleoperateConfig):
     )
 
     teleop = make_teleoperator_from_config(cfg.teleop)
+    teleop_keyboard = make_teleoperator_from_config(cfg.teleop_keyboard) if cfg.teleop_keyboard else None
     robot = make_robot_from_config(cfg.robot)
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
-    teleop.connect()
-    robot.connect()
+    teleop_connected = False
+    robot_connected = False
+    keyboard_connected = False
 
     try:
+        teleop_connected = connect_teleop(teleop)
+        keyboard_connected = connect_keyboard(teleop_keyboard) if teleop_keyboard is not None else False
+
+        robot.connect()
+        robot_connected = True
+
         teleop_loop(
             teleop=teleop,
+            teleop_keyboard=teleop_keyboard if keyboard_connected else None,
             robot=robot,
             fps=cfg.fps,
             display_data=cfg.display_data,

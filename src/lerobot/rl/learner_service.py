@@ -39,6 +39,8 @@ else:
     send_bytes_in_chunks = None
     _ServicerBase = object
 
+from .queue import get_last_item_from_queue
+
 MAX_WORKERS = 3  # Stream parameters, send transitions and interactions
 SHUTDOWN_TIMEOUT = 10
 

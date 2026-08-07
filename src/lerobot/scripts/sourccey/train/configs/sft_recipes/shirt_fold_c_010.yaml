@@ -1,0 +1,35 @@
+# Continue shirt-folding SFT from the latest c-009 corners checkpoint while
+# mixing the general c-010 demonstrations with the pre-fold-specific examples.
+policy:
+  path: outputs/sft/xvla_s_sourccey-shirt-fold-c-009-corners-006/checkpoints/400000/pretrained_model
+  push_to_hub: false
+  # These demonstrations teach visual/action behavior, not new language.
+  freeze_language_encoder: true
+  scheduler_warmup_steps: 10000
+  scheduler_decay_steps: 500000
+  scheduler_decay_lr: 5e-06
+
+dataset:
+  normalization: checkpoint
+  # Keep every frame while excluding out-of-episode future action positions
+  # from XVLA's loss.
+  mask_padded_actions: true
+  sources:
+    - repo_id: Combination/sourccey-shirt-fold-c-010
+      weight: 0.70
+    - repo_id: Combination/sourccey-shirt-fold-c-specific-000
+      weight: 0.30
+
+# Use the XVLA policy preset's full learning rate.
+policy_preset_lr_scale: 1.0
+output_dir: outputs/sft/xvla_s_sourccey-shirt-fold-c-010-pre-000
+job_name: xvla_s_sourccey-shirt-fold-c-010-pre-000
+steps: 500000
+batch_size: 8
+num_workers: 4
+eval_freq: 0
+save_freq: 50000
+log_freq: 200
+
+wandb:
+  enable: true

@@ -479,6 +479,14 @@ def train(cfg: TrainPipelineConfig):
 
     # --- processors (overrides built once, as one typed mapping) -------------------------------
     active_cfg = cfg.trainable_config
+    if getattr(active_cfg, "cache_florence_features", False):
+        if cfg.dataset.image_transforms.enable:
+            raise ValueError(
+                "Florence feature caching requires `dataset.image_transforms.enable=false`; "
+                "a single cached feature cannot preserve random image augmentation."
+            )
+        if cfg.dataset.streaming:
+            raise ValueError("Florence feature caching is not supported for streaming datasets.")
     processor_pretrained_path = active_cfg.pretrained_path
 
     processor_kwargs = ProcessorConfigKwargs()
@@ -852,18 +860,12 @@ def train(cfg: TrainPipelineConfig):
                         env_postprocessor=env_postprocessor,
                         preprocessor=preprocessor,
                         postprocessor=postprocessor,
-                        n_episodes=cfg.eval.n_episodes,
-                        videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
-                        max_episodes_rendered=4,
-                        start_seed=cfg.seed,
-                        max_parallel_tasks=cfg.env.max_parallel_tasks,
                     )
-                # overall metrics (suite-agnostic)
-                aggregated = eval_info["overall"]
+                    update_last_checkpoint(checkpoint_dir)
+                    if wandb_logger:
+                        wandb_logger.log_policy(checkpoint_dir)
 
-                # optional: per-suite logging
-                for suite, suite_info in eval_info.items():
-                    logging.info("Suite %s aggregated: %s", suite, suite_info)
+                accelerator.wait_for_everyone()
 
                 # meters/tracker
                 eval_metrics = {
@@ -887,7 +889,33 @@ def train(cfg: TrainPipelineConfig):
                     wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
                     wandb_logger.log_video(eval_info["overall"]["video_paths"][0], step, mode="eval")
 
-            accelerator.wait_for_everyone()
+                    # optional: per-suite logging
+                    for suite, suite_info in eval_info.items():
+                        logging.info("Suite %s aggregated: %s", suite, suite_info)
+
+                    # meters/tracker
+                    eval_metrics = {
+                        "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
+                        "pc_success": AverageMeter("success", ":.1f"),
+                        "eval_s": AverageMeter("eval_s", ":.3f"),
+                    }
+                    eval_tracker = MetricsTracker(
+                        cfg.batch_size,
+                        dataset.num_frames,
+                        dataset.num_episodes,
+                        eval_metrics,
+                        initial_step=step,
+                        accelerator=accelerator,
+                    )
+                    eval_tracker.eval_s = aggregated.pop("eval_s")
+                    eval_tracker.avg_sum_reward = aggregated.pop("avg_sum_reward")
+                    eval_tracker.pc_success = aggregated.pop("pc_success")
+                    if wandb_logger:
+                        wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
+                        wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
+                        wandb_logger.log_video(eval_info["overall"]["video_paths"][0], step, mode="eval")
+
+                accelerator.wait_for_everyone()
 
     if is_main_process():
         progbar.close()

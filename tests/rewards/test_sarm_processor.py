@@ -96,6 +96,11 @@ class MockConfig:
     def num_frames(self) -> int:
         return 1 + self.n_obs_steps + self.max_rewind_steps
 
+    @property
+    def camera_keys(self) -> list[str]:
+        """Mirror SARMConfig's normalized camera-key interface."""
+        return [self.image_key]
+
 
 class TestSARMEncodingProcessorStepEndToEnd:
     """End-to-end test for SARMEncodingProcessorStep with dummy batch data."""
@@ -219,8 +224,9 @@ class TestSARMEncodingProcessorStepEndToEnd:
         assert "video_features" in obs
         video_features = obs["video_features"]
         assert video_features.shape[0] == batch_size
-        assert video_features.shape[1] == num_frames
-        assert video_features.shape[2] == 512  # CLIP embedding dim
+        assert video_features.shape[1] == len(config.camera_keys)
+        assert video_features.shape[2] == num_frames
+        assert video_features.shape[3] == 512  # CLIP embedding dim
 
         # Check state features exist and have correct shape
         assert "state_features" in obs

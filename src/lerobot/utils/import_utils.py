@@ -16,6 +16,7 @@
 import importlib
 import importlib.metadata
 import logging
+from functools import lru_cache
 from typing import Any
 
 from draccus.choice_types import ChoiceRegistry
@@ -69,7 +70,8 @@ def is_package_available(
         return package_exists
 
 
-def get_safe_default_video_backend():
+@lru_cache(maxsize=1)
+def get_safe_default_video_backend() -> str:
     logger = logging.getLogger(__name__)
     if importlib.util.find_spec("torchcodec"):
         # Despite being installed, torchcodec may not be loadable at runtime.
@@ -83,10 +85,9 @@ def get_safe_default_video_backend():
             )
             return "pyav"
     else:
-        logger.warning(
-            "'torchcodec' is not available in your platform, falling back to 'pyav' as a default decoder"
-        )
-        return "pyav"
+        logger.warning("'torchcodec' is not installed; falling back to 'pyav'")
+
+    return "pyav"
 
 
 _require_package_cache: dict[str, bool] = {}

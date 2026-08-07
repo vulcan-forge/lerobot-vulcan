@@ -58,7 +58,9 @@ class KeyboardTeleop(Teleoperator):
 
         self.event_queue = Queue()
         self.current_pressed = {}
+        self.key_down_edges = []
         self.listener = None
+        self._file_connected = False
         self.logs = {}
 
     @property
@@ -75,7 +77,9 @@ class KeyboardTeleop(Teleoperator):
 
     @property
     def is_connected(self) -> bool:
-        return PYNPUT_AVAILABLE and isinstance(self.listener, keyboard.Listener) and self.listener.is_alive()
+        if self.config.input_state_path:
+            return self._file_connected
+        return PYNPUT_AVAILABLE and keyboard is not None and isinstance(self.listener, keyboard.Listener) and self.listener.is_alive()
 
     @property
     def is_calibrated(self) -> bool:
@@ -118,9 +122,29 @@ class KeyboardTeleop(Teleoperator):
             self.disconnect()
 
     def _drain_pressed_keys(self):
+        if self.config.input_state_path:
+            try:
+                with open(self.config.input_state_path, encoding="utf-8") as state_file:
+                    pressed_keys = set(json.load(state_file))
+            except (OSError, ValueError, TypeError):
+                pressed_keys = set()
+            previous_keys = {key for key, pressed in self.current_pressed.items() if pressed}
+            self.key_down_edges.extend(sorted(pressed_keys - previous_keys))
+            self.current_pressed = {key: True for key in pressed_keys}
+            return
+
         while not self.event_queue.empty():
             key_char, is_pressed = self.event_queue.get_nowait()
+            was_pressed = bool(self.current_pressed.get(key_char, False))
             self.current_pressed[key_char] = is_pressed
+            if is_pressed and not was_pressed:
+                self.key_down_edges.append(key_char)
+
+    def pop_key_down_edges(self) -> list:
+        self._drain_pressed_keys()
+        key_down_edges = list(self.key_down_edges)
+        self.key_down_edges.clear()
+        return key_down_edges
 
     def configure(self):
         pass
@@ -128,6 +152,9 @@ class KeyboardTeleop(Teleoperator):
     @check_if_not_connected
     def get_action(self) -> RobotAction:
         before_read_t = time.perf_counter()
+
+        if not self.is_connected:
+            return {}
 
         self._drain_pressed_keys()
 
@@ -142,6 +169,7 @@ class KeyboardTeleop(Teleoperator):
 
     @check_if_not_connected
     def disconnect(self) -> None:
+        self._file_connected = False
         if self.listener is not None:
             self.listener.stop()
 

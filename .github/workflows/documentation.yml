@@ -16,13 +16,13 @@
 name: Documentation
 
 on:
-  # Allows running this workflow manually from the Actions tab
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version tag (e.g. v0.1.2) - Leave empty for standard main build'
-        required: false
-        type: string
+    # Allows running this workflow manually from the Actions tab
+    workflow_dispatch:
+        inputs:
+            version:
+                description: "Version tag (e.g. v0.1.2) - Leave empty for standard main build"
+                required: false
+                type: string
 
   # Triggers on pushes to main that touch the docs or the sources the API reference is generated from.
   # `src/**` is included because the API reference is built from docstrings via `[[autodoc]]`: without it,
@@ -43,13 +43,13 @@ on:
       - "docs/**"
       - "src/**"
 
-  release:
-    types: [published]
+        release:
+            types: [published]
 
 # Ensures that only the latest commit for a PR or branch is built, canceling older runs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
-  cancel-in-progress: true
+    group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+    cancel-in-progress: true
 
 jobs:
   # This job builds and deploys the official documentation.

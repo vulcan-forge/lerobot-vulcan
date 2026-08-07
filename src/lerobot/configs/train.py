@@ -290,6 +290,7 @@ class TrainPipelineConfig(HubMixin):
                 "Fresh initialization derives feature names from the current dataset, so no rename is applied."
             )
 
+        active_cfg = self.trainable_config
         if not self.job_name:
             if self.env is None:
                 self.job_name = f"{active_cfg.type}"

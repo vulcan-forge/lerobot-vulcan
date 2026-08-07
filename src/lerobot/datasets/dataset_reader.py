@@ -219,23 +219,22 @@ class DatasetReader:
 
         return True
 
-    def get_episodes_file_paths(self) -> list[Path]:
+    def get_episodes_file_paths(self) -> list[str]:
         """Return deduplicated file paths (data + video) for selected episodes.
 
         Used to build the ``allow_patterns`` list for ``snapshot_download``.
         """
         episodes = self.episodes if self.episodes is not None else list(range(self._meta.total_episodes))
-        fpaths = [str(self._meta.get_data_file_path(ep_idx)) for ep_idx in episodes]
+        fpaths = [self._meta.get_data_file_path(ep_idx).as_posix() for ep_idx in episodes]
         if len(self._meta.video_keys) > 0:
             video_files = [
-                str(self._meta.get_video_file_path(ep_idx, vid_key))
+                self._meta.get_video_file_path(ep_idx, vid_key).as_posix()
                 for vid_key in self._meta.video_keys
                 for ep_idx in episodes
             ]
             fpaths += video_files
         # episodes are stored in the same files, so we return unique paths only
-        fpaths = list(set(fpaths))
-        return fpaths
+        return list(dict.fromkeys(fpaths))
 
     def _get_query_indices(
         self, abs_idx: int, ep_idx: int

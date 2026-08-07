@@ -26,9 +26,12 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("torchcodec", reason="torchcodec is required (install lerobot[dataset])")
+from lerobot.utils.import_utils import get_safe_default_video_backend
 
-from lerobot.datasets.video_utils import VideoDecoderCache  # noqa: E402
+if get_safe_default_video_backend() != "torchcodec":
+    pytest.skip("torchcodec is installed but unavailable at runtime", allow_module_level=True)
+
+from lerobot.datasets.video_utils import VideoDecoderCache, decode_video_frames_torchcodec  # noqa: E402
 
 TEST_ARTIFACTS_DIR = Path(__file__).resolve().parent.parent / "artifacts" / "encoded_videos"
 SRC_CLIP = TEST_ARTIFACTS_DIR / "clip_4frames.mp4"
@@ -138,3 +141,48 @@ class TestVideoDecoderCacheBounded:
         for p in paths:
             cache.get_decoder(p)
         assert cache.size() == 3
+
+
+def test_torchcodec_packet_error_falls_back_to_pyav(monkeypatch):
+    """A repeated TorchCodec packet error must use the supported PyAV decoder."""
+
+    class FailingDecoder:
+        metadata = type("Metadata", (), {"average_fps": 30.0})()
+
+        def get_frames_at(self, indices):
+            raise RuntimeError("Could not push packet to decoder: Invalid data found")
+
+    class DecoderCache:
+        def __init__(self):
+            self.invalidated_paths = []
+
+        def get_decoder(self, video_path):
+            return FailingDecoder()
+
+        def invalidate(self, video_path):
+            self.invalidated_paths.append(video_path)
+
+    expected = object()
+    fallback_calls = []
+
+    def fake_decode_video_frames_pyav(video_path, timestamps, tolerance_s, return_uint8=False):
+        fallback_calls.append((video_path, timestamps, tolerance_s, return_uint8))
+        return expected
+
+    monkeypatch.setattr(
+        "lerobot.datasets.video_utils.decode_video_frames_pyav",
+        fake_decode_video_frames_pyav,
+    )
+    cache = DecoderCache()
+
+    result = decode_video_frames_torchcodec(
+        "broken.mp4",
+        [0.5],
+        0.01,
+        decoder_cache=cache,
+        return_uint8=True,
+    )
+
+    assert result is expected
+    assert cache.invalidated_paths == ["broken.mp4"]
+    assert fallback_calls == [("broken.mp4", [0.5], 0.01, True)]

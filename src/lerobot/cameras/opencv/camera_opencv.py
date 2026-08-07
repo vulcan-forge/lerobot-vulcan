@@ -119,6 +119,11 @@ class OpenCVCamera(Camera):
 
         self.rotation: int | None = get_cv2_rotation(config.rotation)
         self.backend: int = config.backend
+        self.auto_reconnect = config.auto_reconnect
+        self.max_consecutive_read_failures = config.max_consecutive_read_failures
+        self.fast_reconnect_interval_s = config.fast_reconnect_interval_s
+        self.fast_reconnect_window_s = config.fast_reconnect_window_s
+        self.reconnect_interval_s = config.reconnect_interval_s
 
         self.capture_width: int | None = None
         self.capture_height: int | None = None
@@ -193,6 +198,57 @@ class OpenCVCamera(Camera):
             raise
 
         logger.info(f"{self} connected.")
+
+    def _open_videocapture(self) -> None:
+        videocapture = cv2.VideoCapture(self.index_or_path, self.backend)
+
+        if not videocapture.isOpened():
+            videocapture.release()
+            raise ConnectionError(
+                f"Failed to open {self}.Run `lerobot-find-cameras opencv` to find available cameras."
+            )
+
+        self.videocapture = videocapture
+        try:
+            self._configure_capture_settings()
+        except Exception:
+            self._release_videocapture()
+            raise
+
+    def _release_videocapture(self) -> None:
+        if self.videocapture is None:
+            return
+
+        self.videocapture.release()
+        self.videocapture = None
+
+    def _reconnect_videocapture(self, reason: Exception) -> bool:
+        if not self.auto_reconnect:
+            return False
+
+        logger.warning(f"{self} reconnecting after read failure: {reason}")
+        self._release_videocapture()
+        reconnect_start_time = time.monotonic()
+
+        while self.stop_event is not None and not self.stop_event.is_set():
+            try:
+                self._open_videocapture()
+                with self.frame_lock:
+                    self.new_frame_event.clear()
+                logger.info(f"{self} reconnected.")
+                return True
+            except Exception as reconnect_error:
+                logger.warning(f"{self} reconnect attempt failed: {reconnect_error}")
+                reconnect_elapsed_s = time.monotonic() - reconnect_start_time
+                if reconnect_elapsed_s < self.fast_reconnect_window_s:
+                    reconnect_interval_s = self.fast_reconnect_interval_s
+                else:
+                    reconnect_interval_s = self.reconnect_interval_s
+
+                if self.stop_event.wait(reconnect_interval_s):
+                    break
+
+        return False
 
     @check_if_not_connected
     def _configure_capture_settings(self) -> None:
@@ -479,14 +535,20 @@ class OpenCVCamera(Camera):
                 self.new_frame_event.set()
                 failure_count = 0
 
-            except DeviceNotConnectedError:
-                break
+            except DeviceNotConnectedError as e:
+                if not self._reconnect_videocapture(e):
+                    break
+                failure_count = 0
             except Exception as e:
-                if failure_count <= 10:
-                    failure_count += 1
+                failure_count += 1
+                if failure_count < self.max_consecutive_read_failures:
                     logger.warning(f"Error reading frame in background thread for {self}: {e}")
-                else:
+                    continue
+
+                if not self._reconnect_videocapture(e):
                     raise RuntimeError(f"{self} exceeded maximum consecutive read failures.") from e
+
+                failure_count = 0
 
     def _start_read_thread(self) -> None:
         """Starts or restarts the background read thread if it's not running."""
@@ -626,6 +688,14 @@ class OpenCVCamera(Camera):
         if not self.is_connected and self.thread is None:
             raise DeviceNotConnectedError(f"{self} not connected.")
 
-        self._cleanup_resources()
+        if self.thread is not None:
+            self._stop_read_thread()
+
+        self._release_videocapture()
+
+        with self.frame_lock:
+            self.latest_frame = None
+            self.latest_timestamp = None
+            self.new_frame_event.clear()
 
         logger.info(f"{self} disconnected.")

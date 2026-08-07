@@ -25,6 +25,7 @@ from datasets import load_dataset
 
 from lerobot.configs import DEFAULT_DEPTH_UNIT, DEPTH_METER_UNIT, DepthEncoderConfig
 from lerobot.utils.constants import HF_LEROBOT_HOME, LOOKAHEAD_BACKTRACKTABLE, LOOKBACK_BACKTRACKTABLE
+from lerobot.utils.import_utils import get_safe_default_video_backend
 
 from .dataset_metadata import CODEBASE_VERSION, LeRobotDatasetMetadata
 from .depth_utils import MM_PER_METRE, dequantize_depth
@@ -415,7 +416,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
     # could be used with a ThreadPoolExecutor to run `make_frame` (especially video decoding)
     # in parallel, feeding a queue from which this iterator will yield processed items.
     def __iter__(self) -> Iterator[dict[str, torch.Tensor]]:
-        if self.video_decoder_cache is None:
+        if self.video_backend == "torchcodec" and self.video_decoder_cache is None:
             self.video_decoder_cache = VideoDecoderCache()
 
         # keep the same seed across exhaustions if shuffle is False, otherwise shuffle data across exhaustions
