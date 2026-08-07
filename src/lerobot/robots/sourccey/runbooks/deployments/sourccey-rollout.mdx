@@ -18,7 +18,7 @@ uv run lerobot-rollout \
   --strategy.type=base \
   --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-010/checkpoints/500000/pretrained_model" \
   --robot.type=sourccey_client \
-  --robot.remote_ip=192.168.1.212 \
+  --robot.remote_ip=192.168.1.242 \
   --task="Fold the shirt" \
   --display_data=true \
   --duration=3600 \
@@ -30,7 +30,7 @@ uv run lerobot-rollout \
 ```bash
 CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
   --strategy.type=base \
-  --policy.path="outputs/sft/xvla_s_sourccey-shirt-fold-c-010-pre-000/checkpoints/500000/pretrained_model" \
+  --policy.path="outputs/sft/xvla_s_sourccey-pile-shirt-fold-010-000/checkpoints/250000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --task="Fold the shirt" \
@@ -58,7 +58,7 @@ CUDA_VISIBLE_DEVICES=0 uv run lerobot-rollout \
   --inference.rtc.enabled=false \
   --inference.rtc.execution_horizon=30 \
   --interpolation_multiplier=2 \
-  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-006/checkpoints/1000000/pretrained_model" \
+  --policy.path="outputs/train/xvla_s_sourccey-shirt-fold-c-010/checkpoints/1000000/pretrained_model" \
   --robot.type=sourccey_client \
   --robot.remote_ip=192.168.1.212 \
   --robot.polling_timeout_ms=5 \
