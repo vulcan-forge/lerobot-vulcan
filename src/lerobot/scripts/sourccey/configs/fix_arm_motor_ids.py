@@ -105,11 +105,25 @@ def plan_arm_repair(
     return ArmRepairPlan(arm, port, tuple(repairs))
 
 
+def discover_arm_motors(bus: FeetechMotorsBus) -> dict[int, int]:
+    """Discover IDs 1-12, falling back when Feetech broadcast replies are unavailable."""
+    discovered = bus.broadcast_ping(num_retry=0)
+    if discovered is not None:
+        return discovered
+
+    print(f"Broadcast discovery returned no status packet on {bus.port}; trying individual IDs 1-12.")
+    return {
+        motor_id: model_number
+        for motor_id in range(1, 13)
+        if (model_number := bus.ping(motor_id, num_retry=0)) is not None
+    }
+
+
 def scan_arm(arm: str, port: str) -> tuple[FeetechMotorsBus, ArmRepairPlan]:
     bus = FeetechMotorsBus(port=port, motors={})
     bus.connect(handshake=False)
     try:
-        discovered = bus.broadcast_ping(num_retry=2, raise_on_error=True) or {}
+        discovered = discover_arm_motors(bus)
         return bus, plan_arm_repair(arm, port, discovered)
     except BaseException:
         bus.disconnect(disable_torque=False)

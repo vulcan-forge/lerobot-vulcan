@@ -1,4 +1,5 @@
 import re
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -7,7 +8,11 @@ from lerobot.robots.sourccey.sourccey.sourccey_follower.config_sourccey_follower
     sourccey_arm_motor_ids,
     sourccey_motor_models,
 )
-from lerobot.scripts.sourccey.configs.fix_arm_motor_ids import MOTOR_NAMES, plan_arm_repair
+from lerobot.scripts.sourccey.configs.fix_arm_motor_ids import (
+    MOTOR_NAMES,
+    discover_arm_motors,
+    plan_arm_repair,
+)
 
 
 def _discovered(ids: tuple[int, ...]) -> dict[int, int]:
@@ -21,6 +26,26 @@ def _discovered(ids: tuple[int, ...]) -> dict[int, int]:
 def test_canonical_sourccey_arm_motor_ids() -> None:
     assert sourccey_arm_motor_ids("left") == (7, 8, 9, 10, 11, 12)
     assert sourccey_arm_motor_ids("right") == (1, 2, 3, 4, 5, 6)
+
+
+def test_discovery_falls_back_to_individual_pings() -> None:
+    expected = _discovered((1, 2, 3, 4, 5, 6))
+    bus = MagicMock(port="/dev/left")
+    bus.broadcast_ping.return_value = None
+    bus.ping.side_effect = lambda motor_id, num_retry: expected.get(motor_id)
+
+    assert discover_arm_motors(bus) == expected
+    bus.broadcast_ping.assert_called_once_with(num_retry=0)
+    assert bus.ping.call_count == 12
+
+
+def test_discovery_prefers_successful_broadcast() -> None:
+    expected = _discovered((1, 2, 3, 4, 5, 6))
+    bus = MagicMock()
+    bus.broadcast_ping.return_value = expected
+
+    assert discover_arm_motors(bus) == expected
+    bus.ping.assert_not_called()
 
 
 def test_plan_repairs_fully_swapped_left_arm() -> None:
