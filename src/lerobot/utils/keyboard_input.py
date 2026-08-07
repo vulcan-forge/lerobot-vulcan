@@ -393,7 +393,7 @@ def create_key_listener(dispatch: Callable[[str], None], *, controls_help: str =
     return None
 
 
-def init_keyboard_listener():
+def init_keyboard_listener(use_global_listener: bool = True):
     """Initialize a non-blocking keyboard listener for interactive recording controls.
 
     Backend selection:
@@ -416,12 +416,20 @@ def init_keyboard_listener():
         A tuple ``(listener, events)`` where ``listener`` exposes ``.stop()`` or is
         ``None``, and ``events`` is the dict of flags (``exit_early``,
         ``rerecord_episode``, ``stop_recording``) set by key presses.
+
+    Args:
+        use_global_listener: When false, return initialized event flags without
+            starting a background keyboard listener. This is used when a focused
+            keyboard teleoperator already forwards recording-control key events.
     """
     events = {
         "exit_early": False,
         "rerecord_episode": False,
         "stop_recording": False,
     }
+
+    if not use_global_listener:
+        return None, events
 
     # Accept the single-byte letter equivalents n/r/q alongside the arrow/Esc keys: the
     # letters are immune to the escape-sequence split/delay/interception that affects arrows

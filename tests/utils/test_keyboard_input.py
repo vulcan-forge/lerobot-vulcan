@@ -188,6 +188,19 @@ def test_init_returns_none_without_tty(monkeypatch):
     assert listener is None
 
 
+def test_init_can_skip_background_listener(monkeypatch):
+    monkeypatch.setattr(ki, "create_key_listener", lambda *args, **kwargs: pytest.fail("listener started"))
+
+    listener, events = init_keyboard_listener(use_global_listener=False)
+
+    assert listener is None
+    assert events == {
+        "exit_early": False,
+        "rerecord_episode": False,
+        "stop_recording": False,
+    }
+
+
 @pytest.mark.parametrize(
     ("key", "flag"),
     [("right", "exit_early"), ("r", "rerecord_episode"), ("q", "stop_recording")],
