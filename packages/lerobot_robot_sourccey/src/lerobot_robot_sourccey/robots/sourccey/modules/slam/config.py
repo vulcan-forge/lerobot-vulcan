@@ -1,6 +1,5 @@
-#!/usr/bin/env python
-
 # Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 Vulcan Robotics, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,8 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .config import TeleoperatorConfig
-from .teleoperator import Teleoperator
-from .utils import TeleopEvents, make_teleoperator_from_config
+from dataclasses import dataclass
 
-__all__ = ["Teleoperator", "TeleoperatorConfig", "TeleopEvents", "make_teleoperator_from_config"]
+
+@dataclass
+class SlamInputConfig:
+    """Configuration for Sourccey -> SLAM sidecar publishing."""
+
+    input_enabled: bool = False
+    input_endpoint: str = "tcp://127.0.0.1:5560"
+    stereo_left_key: str = "front_left"
+    stereo_right_key: str = "front_right"
+    jpeg_quality: int = 80

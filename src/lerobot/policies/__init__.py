@@ -56,8 +56,6 @@ __all__ = [
     "PI0Config",
     "PI0FastConfig",
     "PI05Config",
-    "SIVAConfig",
-    "SIVA2Config",
     "SmolVLAConfig",
     "TDMPCConfig",
     "VLAJEPAConfig",

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lerobot_robot_sourccey"
+version = "0.1.0"
+description = "Sourccey robot and teleoperator plugin for LeRobot"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = "Apache-2.0"
+dependencies = [
+    "lerobot[feetech]",
+    "grpcio>=1.73,<2",
+    "numpy>=1.24",
+    "opencv-python-headless>=4.9",
+    "protobuf>=5,<7",
+    "pyzmq>=26,<28",
+    "websockets>=15,<17",
+]
+
+[project.optional-dependencies]
+hardware = [
+    "gpiozero>=2.0.1; sys_platform == 'linux'",
+    "lgpio>=0.2.2; sys_platform == 'linux'",
+]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+lerobot_robot_sourccey = ["**/*.json", "**/*.proto", "**/*.pyi", "**/*.urdf"]
