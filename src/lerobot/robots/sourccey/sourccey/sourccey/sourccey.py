@@ -433,6 +433,8 @@ class Sourccey(Robot):
             left_action = {key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")}
             right_action = {key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")}
             base_goal_pos = {k: v for k, v in action.items() if k.endswith(".pos")}
+            left_connect_requested = bool(left_action) and not bool(action.get("untorque_left", False))
+            right_connect_requested = bool(right_action) and not bool(action.get("untorque_right", False))
 
             # Proto3 cannot mark arm targets as ABSENT — every command arrives with
             # all 12 joints present, defaulting to exactly 0.0. Forwarding such an
@@ -449,7 +451,7 @@ class Sourccey(Robot):
             # bring the arms online (a torque request with no targets must still
             # connect them so they start reporting — with nothing forwarded below,
             # connecting cannot move them).
-            wants_arms = bool(left_action or right_action)
+            wants_arms = bool(left_action or right_action or left_connect_requested or right_connect_requested)
             if wants_arms and not self._arms_connected:
                 if self._arms_available:
                     try:
