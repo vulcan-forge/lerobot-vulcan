@@ -4207,6 +4207,16 @@ def main() -> int:
         "Use this to perfect the rotation view in isolation.",
     )
     parser.add_argument(
+        "--exit-after-spin-only",
+        action="store_true",
+        default=False,
+        help=(
+            "When used with --spin-only, save the initial 360deg map and exit "
+            "instead of parking forever to keep the viewer open. Intended for "
+            "map-maker handoff scripts."
+        ),
+    )
+    parser.add_argument(
         "--explore-viewpoints",
         type=int,
         default=0,
@@ -4300,8 +4310,8 @@ def main() -> int:
         "--drive-command-sign",
         type=float,
         choices=(-1.0, 1.0),
-        default=1.0,
-        help="Sign applied to the autonomous x.vel drive command. Use -1 if this robot's base drives backward for positive x.vel.",
+        default=-1.0,
+        help="Sign applied to the autonomous x.vel drive command. This robot drives forward with -1; use +1 if another base is wired the opposite way.",
     )
     parser.add_argument(
         "--auto-correct-drive-command-sign",
@@ -15217,11 +15227,15 @@ def main() -> int:
         "  Map = world/lidar_map; frontier centroids amber, target green sphere, PLANNED path "
         "green line (world/plan), executed trail orange (world/trail)."
     )
-    print("  Leave running to keep the viewer up; Ctrl+C to exit.")
+    handoff_exit = bool(args.spin_only) and bool(args.exit_after_spin_only)
+    if handoff_exit:
+        print("  Handoff mode: initial spin map saved; closing so the navigator can start.")
+    else:
+        print("  Leave running to keep the viewer up; Ctrl+C to exit.")
     print("========================================")
 
     try:
-        while True:
+        while not handoff_exit:
             time.sleep(0.5)
     except KeyboardInterrupt:
         pass
@@ -15243,3 +15257,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

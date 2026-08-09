@@ -1151,6 +1151,8 @@ class SavedMapNavigator:
         # map has little structure in that room.
         self.local_odometry = RollingLocalSubmap(max_scans=48, max_points=24000)
         self.global_tracking_cycle = 0
+        self.drive_command_sign = 1.0 if float(getattr(args, "drive_command_sign", 1.0)) >= 0.0 else -1.0
+        self.drive_command_sign_flips = 0
         self._strong_local_motion_relaxations = 0
         self._endpoint_recheck_count = 0
         self._last_local_pose_confirmation_at = -math.inf
@@ -1396,13 +1398,19 @@ class SavedMapNavigator:
         # later refreshes drew only the dynamic robot marker. _refresh() owns
         # the first size-valid static draw and every subsequent resize.
         self.root.after(100, self._refresh)
-        self.status_text = "Map loaded—waiting for live LiDAR and IMU before automatic relocalization"
-        # Active localization moves the chassis, so start it only after both
-        # sensor streams have produced a sample. Polling from Tk keeps startup
-        # non-blocking and avoids a false unavailable result while a healthy
-        # sensor connection is still warming up.
-        self.root.after(250, self._start_initial_relocalization)
-
+        if bool(getattr(self.args, "trust_map_start_pose", False)):
+            self.status_text = "Fresh-map handoff—waiting for live LiDAR and IMU before accepting saved pose"
+            # The map-maker just saved this pose after the initial 360deg sweep.
+            # Wait for one fresh sensor frame, seed rolling odometry at that pose,
+            # then skip the redundant global relocalization game.
+            self.root.after(250, self._accept_trusted_map_start_pose)
+        else:
+            self.status_text = "Map loaded—waiting for live LiDAR and IMU before automatic relocalization"
+            # Active localization moves the chassis, so start it only after both
+            # sensor streams have produced a sample. Polling from Tk keeps startup
+            # non-blocking and avoids a false unavailable result while a healthy
+            # sensor connection is still warming up.
+            self.root.after(250, self._start_initial_relocalization)
     def _record_collision_diagnostic_frame(self) -> None:
         """Append the visible live-LiDAR diagnostic canvas to an MP4 file."""
         if self._diagnostic_video_failed:
@@ -1610,6 +1618,47 @@ class SavedMapNavigator:
             f"{self._ground_validated_pairs} pair(s) validated by rolling LiDAR."
         )
 
+    def _accept_trusted_map_start_pose(self) -> None:
+        """Use the saved map pose when launched immediately after map creation."""
+        if self.closing or self.localized:
+            return
+        _frame_id, frame = self.feed.latest()
+        yaw = self.imu.deg()
+        if frame is None or yaw is None:
+            self.status_text = "Fresh-map handoff waiting for live LiDAR and IMU..."
+            self.status.configure(text=self.status_text)
+            self.root.after(250, self._accept_trusted_map_start_pose)
+            return
+        local = _scan_local(frame, self.args)
+        if len(local) < 40:
+            self.status_text = "Fresh-map handoff waiting for usable LiDAR returns..."
+            self.status.configure(text=self.status_text)
+            self.root.after(250, self._accept_trusted_map_start_pose)
+            return
+        with self.pose_lock:
+            trusted_pose = Pose2D(float(self.pose.x), float(self.pose.y), float(self.pose.theta_deg))
+            self.pose = trusted_pose
+        self.local_odometry.reset(local, trusted_pose)
+        self._saved_map_anchor_failures = 0
+        self._discard_ground_translation()
+        self.global_tracking_cycle = 0
+        self.localization_imu = float(yaw)
+        self.localized = True
+        self.localization_bubble_pose = trusted_pose
+        centre = self._centre(trusted_pose)
+        self.status_text = (
+            f"Fresh map pose accepted at ({centre[0]:+.2f}, {centre[1]:+.2f}), "
+            f"heading {trusted_pose.theta_deg:+.1f}deg; click waypoints; "
+            "press Enter to navigate"
+        )
+        self.status.configure(text=self.status_text)
+        print(
+            "[saved-map] fresh-map handoff: trusted saved current_pose and "
+            f"seeded rolling LiDAR odometry with {len(local)} returns; "
+            "skipping startup global relocalization."
+        )
+        self._compute_view()
+        self._draw_map()
     def _start_initial_relocalization(self) -> None:
         """Automatically localize once the first live sensor samples exist."""
         if self.closing or self.localized:
@@ -5742,14 +5791,14 @@ class SavedMapNavigator:
             return
         print(
             "[saved-map] stationary view was ambiguous; starting one slow "
-            "180deg LiDAR localization sweep."
+            "360deg LiDAR localization sweep."
         )
-        # Choose one safe direction, then acquire one monotonic half sweep. Unlike the
+        # Choose one safe direction, then acquire one monotonic full sweep. Unlike the
         # explorer, saved-map localization has no trusted pose yet; all motion
         # safety is therefore evaluated directly in the calibrated body frame.
         step_deg = 20.0
-        sweep_steps = 9
-        required_sweep_deg = 160.0
+        sweep_steps = 18
+        required_sweep_deg = 330.0
         direction = 0.0
         if self._rotation_safety(step_deg) is None:
             direction = 1.0
@@ -5842,7 +5891,7 @@ class SavedMapNavigator:
             and abs(float(sweep_yaw) - float(initial_yaw)) >= required_sweep_deg
         )
         if completed_full_sweep:
-            # The half-sweep is intentionally retained at its measured final
+            # The full sweep is intentionally retained at its measured final
             # heading; rotating back would waste the clean data and create the
             # double-spin startup behavior this path is designed to remove.
             returned_to_start = True
@@ -6810,13 +6859,16 @@ class SavedMapNavigator:
             return
         weak = 0
         after = self.feed.latest()[0]
-        drive_command = _forward_command_above_stiction(float(self.args.drive_speed))
-        if drive_command != float(self.args.drive_speed):
+        requested_drive = abs(float(self.args.drive_speed)) * float(self.drive_command_sign)
+        drive_command = _forward_command_above_stiction(requested_drive)
+        if abs(drive_command) != abs(float(self.args.drive_speed)):
             print(
                 f"[saved-map] requested forward command "
                 f"{float(self.args.drive_speed):.2f} is below drivetrain stiction; "
                 f"using {drive_command:.2f}."
             )
+        else:
+            print(f"[saved-map] autonomous drive x.vel sign {float(self.drive_command_sign):+.0f}; command {drive_command:.2f}.")
         with self.pose_lock:
             route_start = self._centre(self.pose)
         route, dropped = _drop_reached_waypoint_prefix(route, route_start)
@@ -6932,7 +6984,7 @@ class SavedMapNavigator:
             print(
                 f"[saved-map] waypoint {waypoint_index}/{len(route)} aligned; "
                 f"driving {float(np.hypot(*(np.asarray(waypoint) - centre))):.2f}m "
-                f"with forward command {drive_command:.2f}."
+                f"with x.vel command {drive_command:.2f}."
             )
             # Establish a navigation-time appearance baseline at every new
             # straight segment.  This is a cue for later LiDAR correction,
@@ -7116,6 +7168,35 @@ class SavedMapNavigator:
                 # resulting candidate. Otherwise one bad optical-flow batch
                 # can silently move both the robot and its matcher seed.
                 local_step = self._centre(solved_local) - self._centre(pose_before_ground)
+                segment_norm_for_sign = max(1e-9, float(np.hypot(*segment_direction)))
+                segment_axis_for_sign = segment_direction / segment_norm_for_sign
+                measured_along_m = float(local_step @ segment_axis_for_sign)
+                if (
+                    bool(getattr(self.args, "auto_correct_drive_command_sign", True))
+                    and self.drive_command_sign_flips < 1
+                    and measured_along_m < -float(getattr(self.args, "reverse_progress_trigger_m", 0.08))
+                    and local_score >= max(4.0, float(self.args.localization_min_score) - 2.0)
+                    and local_support >= 0.18
+                ):
+                    self.controller.halt()
+                    old_sign = float(self.drive_command_sign)
+                    self.drive_command_sign = -old_sign
+                    self.drive_command_sign_flips += 1
+                    self._discard_ground_translation()
+                    self._reset_surface_motion_prior(current_pose)
+                    remaining_route = [np.asarray(waypoint, dtype=np.float64)]
+                    remaining_route.extend(np.asarray(point, dtype=np.float64) for point in route[waypoint_index:])
+                    print(
+                        "[saved-map] commanded straight motion moved AWAY from the waypoint "
+                        f"by {-measured_along_m:.2f}m; flipping autonomous x.vel sign "
+                        f"{old_sign:+.0f}->{self.drive_command_sign:+.0f} and re-aiming."
+                    )
+                    return self._navigate_worker(remaining_route, backup_failures)
+                if measured_along_m < -max(0.24, 2.5 * float(getattr(self.args, "reverse_progress_trigger_m", 0.08))):
+                    self.controller.halt()
+                    self.status_text = "Navigation stopped: autonomous drive moved opposite the planned waypoint"
+                    print(f"[saved-map] {self.status_text} ({measured_along_m:.2f}m along-track).")
+                    return
                 pose_dt = max(0.05, time.monotonic() - last_pose_update_at)
                 maximum_forward_step = min(0.20, max(0.04, 0.40 * pose_dt))
                 maximum_lateral_step = min(0.05, max(0.02, 0.08 * pose_dt))
@@ -7700,6 +7781,25 @@ def _parse_args() -> Namespace:
         default=0.80,
         help="Forward base command; nonzero values below the measured 0.80 stiction floor are compensated.",
     )
+    parser.add_argument(
+        "--drive-command-sign",
+        type=float,
+        choices=(-1.0, 1.0),
+        default=-1.0,
+        help="Sign applied to autonomous x.vel while navigating. This robot drives forward with -1; use +1 if another base is wired the opposite way.",
+    )
+    parser.add_argument(
+        "--auto-correct-drive-command-sign",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Stop and flip --drive-command-sign once if LiDAR odometry proves the first straight leg moved backward.",
+    )
+    parser.add_argument(
+        "--reverse-progress-trigger-m",
+        type=float,
+        default=0.08,
+        help="Reverse measured route progress that triggers drive-sign auto-correction.",
+    )
     parser.add_argument("--turn-speed", type=float, default=0.9)
     parser.add_argument("--robot-radius-m", type=float, default=0.31)
     parser.add_argument("--physical-body-radius-m", type=float, default=0.28)
@@ -7829,6 +7929,16 @@ def _parse_args() -> Namespace:
         default=6.0,
         help="Frame rate for the automatic robot-frame diagnostic MP4.",
     )
+    parser.add_argument(
+        "--trust-map-start-pose",
+        action="store_true",
+        default=False,
+        help=(
+            "Start localized at the saved map current_pose instead of running "
+            "global relocalization. Intended only for immediate handoff from "
+            "a freshly created map where the robot has not moved."
+        ),
+    )
     args = parser.parse_args()
     if not 0.50 <= float(args.surface_texture_similarity) <= 0.99:
         parser.error("--surface-texture-similarity must be in [0.50, 0.99]")
@@ -7907,3 +8017,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

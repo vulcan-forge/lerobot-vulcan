@@ -35,6 +35,7 @@ from ..protobuf.generated import sourccey_pb2
 from .config_sourccey import (
     SourcceyConfig,
     SourcceyHostConfig,
+    sourccey_bottom_only_cameras_config,
     sourccey_cameras_config,
     sourccey_slam_eye_only_cameras_config,
 )
@@ -458,12 +459,19 @@ class _BaseCommandService:
 def _build_host_slam_input_publisher(config: SourcceyHostConfig) -> SlamInputPublisher | None:
     if not config.slam_input_enabled:
         return None
-    extra_camera_keys: tuple[str, ...] = ("bottom",) if config.bottom_camera_enabled else ()
+    if config.lidar_mapping_bottom_only_mode:
+        left_key = "bottom"
+        right_key = "bottom"
+        extra_camera_keys: tuple[str, ...] = ()
+    else:
+        left_key = config.slam_stereo_left_key
+        right_key = config.slam_stereo_right_key
+        extra_camera_keys = ("bottom",) if config.bottom_camera_enabled else ()
     return SlamInputPublisher(
         source_prefix="sourccey_host",
         source_id="sourccey",
-        stereo_left_key=config.slam_stereo_left_key,
-        stereo_right_key=config.slam_stereo_right_key,
+        stereo_left_key=left_key,
+        stereo_right_key=right_key,
         jpeg_quality=config.slam_jpeg_quality,
         eye_only_mode=config.slam_publish_eye_only_mode,
         publish_fps=config.slam_publish_fps,
@@ -682,7 +690,42 @@ def main(host_config: SourcceyHostConfig):
 
     logging.info("Configuring Sourccey")
     robot_config = SourcceyConfig(id="sourccey")
-    if host_config.slam_three_camera_front_priority_mode:
+    if host_config.lidar_mapping_bottom_only_mode:
+        robot_config.cameras = sourccey_bottom_only_cameras_config(
+            bottom_fps=host_config.slam_bottom_camera_fps,
+            bottom_width=host_config.slam_bottom_width,
+            bottom_height=host_config.slam_bottom_height,
+            bottom_fourcc=host_config.slam_bottom_fourcc,
+            bottom_path=host_config.bottom_camera_path,
+        )
+        host_config.bottom_camera_enabled = True
+        host_config.slam_input_enabled = True
+        host_config.slam_obstacle_input_enabled = False
+        host_config.fused_vision_enabled = False
+        logging.info(
+            "Sourccey Host LiDAR mapping bottom-only mode enabled: "
+            "base control, IMU yaw, and bottom camera SLAM input stay online; "
+            "front/wrist cameras are disabled."
+        )
+        print(
+            "[HOST] LiDAR mapping bottom-only mode: bottom camera enabled; "
+            "front/wrist cameras disabled; base control + IMU yaw remain active."
+        )
+    elif host_config.lidar_mapping_control_only_mode:
+        robot_config.cameras = {}
+        host_config.bottom_camera_enabled = False
+        host_config.slam_input_enabled = False
+        host_config.slam_obstacle_input_enabled = False
+        host_config.fused_vision_enabled = False
+        logging.info(
+            "Sourccey Host LiDAR mapping control-only mode enabled: "
+            "base control and IMU yaw stay online; all cameras and SLAM camera publishers are disabled."
+        )
+        print(
+            "[HOST] LiDAR mapping control-only mode: cameras disabled; "
+            "base control + IMU yaw remain active."
+        )
+    elif host_config.slam_three_camera_front_priority_mode:
         if not host_config.slam_eye_only_mode:
             raise ValueError("slam_three_camera_front_priority_mode requires --slam_eye_only_mode=true.")
         if not host_config.bottom_camera_enabled:

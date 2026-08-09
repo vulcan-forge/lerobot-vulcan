@@ -137,6 +137,30 @@ def sourccey_slam_eye_only_cameras_config(
     )
 
 
+def sourccey_bottom_only_cameras_config(
+    *,
+    bottom_fps: int = 30,
+    bottom_width: int = 320,
+    bottom_height: int = 240,
+    bottom_fourcc: str | None = "MJPG",
+    bottom_path: str = "/dev/v4l/by-path/platform-1000110000.pcie-pci-0001:01:00.0-usb-0:1.2.2:1.0-video-index0",
+) -> dict[str, CameraConfig]:
+    return {
+        "bottom": OpenCVCameraConfig(
+            index_or_path=bottom_path,
+            fps=bottom_fps,
+            width=bottom_width,
+            height=bottom_height,
+            fourcc=bottom_fourcc,
+            auto_reconnect=True,
+            max_consecutive_read_failures=2,
+            fast_reconnect_interval_s=0.05,
+            fast_reconnect_window_s=2.0,
+            reconnect_interval_s=0.5,
+        )
+    }
+
+
 def sourccey_motor_models() -> dict[str, str]:
     return {
         "shoulder_pan": "sts3215",
@@ -219,6 +243,13 @@ class SourcceyHostConfig:
     arm_hardware_enabled: bool = True
     arm_calibrate_on_connect: bool = False
     arm_relax_on_startup: bool = True
+    # LiDAR mapping/nav only: keep base control + IMU yaw online, but open no
+    # cameras. This prevents the Pi's USB/camera loop from starving the
+    # LDLiDAR serial reader during mapping runs.
+    lidar_mapping_control_only_mode: bool = False
+    # LiDAR mapping/nav with bottom odometry: open only the underside camera
+    # and publish it on the SLAM input stream; front/wrist cameras stay off.
+    lidar_mapping_bottom_only_mode: bool = False
     # Publish the underside camera as `bottom` alongside the other live feeds.
     bottom_camera_enabled: bool = True
     bottom_camera_path: str = "/dev/v4l/by-path/platform-1000110000.pcie-pci-0001:01:00.0-usb-0:1.2.2:1.0-video-index0"
