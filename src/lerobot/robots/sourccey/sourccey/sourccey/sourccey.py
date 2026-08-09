@@ -100,6 +100,7 @@ class Sourccey(Robot):
         self._arms_available = True
         self._arms_unavailable_reason: str | None = None
         self._connect_arms_on_startup = True
+        self._arm_observation_enabled = True
 
     def __del__(self):
         # Destructors can run on partially initialized objects if __init__ raised.
@@ -298,6 +299,16 @@ class Sourccey(Robot):
         self._arms_available = False
         self._arms_unavailable_reason = str(reason)
 
+    def set_arm_observation_enabled(self, enabled: bool) -> None:
+        """Enable/disable follower-arm readback in the host observation loop.
+
+        SLAM mapping may briefly connect the arms to latch a safe stow pose, but
+        continuous arm polling competes with the Pi's other USB/serial devices
+        and is unnecessary for mapping. Teleop can re-enable readback when arm
+        state is part of the operator-facing observation stream.
+        """
+        self._arm_observation_enabled = bool(enabled)
+
     def disconnect(self):
         if not self.is_connected:
             return
@@ -408,7 +419,7 @@ class Sourccey(Robot):
 
             obs_dict = {}
 
-            if self._arms_connected:
+            if self._arms_connected and self._arm_observation_enabled:
                 left_obs = self.left_arm.get_observation()
                 obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
 

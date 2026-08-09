@@ -129,6 +129,8 @@ class HostResourceManager:
             logger.info("Applying Sourccey host mode '%s' (%s)", mode, reason or "no reason provided")
             self.robot.watchdog_stop_motion()
             self.robot.set_connected_cameras(self._camera_keys_for_mode(mode))
+            if hasattr(self.robot, "set_arm_observation_enabled"):
+                self.robot.set_arm_observation_enabled(mode == "teleop_full")
             self._slam_input_active = mode in {"slam_mapping", "slam_front", "safety_only"}
             self._mode = mode
             self._message = reason or f"mode switched to {mode}"
