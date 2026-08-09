@@ -1,18 +1,33 @@
-"""Compatibility package for legacy ``sourccey_wander`` script imports."""
+"""Compatibility package for legacy ``sourccey_wander`` script imports.
 
-from pathlib import Path
+The real implementation now lives under the Sourccey SLAM package.  Do not point
+``__path__`` at that folder directly: Python would then load the files as
+``sourccey_wander.*`` modules, breaking their package-relative imports like
+``from ..lidar``.  Instead, alias the legacy module names to the real package
+modules so old scripts keep working while the implementation stays organized.
+"""
 
-_SLAM_WANDER = (
-    Path(__file__).resolve().parents[2]
-    / "src"
-    / "lerobot"
-    / "robots"
-    / "sourccey"
-    / "sourccey"
-    / "sourccey"
-    / "modules"
-    / "slam"
-    / "wander"
+from __future__ import annotations
+
+import importlib
+import sys
+
+_REAL_PACKAGE = "lerobot.robots.sourccey.sourccey.sourccey.modules.slam.wander"
+_SUBMODULES = (
+    "wander_types",
+    "imu_heading",
+    "lidar_feed",
+    "stop_zone",
+    "frontier",
+    "boxed_in",
+    "mapping",
+    "localization",
+    "calibration",
+    "driving",
 )
 
-__path__ = [str(_SLAM_WANDER)]
+for _name in _SUBMODULES:
+    _module = importlib.import_module(f"{_REAL_PACKAGE}.{_name}")
+    sys.modules[f"{__name__}.{_name}"] = _module
+
+__all__ = list(_SUBMODULES)
