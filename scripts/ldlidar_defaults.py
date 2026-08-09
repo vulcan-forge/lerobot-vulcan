@@ -1,9 +1,3 @@
-from __future__ import annotations
+"""Compatibility shim for legacy script imports."""
 
-DEFAULT_LIDAR_FORWARD_ANGLE_DEG = 270.0
-
-DEFAULT_LIDAR_STOP_BOX_MIN_DISTANCE_M = 0.00
-DEFAULT_LIDAR_STOP_BOX_DISTANCE_M = 0.14
-DEFAULT_LIDAR_STOP_BOX_HALF_WIDTH_M = 0.28
-DEFAULT_LIDAR_STOP_BOX_THICKNESS_M = 0.12
-
+from lerobot.robots.sourccey.sourccey.sourccey.modules.slam.lidar.defaults import *  # noqa: F401,F403

@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from sourccey_wander.wander_types import _normalize_angle_deg
+from .wander_types import _normalize_angle_deg
 
 @dataclass(slots=True)
 class StopZoneConfig:

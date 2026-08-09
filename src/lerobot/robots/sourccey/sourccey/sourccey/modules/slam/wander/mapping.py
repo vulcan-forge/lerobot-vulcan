@@ -15,8 +15,8 @@ from pathlib import Path
 
 import numpy as np
 
-from ldlidar_direct_snapshot_client import DirectLidarFeed, _save_snapshot, _scan_to_local_points
-from ldlidar_direct_snapshot_stitch import (
+from ..lidar.direct_snapshot_client import DirectLidarFeed, _save_snapshot, _scan_to_local_points
+from ..lidar.direct_snapshot_stitch import (
     HTML_TEMPLATE,
     MotionHint,
     Pose2D,
@@ -220,7 +220,7 @@ def _write_stitch_report(
     ``stitch_dir``. This is the file you open to SEE the map as it grows. Returns
     the two written paths.
     """
-    from ldlidar_direct_snapshot_stitch import _generate_svg
+    from ..lidar.direct_snapshot_stitch import _generate_svg
 
     svg = _generate_svg(transformed_sets, poses)
     report = {

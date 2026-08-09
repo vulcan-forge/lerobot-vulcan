@@ -16,6 +16,7 @@
 import base64
 import json
 import logging
+import os
 from functools import cached_property
 import threading
 import time
@@ -34,6 +35,7 @@ from .modules.slam import (
     close_slam_pub_socket,
     create_slam_pub_socket,
 )
+from .modules.resource_manager import HOST_MODE_SCHEMA
 
 # Import protobuf modules
 from ..protobuf.generated import sourccey_pb2
@@ -53,6 +55,17 @@ class SourcceyClient(Robot):
         self.port_zmq_cmd = config.port_zmq_cmd
         self.port_zmq_observations = config.port_zmq_observations
         self.port_zmq_base_status = config.port_zmq_base_status
+        self.port_zmq_host_mode = config.port_zmq_host_mode
+        self.host_mode_request_enabled = config.host_mode_request_enabled
+        self.host_session_mode = config.host_session_mode
+        self.host_mode_request_timeout_s = config.host_mode_request_timeout_s
+        self.host_mode_control_token = config.host_mode_control_token or os.environ.get(
+            "SOURCCEY_HOST_MODE_TOKEN",
+            "",
+        )
+        self.host_mode_stow_arms = config.host_mode_stow_arms
+        self.host_mode_stow_pose_path = config.host_mode_stow_pose_path
+        self.host_mode_response = None
         slam_cfg = config.slam
         self.slam_input_enabled = slam_cfg.input_enabled
         self.slam_input_endpoint = slam_cfg.input_endpoint
@@ -241,6 +254,8 @@ class SourcceyClient(Robot):
                 f"tcp://{self.remote_ip}:{self.port_zmq_base_status}"
             )
 
+            self._request_host_mode()
+
             if self.slam_input_enabled:
                 self.zmq_slam_input_socket = create_slam_pub_socket(
                     self.zmq_context, self.slam_input_endpoint
@@ -288,6 +303,59 @@ class SourcceyClient(Robot):
                 self.zmq_context.term()
                 self.zmq_context = None
             raise
+
+    def _request_host_mode(self) -> None:
+        """Best-effort request for the Pi host to switch hardware profiles."""
+        if not self.host_mode_request_enabled or not self.host_session_mode:
+            return
+        if self.zmq_context is None:
+            return
+
+        endpoint = f"tcp://{self.remote_ip}:{self.port_zmq_host_mode}"
+        socket = self.zmq_context.socket(zmq.REQ)
+        socket.setsockopt(zmq.LINGER, 0)
+        request = {
+            "schema": HOST_MODE_SCHEMA,
+            "action": "set_mode",
+            "mode": self.host_session_mode,
+            "token": self.host_mode_control_token,
+            "stow_arms": bool(self.host_mode_stow_arms),
+            "stow_pose_path": self.host_mode_stow_pose_path,
+            "reason": f"{self.id or 'sourccey_client'} connect",
+        }
+        try:
+            socket.connect(endpoint)
+            socket.send_json(request)
+            if not socket.poll(int(max(float(self.host_mode_request_timeout_s), 0.05) * 1000), zmq.POLLIN):
+                logging.debug(
+                    "Host mode request '%s' received no response from %s; continuing with current host mode.",
+                    self.host_session_mode,
+                    endpoint,
+                )
+                return
+            response = socket.recv_json()
+            self.host_mode_response = response
+            if response.get("ok"):
+                logging.info(
+                    "Host mode active: %s cameras=%s",
+                    response.get("mode"),
+                    response.get("active_camera_keys"),
+                )
+            else:
+                logging.warning(
+                    "Host refused mode request '%s': %s",
+                    self.host_session_mode,
+                    response.get("error", response),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logging.debug(
+                "Host mode request '%s' failed against %s: %s",
+                self.host_session_mode,
+                endpoint,
+                exc,
+            )
+        finally:
+            socket.close(0)
 
     def calibrate(self) -> None:
         pass

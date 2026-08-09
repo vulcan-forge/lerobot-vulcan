@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from ldlidar_direct_snapshot_stitch import MotionHint
+from ..lidar.direct_snapshot_stitch import MotionHint
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey_client import SourcceyClient
 
 @dataclass(slots=True)

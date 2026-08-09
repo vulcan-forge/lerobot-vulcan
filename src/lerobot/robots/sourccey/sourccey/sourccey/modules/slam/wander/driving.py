@@ -18,9 +18,9 @@ import traceback
 
 import numpy as np
 
-from ldlidar_auto_snapshot_stitch import _execute_turn_burst, _send_stop
-from ldlidar_direct_snapshot_client import DirectLidarFeed, _scan_to_local_points
-from ldlidar_direct_snapshot_stitch import (
+from ..lidar.auto_snapshot_stitch import _execute_turn_burst, _send_stop
+from ..lidar.direct_snapshot_client import DirectLidarFeed, _scan_to_local_points
+from ..lidar.direct_snapshot_stitch import (
     Pose2D,
     _build_score_grids,
     _score_candidate,
@@ -28,9 +28,9 @@ from ldlidar_direct_snapshot_stitch import (
     _transform_points,
 )
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey_client import SourcceyClient
-from sourccey_wander.frontier import _build_world_occupancy, _dilate_bool_grid
-from sourccey_wander.stop_zone import StopZoneConfig, _blocked_points_for_frame
-from sourccey_wander.wander_types import (
+from .frontier import _build_world_occupancy, _dilate_bool_grid
+from .stop_zone import StopZoneConfig, _blocked_points_for_frame
+from .wander_types import (
     DriveBurstMeta,
     DriveSequenceMeta,
     _apply_min_effective_magnitude,

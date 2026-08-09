@@ -13,11 +13,11 @@ import math
 import time
 
 
-from ldlidar_auto_snapshot_stitch import _execute_turn_burst, _send_stop
-from ldlidar_direct_snapshot_client import DirectLidarFeed, _scan_to_local_points
+from ..lidar.auto_snapshot_stitch import _execute_turn_burst, _send_stop
+from ..lidar.direct_snapshot_client import DirectLidarFeed, _scan_to_local_points
 from lerobot.robots.sourccey.sourccey.sourccey.sourccey_client import SourcceyClient
-from sourccey_wander.frontier import _select_frontier_choice
-from sourccey_wander.wander_types import _normalize_angle_deg
+from .frontier import _select_frontier_choice
+from .wander_types import _normalize_angle_deg
 
 def _escape_boxed_in(
     *,

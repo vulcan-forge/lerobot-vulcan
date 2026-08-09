@@ -15,7 +15,7 @@
 
 import logging
 from functools import cached_property
-from typing import Any
+from typing import Any, Iterable
 import numpy as np
 import threading
 import time
@@ -75,6 +75,7 @@ class Sourccey(Robot):
         self.cameras = make_cameras_from_configs(config.cameras)
         # Cameras are treated as best-effort: startup should not fail if a camera fails to connect/read.
         self._connected_cameras: set[str] = set()
+        self._camera_lock = threading.RLock()
 
         self.dc_motors_controller = PWMDCMotorsController(
             motors=self.config.dc_motors,
@@ -155,7 +156,12 @@ class Sourccey(Robot):
     ###################################################################
     # Connection Management
     ###################################################################
-    def connect(self, calibrate: bool = True, connect_arms: bool = True) -> None:
+    def connect(
+        self,
+        calibrate: bool = True,
+        connect_arms: bool = True,
+        camera_keys: Iterable[str] | None = None,
+    ) -> None:
         self._connect_arms_on_startup = bool(connect_arms)
         self._arms_connected = False
         if connect_arms:
@@ -164,28 +170,66 @@ class Sourccey(Robot):
         self.z_actuator.connect()
 
         # Connect cameras in a stable order and avoid strict per-camera warmup deadlocks.
-        self._connected_cameras.clear()
-        connect_order = self._camera_connect_order()
-        for index, cam_key in enumerate(connect_order):
-            camera = self.cameras[cam_key]
-            try:
-                self._connect_camera(camera, cam_key)
-                self._connected_cameras.add(cam_key)
-                if index < len(connect_order) - 1:
-                    time.sleep(0.35)
-            except Exception as e:
-                logger.warning(f"Camera '{cam_key}' failed to connect: {e}. Continuing without it.")
-                try:
-                    if getattr(camera, "is_connected", False):
-                        camera.disconnect()
-                except Exception:
-                    pass
+        with self._camera_lock:
+            self._connected_cameras.clear()
+        self.connect_cameras(self._camera_connect_order(camera_keys))
 
-    def _camera_connect_order(self) -> list[str]:
+    def _camera_connect_order(self, camera_keys: Iterable[str] | None = None) -> list[str]:
+        allowed = None if camera_keys is None else set(camera_keys)
         preferred = ["front_left", "front_right", "bottom"]
-        ordered = [key for key in preferred if key in self.cameras]
-        ordered.extend(key for key in self.cameras.keys() if key not in ordered)
+        ordered = [key for key in preferred if key in self.cameras and (allowed is None or key in allowed)]
+        ordered.extend(
+            key
+            for key in self.cameras.keys()
+            if key not in ordered and (allowed is None or key in allowed)
+        )
         return ordered
+
+    def connect_cameras(self, camera_keys: Iterable[str]) -> None:
+        """Connect a selected set of camera devices without touching other hardware."""
+        connect_order = self._camera_connect_order(camera_keys)
+        with self._camera_lock:
+            for index, cam_key in enumerate(connect_order):
+                if cam_key in self._connected_cameras:
+                    continue
+                camera = self.cameras[cam_key]
+                try:
+                    self._connect_camera(camera, cam_key)
+                    self._connected_cameras.add(cam_key)
+                    if index < len(connect_order) - 1:
+                        time.sleep(0.35)
+                except Exception as e:
+                    logger.warning(f"Camera '{cam_key}' failed to connect: {e}. Continuing without it.")
+                    try:
+                        if getattr(camera, "is_connected", False):
+                            camera.disconnect()
+                    except Exception:
+                        pass
+
+    def disconnect_cameras(self, camera_keys: Iterable[str] | None = None) -> None:
+        """Disconnect selected cameras, or all connected cameras if no keys are provided."""
+        with self._camera_lock:
+            keys = list(self._connected_cameras if camera_keys is None else camera_keys)
+            for cam_key in keys:
+                if cam_key not in self._connected_cameras:
+                    continue
+                try:
+                    self.cameras[cam_key].disconnect()
+                except Exception:
+                    logger.exception("Failed to disconnect camera '%s'", cam_key)
+                self._connected_cameras.discard(cam_key)
+
+    def set_connected_cameras(self, camera_keys: Iterable[str]) -> None:
+        """Switch the active camera set to exactly the requested keys."""
+        desired = {key for key in camera_keys if key in self.cameras}
+        with self._camera_lock:
+            current = set(self._connected_cameras)
+        self.disconnect_cameras(current - desired)
+        self.connect_cameras(self._camera_connect_order(desired - current))
+
+    def connected_camera_keys(self) -> tuple[str, ...]:
+        with self._camera_lock:
+            return tuple(self._camera_connect_order(self._connected_cameras))
 
     def _connect_camera(self, camera: Any, cam_key: str) -> None:
         if isinstance(camera, OpenCVCamera):
@@ -272,12 +316,7 @@ class Sourccey(Robot):
         self.z_actuator.disconnect()
 
         # Disconnect only those we connected
-        for cam_key in list(self._connected_cameras):
-            try:
-                self.cameras[cam_key].disconnect()
-            except Exception:
-                pass
-        self._connected_cameras.clear()
+        self.disconnect_cameras()
 
         logger.info(f"Sourccey disconnected.")
 
@@ -394,14 +433,16 @@ class Sourccey(Robot):
             except Exception:
                 obs_dict["z.pos"] = 100.0
 
-            for cam_key in self.cameras.keys():
+            with self._camera_lock:
+                active_camera_keys = list(self._connected_cameras)
+            for cam_key in active_camera_keys:
                 try:
                     start = time.perf_counter()
                     obs_dict[cam_key] = self.cameras[cam_key].read_latest()
                     dt_ms = (time.perf_counter() - start) * 1e3
                     logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
                 except Exception as e:
-                    # Keep the observation schema stable even if a camera is down.
+                    # Keep active camera schemas stable even if a connected camera read fails.
                     h = int(self.config.cameras[cam_key].height)
                     w = int(self.config.cameras[cam_key].width)
                     obs_dict[cam_key] = np.zeros((h, w, 3), dtype=np.uint8)

@@ -56,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     cfg = SourcceyClientConfig(
         id=args.robot_id,
         remote_ip=args.remote_ip,
+        host_session_mode="teleop_full",
     )
 
     robot = SourcceyClient(cfg)

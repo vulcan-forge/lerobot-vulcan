@@ -24,6 +24,7 @@ def main(cfg: SourcceySlamBridgeConfig) -> None:
             id=cfg.robot_id,
             slam_input_enabled=True,
             slam_input_endpoint=cfg.slam_input_endpoint,
+            host_session_mode="slam_mapping",
         )
     )
 

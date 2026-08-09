@@ -4987,7 +4987,13 @@ def main() -> int:
     print(f"[explore] IMU live; start heading = {yaw0:+.1f}deg.")
 
     # ---- Robot ----
-    robot = SourcceyClient(SourcceyClientConfig(id=args.robot_id, remote_ip=args.remote_ip))
+    robot = SourcceyClient(
+        SourcceyClientConfig(
+            id=args.robot_id,
+            remote_ip=args.remote_ip,
+            host_session_mode="slam_mapping",
+        )
+    )
     robot.connect()
     _send_stop(robot)
     print(f"[explore] robot connected ({args.remote_ip}).")

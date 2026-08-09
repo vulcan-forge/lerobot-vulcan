@@ -14,10 +14,10 @@ import math
 
 import numpy as np
 
-from ldlidar_direct_snapshot_stitch import (
+from ..lidar.direct_snapshot_stitch import (
     Pose2D,
 )
-from sourccey_wander.wander_types import (
+from .wander_types import (
     ExploreTarget,
     FrontierChoice,
     _normalize_angle_deg,

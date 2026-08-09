@@ -336,6 +336,24 @@ class SourcceyHostConfig:
     imu_yaw_gyro_axis: int = 2
     imu_yaw_gyro_sign: float = 1.0
 
+    # Runtime hardware resource manager. When enabled, the host can switch
+    # camera/arm usage by named task mode instead of keeping every device open
+    # for the whole process lifetime.
+    host_resource_manager_enabled: bool = True
+    host_mode_control_enabled: bool = False
+    port_zmq_host_mode: int = 5563
+    host_mode_control_token: str = ""
+    # "auto" preserves the old startup profile selected by the existing flags.
+    # Clients can later request e.g. slam_mapping or teleop_full on port 5563.
+    host_initial_mode: str = "auto"
+    # The current lidar/room mapper wants bottom-camera odometry, not front-eye
+    # video, on the SLAM sidecar stream.
+    host_slam_camera_profile: str = "bottom"
+    host_slam_stow_arms: bool = False
+    host_slam_stow_pose_path: str = "scripts/sourccey_arm_stow_pose.json"
+    host_slam_stow_settle_s: float = 3.0
+    host_mode_allow_remote_arm_stow: bool = False
+
 
 @RobotConfig.register_subclass("sourccey_client")
 @dataclass
@@ -345,6 +363,7 @@ class SourcceyClientConfig(RobotConfig):
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
     port_zmq_base_status: int = 5562
+    port_zmq_host_mode: int = 5563
     # SLAM sidecar input stream (sourccey-slam expects slam_input.v1).
     # Canonical config lives under this nested field.
     slam: SlamInputConfig = field(default_factory=SlamInputConfig)
@@ -392,6 +411,12 @@ class SourcceyClientConfig(RobotConfig):
     # Minimum interval between timeout log lines (seconds) when logging is enabled.
     no_data_log_interval_s: float = 5.0
     connect_timeout_s: int = 5
+    host_mode_request_enabled: bool = True
+    host_session_mode: str | None = None
+    host_mode_request_timeout_s: float = 0.75
+    host_mode_control_token: str = ""
+    host_mode_stow_arms: bool = False
+    host_mode_stow_pose_path: str | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()

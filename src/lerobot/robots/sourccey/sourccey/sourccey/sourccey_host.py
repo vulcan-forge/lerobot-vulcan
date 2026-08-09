@@ -39,6 +39,7 @@ from .config_sourccey import (
     sourccey_cameras_config,
     sourccey_slam_eye_only_cameras_config,
 )
+from .modules.resource_manager import HostModeControlService, HostResourceManager
 from .modules.slam import SlamInputPublisher, close_slam_pub_socket, create_slam_pub_socket
 from .sourccey import Sourccey
 
@@ -106,9 +107,10 @@ class _HostPanoramaFusion:
 
 
 class SourcceyHost:
-    def __init__(self, config: SourcceyHostConfig, *, imu_provider=None):
+    def __init__(self, config: SourcceyHostConfig, *, imu_provider=None, resource_manager=None):
         self.config = config
         self.imu_provider = imu_provider
+        self.resource_manager = resource_manager
         self.panorama_fusion = _HostPanoramaFusion(config)
         self.zmq_context = zmq.Context()
 
@@ -184,6 +186,8 @@ class SourcceyHost:
         self.zmq_context.term()
 
     def publish_slam_input(self, observation: dict) -> None:
+        if self.resource_manager is not None and not self.resource_manager.slam_input_active():
+            return
         frames = {
             key: value
             for key, value in observation.items()
@@ -206,7 +210,14 @@ class SourcceyHost:
             )
 
     def add_fused_camera(self, observation: dict) -> None:
+        if self.resource_manager is not None and not self.resource_manager.fused_camera_active():
+            return
         self.panorama_fusion.add_to_observation(observation)
+
+    def mode_status(self) -> dict:
+        if self.resource_manager is None:
+            return {}
+        return self.resource_manager.status().as_json()
 
 
 def _build_slam_eye_v4l2_controls(config: SourcceyHostConfig) -> dict[str, int]:
@@ -380,6 +391,7 @@ class _BaseCommandService:
                     "watchdog_stop": bool(watchdog),
                     "base_velocity": velocity,
                     "arms_available": bool(self._robot._arms_available),
+                    "host_mode": self._host.mode_status(),
                     "host_monotonic_ns": time.monotonic_ns(),
                 },
                 flags=zmq.NOBLOCK,
@@ -459,7 +471,10 @@ class _BaseCommandService:
 def _build_host_slam_input_publisher(config: SourcceyHostConfig) -> SlamInputPublisher | None:
     if not config.slam_input_enabled:
         return None
-    if config.lidar_mapping_bottom_only_mode:
+    if config.lidar_mapping_bottom_only_mode or (
+        bool(getattr(config, "host_resource_manager_enabled", False))
+        and str(getattr(config, "host_slam_camera_profile", "")).strip().lower() == "bottom"
+    ):
         left_key = "bottom"
         right_key = "bottom"
         extra_camera_keys: tuple[str, ...] = ()
@@ -690,7 +705,38 @@ def main(host_config: SourcceyHostConfig):
 
     logging.info("Configuring Sourccey")
     robot_config = SourcceyConfig(id="sourccey")
-    if host_config.lidar_mapping_bottom_only_mode:
+    resource_manager_enabled = bool(getattr(host_config, "host_resource_manager_enabled", False))
+    if resource_manager_enabled:
+        if str(getattr(host_config, "host_slam_camera_profile", "")).strip().lower() == "bottom":
+            host_config.bottom_camera_enabled = True
+            host_config.slam_input_enabled = True
+        robot_config.cameras = sourccey_cameras_config(
+            front_fps=host_config.slam_eye_camera_fps,
+            front_width=host_config.slam_eye_width,
+            front_height=host_config.slam_eye_height,
+            front_fourcc=host_config.slam_eye_fourcc,
+            wrist_fps=host_config.slam_eye_camera_fps,
+            wrist_width=host_config.slam_eye_width,
+            wrist_height=host_config.slam_eye_height,
+            wrist_fourcc=host_config.slam_eye_fourcc,
+            include_wrist=True,
+            bottom_fps=host_config.slam_bottom_camera_fps,
+            bottom_width=host_config.slam_bottom_width,
+            bottom_height=host_config.slam_bottom_height,
+            bottom_fourcc=host_config.slam_bottom_fourcc,
+            include_bottom=host_config.bottom_camera_enabled,
+            bottom_path=host_config.bottom_camera_path,
+        )
+        logging.info(
+            "Sourccey Host resource manager enabled: configured %d camera(s), "
+            "initial mode will choose which devices are opened.",
+            len(robot_config.cameras),
+        )
+        print(
+            "[HOST] Resource manager enabled: cameras are opened by task mode "
+            "(slam_mapping uses bottom only; teleop_full restores front/wrist/bottom)."
+        )
+    elif host_config.lidar_mapping_bottom_only_mode:
         robot_config.cameras = sourccey_bottom_only_cameras_config(
             bottom_fps=host_config.slam_bottom_camera_fps,
             bottom_width=host_config.slam_bottom_width,
@@ -830,17 +876,31 @@ def main(host_config: SourcceyHostConfig):
     robot.connect(
         calibrate=host_config.arm_calibrate_on_connect,
         connect_arms=False,
+        camera_keys=() if resource_manager_enabled else None,
     )
     logging.info("Sourccey Host started without connecting follower arms.")
+
+    resource_manager = None
+    if resource_manager_enabled:
+        resource_manager = HostResourceManager(robot, host_config)
+        initial_mode = resource_manager.resolve_initial_mode(host_config.host_initial_mode)
+        status = resource_manager.apply_mode(initial_mode, reason="host startup")
+        print(
+            "[HOST] Resource manager active: "
+            f"mode={status.mode} cameras={list(status.active_camera_keys)} "
+            f"slam_input_active={status.slam_input_active}"
+        )
 
     # Make the underside feed's hardware/configuration state visible once at startup.
     # Unity receives it through the normal observation stream under the "bottom" key.
     if host_config.bottom_camera_enabled:
         bottom_camera = robot.cameras.get("bottom")
         bottom_connected = bool(getattr(bottom_camera, "is_connected", False))
+        connected_keys = robot.connected_camera_keys()
         print(
             "[HOST] Bottom camera feed: enabled "
-            f"(key=bottom path={host_config.bottom_camera_path} connected={bottom_connected})"
+            f"(key=bottom path={host_config.bottom_camera_path} connected={bottom_connected} "
+            f"active_cameras={list(connected_keys)})"
         )
     else:
         print(
@@ -851,7 +911,13 @@ def main(host_config: SourcceyHostConfig):
     logging.info("Starting Host")
     imu_reporter = _IMUReporter(host_config)
     imu_reporter.start()
-    host = SourcceyHost(host_config, imu_provider=imu_reporter)
+    host = SourcceyHost(host_config, imu_provider=imu_reporter, resource_manager=resource_manager)
+    mode_control = None
+    if resource_manager is not None and host_config.host_mode_control_enabled:
+        mode_control = HostModeControlService(host.zmq_context, host_config, resource_manager)
+        mode_control.start()
+    elif host_config.host_mode_control_enabled:
+        logging.warning("Host mode control requested but resource manager is disabled.")
     print(f"[HOST] Control module: {Path(__file__).resolve()}")
     base_commands = _BaseCommandService(host, robot)
     base_commands.start()
@@ -920,6 +986,8 @@ def main(host_config: SourcceyHostConfig):
     finally:
         print("Shutting down Sourccey Host.")
         base_commands.stop()
+        if mode_control is not None:
+            mode_control.stop()
         imu_reporter.stop()
         robot.disconnect()
         host.disconnect()

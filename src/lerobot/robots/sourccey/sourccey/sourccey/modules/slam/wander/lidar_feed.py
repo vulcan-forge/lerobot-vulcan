@@ -18,7 +18,7 @@ import dataclasses
 
 import numpy as np
 
-from ldlidar_direct_snapshot_client import DirectLidarFeed
+from ..lidar.direct_snapshot_client import DirectLidarFeed
 
 class SelfMaskedLidarFeed(DirectLidarFeed):
     """LiDAR feed that filters the robot's OWN returns (arms/grippers/shell in

@@ -13,13 +13,13 @@ import math
 
 import numpy as np
 
-from ldlidar_direct_snapshot_stitch import (
+from ..lidar.direct_snapshot_stitch import (
     MotionHint,
     Pose2D,
     _search_pose,
     _transform_points,
 )
-from sourccey_wander.wander_types import _normalize_angle_deg
+from .wander_types import _normalize_angle_deg
 
 def _pose_delta_metrics(reference_pose: Pose2D, candidate_pose: Pose2D) -> tuple[float, float]:
     """How far apart two poses are, split into distance and heading.

@@ -1316,7 +1316,13 @@ class SavedMapNavigator:
                 if str(args.bottom_odometry) == "required":
                     raise
                 print(f"[saved-map] WARNING: bottom-camera odometry disabled ({type(exc).__name__}: {exc}).")
-        self.robot = SourcceyClient(SourcceyClientConfig(id=args.robot_id, remote_ip=args.remote_ip))
+        self.robot = SourcceyClient(
+            SourcceyClientConfig(
+                id=args.robot_id,
+                remote_ip=args.remote_ip,
+                host_session_mode="slam_mapping",
+            )
+        )
         self.robot.connect()
         _send_stop(self.robot)
         self.collision_profile = load_collision_box(args.collision_box_file)

@@ -13,9 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .slam import SlamInputPublisher, close_slam_pub_socket, create_slam_pub_socket
+from .slam import SlamInputConfig, SlamInputPublisher, close_slam_pub_socket, create_slam_pub_socket
+from .resource_manager import HostModeControlService, HostModeStatus, HostResourceManager
 
 __all__ = [
+    "HostModeControlService",
+    "HostModeStatus",
+    "HostResourceManager",
+    "SlamInputConfig",
     "SlamInputPublisher",
     "create_slam_pub_socket",
     "close_slam_pub_socket",

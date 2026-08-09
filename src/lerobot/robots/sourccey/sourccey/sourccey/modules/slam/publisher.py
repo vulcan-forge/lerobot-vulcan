@@ -1,24 +1,10 @@
-# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
-# Copyright 2025 Vulcan Robotics, Inc. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+from __future__ import annotations
 
 import base64
 import json
 import logging
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
 from typing import Any
 
 import cv2
@@ -26,38 +12,6 @@ import numpy as np
 import zmq
 
 from lerobot.sensors.imu.types import IMUSample
-
-
-@dataclass
-class SlamInputConfig:
-    """Configuration for Sourccey -> SLAM sidecar publishing."""
-
-    input_enabled: bool = False
-    input_endpoint: str = "tcp://127.0.0.1:5560"
-    stereo_left_key: str = "front_left"
-    stereo_right_key: str = "front_right"
-    jpeg_quality: int = 80
-    eye_only_mode: bool = False
-    publish_fps: float = 0.0
-    resize_width: int | None = None
-    resize_height: int | None = None
-    extra_camera_keys: tuple[str, ...] = ()
-
-
-def create_slam_pub_socket(zmq_context: zmq.Context, endpoint: str) -> zmq.Socket:
-    socket = zmq_context.socket(zmq.PUB)
-    socket.setsockopt(zmq.LINGER, 0)
-    try:
-        socket.bind(endpoint)
-    except zmq.ZMQError as e:
-        socket.close(0)
-        raise RuntimeError(f"Failed to bind SLAM input publisher at {endpoint}: {e}") from e
-    return socket
-
-
-def close_slam_pub_socket(socket: zmq.Socket | None) -> None:
-    if socket is not None:
-        socket.close(0)
 
 
 class SlamInputPublisher:
