@@ -2255,7 +2255,9 @@ class SavedMapNavigator:
                 "are visible in the frozen diagnostic panel."
             )
 
-    def _collision_envelope_points(self, profile: dict) -> np.ndarray:
+    def _collision_envelope_points(self, profile: dict | None) -> np.ndarray:
+        if not profile:
+            return np.empty((0, 2), dtype=np.float64)
         ranges = effective_ranges(profile)
         if not len(ranges):
             return np.empty((0, 2), dtype=np.float64)
