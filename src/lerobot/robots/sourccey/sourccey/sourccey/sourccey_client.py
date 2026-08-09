@@ -428,13 +428,21 @@ class SourcceyClient(Robot):
                 status = socket.recv_json(flags=zmq.NOBLOCK)
             except zmq.Again:
                 continue
-            if (
+            stationary = bool(status.get("stationary", False))
+            applied_id = int(status.get("applied_command_id", 0))
+            watchdog_stop = bool(status.get("watchdog_stop", False))
+            if stationary and (
                 # A controller thread may publish a newer zero-velocity lease
                 # after this stop request. Monotonic IDs share the same client
                 # clock, so a newer stationary acknowledgement is equally
                 # strong proof that obsolete motion has been superseded.
-                int(status.get("applied_command_id", 0)) >= expected_id
-                and bool(status.get("stationary", False))
+                applied_id >= expected_id
+                # If transport jitter prevents this exact zero command ID from
+                # being observed, a host watchdog stationary report is still a
+                # camera-independent proof that motion has been superseded by
+                # zero velocity. The explorer only calls this while repeatedly
+                # streaming stop packets at a processing boundary.
+                or watchdog_stop
             ):
                 return True
         return False

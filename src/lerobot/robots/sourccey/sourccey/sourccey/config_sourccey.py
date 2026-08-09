@@ -39,7 +39,7 @@ def sourccey_cameras_config(
     bottom_height: int = 240,
     bottom_fourcc: str | None = None,
     include_bottom: bool = False,
-    bottom_path: str = "/dev/cameraBottom",
+    bottom_path: str = "/dev/v4l/by-path/platform-1000110000.pcie-pci-0001:01:00.0-usb-0:1.2.2:1.0-video-index0",
 ) -> dict[str, CameraConfig]:
     config = {
         "front_left": OpenCVCameraConfig(
@@ -116,7 +116,7 @@ def sourccey_slam_eye_only_cameras_config(
     front_fourcc: str | None = None,
     include_wrist: bool = False,
     include_bottom: bool = False,
-    bottom_path: str = "/dev/cameraBottom",
+    bottom_path: str = "/dev/v4l/by-path/platform-1000110000.pcie-pci-0001:01:00.0-usb-0:1.2.2:1.0-video-index0",
 ) -> dict[str, CameraConfig]:
     return sourccey_cameras_config(
         front_fps=front_fps,
@@ -221,7 +221,7 @@ class SourcceyHostConfig:
     arm_relax_on_startup: bool = True
     # Publish the underside camera as `bottom` alongside the other live feeds.
     bottom_camera_enabled: bool = True
-    bottom_camera_path: str = "/dev/cameraBottom"
+    bottom_camera_path: str = "/dev/v4l/by-path/platform-1000110000.pcie-pci-0001:01:00.0-usb-0:1.2.2:1.0-video-index0"
     slam_eye_only_mode: bool = False
     slam_eye_camera_fps: int = 30
     slam_eye_loop_freq_hz: int = 30
@@ -229,9 +229,10 @@ class SourcceyHostConfig:
     slam_eye_height: int = 240
     slam_eye_fourcc: str | None = "MJPG"
     # Front-priority 3-camera mode: keep front stereo at slam_eye_* settings,
-    # disable wrist cameras, and run the bottom camera with its own lighter budget.
+    # disable wrist cameras, and run the bottom camera with its own negotiated budget.
+    # The current underside UVC camera reports 30 FPS for 320x240 MJPG and rejects 15 FPS.
     slam_three_camera_front_priority_mode: bool = False
-    slam_bottom_camera_fps: int = 15
+    slam_bottom_camera_fps: int = 30
     slam_bottom_width: int = 320
     slam_bottom_height: int = 240
     slam_bottom_fourcc: str | None = "MJPG"
@@ -351,7 +352,7 @@ class SourcceyClientConfig(RobotConfig):
     )
 
     include_bottom_camera: bool = False
-    bottom_camera_path: str = "/dev/cameraBottom"
+    bottom_camera_path: str = "/dev/v4l/by-path/platform-1000110000.pcie-pci-0001:01:00.0-usb-0:1.2.2:1.0-video-index0"
     cameras: dict[str, CameraConfig] = field(default_factory=sourccey_cameras_config)
 
     polling_timeout_ms: int = 15

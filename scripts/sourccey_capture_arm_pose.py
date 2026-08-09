@@ -30,16 +30,35 @@ from sourccey_arm_pose import (
 def _close_without_sending(robot) -> None:
     """Tear the client down WITHOUT the usual disconnect (which sends a relax
     command). Nothing may leave the command socket, so close everything by hand."""
-    for step in (
-        robot._stop_slam_publish_thread,
-        lambda: robot.zmq_observation_socket.close(0),
-        lambda: robot.zmq_cmd_socket.close(0),
-        lambda: robot.zmq_context.term(),
-    ):
+    for step in (robot._stop_slam_publish_thread,):
         try:
             step()
         except BaseException:
             pass
+    for name in (
+        "zmq_slam_input_socket",
+        "zmq_base_status_socket",
+        "zmq_observation_socket",
+        "zmq_cmd_socket",
+    ):
+        socket = getattr(robot, name, None)
+        if socket is None:
+            continue
+        try:
+            socket.close(0)
+        except BaseException:
+            pass
+        try:
+            setattr(robot, name, None)
+        except BaseException:
+            pass
+    context = getattr(robot, "zmq_context", None)
+    if context is not None:
+        try:
+            context.destroy(linger=0)
+        except BaseException:
+            pass
+        robot.zmq_context = None
     robot._is_connected = False
 
 

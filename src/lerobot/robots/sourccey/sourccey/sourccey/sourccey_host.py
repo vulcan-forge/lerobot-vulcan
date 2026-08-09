@@ -742,16 +742,19 @@ def main(host_config: SourcceyHostConfig):
             wrist_height=host_config.slam_eye_height,
             wrist_fourcc=host_config.slam_eye_fourcc,
             include_wrist=True,
-            bottom_fps=host_config.slam_eye_camera_fps,
-            bottom_width=host_config.slam_eye_width,
-            bottom_height=host_config.slam_eye_height,
-            bottom_fourcc=host_config.slam_eye_fourcc,
+            bottom_fps=host_config.slam_bottom_camera_fps,
+            bottom_width=host_config.slam_bottom_width,
+            bottom_height=host_config.slam_bottom_height,
+            bottom_fourcc=host_config.slam_bottom_fourcc,
             include_bottom=host_config.bottom_camera_enabled,
             bottom_path=host_config.bottom_camera_path,
         )
         logging.info(
             "Sourccey Host eye-only SLAM mode requested with obstacle publishing enabled; "
-            "using the legacy full camera config so both front and wrist feeds stay on the known-good path."
+            "using the legacy full camera config for front/wrist while keeping bottom at %dx%d@%d.",
+            host_config.slam_bottom_width,
+            host_config.slam_bottom_height,
+            host_config.slam_bottom_camera_fps,
         )
     elif host_config.bottom_camera_enabled:
         robot_config.cameras = sourccey_cameras_config(

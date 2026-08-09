@@ -3774,19 +3774,24 @@ def _log_world(
         xyz = np.column_stack([pts[:, 0], pts[:, 1], np.zeros(len(pts), dtype=np.float32)])
         colors = _MAP_PALETTE[ids % len(_MAP_PALETTE)]
         rr.log("world/lidar_map", rr.Points3D(xyz.astype(np.float32), colors=colors, radii=0.02))
+        with contextlib.suppress(Exception):
+            rr.log("world2d/lidar_map", rr.Points2D(pts.astype(np.float32), colors=colors, radii=0.035))
+    else:
+        with contextlib.suppress(Exception):
+            rr.log("world2d/lidar_map", rr.Points2D(np.zeros((0, 2), dtype=np.float32)))
     # Frontier cells are planner state, not LiDAR returns. Drawing every cell as
     # a red dotted wall made newly exposed UNKNOWN boundaries look like corrupt
     # map geometry. Keep the map layer pure and show one amber marker per
     # significant frontier instead.
     rr.log("world/frontier_candidates", rr.Points3D(np.zeros((0, 3), dtype=np.float32)))
+    with contextlib.suppress(Exception):
+        rr.log("world2d/frontier_candidates", rr.Points2D(np.zeros((0, 2), dtype=np.float32)))
     if analysis is not None and analysis.clusters:
-        fxyz = np.asarray(
-            [
-                [float(cluster.centroid_xy[0]), float(cluster.centroid_xy[1]), 0.015]
-                for cluster in analysis.clusters
-            ],
+        fxy = np.asarray(
+            [[float(cluster.centroid_xy[0]), float(cluster.centroid_xy[1])] for cluster in analysis.clusters],
             dtype=np.float32,
         )
+        fxyz = np.column_stack([fxy[:, 0], fxy[:, 1], np.full(len(fxy), 0.015, dtype=np.float32)])
         rr.log(
             "world/frontiers",
             rr.Points3D(
@@ -3795,24 +3800,40 @@ def _log_world(
                 radii=0.045,
             ),
         )
+        with contextlib.suppress(Exception):
+            rr.log("world2d/frontiers", rr.Points2D(fxy, colors=[[255, 180, 40]] * len(fxy), radii=0.08))
     else:
         rr.log("world/frontiers", rr.Points3D(np.zeros((0, 3), dtype=np.float32)))
+        with contextlib.suppress(Exception):
+            rr.log("world2d/frontiers", rr.Points2D(np.zeros((0, 2), dtype=np.float32)))
     if target_xy is not None:
+        target2 = np.asarray([[float(target_xy[0]), float(target_xy[1])]], dtype=np.float32)
         rr.log(
             "world/target",
             rr.Points3D(
                 [[float(target_xy[0]), float(target_xy[1]), 0.0]], colors=[[80, 255, 120]], radii=0.09
             ),
         )
+        with contextlib.suppress(Exception):
+            rr.log("world2d/target", rr.Points2D(target2, colors=[[80, 255, 120]], radii=0.12))
     else:
         rr.log("world/target", rr.Points3D(np.zeros((0, 3), dtype=np.float32)))
+        with contextlib.suppress(Exception):
+            rr.log("world2d/target", rr.Points2D(np.zeros((0, 2), dtype=np.float32)))
     if waypoints:
         strip = [[float(robot_centre[0]), float(robot_centre[1]), 0.0]] + [
             [float(p[0]), float(p[1]), 0.0] for p in waypoints
         ]
         rr.log("world/path", rr.LineStrips3D([strip], colors=[[255, 220, 90]], radii=0.012))
+        with contextlib.suppress(Exception):
+            strip2 = [[float(robot_centre[0]), float(robot_centre[1])]] + [
+                [float(p[0]), float(p[1])] for p in waypoints
+            ]
+            rr.log("world2d/path", rr.LineStrips2D([strip2], colors=[[255, 220, 90]], radii=0.025))
     else:
         rr.log("world/path", rr.LineStrips3D([]))
+        with contextlib.suppress(Exception):
+            rr.log("world2d/path", rr.LineStrips2D([]))
     if len(trail) >= 2:
         rr.log(
             "world/trail",
@@ -3820,12 +3841,22 @@ def _log_world(
                 [[[float(p[0]), float(p[1]), 0.0] for p in trail]], colors=[[255, 150, 70]], radii=0.008
             ),
         )
+        with contextlib.suppress(Exception):
+            rr.log(
+                "world2d/trail",
+                rr.LineStrips2D([[[float(p[0]), float(p[1])] for p in trail]], colors=[[255, 150, 70]], radii=0.018),
+            )
     rr.log(
         "world/robot",
         rr.Points3D(
             [[float(robot_centre[0]), float(robot_centre[1]), 0.0]], colors=[[255, 130, 60]], radii=0.07
         ),
     )
+    with contextlib.suppress(Exception):
+        rr.log(
+            "world2d/robot",
+            rr.Points2D([[float(robot_centre[0]), float(robot_centre[1])]], colors=[[255, 130, 60]], radii=0.13),
+        )
     footprint_angles = np.linspace(0.0, 2.0 * math.pi, 49)
     footprint = [
         [
@@ -3836,6 +3867,8 @@ def _log_world(
         for a in footprint_angles
     ]
     rr.log("world/robot_footprint", rr.LineStrips3D([footprint], colors=[[255, 130, 60]], radii=0.006))
+    with contextlib.suppress(Exception):
+        rr.log("world2d/robot_footprint", rr.LineStrips2D([[p[:2] for p in footprint]], colors=[[255, 130, 60]], radii=0.014))
     if note:
         rr.log("explore/status", rr.TextLog(note))
 
@@ -3851,18 +3884,28 @@ def _configure_rerun_layout(rr) -> None:
     try:
         import rerun.blueprint as rrb
 
+        world_bounds = rrb.VisualBounds2D(x_range=[-6.0, 6.0], y_range=[-6.0, 6.0])
+        live_bounds = rrb.VisualBounds2D(x_range=[-1.0, 5.0], y_range=[-3.0, 3.0])
         blueprint = rrb.Blueprint(
             rrb.Horizontal(
-                rrb.Spatial3DView(name="World map", origin="/world"),
+                rrb.Spatial2DView(
+                    name="World map",
+                    origin="/world2d",
+                    visual_bounds=world_bounds,
+                ),
                 rrb.Vertical(
-                    rrb.Spatial3DView(name="Live LiDAR (robot frame)", origin="/live_lidar"),
+                    rrb.Spatial2DView(
+                        name="Live LiDAR (robot frame)",
+                        origin="/live_lidar2d",
+                        visual_bounds=live_bounds,
+                    ),
                     rrb.Spatial2DView(name="Camera panorama", origin="/cameras/panorama"),
                 ),
             ),
             collapse_panels=True,
         )
         rr.send_blueprint(blueprint, make_active=True, make_default=True)
-        print("[rerun] layout pinned: world map left; robot-frame live LiDAR right.")
+        print("[rerun] layout pinned as stable 2D floorplan panes: world map left; robot-frame LiDAR right.")
     except Exception as exc:  # noqa: BLE001 - Rerun blueprint API is optional.
         print(f"[rerun] could not pin the split viewer layout ({exc}); data remains under world/ and live_lidar/.")
 
@@ -4252,6 +4295,25 @@ def main() -> int:
         type=float,
         default=0.80,
         help="Forward velocity command while driving (must clear wheel stiction ~0.78).",
+    )
+    parser.add_argument(
+        "--drive-command-sign",
+        type=float,
+        choices=(-1.0, 1.0),
+        default=1.0,
+        help="Sign applied to the autonomous x.vel drive command. Use -1 if this robot's base drives backward for positive x.vel.",
+    )
+    parser.add_argument(
+        "--auto-correct-drive-command-sign",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Stop and flip --drive-command-sign once if the first straight leg clearly moves away from its waypoint.",
+    )
+    parser.add_argument(
+        "--reverse-progress-trigger-m",
+        type=float,
+        default=0.18,
+        help="Reverse progress distance that triggers the autonomous drive sign auto-correction.",
     )
     parser.add_argument(
         "--turn-speed", type=float, default=0.9, help="Max rotation command while aiming toward the path."
@@ -4855,6 +4917,8 @@ def main() -> int:
         parser.error("--active-yaw-dither-period-s must be greater than 0.5")
     if float(args.active_yaw_dither_min_segment_m) <= 0.0:
         parser.error("--active-yaw-dither-min-segment-m must be positive")
+    if float(args.reverse_progress_trigger_m) <= 0.0:
+        parser.error("--reverse-progress-trigger-m must be positive")
     if not 0.50 <= float(args.surface_texture_similarity) <= 0.99:
         parser.error("--surface-texture-similarity must be in [0.50, 0.99]")
     configure_candidate_scoring_device(str(args.matcher_device))
@@ -4863,6 +4927,12 @@ def main() -> int:
     imu_host = args.imu_host or args.remote_ip
     lever_m = float(args.lidar_offset_forward_m)
     forward_offset = _phys_forward_offset_deg(args)
+    drive_command_sign = [1.0 if float(args.drive_command_sign) >= 0.0 else -1.0]
+    drive_command_sign_flips = [0]
+    print(
+        f"[explore] autonomous drive x.vel sign {drive_command_sign[0]:+.0f} "
+        f"(auto-correct {'on' if bool(args.auto_correct_drive_command_sign) else 'off'})."
+    )
     # This guard projects the CURRENT heading as a straight line; it is not the
     # footprint size. Beyond 12cm that approximation cuts across curves that the
     # path follower will actually turn through and falsely seals doorways. The
@@ -5319,6 +5389,8 @@ def main() -> int:
             "live_lidar/returns",
             rr.Points3D(xyz, colors=[[80, 255, 120]], radii=0.012),
         )
+        with contextlib.suppress(Exception):
+            rr.log("live_lidar2d/returns", rr.Points2D(points.astype(np.float32), colors=[[80, 255, 120]], radii=0.025))
         if collision_profile is not None:
             hit = _collision_box_violation(
                 points,
@@ -5337,11 +5409,15 @@ def main() -> int:
                         radii=0.022,
                     ),
                 )
+                with contextlib.suppress(Exception):
+                    rr.log("live_lidar2d/collision_returns", rr.Points2D(points[np.asarray(hit[0], dtype=bool)].astype(np.float32), colors=[[255, 55, 40]], radii=0.04))
             else:
                 rr.log(
                     "live_lidar/collision_returns",
                     rr.Points3D(np.empty((0, 3), dtype=np.float32)),
                 )
+                with contextlib.suppress(Exception):
+                    rr.log("live_lidar2d/collision_returns", rr.Points2D(np.zeros((0, 2), dtype=np.float32)))
             ranges = _collision_box_effective_ranges(collision_profile)
             bin_size = float(collision_profile["bin_size_deg"])
             angles = np.radians(-180.0 + (np.arange(len(ranges)) + 0.5) * bin_size)
@@ -5363,11 +5439,15 @@ def main() -> int:
                         radii=0.008,
                     ),
                 )
+                with contextlib.suppress(Exception):
+                    rr.log("live_lidar2d/collision_envelope", rr.LineStrips2D([outline[:, :2].tolist()], colors=[[0, 210, 255]], radii=0.018))
         robot_origin = np.array([[-lever_m, 0.0, 0.0]], dtype=np.float32)
         rr.log(
             "live_lidar/robot_centre",
             rr.Points3D(robot_origin, colors=[[255, 170, 30]], radii=0.035),
         )
+        with contextlib.suppress(Exception):
+            rr.log("live_lidar2d/robot_centre", rr.Points2D(robot_origin[:, :2], colors=[[255, 170, 30]], radii=0.055))
         rr.log(
             "live_lidar/physical_forward",
             rr.Arrows3D(
@@ -5376,6 +5456,11 @@ def main() -> int:
                 colors=[[255, 255, 255]],
             ),
         )
+        with contextlib.suppress(Exception):
+            rr.log(
+                "live_lidar2d/physical_forward",
+                rr.LineStrips2D([[[float(-lever_m), 0.0], [float(-lever_m) + 0.50, 0.0]]], colors=[[255, 255, 255]], radii=0.018),
+            )
         live_lidar_log_state["frame_id"] = int(frame_id)
         live_lidar_log_state["time"] = now
 
@@ -13197,9 +13282,10 @@ def main() -> int:
                     # surface's LiDAR-trained command scale*.  This is not a
                     # wheel/flow pose measurement: the following fresh LiDAR
                     # registration must accept or discard the prediction.
+                    signed_drive_command = float(args.drive_speed) * float(drive_command_sign[0])
                     cur_pose = _apply_surface_motion_prediction(
                         cur_pose,
-                        forward_command=float(args.drive_speed),
+                        forward_command=signed_drive_command,
                     )
                     # Legacy optical flow can still be explicitly enabled for
                     # comparison, but surface calibration is independent of it.
@@ -13395,6 +13481,35 @@ def main() -> int:
                             segment_target_imu = None
                             prev_imu = imu.deg()
                             continue
+                    segment_length = float(np.hypot(*(segment_end - segment_start)))
+                    segment_progress_m = 0.0
+                    if segment_length > 1e-6:
+                        segment_axis = (segment_end - segment_start) / segment_length
+                        segment_progress_m = float(np.dot(_robot_centre(cur_pose) - segment_start, segment_axis))
+                    if (
+                        bool(args.auto_correct_drive_command_sign)
+                        and drive_command_sign_flips[0] < 1
+                        and segment_progress_m < -float(args.reverse_progress_trigger_m)
+                    ):
+                        controller.halt()
+                        old_sign = float(drive_command_sign[0])
+                        drive_command_sign[0] = -old_sign
+                        drive_command_sign_flips[0] += 1
+                        last_sent = None
+                        driving = False
+                        segment_start = _robot_centre(cur_pose).copy()
+                        segment_target_imu = None
+                        _discard_translation_prior()
+                        _reset_surface_motion_prior(cur_pose)
+                        print(
+                            "[drive] commanded straight motion moved AWAY from the waypoint "
+                            f"by {-segment_progress_m:.2f}m; flipping autonomous x.vel sign "
+                            f"{old_sign:+.0f}->{drive_command_sign[0]:+.0f} and re-aiming."
+                        )
+                        continue
+                    if segment_progress_m < -max(0.40, 2.5 * float(args.reverse_progress_trigger_m)):
+                        controller.halt()
+                        return "hard stop (autonomous drive moved opposite planned waypoint)"
                     if bool(featureless_corridor_state["checkpoint_due"]):
                         checkpoint_reason = str(
                             featureless_corridor_state["checkpoint_reason"] or "odometry interval"
@@ -13577,7 +13692,6 @@ def main() -> int:
                     # whenever the live view does not look like a corridor.
                     if corridor_steer_deg != 0.0:
                         command_target += corridor_steer_deg
-                    segment_length = float(np.hypot(*(segment_end - segment_start)))
                     remaining_segment_m = float(
                         np.hypot(*(segment_end - _robot_centre(cur_pose)))
                     )
@@ -13603,9 +13717,9 @@ def main() -> int:
                             / float(args.active_yaw_dither_period_s)
                         )
                         command_target += float(args.active_yaw_dither_deg) * math.sin(phase)
-                    if last_sent is None or abs(command_target - last_sent[1]) > 1.0:
-                        controller.drive_toward(float(args.drive_speed), command_target)
-                        last_sent = (True, command_target)
+                    if last_sent is None or abs(command_target - last_sent[1]) > 1.0 or len(last_sent) < 3 or abs(float(last_sent[2]) - signed_drive_command) > 1e-6:
+                        controller.drive_toward(signed_drive_command, command_target)
+                        last_sent = (True, command_target, signed_drive_command)
                 trail.append(_robot_centre(cur_pose))
                 # Throttle rendering — it is expensive and adds steering latency.
                 now = time.monotonic()
