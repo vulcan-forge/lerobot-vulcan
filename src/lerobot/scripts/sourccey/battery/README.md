@@ -67,17 +67,106 @@ Verify Python I2C dependency (`smbus2`) in this project env:
 uv run python -c "import smbus2; print('smbus2 OK')"
 ```
 
-## Quick Start
+## New Robot Quick Start (Standard Battery)
 
-### 1) Confirm communication
+Use this workflow for a new or recovered Sourccey robot with all of the following:
+
+- GoldenMate 12.8 V 10 Ah LiFePO4 battery
+- 4 cells in series (4S)
+- TI bq34z100 gauge (`device_type=0x0100`)
+- Gauge firmware `0x0201`
+
+The golden image contains the matching firmware, LiFePO4 chemistry, configuration,
+and learned battery parameters. Do not use it for a different battery, gauge, or
+firmware version.
+
+### 1) Prepare the robot
+
+Before writing the gauge:
+
+1. Stop the Sourccey desktop app and every other process polling battery telemetry.
+2. Stop the motors and other heavy loads.
+3. Keep the battery connected and robot power stable throughout the flash.
+4. Do not interrupt the flash or power-cycle the robot while it is running.
+
+### 2) Confirm communication and compatibility
 
 ```bash
 uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py info
 ```
 
-Expected: JSON with `device_type`, `fw_version`, `chem_id`, `control_status`.
+For the bundled golden image, confirm the output contains:
 
-### 2) Apply standard Sourccey setup
+```json
+{
+  "device_type": "0x0100",
+  "fw_version": "0x0201"
+}
+```
+
+The initial chemistry ID can differ on a new chip. Do not continue if the device
+type or firmware version differs.
+
+### 3) Flash the golden image
+
+Optional parse-only preview (does not write the gauge):
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py flash-golden --profile bq --dry-run
+```
+
+Program the full firmware and data-flash image:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py flash-golden --profile bq
+```
+
+A successful run ends with `Flashstream complete` and a flash summary. All strict
+comparison checks must pass. If the command reports an error, preserve the complete
+output and do not run another write command until the I2C/power issue is resolved.
+
+### 4) Validate the flashed gauge
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/check_bq34z100.py --pretty
+```
+
+Confirm these key values:
+
+- `chip_info.chem_id` is `0x4203`
+- `chip_info.device_type` is `0x0100`
+- `chip_info.fw_version` is `0x0201`
+- `pack.series_cells` is `4`
+- `pack.voltage_divider` is `4023`
+- `pack.voltsel_enabled` is `true`
+- `pack.update_status` is `0x06`
+- `control_flags.QEN` is `true`
+- `learning.charge_voltage_target_mv` is `14300`
+- `learning.taper_current_ma` is `250`
+- `telemetry.max_error` is low (the bundled learned image normally reports about `1`)
+
+Do not run `setup-4s-lifepo4` after a successful golden-image flash. That command
+is for manual configuration and can overwrite learned golden-image parameters.
+
+### 5) Synchronize state of charge
+
+Immediately after flashing, `state_of_charge` and `remaining_capacity_ah` can be
+stale (including `0`) even when voltage is sensible. Use a proper 4S LiFePO4
+charger, charge toward 14.3 V until current tapers, and then allow the battery to
+rest with minimal load so the gauge can synchronize with the attached pack.
+
+Monitor the adjustment:
+
+```bash
+uv run python src/lerobot/scripts/sourccey/battery/check_bq34z100.py --watch --interval-s 5
+```
+
+## Manual Configuration (Custom or Unflashed Gauge)
+
+Use this section only when the bundled golden image is not appropriate or when
+you intentionally need to change individual profile values.
+
+### 1) Apply standard Sourccey fields
 
 ```bash
 uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py setup-4s-lifepo4
@@ -85,7 +174,7 @@ uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py setup-4
 
 This applies the project defaults (4S LiFePO4 profile, divider/config fields, thresholds, IT enable flow).
 
-### 3) Verify key written fields
+### 2) Verify key written fields
 
 ```bash
 uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py read-field --field voltage_divider
@@ -93,7 +182,7 @@ uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py read-fi
 uv run python src/lerobot/scripts/sourccey/battery/configure_bq34z100.py read-field --field number_of_series_cells
 ```
 
-### 3b) Show all stats (pretty JSON, useful for debugging)
+### 3) Show all stats (pretty JSON, useful for debugging)
 
 ```bash
 uv run python src/lerobot/scripts/sourccey/battery/check_bq34z100.py --pretty
@@ -125,7 +214,7 @@ Optional watch mode:
 uv run python src/lerobot/scripts/sourccey/battery/check_bq34z100.py --watch --interval-s 5
 ```
 
-### 6) Flash golden image (new or recovered chips)
+## Golden Image Command Reference
 
 Full firmware + data flash image:
 
@@ -211,10 +300,11 @@ If voltage path is wrong, writes can be blocked by flash update safety behavior.
 ### Recovery sequence (recommended)
 
 1. Stop any other process talking to the gauge.
-2. Reprogram matching default firmware image (`.srec`) for the detected FW family.
-3. Re-run `setup-4s-lifepo4`.
-4. Re-run the three verify reads in **Quick Start step 3**.
-5. Confirm telemetry voltage is sane.
+2. Confirm stable power, wiring, I2C address, device type, and firmware version.
+3. For the standard supported hardware, re-run the full golden-image command from
+   **New Robot Quick Start step 3**.
+4. Run the validation command from **New Robot Quick Start step 4**.
+5. Confirm the chemistry/configuration values match and telemetry voltage is sane.
 
 ## Notes
 
