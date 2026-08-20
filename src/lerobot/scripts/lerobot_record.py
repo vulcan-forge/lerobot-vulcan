@@ -132,7 +132,6 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
-from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import SourcceyClientConfig  # noqa: F401
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
@@ -153,12 +152,6 @@ from lerobot.teleoperators import (  # noqa: F401
     unitree_g1,
 )
 from lerobot.teleoperators.keyboard import KeyboardTeleop
-from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourccey_leader import (  # noqa: F401
-    BiSourcceyLeaderConfig,
-)
-from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.config_sourccey_leader import (  # noqa: F401
-    SourcceyLeaderConfig,
-)
 from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.feature_utils import build_dataset_frame, combine_feature_dicts
 from lerobot.utils.import_utils import register_third_party_plugins
@@ -182,7 +175,7 @@ class RecordConfig:
     # Teleoperator to control the robot (required)
     teleop: TeleoperatorConfig | None = None
     # Optional keyboard teleoperator to combine with the main teleop.
-    # Useful for robots that split arm/base control, such as sourccey_client.
+    # Useful for robots that split arm and base control across input devices.
     teleop_keyboard: TeleoperatorConfig | None = None
     # Display all cameras on screen
     display_data: bool = False

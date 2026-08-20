@@ -101,7 +101,6 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
-from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import SourcceyClientConfig  # noqa: F401
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
@@ -123,12 +122,6 @@ from lerobot.teleoperators import (  # noqa: F401
     unitree_g1,
 )
 from lerobot.teleoperators.keyboard import KeyboardTeleop
-from lerobot.teleoperators.sourccey.sourccey.bi_sourccey_leader.config_bi_sourccey_leader import (  # noqa: F401
-    BiSourcceyLeaderConfig,
-)
-from lerobot.teleoperators.sourccey.sourccey.sourccey_leader.config_sourccey_leader import (  # noqa: F401
-    SourcceyLeaderConfig,
-)
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
@@ -145,7 +138,7 @@ class TeleoperateConfig:
     teleop: TeleoperatorConfig
     robot: RobotConfig
     # Optional keyboard teleoperator to combine with the main teleop.
-    # Useful for robots that split arm/base control, such as sourccey_client.
+    # Useful for robots that split arm and base control across input devices.
     teleop_keyboard: TeleoperatorConfig | None = None
     # Limit the maximum frames per second.
     fps: int = 60
@@ -341,16 +334,13 @@ def teleoperate(cfg: TeleoperateConfig):
     robot = make_robot_from_config(cfg.robot)
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
-    teleop_connected = False
-    robot_connected = False
     keyboard_connected = False
 
     try:
-        teleop_connected = connect_teleop(teleop)
+        connect_teleop(teleop)
         keyboard_connected = connect_keyboard(teleop_keyboard) if teleop_keyboard is not None else False
 
         robot.connect()
-        robot_connected = True
 
         teleop_loop(
             teleop=teleop,

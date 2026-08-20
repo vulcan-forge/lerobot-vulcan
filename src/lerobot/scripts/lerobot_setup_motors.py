@@ -39,7 +39,6 @@ from lerobot.robots import (  # noqa: F401
     rebot_b601_follower,
     so_follower,
 )
-from lerobot.robots.sourccey import sourccey
 from lerobot.teleoperators import (  # noqa: F401
     TeleoperatorConfig,
     bi_openarm_mini,
@@ -51,7 +50,6 @@ from lerobot.teleoperators import (  # noqa: F401
     openarm_mini,
     rebot_102_leader,
     so_leader,
-    sourccey
 )
 from lerobot.utils.import_utils import register_third_party_plugins
 
