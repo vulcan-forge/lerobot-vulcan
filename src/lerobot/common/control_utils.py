@@ -35,7 +35,7 @@ else:
 
 if TYPE_CHECKING:
     from lerobot.datasets import LeRobotDataset
-from lerobot.lerobot_types import PolicyAction
+from lerobot.lerobot_types import PolicyAction, RobotAction
 from lerobot.processor import PolicyProcessorPipeline
 from lerobot.robots import Robot
 
@@ -238,6 +238,56 @@ def teleop_supports_feedback(teleop) -> bool:
         and hasattr(teleop, "disable_torque")
         and hasattr(teleop, "enable_torque")
     )
+
+
+def move_robot(robot: Robot, target: RobotAction, duration_s: float = 2.0, fps: int = 30) -> RobotAction:
+    """Smoothly move a connected robot to a target joint pose.
+
+    Only joints included in ``target`` are commanded. The robot's
+    :meth:`~lerobot.robots.robot.Robot.send_action` implementation remains
+    responsible for applying hardware-specific safety limits.
+
+    Args:
+        robot: Connected robot to move.
+        target: Target values keyed by the robot's action feature names.
+        duration_s: Time over which to interpolate to the target.
+        fps: Number of commands to send per second.
+
+    Returns:
+        The final action actually sent by the robot, after any safety clipping.
+    """
+    if not robot.is_connected:
+        raise RuntimeError("Robot must be connected before it can be moved.")
+    if duration_s <= 0:
+        raise ValueError(f"duration_s must be greater than 0, got {duration_s}")
+    if fps <= 0:
+        raise ValueError(f"fps must be greater than 0, got {fps}")
+    if not target:
+        raise ValueError("target must contain at least one action")
+
+    unknown_actions = target.keys() - robot.action_features.keys()
+    if unknown_actions:
+        raise ValueError(f"Unknown robot action features: {sorted(unknown_actions)}")
+
+    observation = robot.get_observation()
+    missing_observations = target.keys() - observation.keys()
+    if missing_observations:
+        raise ValueError(
+            f"Cannot determine current values for action features: {sorted(missing_observations)}"
+        )
+
+    start = {key: float(observation[key]) for key in target}
+    goal = {key: float(value) for key, value in target.items()}
+    steps = max(round(duration_s * fps), 1)
+    sent_action: RobotAction = {}
+
+    for step in range(1, steps + 1):
+        progress = step / steps
+        action = {key: value + progress * (goal[key] - value) for key, value in start.items()}
+        sent_action = robot.send_action(action)
+        time.sleep(1 / fps)
+
+    return sent_action
 
 
 def teleop_smooth_move_to(teleop, target_pos: dict, duration_s: float = 2.0, fps: int = 30) -> None:
