@@ -209,17 +209,38 @@ def verdict_for(key: str, stats: CameraStats, expected_fps: float) -> tuple[str,
     age = stats.age_s()
     if age is not None and age > STALE_AFTER_S:
         return "FAIL", f"frames stopped {age:.1f}s ago — the camera dropped out mid-run"
+    # This is the load-bearing check. When a camera read fails on the robot, the
+    # host does NOT drop the key - it publishes np.zeros() to keep the observation
+    # schema stable (see Sourccey.get_observation). A dead camera therefore arrives
+    # at full frame rate and would otherwise look perfectly healthy.
     if stats.blank_frames >= stats.frames:
-        return "FAIL", "every frame is blank (black/flat) — no image data"
+        return "FAIL", (
+            f"all {stats.frames} frames are black/flat - the host is substituting blank "
+            "frames because the camera read is failing on the robot"
+        )
     if stats.frames > 10 and stats.frozen_frames > FROZEN_FRAME_RATIO * stats.frames:
         return "FAIL", f"feed is frozen ({stats.frozen_frames}/{stats.frames} identical frames)"
+
     fps = stats.fps()
+    detail = f"{stats.frames} frames at {fps:.1f} fps"
+    # Intermittent failures are the same mechanism, just partial: some real frames,
+    # some host-substituted black ones. Silently passing those hides a dying camera.
+    if stats.blank_frames:
+        return "WARN", (
+            f"{stats.blank_frames}/{stats.frames} frames were black - the camera is "
+            "intermittently failing to read on the robot (check its USB cable/power)"
+        )
+    if stats.frozen_frames:
+        return "WARN", (
+            f"{detail}, but {stats.frozen_frames} were identical to the previous frame - "
+            "the feed is intermittently stalling"
+        )
     if expected_fps > 0 and fps < 0.5 * expected_fps:
         return "WARN", (
             f"only {fps:.1f} fps (host camera is configured for {expected_fps:.0f}); "
             "USB bandwidth on the Pi, or another client is sharing the stream"
         )
-    return "PASS", f"{stats.frames} frames at {fps:.1f} fps"
+    return "PASS", f"{detail} (0 blank, 0 frozen)"
 
 
 def render_tiles(
@@ -386,11 +407,50 @@ def build_parser(description: str) -> argparse.ArgumentParser:
     return parser
 
 
+_gui_available: bool | None = None
+
+
+def gui_available() -> bool:
+    """True only if this OpenCV build can actually open a window.
+
+    This repo pins `opencv-python-headless` (see pyproject.toml), which ships
+    without highgui: `imshow` raises instead of drawing. Having a desktop is
+    therefore NOT enough - the check has to be about the build, and probing with
+    a real window is the only reliable way to ask, since the build flags are not
+    always reported consistently.
+    """
+    global _gui_available
+    if _gui_available is None:
+        try:
+            cv2.namedWindow("__sourccey_gui_probe__", cv2.WINDOW_AUTOSIZE)
+            cv2.destroyWindow("__sourccey_gui_probe__")
+            _gui_available = True
+        except Exception:  # noqa: BLE001 - any failure means no usable GUI
+            _gui_available = False
+    return _gui_available
+
+
+NO_GUI_HINT = (
+    "this OpenCV build has no GUI support (the repo pins opencv-python-headless, "
+    "so cv2.imshow cannot draw)"
+)
+
+
 def resolve_view(view: str) -> str:
+    """Pick the preview transport, and say so when it is not what was implied."""
+    if view == "window" and not gui_available():
+        # An explicit --view window that cannot work is an error, not something
+        # to quietly reroute: the user asked for a specific thing.
+        raise RuntimeError(
+            f"--view window was requested but {NO_GUI_HINT}. "
+            "Use --view mjpeg to watch in a browser, or install the GUI build "
+            "(`uv pip install opencv-python`) in a separate environment."
+        )
     if view != "auto":
         return view
-    # Windows/macOS desktops always have a window server; on Linux, trust the
-    # display env vars and otherwise serve the preview over HTTP.
+    if not gui_available():
+        print(f"[check] NOTE  {NO_GUI_HINT}; serving the preview over HTTP instead")
+        return "mjpeg"
     if os.name == "nt" or os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
         return "window"
     return "mjpeg"
@@ -403,10 +463,14 @@ def run_camera_check(
     args: argparse.Namespace,
 ) -> int:
     """Stream the named cameras from the robot, then print a PASS/FAIL table."""
-    view = resolve_view(args.view)
+    print(f"[check] {title}")
+    try:
+        view = resolve_view(args.view)
+    except RuntimeError as exc:
+        print(f"[check] FAIL  {exc}")
+        return 1
     subscriber = ObservationSubscriber(args.remote_ip, args.port, connect_timeout_s=args.connect_timeout)
 
-    print(f"[check] {title}")
     print(f"[check] connecting to the robot at {subscriber.endpoint} (passive: observations only)")
     try:
         subscriber.connect()
@@ -427,12 +491,30 @@ def run_camera_check(
         print(f"[check] open http://127.0.0.1:{args.http_port}/ to watch the feeds")
     elif view == "window":
         print("[check] press 'q' in the preview window to stop")
+    if args.seconds > 0:
+        print(f"[check] running for {args.seconds:.0f}s, then printing results")
+    else:
+        print("[check] running until you press Ctrl+C (or pass --seconds N to time-box it)")
 
     start = time.monotonic()
+    # A live heartbeat: without it the terminal looks frozen for the whole run,
+    # and there is no way to tell "connected and streaming" from "stalled".
+    next_heartbeat = start + 2.0
     try:
         while True:
-            if args.seconds > 0 and (time.monotonic() - start) >= args.seconds:
+            now = time.monotonic()
+            if args.seconds > 0 and (now - start) >= args.seconds:
                 break
+            if now >= next_heartbeat:
+                next_heartbeat = now + 2.0
+                live_summary = "  ".join(
+                    f"{key}={subscriber.stats(key).fps():.1f}fps"
+                    if subscriber.stats(key).frames
+                    else f"{key}=--"
+                    for key in keys
+                )
+                # flush: the heartbeat is worthless if it sits in a pipe buffer.
+                print(f"[check] live  {live_summary}   ({subscriber.packets()} packets)", flush=True)
             if view == "none":
                 time.sleep(0.1)
                 continue
@@ -464,7 +546,12 @@ def run_camera_check(
         if server is not None:
             server.stop()
         if view == "window":
-            cv2.destroyAllWindows()
+            # Never let teardown raise: a second exception here would mask
+            # whatever actually went wrong in the loop above.
+            try:
+                cv2.destroyAllWindows()
+            except Exception:  # noqa: BLE001
+                pass
 
     print()
     print(f"[check] ==== {title}: results ====")
