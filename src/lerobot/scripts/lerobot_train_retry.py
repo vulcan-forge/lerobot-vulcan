@@ -94,19 +94,22 @@ def _build_resume_args(train_args: list[str], config_path: Path) -> list[str]:
     return [*sanitized_args, "--resume=true", f"--config_path={config_path}"]
 
 
-def _run_train(train_args: list[str]) -> int:
+def _run_training_module(train_args: list[str], training_module: str) -> int:
     # Run as a module so relative imports inside lerobot_train.py resolve correctly.
-    cmd = [sys.executable, "-m", "lerobot.scripts.lerobot_train", *train_args]
+    cmd = [sys.executable, "-m", training_module, *train_args]
     logging.info("Launching command: %s", " ".join(shlex.quote(part) for part in cmd))
     return subprocess.run(cmd, check=False).returncode
 
 
-def main() -> int:
+def retry_main(
+    training_module: str = "lerobot.scripts.lerobot_train",
+    training_name: str = "lerobot_train.py",
+) -> int:
     register_third_party_plugins()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True)
 
     parser = argparse.ArgumentParser(
-        description="Run lerobot_train.py with auto-retry and automatic resume from the last checkpoint.",
+        description=f"Run {training_name} with auto-retry and automatic resume from the last checkpoint.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -153,7 +156,7 @@ def main() -> int:
 
     for attempt in range(1, max_attempts + 1):
         logging.info("Starting training attempt %d/%d", attempt, max_attempts)
-        exit_code = _run_train(retry_train_args)
+        exit_code = _run_training_module(retry_train_args, training_module)
 
         if exit_code == 0:
             logging.info("Training finished successfully on attempt %d.", attempt)
@@ -189,6 +192,10 @@ def main() -> int:
             time.sleep(args.retry_delay_seconds)
 
     return 1
+
+
+def main() -> int:
+    return retry_main()
 
 
 if __name__ == "__main__":

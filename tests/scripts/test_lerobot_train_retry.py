@@ -37,14 +37,14 @@ def test_build_resume_args_drops_policy_path_flags():
 
 
 def test_extract_output_dir_from_yaml_config(tmp_path: Path):
-    config_path = tmp_path / "siva.yaml"
-    config_path.write_text("output_dir: outputs/train/siva-c-010\n", encoding="utf-8")
+    config_path = tmp_path / "train.yaml"
+    config_path.write_text("output_dir: outputs/train/example\n", encoding="utf-8")
 
-    assert _extract_output_dir([f"--config_path={config_path}"]) == Path("outputs/train/siva-c-010")
+    assert _extract_output_dir([f"--config_path={config_path}"]) == Path("outputs/train/example")
 
 
 def test_cli_output_dir_overrides_yaml_config(tmp_path: Path):
-    config_path = tmp_path / "siva.yaml"
+    config_path = tmp_path / "train.yaml"
     config_path.write_text("output_dir: outputs/train/from-config\n", encoding="utf-8")
 
     assert _extract_output_dir(

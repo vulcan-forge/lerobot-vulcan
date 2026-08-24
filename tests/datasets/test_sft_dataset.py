@@ -18,8 +18,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from lerobot.scripts.sourccey.train.configs.sft import SFTDatasetConfig, SFTDatasetSourceConfig
-from lerobot.scripts.sourccey.train.datasets.sft import (
+from lerobot.configs.sft import SFTDatasetConfig, SFTDatasetSourceConfig
+from lerobot.datasets.sft import (
     SFT_MASK_PADDED_ACTIONS,
     SFT_SOURCE_INDEX,
     SFTMixtureDataset,

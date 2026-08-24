@@ -660,7 +660,7 @@ class PhoneTeleoperator(Teleoperator):
             if len(solution_final) > 4:
                 solution_final[4] = -(solution_final[4] + 90)
 
-            # Sourccey Math Additions 
+            # Experimental calibration transformations
 
             # shoulder_pan (index 0): direction reversal
         #     if len(solution_final) > 0:
@@ -793,5 +793,3 @@ class PhoneTeleoperator(Teleoperator):
             
         except Exception as e:
             logger.error(f"Error disconnecting {self}: {e}")
-
- 
