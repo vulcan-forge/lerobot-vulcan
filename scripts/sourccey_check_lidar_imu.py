@@ -161,6 +161,12 @@ def check_lidar(args: argparse.Namespace) -> bool:
 
     rpm = statistics.mean(speeds) / 6.0 if speeds else 0.0
     valid = [p for p in points if p.distance_m > 0.0 and p.confidence >= MIN_CONFIDENCE]
+    # Split the REJECTED points, because the two causes mean opposite things:
+    # a zero distance is "nothing came back" (open space, or beyond range), while
+    # a weak return is "something came back but faintly" - a dirty or fogged
+    # window, a very dark/angled surface, or a confidence threshold set too high.
+    no_return = [p for p in points if p.distance_m <= 0.0]
+    weak = [p for p in points if p.distance_m > 0.0 and p.confidence < MIN_CONFIDENCE]
     distances = sorted(p.distance_m for p in valid)
     coverage = len({int(p.angle_deg) % 360 for p in valid}) / 360.0
 
@@ -168,6 +174,12 @@ def check_lidar(args: argparse.Namespace) -> bool:
     print(f"[lidar] spin rate  {rpm:.1f} rpm ({rpm / 60.0:.1f} Hz)")
     print(f"[lidar] coverage   {coverage * 100:.0f}% of the 360 deg circle, "
           f"{len(valid) / len(points) * 100:.0f}% of points valid")
+    print(f"[lidar] rejected   {len(no_return)} with no return (open space or out of range), "
+          f"{len(weak)} too weak (confidence < {MIN_CONFIDENCE})")
+    if weak:
+        weak_confidence = sorted(p.confidence for p in weak)
+        print(f"[lidar]            weak-return confidence: min={weak_confidence[0]} "
+              f"median={weak_confidence[len(weak_confidence) // 2]} max={weak_confidence[-1]}")
     if distances:
         print(f"[lidar] distances  min={distances[0]:.2f}m "
               f"median={distances[len(distances) // 2]:.2f}m max={distances[-1]:.2f}m")
@@ -180,42 +192,108 @@ def check_lidar(args: argparse.Namespace) -> bool:
         print("[lidar] FAIL  packets arrive but no point clears the confidence threshold")
         ok = False
     elif coverage < MIN_ANGULAR_COVERAGE:
-        print(f"[lidar] WARN  only {coverage * 100:.0f}% angular coverage - something is blocking "
-              "the rotor, or the listen window was too short")
+        print(f"[lidar] WARN  only {coverage * 100:.0f}% angular coverage")
+        if len(weak) > len(no_return):
+            print("[lidar]       most rejected points came back TOO WEAK rather than not at "
+                  "all, which points at a dirty/fogged window or an obstructed rotor")
+        else:
+            print("[lidar]       most rejected points had no return at all - expected if the "
+                  "robot is on a bench in open space, suspicious in a room with walls")
+        print("[lidar]       re-run facing a wall about 1m away: coverage should jump")
     if ok:
         print("[lidar] PASS  LiDAR is spinning and returning real scan data")
     return ok
+
+
+@dataclass
+class ImuSample:
+    """One IMU reading, in SI units."""
+
+    timestamp_ns: int
+    accel_m_s2: tuple[float, float, float]
+    gyro_rad_s: tuple[float, float, float]
+    mag_uT: tuple[float, float, float]
+    valid: bool = True
+    error: str | None = None
+
+
+class DirectIMU:
+    """Minimal LSM6DSOX + LIS3MDL reader, talking to the Adafruit drivers directly.
+
+    Deliberately does NOT go through the robot's own IMU class: the driver moved
+    out of this repo into the `lerobot-robot-sourccey` package, and a hardware
+    check has to keep working when that package is absent or mid-migration -
+    which is exactly when you reach for it. This is the same handful of calls the
+    robot's driver makes.
+    """
+
+    # LSM6DSOX first, then the pin-compatible siblings the robot's driver accepts.
+    VARIANTS = (
+        ("adafruit_lsm6ds.lsm6dsox", "LSM6DSOX"),
+        ("adafruit_lsm6ds.ism330dhcx", "ISM330DHCX"),
+        ("adafruit_lsm6ds.lsm6dso32", "LSM6DSO32"),
+        ("adafruit_lsm6ds.lsm6ds33", "LSM6DS33"),
+        ("adafruit_lsm6ds.lsm6ds3trc", "LSM6DS3TRC"),
+    )
+
+    def __init__(self, accel_address: int, mag_address: int) -> None:
+        self.accel_address = accel_address
+        self.mag_address = mag_address
+        self.variant: str | None = None
+        self._imu6 = None
+        self._mag = None
+
+    def connect(self) -> None:
+        import board
+        from adafruit_lis3mdl import LIS3MDL
+
+        i2c = board.I2C()
+        errors: list[str] = []
+        for module_name, class_name in self.VARIANTS:
+            try:
+                module = __import__(module_name, fromlist=[class_name])
+                self._imu6 = getattr(module, class_name)(i2c, address=self.accel_address)
+                self.variant = class_name
+                break
+            except Exception as exc:  # noqa: BLE001 - try the next variant
+                errors.append(f"{class_name}: {exc}")
+        if self._imu6 is None:
+            raise RuntimeError(
+                f"no supported LSM6-family device at 0x{self.accel_address:02X}. "
+                f"Tried: {'; '.join(errors) if errors else 'no driver classes available'}"
+            )
+        self._mag = LIS3MDL(i2c, address=self.mag_address)
+
+    def read(self) -> ImuSample:
+        return ImuSample(
+            timestamp_ns=time.time_ns(),
+            accel_m_s2=tuple(float(v) for v in self._imu6.acceleration),
+            gyro_rad_s=tuple(float(v) for v in self._imu6.gyro),
+            mag_uT=tuple(float(v) for v in self._mag.magnetic),
+        )
 
 
 def check_imu(args: argparse.Namespace) -> bool:
     """Read the I2C IMU and report whether it produces sane, changing data."""
     print()
     print("[imu] ---- IMU check ----")
-    try:
-        from lerobot.sensors.imu import AdafruitLSM6DSOXLIS3MDLIMU, IMUConfig
-    except Exception as exc:  # noqa: BLE001
-        print(f"[imu] FAIL  IMU driver import failed: {exc}")
-        print("[imu]       install the extras on the Pi: uv sync --extra sourccey")
-        return False
-
-    imu = AdafruitLSM6DSOXLIS3MDLIMU(
-        config=IMUConfig(
-            bus_num=args.imu_bus,
-            lsm6dsox_address=args.imu_accel_address,
-            lis3mdl_address=args.imu_mag_address,
-        )
-    )
+    imu = DirectIMU(args.imu_accel_address, args.imu_mag_address)
     try:
         imu.connect()
+    except ImportError as exc:
+        print(f"[imu] FAIL  the Adafruit I2C drivers are not installed: {exc}")
+        print("[imu]       uv pip install adafruit-blinka adafruit-circuitpython-lsm6ds "
+              "adafruit-circuitpython-lis3mdl")
+        return False
     except Exception as exc:  # noqa: BLE001
         print(f"[imu] FAIL  could not connect: {exc}")
         print(f"[imu]       check the wiring and `i2cdetect -y {args.imu_bus}` - expect "
               f"0x{args.imu_accel_address:02X} (LSM6DSOX) and 0x{args.imu_mag_address:02X} (LIS3MDL)")
         return False
 
-    print(f"[imu] connected on i2c-{args.imu_bus}; sampling for {args.imu_seconds:.1f}s "
-          "(hold the robot still)")
-    samples = []
+    print(f"[imu] connected on i2c-{args.imu_bus} ({imu.variant}); sampling for "
+          f"{args.imu_seconds:.1f}s (hold the robot still)")
+    samples: list[ImuSample] = []
     try:
         deadline = time.monotonic() + args.imu_seconds
         while time.monotonic() < deadline:
@@ -229,8 +307,6 @@ def check_imu(args: argparse.Namespace) -> bool:
     except Exception as exc:  # noqa: BLE001
         print(f"[imu] FAIL  read error after {len(samples)} samples: {exc}")
         return False
-    finally:
-        imu.disconnect()
 
 
 def _report_imu_samples(samples: list) -> bool:

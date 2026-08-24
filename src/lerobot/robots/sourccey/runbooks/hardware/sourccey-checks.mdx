@@ -134,12 +134,20 @@ The robot code now ships as the separate **`lerobot-robot-sourccey`** package (i
 discovery). Imports live under `lerobot_robot_sourccey.robots.*` — the old
 `lerobot.robots.sourccey.sourccey.*` paths are gone.
 
-- **Need the package:** the two PC-side camera checks and `sourccey_check_motors.py`. They
-  decode the host's protobuf observations, or read the robot's motor/pin configuration.
-- **Need nothing but OpenCV/pyserial:** `sourccey_check_eye_cameras_pi.py`,
-  `sourccey_check_arm_cameras_pi.py`, `sourccey_check_bottom_camera.py`, and
-  `sourccey_check_lidar_imu.py`. That is deliberate — a hardware check should still run when
-  the software stack is broken or mid-migration, which is exactly when you reach for it.
+- **Need the package:** only the two PC-side camera checks and
+  `sourccey_check_motors.py --remote-ip`, which decode the host's protobuf observations.
+- **Need nothing from it:** every Pi-side check — both `*_pi.py` camera scripts,
+  `sourccey_check_bottom_camera.py`, `sourccey_check_lidar_imu.py`, and
+  `sourccey_check_motors.py` in its local mode. That is deliberate: a pre-ship hardware check
+  must run when the software stack is broken or mid-migration, which is exactly when you
+  reach for it. On the Pi they need only OpenCV, pyserial, gpiozero, and the Adafruit I2C
+  drivers.
+
+Because of that, the Pi-side checks keep a local copy of the robot's wiring — device names,
+servo IDs and models, H-bridge GPIO pins, ADC channel. The package remains the authority for
+the running robot; if it ever changes, update `scripts/sourccey_check_devices.py` and the
+constants at the top of `scripts/sourccey_check_motors.py` to match. Every value is
+overridable on the command line.
 
 ## Table of Contents
 
