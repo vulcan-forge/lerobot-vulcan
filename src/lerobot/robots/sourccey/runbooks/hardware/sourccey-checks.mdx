@@ -1,0 +1,268 @@
+# Sourccey Hardware Checks
+
+## TL;DR
+
+Swap `192.168.1.237` for your robot's IP. Exit code 0 = everything passed.
+
+**From your PC** — needs `sourccey_host.py` running on the Pi, nothing else connected:
+
+```bash
+# eye cameras: live view of front_left + front_right
+uv run python scripts/sourccey_check_eye_cameras.py --remote-ip 192.168.1.237 --skip-bottom
+
+# arm cameras: live view of wrist_left + wrist_right
+uv run python scripts/sourccey_check_arm_cameras.py --remote-ip 192.168.1.237
+
+# all 12 joints + Z + wheels, as the host reads them
+uv run python scripts/sourccey_check_motors.py --remote-ip 192.168.1.237
+```
+
+**On the Pi** (`ssh`) — stop the host first, these need the devices:
+
+```bash
+# arm servos 1-12 pinged by ID, with voltage + temp; wheel driver pins; Z actuator ADC
+uv run python scripts/sourccey_check_motors.py
+
+# lidar spin + returns, then IMU accel/gyro/mag
+uv run python scripts/sourccey_check_lidar_imu.py
+
+# confirm the wheel motors themselves spin (wheels OFF the ground, asks first)
+uv run python scripts/sourccey_check_motors.py --skip-arms --skip-z --wiggle
+```
+
+**No-window versions** for a quick pass/fail with saved frames:
+
+```bash
+uv run python scripts/sourccey_check_eye_cameras.py --remote-ip 192.168.1.237 \
+  --skip-bottom --view none --seconds 10 --save-dir camera_health
+uv run python scripts/sourccey_check_arm_cameras.py --remote-ip 192.168.1.237 \
+  --view none --seconds 10 --save-dir camera_health
+```
+
+Gotchas in one line each: `bottom` isn't in this branch's camera config, so use `--skip-bottom`;
+run camera checks with teleop closed or you both get half the frames; the wheels have no
+encoders, so only `--wiggle` proves a wheel motor is alive.
+
+---
+
+Four scripts that answer "is everything on the robot actually working?" — the two
+eye cameras plus the underside camera, the two arm cameras, the LiDAR and IMU, and an
+electrical roll-call of the 12 arm servos and the wheel drivers.
+
+Two of them run **from your control PC** and connect to the robot the way the teleop
+client does (the host's observation stream). Two of them must run **on the Pi**,
+because they touch devices that the host does not publish to the network.
+
+| Script | Checks | Runs on | Needs |
+| --- | --- | --- | --- |
+| `scripts/sourccey_check_eye_cameras.py` | `front_left`, `front_right`, `bottom` | your PC | `sourccey_host.py` running |
+| `scripts/sourccey_check_arm_cameras.py` | `wrist_left`, `wrist_right` | your PC | `sourccey_host.py` running |
+| `scripts/sourccey_check_motors.py` | 12 arm servos, wheel drivers, Z actuator | the Pi (PC mode available) | host **stopped** on the Pi |
+| `scripts/sourccey_check_lidar_imu.py` | LiDAR scans, I2C IMU | the Pi | — |
+
+Shared connection and viewer plumbing lives in `scripts/sourccey_check_common.py`.
+
+## Table of Contents
+
+1. [Why some checks are PC-side and some are not](#why-some-checks-are-pc-side-and-some-are-not)
+2. [1) Eye + Bottom Cameras (from your PC)](#1-eye--bottom-cameras-from-your-pc)
+3. [2) Arm Cameras (from your PC)](#2-arm-cameras-from-your-pc)
+4. [3) Motor Roll-Call (on the Pi)](#3-motor-roll-call-on-the-pi)
+5. [4) LiDAR + IMU (on the Pi)](#4-lidar--imu-on-the-pi)
+6. [Reading the Results](#reading-the-results)
+7. [Run Everything in One Pass](#run-everything-in-one-pass)
+8. [Troubleshooting](#troubleshooting)
+
+---
+
+## Why some checks are PC-side and some are not
+
+`sourccey_host.py` publishes exactly one thing to the network: the observation stream
+on `tcp://<pi-ip>:5556`, carrying arm joint positions, base velocity, Z position, and
+**camera frames**. That is what the teleop client subscribes to, and it is what the two
+camera checks subscribe to as well — passively, observations only, never the command
+socket, so they cannot move the robot.
+
+The LiDAR (serial), the IMU (I2C), and the motor buses themselves are **not** published
+by the host. There is no stream for a PC-side client to read, so those checks SSH-and-run
+on the Pi. `sourccey_check_motors.py` does have a `--remote-ip` mode, but it can only
+report what the host is reading, not perform a bus-level roll-call — see below.
+
+> **One client at a time.** The host's observation socket is a ZMQ PUSH, which
+> round-robins between connected receivers. If teleop is running while you check the
+> cameras, the two of you split the frames and both look slow. Run the checks alone.
+
+## 1) Eye + Bottom Cameras (from your PC)
+
+```bash
+# watch the feeds live
+uv run python scripts/sourccey_check_eye_cameras.py --remote-ip 192.168.1.237
+
+# unattended: 15 seconds, no viewer, one saved frame per camera
+uv run python scripts/sourccey_check_eye_cameras.py --remote-ip 192.168.1.237 \
+  --view none --seconds 15 --save-dir camera_health
+```
+
+Expects `front_left`, `front_right`, and `bottom`.
+
+> **Note:** `bottom` is not in this branch's `sourccey_cameras_config()`, so the host
+> does not open it. Until it is added, the check reports it as "the host published no
+> frames for this camera" — use `--skip-bottom` for a clean two-camera run, or
+> `--bottom-key <name>` if the host publishes it under a different name.
+
+Useful flags: `--scale 3` to zoom the 320x240 frames, `--view mjpeg` to watch in a
+browser instead of a window, `--seconds N` to time-box the run.
+
+## 2) Arm Cameras (from your PC)
+
+```bash
+uv run python scripts/sourccey_check_arm_cameras.py --remote-ip 192.168.1.237
+```
+
+Expects `wrist_left` and `wrist_right`. It never commands the arms — move them by hand
+if you want to confirm the view is live; the check also flags frozen feeds on its own.
+Its browser port defaults to **8092** (the eye check uses **8091**), so both previews can
+run at once.
+
+## 3) Motor Roll-Call (on the Pi)
+
+The electrical check: SSH into the Pi, stop `sourccey_host.py` (it holds the serial buses
+and the GPIO), and run:
+
+```bash
+uv run python scripts/sourccey_check_motors.py
+```
+
+**Arm servos** — pings every expected ID on both buses and reports each servo's model,
+bus voltage, temperature, and raw position:
+
+```
+left  arm  /dev/robotLeftArm   IDs 1-6     right arm  /dev/robotRightArm  IDs 7-12
+order: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper
+```
+
+A servo that does not answer is reported as `SILENT`. The bus roll-call also lists any
+**unexpected** IDs, which is how you catch a duplicate or misassigned servo ID. Nothing is
+written to any servo: the bus is opened without a handshake and closed without touching
+torque.
+
+**Wheel drivers** — claims each DRV8874 IN1/IN2 GPIO pin and holds it idle, proving the
+pins are valid, free, and drivable. Be aware of what this cannot tell you: the DC motors
+are **open-loop** — no encoders, no current sensing anywhere in the stack — so a wheel
+motor unplugged at the H-bridge looks identical to a healthy one from software. To confirm
+the motors themselves:
+
+```bash
+# briefly pulses each wheel; asks for confirmation first
+uv run python scripts/sourccey_check_motors.py --skip-arms --skip-z --wiggle
+```
+
+Put the robot on blocks with its wheels off the ground first. The linear actuator is
+excluded unless you add `--wiggle-actuator`.
+
+**Z actuator** — reads the potentiometer through the MCP3008 ADC and warns when the value
+is pinned at a rail (usually a disconnected wiper rather than an end stop).
+
+**PC-side mode** shows what the host is currently reading for all 12 joints, Z, and the
+base velocities:
+
+```bash
+uv run python scripts/sourccey_check_motors.py --remote-ip 192.168.1.237
+```
+
+Treat it as a smoke test, not a roll-call: a servo that dropped off the bus can still
+show its last value, and the base velocities are commanded numbers, not measurements.
+
+## 4) LiDAR + IMU (on the Pi)
+
+```bash
+# both checks: 5s of LiDAR, 3s of IMU
+uv run python scripts/sourccey_check_lidar_imu.py
+
+# LiDAR only, longer listen, different port
+uv run python scripts/sourccey_check_lidar_imu.py --skip-imu \
+  --lidar-port /dev/ttyUSB1 --lidar-seconds 10
+
+# IMU only, plus an interactive yaw test
+uv run python scripts/sourccey_check_lidar_imu.py --skip-lidar --spin-test
+```
+
+**LiDAR** — opens the serial port briefly, parses LD06/LD19 packets, and reports packets
+received, valid returns, spin rate in RPM, angular coverage of the 360° circle, and
+min/median/max distance. It fails if no data arrives, if the rotor is below ~120 RPM
+(stalled or unpowered), or if no point clears the confidence threshold; it warns if
+angular coverage is under 70%, which means something is blocking the rotor. The port is
+released as soon as the check ends.
+
+**IMU** — reads the LSM6DSOX + LIS3MDL over I2C and reports sample rate, accelerometer
+magnitude (should sit near 9.81 m/s² at rest), gyro rates, and magnetometer field
+strength. It fails if the driver cannot connect, if `|accel|` is nowhere near gravity, or
+if every sample is byte-identical — a wedged I2C read looks "successful" but is not live
+data.
+
+**`--spin-test`** is interactive: press Enter, rotate the robot ~90° by hand, and the
+script integrates the yaw gyro and confirms it tracked the rotation.
+
+## Reading the Results
+
+Every run ends with a summary, and the exit code is `0` only if nothing failed:
+
+```
+[check] ==== Sourccey eye + bottom cameras: results ====
+[check] 412 observation packets received from 192.168.1.237
+[check] cameras the host is publishing: front_left, front_right, wrist_left, wrist_right
+[check] PASS front_left   412 frames at 29.8 fps
+[check] WARN front_right  only 11.2 fps (host camera is configured for 30); ...
+[check] FAIL bottom       the host published no frames for this camera ...
+[check] 2/3 cameras healthy
+```
+
+- **PASS** — present and behaving.
+- **WARN** — working but degraded: below half the configured frame rate, a hot servo, a
+  LiDAR with thin angular coverage.
+- **FAIL** — absent, silent, or delivering data that is not real: a camera publishing
+  blank or frozen frames, a servo that does not answer its ID, a stalled LiDAR rotor.
+
+The blank-frame and frozen-frame checks matter because a stalled camera still "arrives
+fine" — a feed that republishes the same black image forever must not read as healthy.
+
+## Run Everything in One Pass
+
+From your PC, with the host running:
+
+```bash
+uv run python scripts/sourccey_check_eye_cameras.py --remote-ip 192.168.1.237 \
+  --view none --seconds 10 --save-dir camera_health --skip-bottom
+uv run python scripts/sourccey_check_arm_cameras.py --remote-ip 192.168.1.237 \
+  --view none --seconds 10 --save-dir camera_health
+```
+
+Then on the Pi, with the host stopped:
+
+```bash
+uv run python scripts/sourccey_check_motors.py
+uv run python scripts/sourccey_check_lidar_imu.py
+```
+
+Any non-zero exit code means something on that list is not working.
+
+## Troubleshooting
+
+| Symptom | Likely cause / fix |
+| --- | --- |
+| `no observation packet from tcp://...:5556` | The host is not running or the IP is wrong. Start it on the Pi: `uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host`. |
+| Camera reports `NOT PUBLISHED` | The host did not open that camera — it is missing from `sourccey_cameras_config()`, or it failed to connect on the Pi. Check the host's console for camera warnings. |
+| All cameras at half frame rate | Another client (teleop, a recording session) is sharing the observation stream. |
+| Every frame is blank | Lens cap, dead exposure, or the camera opened but never streamed. Swap ports/cables with a known-good camera to separate hardware from mapping. See [`sourccey-camera.mdx`](sourccey-camera.mdx) for device-level checks. |
+| Servo reports `SILENT` | That ID is not answering: check the daisy-chain cable upstream of it, its power rail, and whether its ID was reassigned. |
+| `unexpected IDs on this bus` | Two servos share an ID, or one was flashed with the wrong ID. |
+| `LOW VOLTAGE` on several servos | The pack is sagging under load — check the battery and the power wiring, not the servos. |
+| `could not claim its pins` | Another process (usually `sourccey_host.py`) already owns that GPIO. Stop it and retry. |
+| `no such serial device: /dev/ttyUSB0` | Run `ls -l /dev/ttyUSB* /dev/ttyACM*` and pass the right `--lidar-port`. |
+| LiDAR `spin rate 0.0 rpm` | The rotor is not turning — check LiDAR power; some hubs cannot supply it from the data line alone. |
+| IMU `could not connect` | Run `i2cdetect -y 1`; expect `0x6a` (LSM6DSOX) and `0x1c` (LIS3MDL). Enable I2C in `raspi-config`, and install extras with `uv sync --extra sourccey`. |
+| IMU `every sample is identical` | The I2C read is wedged. Power-cycle the Pi; if it persists, check the IMU wiring and pull-ups. |
+
+Related: [`sourccey-camera.mdx`](sourccey-camera.mdx) for device-name and v4l2-level camera
+checks on the Pi, [`sourccey-battery.mdx`](sourccey-battery.mdx) for pack telemetry, and
+[`../operations/sourccey.mdx`](../operations/sourccey.mdx) for starting the host and teleop.
