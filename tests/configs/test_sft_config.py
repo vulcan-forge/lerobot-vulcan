@@ -18,21 +18,19 @@ import draccus
 import pytest
 import yaml
 
-from lerobot.policies.act.configuration_act import ACTConfig
-from lerobot.scripts.sourccey.train.configs.sft import (
+from lerobot.configs.sft import (
     SFTDatasetConfig,
     SFTDatasetSourceConfig,
     SFTPipelineConfig,
 )
+from lerobot.policies.act.configuration_act import ACTConfig
 
-SFT_RECIPE_DIR = (
-    Path(__file__).parents[2] / "src" / "lerobot" / "scripts" / "sourccey" / "train" / "configs" / "sft_recipes"
-)
+SFT_RECIPE_DIR = Path(__file__).parents[2] / "src" / "lerobot" / "configs" / "sft_recipes"
 
 
 @pytest.mark.parametrize(
     "recipe_name",
-    ["example.yaml", "shirt_fold_c_009.yaml", "shirt_fold_c_010.yaml"],
+    ["example.yaml"],
 )
 def test_sft_recipes_are_valid_yaml(recipe_name: str) -> None:
     recipe = yaml.safe_load((SFT_RECIPE_DIR / recipe_name).read_text(encoding="utf-8"))
@@ -93,7 +91,7 @@ def test_sft_config_checkpoint_round_trip(tmp_path: Path):
 
 
 def test_sft_requires_a_pretrained_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("sys.argv", ["sourccey/train/sft.py"])
+    monkeypatch.setattr("sys.argv", ["lerobot_sft.py"])
     cfg = SFTPipelineConfig(
         dataset=SFTDatasetConfig(sources=[SFTDatasetSourceConfig(repo_id="org/data")]),
         policy=ACTConfig(device="cpu", push_to_hub=False),
@@ -105,7 +103,7 @@ def test_sft_requires_a_pretrained_policy(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_sft_scales_policy_preset_learning_rate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("sys.argv", ["sourccey/train/sft.py"])
+    monkeypatch.setattr("sys.argv", ["lerobot_sft.py"])
     policy = ACTConfig(
         device="cpu",
         push_to_hub=False,

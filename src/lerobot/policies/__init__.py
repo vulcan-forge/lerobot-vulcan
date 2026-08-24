@@ -26,8 +26,6 @@ from .pi0.configuration_pi0 import PI0Config as PI0Config
 from .pi0_fast.configuration_pi0_fast import PI0FastConfig as PI0FastConfig
 from .pi05.configuration_pi05 import PI05Config as PI05Config
 from .pretrained import PreTrainedPolicy as PreTrainedPolicy
-from .siva.configuration_siva import SIVAConfig as SIVAConfig
-from .siva2.configuration_siva2 import SIVA2Config as SIVA2Config
 from .smolvla.configuration_smolvla import SmolVLAConfig as SmolVLAConfig
 from .tdmpc.configuration_tdmpc import TDMPCConfig as TDMPCConfig
 from .utils import make_robot_action, prepare_observation_for_inference
@@ -55,8 +53,6 @@ __all__ = [
     "PI0Config",
     "PI0FastConfig",
     "PI05Config",
-    "SIVAConfig",
-    "SIVA2Config",
     "SmolVLAConfig",
     "TDMPCConfig",
     "VQBeTConfig",

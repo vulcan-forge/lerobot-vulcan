@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2026 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,8 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .config import TeleoperatorConfig
-from .teleoperator import Teleoperator
-from .utils import TeleopEvents, make_teleoperator_from_config
+"""Retry LeRobot SFT and resume from its latest safe checkpoint."""
 
-__all__ = ["Teleoperator", "TeleoperatorConfig", "TeleopEvents", "make_teleoperator_from_config"]
+from .lerobot_train_retry import retry_main
+
+
+def main() -> int:
+    return retry_main(
+        training_module="lerobot.scripts.lerobot_sft",
+        training_name="lerobot_sft.py",
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
