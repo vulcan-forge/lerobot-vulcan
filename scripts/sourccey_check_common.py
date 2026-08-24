@@ -34,8 +34,8 @@ import cv2
 import numpy as np
 import zmq
 
-from lerobot.robots.sourccey.sourccey.protobuf.generated import sourccey_pb2
-from lerobot.robots.sourccey.sourccey.protobuf.sourccey_protobuf import SourcceyProtobuf
+from lerobot_robot_sourccey.robots.protobuf.generated import sourccey_pb2
+from lerobot_robot_sourccey.robots.protobuf.sourccey_protobuf import SourcceyProtobuf
 
 # A frame whose pixel spread is below this is effectively a blank sensor output:
 # lens cap, dead exposure, or a stream that opened but never delivered light.
@@ -477,7 +477,7 @@ def run_camera_check(
     except TimeoutError as exc:
         print(f"[check] FAIL  {exc}")
         print("[check]       start it on the Pi with: "
-              "uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host")
+              "uv run sourccey-host")
         return 1
     except zmq.ZMQError as exc:
         print(f"[check] FAIL  could not open {subscriber.endpoint}: {exc}")

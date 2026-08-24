@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lerobot.motors.feetech.feetech import FeetechMotorsBus  # noqa: E402
 from lerobot.motors.motors_bus import Motor, MotorNormMode  # noqa: E402
-from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import (  # noqa: E402
+from lerobot_robot_sourccey.robots.sourccey.config_sourccey import (  # noqa: E402
     SourcceyConfig,
     sourccey_dc_motors,
     sourccey_dc_motors_config,
@@ -249,7 +249,7 @@ def check_z_actuator(args: argparse.Namespace) -> bool:
     print()
     print("[z] ---- Z actuator feedback ----")
     try:
-        from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import ZSensor
+        from lerobot_robot_sourccey.robots.sourccey_z_actuator.sourccey_z_actuator import ZSensor
     except Exception as exc:  # noqa: BLE001
         print(f"[z] FAIL  could not import the Z sensor: {exc}")
         return False
@@ -303,7 +303,7 @@ def check_z_stroke(args: argparse.Namespace) -> bool:
     try:
         from gpiozero import PWMLED
 
-        from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import ZSensor
+        from lerobot_robot_sourccey.robots.sourccey_z_actuator.sourccey_z_actuator import ZSensor
     except Exception as exc:  # noqa: BLE001
         print(f"[z-stroke] FAIL  needs gpiozero + the Z sensor on the Pi: {exc}")
         return False
@@ -396,7 +396,7 @@ def check_remote(args: argparse.Namespace) -> bool:
     except TimeoutError as exc:
         print(f"[remote] FAIL  {exc}")
         print("[remote]       start it on the Pi with: "
-              "uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host")
+              "uv run sourccey-host")
         return False
 
     try:
