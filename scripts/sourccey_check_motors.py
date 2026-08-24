@@ -282,6 +282,108 @@ def check_z_actuator(args: argparse.Namespace) -> bool:
         sensor.disconnect()
 
 
+def check_z_stroke(args: argparse.Namespace) -> bool:
+    """Drive the linear actuator briefly and confirm the ADC follows the motion.
+
+    This is the only closed-loop check on the robot: the Z axis has a
+    potentiometer, so driving the motor and watching the reading move proves the
+    whole chain at once - H-bridge, motor, mechanism, pot, and ADC. If the
+    reading does not move, one of those is broken and the printout says which
+    direction was tried.
+    """
+    print()
+    print("[z-stroke] ---- linear actuator motion test ----")
+    print("[z-stroke] This will BRIEFLY DRIVE the Z axis in both directions.")
+    print("[z-stroke] Make sure the column has clearance above and below, and that")
+    print("[z-stroke] nothing (arms, cables, people) is in the way.")
+    if input("[z-stroke] Type 'yes' to continue: ").strip().lower() != "yes":
+        print("[z-stroke] skipped")
+        return True
+
+    try:
+        from gpiozero import PWMLED
+
+        from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import ZSensor
+    except Exception as exc:  # noqa: BLE001
+        print(f"[z-stroke] FAIL  needs gpiozero + the Z sensor on the Pi: {exc}")
+        return False
+
+    pins = sourccey_dc_motors_config()
+    index = list(sourccey_dc_motors().keys()).index("linear_actuator")
+    in1_pin, in2_pin = pins["in1_pins"][index], pins["in2_pins"][index]
+    frequency = pins["pwm_frequency"]
+
+    sensor = ZSensor(adc_channel=args.z_adc_channel, average_samples=5)
+    try:
+        sensor.connect()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[z-stroke] FAIL  the Z ADC did not respond, so motion cannot be verified: {exc}")
+        return False
+    if not sensor.is_connected:
+        print("[z-stroke] FAIL  the Z ADC did not initialize, so motion cannot be verified")
+        return False
+
+    baseline = sensor.read_raw().raw
+    print(f"[z-stroke] baseline ADC reading: {baseline}/1023")
+
+    deltas: dict[str, int] = {}
+    try:
+        # Direction is intentionally unlabeled: which pin raises the column
+        # depends on the motor's wiring, and the test only needs the reading to
+        # MOVE. Direction B runs second to bring the column back toward start.
+        for label, (drive_pin, idle_pin) in (
+            ("A", (in1_pin, in2_pin)),
+            ("B", (in2_pin, in1_pin)),
+        ):
+            start = sensor.read_raw().raw
+            drive = idle = None
+            try:
+                drive = PWMLED(drive_pin, frequency=frequency)
+                idle = PWMLED(idle_pin, frequency=frequency)
+                idle.value = 0.0
+                drive.value = args.z_duty
+                deadline = time.monotonic() + args.z_seconds
+                reading = start
+                while time.monotonic() < deadline:
+                    time.sleep(0.05)
+                    reading = sensor.read_raw().raw
+                    # A rail means an end stop: stop pushing into it.
+                    if reading <= 2 or reading >= 1021:
+                        print(f"[z-stroke] direction {label}: hit an end stop at {reading}, stopping")
+                        break
+            finally:
+                for led in (drive, idle):
+                    if led is not None:
+                        try:
+                            led.value = 0.0
+                            led.close()
+                        except Exception:  # noqa: BLE001
+                            pass
+            time.sleep(0.4)  # let the column settle before reading
+            settled = sensor.read_raw().raw
+            deltas[label] = settled - start
+            print(f"[z-stroke] direction {label}: {start} -> {settled} "
+                  f"(delta {settled - start:+d} counts)")
+    finally:
+        sensor.disconnect()
+
+    best = max(abs(d) for d in deltas.values()) if deltas else 0
+    if best < args.z_min_delta:
+        print(f"[z-stroke] FAIL  the ADC moved at most {best} counts (need {args.z_min_delta}) - "
+              "the actuator is not moving, or the pot is not tracking it")
+        print("[z-stroke]       if it was already at an end stop, reposition it and re-run;")
+        print(f"[z-stroke]       otherwise check the H-bridge on GPIO{in1_pin}/GPIO{in2_pin}, the")
+        print("[z-stroke]       actuator's power, and the potentiometer wiring")
+        return False
+    if any(d > 0 for d in deltas.values()) and any(d < 0 for d in deltas.values()):
+        print(f"[z-stroke] PASS  the actuator drives both ways and the ADC follows "
+              f"(best delta {best} counts)")
+    else:
+        print(f"[z-stroke] WARN  the ADC moved {best} counts but not in both directions - "
+              "one direction may be blocked, at an end stop, or miswired")
+    return True
+
+
 def check_remote(args: argparse.Namespace) -> bool:
     """From the PC: report what the host is reading for every motor."""
     from sourccey_check_common import ObservationSubscriber
@@ -366,6 +468,25 @@ def main() -> int:
     )
     parser.add_argument("--wiggle-duty", type=float, default=0.35, help="Wiggle PWM duty (0-1).")
     parser.add_argument("--wiggle-seconds", type=float, default=0.6, help="Wiggle duration per motor.")
+
+    parser.add_argument(
+        "--z-stroke",
+        action="store_true",
+        help="Drive the linear actuator both ways and confirm the ADC follows (asks first).",
+    )
+    parser.add_argument(
+        "--z-duty",
+        type=float,
+        default=defaults.z_minimum_up_command,
+        help="PWM duty for --z-stroke; below the configured minimum the column will not move.",
+    )
+    parser.add_argument("--z-seconds", type=float, default=1.0, help="Drive time per direction.")
+    parser.add_argument(
+        "--z-min-delta",
+        type=int,
+        default=15,
+        help="Raw ADC counts the reading must move for --z-stroke to pass.",
+    )
     args = parser.parse_args()
 
     results: dict[str, bool] = {}
@@ -380,6 +501,8 @@ def main() -> int:
             results["wheel drivers"] = check_wheel_drivers(args)
         if not args.skip_z:
             results["z actuator"] = check_z_actuator(args)
+        if args.z_stroke:
+            results["z actuator motion"] = check_z_stroke(args)
 
     print()
     print("[check] ==== summary ====")
