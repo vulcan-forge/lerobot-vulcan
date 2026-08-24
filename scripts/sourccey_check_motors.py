@@ -44,13 +44,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lerobot.motors.feetech.feetech import FeetechMotorsBus  # noqa: E402
 from lerobot.motors.motors_bus import Motor, MotorNormMode  # noqa: E402
-from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import (  # noqa: E402
-    SourcceyConfig,
-    sourccey_dc_motors,
-    sourccey_dc_motors_config,
-    sourccey_motor_models,
-)
 
+# The robot's wiring, written out rather than imported from
+# `lerobot_robot_sourccey.robots.sourccey.config_sourccey`. That package is the
+# authority for the running robot, but a pre-ship electrical check must work even
+# when it is not installed in this environment - which is exactly the situation on
+# a Pi where the host runs from its own venv. These values mirror it; every one is
+# overridable on the command line.
 JOINT_ORDER = (
     "shoulder_pan",
     "shoulder_lift",
@@ -60,6 +60,24 @@ JOINT_ORDER = (
     "gripper",
 )
 ARM_IDS = {"left": (1, 2, 3, 4, 5, 6), "right": (7, 8, 9, 10, 11, 12)}
+MOTOR_MODELS = {
+    "shoulder_pan": "sts3215",
+    "shoulder_lift": "sts3250",
+    "elbow_flex": "sts3250",
+    "wrist_flex": "sts3215",
+    "wrist_roll": "sts3215",
+    "gripper": "sts3215",
+}
+DEFAULT_LEFT_ARM_PORT = "/dev/robotLeftArm"
+DEFAULT_RIGHT_ARM_PORT = "/dev/robotRightArm"
+
+# DRV8874 H-bridge wiring: one IN1/IN2 GPIO pair per DC channel, in this order.
+DC_CHANNELS = ("front_left", "front_right", "rear_left", "rear_right", "linear_actuator")
+DC_IN1_PINS = [17, 23, 24, 26, 5]   # physical pins 11, 16, 18, 37, 29
+DC_IN2_PINS = [27, 22, 25, 16, 6]   # physical pins 13, 15, 22, 36, 31
+DC_PWM_FREQUENCY = 10000
+# Below this duty the Z actuator cannot overcome stiction (z_minimum_up_command).
+Z_MINIMUM_COMMAND = 0.82
 
 # Feetech servos report bus voltage in 0.1 V units. A 3S/4S pack that has sagged
 # below this is browning out even if every servo still answers.
@@ -70,7 +88,7 @@ MAX_TEMPERATURE_C = 55.0
 
 def _build_bus(port: str, side: str) -> FeetechMotorsBus:
     """Build a bus with the same IDs/models the robot itself uses."""
-    models = sourccey_motor_models()
+    models = MOTOR_MODELS
     ids = ARM_IDS[side]
     return FeetechMotorsBus(
         port=port,
@@ -151,13 +169,10 @@ def check_wheel_drivers(args: argparse.Namespace) -> bool:
     """
     print()
     print("[wheels] ---- wheel + actuator drivers ----")
-    pins = sourccey_dc_motors_config()
-    motors = sourccey_dc_motors()
-    names = list(motors.keys())
-    in1_pins = pins["in1_pins"]
-    in2_pins = pins["in2_pins"]
+    names = list(DC_CHANNELS)
+    in1_pins, in2_pins = DC_IN1_PINS, DC_IN2_PINS
     print(f"[wheels] {len(names)} DC channels: {', '.join(names)}")
-    print(f"[wheels] IN1 pins {in1_pins}  IN2 pins {in2_pins}  @ {pins['pwm_frequency']} Hz")
+    print(f"[wheels] IN1 pins {in1_pins}  IN2 pins {in2_pins}  @ {DC_PWM_FREQUENCY} Hz")
 
     try:
         from gpiozero import PWMLED
@@ -171,7 +186,7 @@ def check_wheel_drivers(args: argparse.Namespace) -> bool:
         channels = []
         try:
             for label, pin in (("IN1", in1_pins[index]), ("IN2", in2_pins[index])):
-                led = PWMLED(pin, frequency=pins["pwm_frequency"])
+                led = PWMLED(pin, frequency=DC_PWM_FREQUENCY)
                 led.value = 0.0  # claimed but idle: this does NOT turn the motor
                 channels.append((label, pin, led))
             claimed = ", ".join(f"{label}=GPIO{pin}" for label, pin, _ in channels)
@@ -192,7 +207,7 @@ def check_wheel_drivers(args: argparse.Namespace) -> bool:
     print("[wheels]       connected. Use --wiggle to confirm the motors themselves.")
 
     if args.wiggle:
-        ok = _wiggle_wheels(args, names, in1_pins, in2_pins, pins["pwm_frequency"]) and ok
+        ok = _wiggle_wheels(args, names, in1_pins, in2_pins, DC_PWM_FREQUENCY) and ok
     return ok
 
 
@@ -244,34 +259,66 @@ def _wiggle_wheels(
     return True
 
 
+class ZPotentiometer:
+    """Reads the Z actuator's potentiometer straight off the MCP3008.
+
+    The robot's own ZSensor moved into the `lerobot-robot-sourccey` package; this
+    is the same two calls it makes (`MCP3008(channel).raw_value`, averaged), so
+    the check keeps working when that package is not installed here.
+    """
+
+    RAW_MAX = 1023
+    VREF = 3.30
+
+    def __init__(self, channel: int, samples: int = 25) -> None:
+        self.channel = int(channel)
+        self.samples = max(int(samples), 1)
+        self._adc = None
+
+    def connect(self) -> None:
+        from gpiozero import MCP3008
+
+        adc = MCP3008(channel=self.channel)
+        _ = adc.raw_value  # probe once so a dead SPI bus fails here, not later
+        self._adc = adc
+
+    def read(self) -> tuple[int, float]:
+        """Return (averaged raw 0-1023, volts)."""
+        total = sum(float(self._adc.raw_value) for _ in range(self.samples))
+        raw = int(round(total / self.samples))
+        return raw, (raw / self.RAW_MAX) * self.VREF
+
+    def close(self) -> None:
+        if self._adc is not None:
+            try:
+                self._adc.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._adc = None
+
+
 def check_z_actuator(args: argparse.Namespace) -> bool:
     """Read the Z actuator's potentiometer through the MCP3008 ADC."""
     print()
     print("[z] ---- Z actuator feedback ----")
-    try:
-        from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import ZSensor
-    except Exception as exc:  # noqa: BLE001
-        print(f"[z] FAIL  could not import the Z sensor: {exc}")
-        return False
-
-    sensor = ZSensor(adc_channel=args.z_adc_channel)
+    sensor = ZPotentiometer(args.z_adc_channel)
     try:
         sensor.connect()
+    except ImportError as exc:
+        print(f"[z] FAIL  gpiozero is not installed: {exc}")
+        print("[z]       this check only runs on the Pi")
+        return False
     except Exception as exc:  # noqa: BLE001
         print(f"[z] FAIL  MCP3008 on channel {args.z_adc_channel} did not respond: {exc}")
         print("[z]       check SPI is enabled (`raspi-config`) and the ADC wiring")
         return False
-    if not sensor.is_connected:
-        print(f"[z] FAIL  MCP3008 on channel {args.z_adc_channel} did not initialize")
-        return False
 
     try:
-        reading = sensor.read_raw()
-        print(f"[z] PASS  ADC channel {args.z_adc_channel}: raw={reading.raw}/1023 "
-              f"({reading.voltage:.2f}V)")
+        raw, voltage = sensor.read()
+        print(f"[z] PASS  ADC channel {args.z_adc_channel}: raw={raw}/1023 ({voltage:.2f}V)")
         # Both rails mean a floating wiper or a disconnected pot far more often
         # than a genuinely fully-extended actuator.
-        if reading.raw <= 2 or reading.raw >= 1021:
+        if raw <= 2 or raw >= 1021:
             print("[z] WARN  the reading is pinned at a rail - if the actuator is not at "
                   "an end stop, the potentiometer is likely disconnected")
         return True
@@ -279,7 +326,7 @@ def check_z_actuator(args: argparse.Namespace) -> bool:
         print(f"[z] FAIL  ADC read failed: {exc}")
         return False
     finally:
-        sensor.disconnect()
+        sensor.close()
 
 
 def check_z_stroke(args: argparse.Namespace) -> bool:
@@ -302,28 +349,23 @@ def check_z_stroke(args: argparse.Namespace) -> bool:
 
     try:
         from gpiozero import PWMLED
-
-        from lerobot.robots.sourccey.sourccey.sourccey_z_actuator.sourccey_z_actuator import ZSensor
     except Exception as exc:  # noqa: BLE001
-        print(f"[z-stroke] FAIL  needs gpiozero + the Z sensor on the Pi: {exc}")
+        print(f"[z-stroke] FAIL  needs gpiozero on the Pi: {exc}")
         return False
 
-    pins = sourccey_dc_motors_config()
-    index = list(sourccey_dc_motors().keys()).index("linear_actuator")
-    in1_pin, in2_pin = pins["in1_pins"][index], pins["in2_pins"][index]
-    frequency = pins["pwm_frequency"]
+    index = DC_CHANNELS.index("linear_actuator")
+    in1_pin, in2_pin = DC_IN1_PINS[index], DC_IN2_PINS[index]
+    frequency = DC_PWM_FREQUENCY
 
-    sensor = ZSensor(adc_channel=args.z_adc_channel, average_samples=5)
+    # Few samples per read: the ADC is polled while the column is moving.
+    sensor = ZPotentiometer(args.z_adc_channel, samples=5)
     try:
         sensor.connect()
     except Exception as exc:  # noqa: BLE001
         print(f"[z-stroke] FAIL  the Z ADC did not respond, so motion cannot be verified: {exc}")
         return False
-    if not sensor.is_connected:
-        print("[z-stroke] FAIL  the Z ADC did not initialize, so motion cannot be verified")
-        return False
 
-    baseline = sensor.read_raw().raw
+    baseline = sensor.read()[0]
     print(f"[z-stroke] baseline ADC reading: {baseline}/1023")
 
     deltas: dict[str, int] = {}
@@ -335,7 +377,7 @@ def check_z_stroke(args: argparse.Namespace) -> bool:
             ("A", (in1_pin, in2_pin)),
             ("B", (in2_pin, in1_pin)),
         ):
-            start = sensor.read_raw().raw
+            start = sensor.read()[0]
             drive = idle = None
             try:
                 drive = PWMLED(drive_pin, frequency=frequency)
@@ -346,7 +388,7 @@ def check_z_stroke(args: argparse.Namespace) -> bool:
                 reading = start
                 while time.monotonic() < deadline:
                     time.sleep(0.05)
-                    reading = sensor.read_raw().raw
+                    reading = sensor.read()[0]
                     # A rail means an end stop: stop pushing into it.
                     if reading <= 2 or reading >= 1021:
                         print(f"[z-stroke] direction {label}: hit an end stop at {reading}, stopping")
@@ -360,12 +402,12 @@ def check_z_stroke(args: argparse.Namespace) -> bool:
                         except Exception:  # noqa: BLE001
                             pass
             time.sleep(0.4)  # let the column settle before reading
-            settled = sensor.read_raw().raw
+            settled = sensor.read()[0]
             deltas[label] = settled - start
             print(f"[z-stroke] direction {label}: {start} -> {settled} "
                   f"(delta {settled - start:+d} counts)")
     finally:
-        sensor.disconnect()
+        sensor.close()
 
     best = max(abs(d) for d in deltas.values()) if deltas else 0
     if best < args.z_min_delta:
@@ -396,7 +438,7 @@ def check_remote(args: argparse.Namespace) -> bool:
     except TimeoutError as exc:
         print(f"[remote] FAIL  {exc}")
         print("[remote]       start it on the Pi with: "
-              "uv run -m lerobot.robots.sourccey.sourccey.sourccey.sourccey_host")
+              "uv run sourccey-host")
         return False
 
     try:
@@ -448,9 +490,12 @@ def main() -> int:
         "--remote-seconds", type=float, default=2.0, help="Remote sampling window in seconds."
     )
 
-    defaults = SourcceyConfig(id="sourccey_check")
-    parser.add_argument("--left-port", default=defaults.left_arm_port, help="Left arm serial port.")
-    parser.add_argument("--right-port", default=defaults.right_arm_port, help="Right arm serial port.")
+    parser.add_argument(
+        "--left-port", default=DEFAULT_LEFT_ARM_PORT, help="Left arm serial port."
+    )
+    parser.add_argument(
+        "--right-port", default=DEFAULT_RIGHT_ARM_PORT, help="Right arm serial port."
+    )
     parser.add_argument("--skip-arms", action="store_true", help="Skip the arm servo roll-call.")
     parser.add_argument("--skip-wheels", action="store_true", help="Skip the DC driver check.")
     parser.add_argument("--skip-z", action="store_true", help="Skip the Z actuator ADC read.")
@@ -477,7 +522,7 @@ def main() -> int:
     parser.add_argument(
         "--z-duty",
         type=float,
-        default=defaults.z_minimum_up_command,
+        default=Z_MINIMUM_COMMAND,
         help="PWM duty for --z-stroke; below the configured minimum the column will not move.",
     )
     parser.add_argument("--z-seconds", type=float, default=1.0, help="Drive time per direction.")

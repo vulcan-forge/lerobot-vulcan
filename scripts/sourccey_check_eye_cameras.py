@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sourccey_check_common import build_parser, run_camera_check  # noqa: E402
 
-from lerobot.robots.sourccey.sourccey.sourccey.config_sourccey import (  # noqa: E402
+from lerobot_robot_sourccey.robots.sourccey.config_sourccey import (  # noqa: E402
     sourccey_cameras_config,
 )
 
