@@ -14,6 +14,14 @@ that:
     #    then checks it and prints its STABLE device path.
     uv run python scripts/sourccey_check_bottom_camera.py --identify
 
+    # ...and give it a permanent /dev/cameraBottom name like the other four
+    # (writes a udev rule keyed to its USB port; asks first, needs sudo)
+    uv run python scripts/sourccey_check_bottom_camera.py --identify --name-it
+
+    # audit every camera name: present, unique, unchanged, and reboot-proof.
+    # Changes nothing - run it any time, especially after a reboot.
+    uv run python scripts/sourccey_check_bottom_camera.py --verify-names
+
     # 2) auto - assumes the only USB camera that is not one of the four
     #    configured /dev/camera* devices is the bottom one.
     uv run python scripts/sourccey_check_bottom_camera.py
@@ -40,7 +48,9 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+import shlex
 import socket
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -463,6 +473,362 @@ def stream_check(device: str, args: argparse.Namespace) -> int:
     return 0
 
 
+DEFAULT_RULES_FILE = "/etc/udev/rules.d/99-sourccey-cameras.rules"
+
+
+def udev_rule_for(usb_port: str, symlink_name: str) -> str:
+    """The rule that gives this physical USB port a stable name.
+
+    Keyed on the PORT, not on the device's serial or vendor id, because all five
+    cameras are the same model - only where they are plugged in tells them apart.
+    """
+    return (
+        f'SUBSYSTEM=="video4linux", KERNELS=="{usb_port}", '
+        f'ATTR{{index}}=="0", SYMLINK+="{symlink_name}"'
+    )
+
+
+def find_existing_rules_file() -> str | None:
+    """Locate the rules file that already names the other four cameras."""
+    for path in sorted(glob.glob("/etc/udev/rules.d/*.rules")):
+        try:
+            with open(path) as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        if any(os.path.basename(link) in text for link in KNOWN_CAMERA_LINKS):
+            return path
+    return None
+
+
+def _run(command: list[str], *, input_text: str | None = None) -> tuple[int, str]:
+    """Run a command, returning (exit code, combined output)."""
+    try:
+        completed = subprocess.run(
+            command,
+            input=input_text,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        return 127, str(exc)
+    return completed.returncode, (completed.stdout + completed.stderr).strip()
+
+
+def _sudo(command: list[str]) -> list[str]:
+    """Prefix with sudo unless we are already root."""
+    return command if os.geteuid() == 0 else ["sudo", *command]
+
+
+def snapshot_camera_names(extra: tuple[str, ...] = ()) -> dict[str, tuple[str | None, str | None]]:
+    """Map every configured camera name to the (node, USB port) it resolves to.
+
+    The USB PORT is the identity that matters: /dev/videoN numbers are allowed to
+    shuffle when udev re-triggers, but a NAME that starts pointing at a different
+    physical port means the rules have been corrupted.
+    """
+    devices = {d.node: d for d in enumerate_devices()}
+    snapshot: dict[str, tuple[str | None, str | None]] = {}
+    for link in (*KNOWN_CAMERA_LINKS, *extra):
+        if not os.path.exists(link):
+            snapshot[link] = (None, None)
+            continue
+        node = os.path.realpath(link)
+        device = devices.get(node)
+        snapshot[link] = (node, device.usb_port if device else None)
+    return snapshot
+
+
+def report_naming_changes(
+    before: dict[str, tuple[str | None, str | None]],
+    after: dict[str, tuple[str | None, str | None]],
+) -> bool:
+    """Compare two name snapshots and complain about anything that moved."""
+    ok = True
+    for link in before:
+        old_node, old_port = before[link]
+        new_node, new_port = after.get(link, (None, None))
+        name = os.path.basename(link)
+
+        if old_node is not None and new_node is None:
+            print(f"[verify] FAIL  {name} EXISTED BEFORE and is gone now - the rules change "
+                  "broke an existing camera name")
+            ok = False
+        elif old_node is None and new_node is None:
+            print(f"[verify] ----  {name} absent before and after (not wired on this robot)")
+        elif old_port and new_port and old_port != new_port:
+            print(f"[verify] FAIL  {name} now points at USB port {new_port}, was {old_port} - "
+                  "two rules are fighting over the same name")
+            ok = False
+        elif old_node != new_node:
+            # Legitimate: the kernel can hand out a different node number after a
+            # re-trigger. The name still tracks the same physical port.
+            print(f"[verify] OK    {name} -> {new_node} (was {old_node}; same USB port "
+                  f"{new_port}, so the name still follows the right camera)")
+        else:
+            print(f"[verify] OK    {name} -> {new_node} unchanged (port {new_port})")
+    return ok
+
+
+def verify_rules_file_untouched(path: str, before_text: str, added: str) -> bool:
+    """Confirm the append added our lines and changed nothing else."""
+    try:
+        with open(path) as handle:
+            after_text = handle.read()
+    except OSError as exc:
+        print(f"[verify] FAIL  cannot re-read {path}: {exc}")
+        return False
+
+    if not after_text.startswith(before_text):
+        print(f"[verify] FAIL  the existing contents of {path} changed - this should have been "
+              "an append only")
+        print(f"[verify]       restore it from {path}.bak and investigate before rebooting")
+        return False
+    delta = after_text[len(before_text):]
+    if delta != added:
+        print(f"[verify] FAIL  {path} gained unexpected content:")
+        print(f"[verify]       expected: {added!r}")
+        print(f"[verify]       found:    {delta!r}")
+        return False
+
+    print(f"[verify] OK    {path}: every pre-existing line is byte-for-byte unchanged")
+    print(f"[verify] OK    only the {len(added.strip().splitlines())} expected line(s) were added")
+    return True
+
+
+def verify_persistence(symlink: str, node: str, rules_file: str) -> bool:
+    """Confirm the new name survives a reboot, rather than being a live-only link.
+
+    Three independent signals, because "it works right now" is exactly what a
+    temporary hand-made symlink also looks like:
+      1. the rule lives in a persistent rules directory, not a tmpfs one;
+      2. udev's own database lists the symlink for this device (so udev created
+         it from a rule - a manual `ln -s` would not appear);
+      3. replaying the device event reproduces the symlink, which is what will
+         happen on the next boot.
+    """
+    print("[verify] ---- will this name survive a reboot? ----")
+    ok = True
+
+    real_rules = os.path.realpath(rules_file)
+    if real_rules.startswith(("/run/", "/tmp/", "/var/run/")):
+        print(f"[verify] FAIL  {real_rules} is on a volatile filesystem - the rule will be GONE "
+              "after a power cycle")
+        print("[verify]       re-run with --rules-file /etc/udev/rules.d/99-sourccey-cameras.rules")
+        ok = False
+    elif not real_rules.startswith("/etc/udev/rules.d/"):
+        print(f"[verify] WARN  {real_rules} is outside /etc/udev/rules.d - udev may not read it")
+        print("[verify]       (persistent rules normally live there; /lib and /usr/lib are for "
+              "packages)")
+    else:
+        print(f"[verify] OK    the rule is in {real_rules}, which persists across reboots")
+
+    if not real_rules.endswith(".rules"):
+        print(f"[verify] FAIL  udev only reads files ending in .rules - {real_rules} will be "
+              "ignored on boot")
+        ok = False
+
+    # 2. Ask udev's database what symlinks it owns for this device.
+    code, output = _run(["udevadm", "info", "--query=symlink", f"--name={node}"])
+    if code != 0:
+        print(f"[verify] WARN  could not query udev for {node}: {output}")
+    else:
+        links = output.split()
+        if any(link == symlink or link.endswith(f"/{symlink}") for link in links):
+            print(f"[verify] OK    udev's database lists '{symlink}' for {node}, so udev created "
+                  "it from a rule (not a manual symlink)")
+        else:
+            print(f"[verify] FAIL  udev does not list '{symlink}' among {node}'s symlinks: "
+                  f"{links or '(none)'}")
+            print("[verify]       the /dev entry may be a leftover that will NOT come back on boot")
+            ok = False
+
+    # 3. Replay the event the way boot will.
+    syspath = os.path.join(V4L_SYSFS, os.path.basename(node))
+    code, output = _run(_sudo(["udevadm", "test", syspath]))
+    if code != 0:
+        print(f"[verify] WARN  `udevadm test {syspath}` did not run cleanly; skipping the "
+              "replay check")
+    elif symlink in output:
+        print(f"[verify] OK    replaying the device event recreates '{symlink}' - the next boot "
+              "will too")
+    else:
+        print(f"[verify] FAIL  replaying the device event did NOT produce '{symlink}'")
+        print("[verify]       the rule is not matching; the name will disappear on reboot")
+        ok = False
+
+    return ok
+
+
+def verify_naming(args: argparse.Namespace) -> bool:
+    """Standalone audit: are all the camera names present, correct, and permanent?"""
+    print("[verify] ---- camera naming audit ----")
+    names = (*KNOWN_CAMERA_LINKS, f"/dev/{args.symlink_name}")
+    snapshot = snapshot_camera_names((f"/dev/{args.symlink_name}",))
+
+    ok = True
+    seen_ports: dict[str, str] = {}
+    for link in names:
+        node, port = snapshot.get(link, (None, None))
+        name = os.path.basename(link)
+        if node is None:
+            level = "WARN" if link.endswith(args.symlink_name) else "FAIL"
+            print(f"[verify] {level}  {name} does not exist")
+            ok = ok and level == "WARN"
+            continue
+        # Two names on one port means a duplicated rule, which is how "it worked
+        # yesterday" turns into a camera swap after a reboot.
+        if port and port in seen_ports:
+            print(f"[verify] FAIL  {name} and {seen_ports[port]} both point at USB port {port}")
+            ok = False
+        elif port:
+            seen_ports[port] = name
+        print(f"[verify] OK    {name} -> {node} (port {port or 'unknown'})")
+
+    rules_file = args.rules_file or find_existing_rules_file()
+    if rules_file is None:
+        print("[verify] WARN  no udev rules file naming these cameras was found; the names may "
+              "come from somewhere else entirely")
+        return ok
+
+    target = f"/dev/{args.symlink_name}"
+    if os.path.exists(target):
+        ok = verify_persistence(args.symlink_name, os.path.realpath(target), rules_file) and ok
+    return ok
+
+
+def install_udev_rule(device: VideoDevice, args: argparse.Namespace) -> bool:
+    """Give the identified camera a stable /dev/<name>, like the other four."""
+    print()
+    print("[udev] ---- naming this camera ----")
+    if not device.usb_port:
+        print("[udev] FAIL  this device has no USB port path, so it cannot be named by port")
+        return False
+
+    symlink = args.symlink_name
+    rule = udev_rule_for(device.usb_port, symlink)
+    rules_file = args.rules_file or find_existing_rules_file() or DEFAULT_RULES_FILE
+
+    existing_text = ""
+    if os.path.exists(rules_file):
+        try:
+            with open(rules_file) as handle:
+                existing_text = handle.read()
+        except OSError as exc:
+            print(f"[udev] FAIL  cannot read {rules_file}: {exc}")
+            return False
+
+    if existing_text:
+        camera_rules = [
+            line for line in existing_text.splitlines()
+            if "video4linux" in line and "SYMLINK" in line
+        ]
+        if camera_rules:
+            print(f"[udev] existing camera rules in {rules_file}:")
+            for line in camera_rules:
+                print(f"[udev]   {line.strip()}")
+
+    if f'SYMLINK+="{symlink}"' in existing_text:
+        if rule in existing_text.replace("  ", " "):
+            print(f"[udev] a rule for {symlink} on port {device.usb_port} is already present")
+            return verify_symlink(symlink, device, args)
+        print(f"[udev] FAIL  {rules_file} already has a rule for {symlink}, but for a "
+              "different port")
+        print("[udev]       edit or remove that line by hand, then re-run - this script will "
+              "not rewrite existing rules")
+        return False
+
+    print()
+    print(f"[udev] will append to {rules_file}:")
+    print(f"[udev]   {rule}")
+    print("[udev] then reload udev and confirm the name appears.")
+    if input("[udev] Type 'yes' to write it: ").strip().lower() != "yes":
+        print("[udev] skipped - nothing was written")
+        return True
+
+    # Record where every existing camera name points BEFORE touching anything, so
+    # the after-state can be compared against it rather than merely eyeballed.
+    names_before = snapshot_camera_names((f"/dev/{symlink}",))
+    print("[udev] recorded the current camera names for comparison afterwards")
+
+    # Back up before touching a system file, even for an append.
+    if os.path.exists(rules_file):
+        backup = f"{rules_file}.bak"
+        code, output = _run(_sudo(["cp", "-n", rules_file, backup]))
+        if code == 0:
+            print(f"[udev] backed up {rules_file} -> {backup}")
+        else:
+            print(f"[udev] WARN  could not back up {rules_file}: {output}")
+
+    # `tee -a` rather than a Python write, so sudo can own the privileged part.
+    header = "" if existing_text.endswith("\n") or not existing_text else "\n"
+    addition = (
+        f"{header}# Sourccey bottom camera (added by sourccey_check_bottom_camera.py)\n{rule}\n"
+    )
+    code, output = _run(_sudo(["tee", "-a", rules_file]), input_text=addition)
+    if code != 0:
+        print(f"[udev] FAIL  could not write {rules_file}: {output}")
+        print(f"[udev]       add it by hand: echo {shlex.quote(rule)} | sudo tee -a {rules_file}")
+        return False
+    print(f"[udev] wrote the rule to {rules_file}")
+
+    for command in (
+        ["udevadm", "control", "--reload-rules"],
+        ["udevadm", "trigger", "--subsystem-match=video4linux"],
+    ):
+        code, output = _run(_sudo(command))
+        if code != 0:
+            print(f"[udev] FAIL  `{' '.join(command)}` failed: {output}")
+            return False
+    print("[udev] reloaded udev rules")
+
+    if not verify_symlink(symlink, device, args):
+        return False
+
+    # Everything below answers "did anything ELSE change, and will this survive a
+    # power cycle" - the two questions a working /dev entry cannot answer by itself.
+    print()
+    print("[verify] ---- checking nothing else moved ----")
+    ok = verify_rules_file_untouched(rules_file, existing_text, addition)
+    ok = report_naming_changes(names_before, snapshot_camera_names((f"/dev/{symlink}",))) and ok
+    print()
+    ok = verify_persistence(symlink, os.path.realpath(f"/dev/{symlink}"), rules_file) and ok
+
+    print()
+    if ok:
+        print("[verify] PASS  all camera names are intact and permanent")
+        print("[verify]       (re-run with --verify-names any time, including after a reboot)")
+    else:
+        print("[verify] FAIL  something is not right - see the lines above")
+        print(f"[verify]       the previous rules file is saved as {rules_file}.bak")
+        print("[verify]       resolve this BEFORE rebooting the robot")
+    return ok
+
+
+def verify_symlink(symlink: str, device: VideoDevice, args: argparse.Namespace) -> bool:
+    """Confirm /dev/<name> now exists and points at the right camera."""
+    path = f"/dev/{symlink}"
+    deadline = time.monotonic() + args.settle_seconds
+    while time.monotonic() < deadline:
+        if os.path.exists(path):
+            target = os.path.realpath(path)
+            match = next((d for d in enumerate_devices() if d.node == target), None)
+            if match is not None and match.usb_port == device.usb_port:
+                print(f"[udev] PASS  {path} -> {target} (port {match.usb_port})")
+                print(f"[udev]       use index_or_path=\"{path}\" in sourccey_cameras_config()")
+                return True
+            print(f"[udev] FAIL  {path} exists but points at {target}, which is not the "
+                  f"camera on port {device.usb_port}")
+            return False
+        time.sleep(0.3)
+
+    print(f"[udev] FAIL  {path} did not appear within {args.settle_seconds:.0f}s")
+    print("[udev]       the rule is written; try re-plugging the camera, or reboot the Pi")
+    print(f"[udev]       and check with: udevadm info --name={device.node} | head -20")
+    return False
+
+
 def print_wiring_hints(device: VideoDevice | None, node: str) -> None:
     """Tell the operator exactly what to put in the config when they wire it up."""
     print()
@@ -477,13 +843,11 @@ def print_wiring_hints(device: VideoDevice | None, node: str) -> None:
     print(f"[bottom] index_or_path=\"{device.stable_path}\"")
     print("[bottom]       (stable across re-plug, unlike the /dev/videoN number)")
     if device.usb_port:
+        rules_file = find_existing_rules_file() or DEFAULT_RULES_FILE
         print()
-        print("[bottom] or give it a name like the other four, with a udev rule in")
-        print("[bottom] /etc/udev/rules.d/99-sourccey-cameras.rules:")
-        print(f"[bottom]   SUBSYSTEM==\"video4linux\", KERNELS==\"{device.usb_port}\", "
-              "ATTR{index}==\"0\", SYMLINK+=\"cameraBottom\"")
-        print("[bottom] then: sudo udevadm control --reload-rules && sudo udevadm trigger")
-        print("[bottom] and use index_or_path=\"/dev/cameraBottom\"")
+        print("[bottom] or give it a name like the other four - re-run with --name-it to have")
+        print(f"[bottom] this rule written to {rules_file} for you:")
+        print(f"[bottom]   {udev_rule_for(device.usb_port, 'cameraBottom')}")
 
 
 def main() -> int:
@@ -501,6 +865,27 @@ def main() -> int:
         help="V4L2 device to check (e.g. /dev/video8). Omit to auto-detect.",
     )
     parser.add_argument("--list", action="store_true", help="Only list USB cameras, then exit.")
+    parser.add_argument(
+        "--name-it",
+        action="store_true",
+        help="Install a udev rule so this camera gets a stable /dev name (asks first, needs sudo).",
+    )
+    parser.add_argument(
+        "--verify-names",
+        action="store_true",
+        help="Audit all camera names (present, unique, permanent) and exit. Safe to re-run "
+             "after a reboot; changes nothing.",
+    )
+    parser.add_argument(
+        "--symlink-name",
+        default="cameraBottom",
+        help="Name to give it under /dev (default: cameraBottom, matching the other four).",
+    )
+    parser.add_argument(
+        "--rules-file",
+        default=None,
+        help="udev rules file to append to; default is whichever file already names the cameras.",
+    )
     parser.add_argument(
         "--settle-seconds",
         type=float,
@@ -543,6 +928,9 @@ def main() -> int:
         print_inventory()
         return 0
 
+    if args.verify_names:
+        return 0 if verify_naming(args) else 1
+
     print("[bottom] ---- bottom camera check ----")
     device_info: VideoDevice | None = None
 
@@ -579,9 +967,20 @@ def main() -> int:
 
     print(f"[bottom] checking {node}")
     result = stream_check(node, args)
-    if result == 0:
-        print_wiring_hints(device_info, node)
-    return result
+    if result != 0:
+        return result
+
+    if args.name_it:
+        if device_info is None:
+            print()
+            print("[udev] FAIL  cannot name this device: it is not a USB camera node")
+            return 1
+        # A camera that failed its stream check is not one to bless with a name,
+        # which is why this runs only after the check passed.
+        return 0 if install_udev_rule(device_info, args) else 1
+
+    print_wiring_hints(device_info, node)
+    return 0
 
 
 if __name__ == "__main__":
