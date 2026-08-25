@@ -2813,9 +2813,6 @@ smolvla = [
     { name = "num2words" },
     { name = "transformers" },
 ]
-sourccey = [
-    { name = "lerobot-robot-sourccey", extra = ["desktop", "robot"] },
-]
 sourccey-desktop = [
     { name = "lerobot-robot-sourccey", extra = ["desktop"] },
 ]
@@ -3030,9 +3027,8 @@ requires-dist = [
     { name = "lerobot", extras = ["vla-jepa"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["wallx"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["xvla"], marker = "extra == 'all'" },
-    { name = "lerobot-robot-sourccey", extras = ["desktop"], marker = "extra == 'sourccey-desktop'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.3" },
-    { name = "lerobot-robot-sourccey", extras = ["robot"], marker = "extra == 'sourccey-robot'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.3" },
-    { name = "lerobot-robot-sourccey", extras = ["robot", "desktop"], marker = "extra == 'sourccey'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.3" },
+    { name = "lerobot-robot-sourccey", extras = ["desktop"], marker = "extra == 'sourccey-desktop'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.4.dev2" },
+    { name = "lerobot-robot-sourccey", extras = ["robot"], marker = "extra == 'sourccey-robot'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.4.dev2" },
     { name = "matplotlib", marker = "extra == 'matplotlib-dep'", specifier = ">=3.10.3,<4.0.0" },
     { name = "meshcat", marker = "extra == 'unitree-g1'", specifier = ">=0.3.0,<0.4.0" },
     { name = "metaworld", marker = "extra == 'metaworld'", specifier = "==3.0.0" },
@@ -3093,12 +3089,12 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'transformers-dep'", specifier = ">=5.4.0,<5.6.0" },
     { name = "wandb", marker = "extra == 'training'", specifier = ">=0.24.0,<0.25.0" },
 ]
-provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "transformers-dep", "grpcio-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "motorbridge-dep", "motorbridge-smart-servo-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "sourccey", "sourccey-robot", "sourccey-desktop", "rebot", "kinematics", "intelrealsense", "phone", "diffusion", "wallx", "pi", "molmoact2", "smolvla", "multi-task-dit", "groot", "sarm", "robometer", "topreward", "xvla", "eo1", "hilserl", "vla-jepa", "async", "peft", "dev", "notebook", "test", "video-benchmark", "mujoco-dep", "aloha", "pusht", "libero", "metaworld", "all"]
+provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "transformers-dep", "grpcio-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "motorbridge-dep", "motorbridge-smart-servo-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "sourccey-robot", "sourccey-desktop", "rebot", "kinematics", "intelrealsense", "phone", "diffusion", "wallx", "pi", "molmoact2", "smolvla", "multi-task-dit", "groot", "sarm", "robometer", "topreward", "xvla", "eo1", "hilserl", "vla-jepa", "async", "peft", "dev", "notebook", "test", "video-benchmark", "mujoco-dep", "aloha", "pusht", "libero", "metaworld", "all"]
 
 [[package]]
 name = "lerobot-robot-sourccey"
-version = "0.2.3"
-source = { git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.3#d501d2bd683defab4f772d6948d1baba5c255b7b" }
+version = "0.2.4.dev2"
+source = { git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.4.dev2#2625a5dbe2eab37f19918aa7db969b87ba13ce07" }
 dependencies = [
     { name = "lerobot", extra = ["feetech"] },
     { name = "numpy" },
