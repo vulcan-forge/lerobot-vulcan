@@ -3027,8 +3027,17 @@ requires-dist = [
     { name = "lerobot", extras = ["vla-jepa"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["wallx"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["xvla"], marker = "extra == 'all'" },
+<<<<<<< HEAD
     { name = "lerobot-robot-sourccey", extras = ["desktop"], marker = "extra == 'sourccey-desktop'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.3" },
     { name = "lerobot-robot-sourccey", extras = ["robot"], marker = "extra == 'sourccey-robot'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.3" },
+||||||| 89a2dbe0f
+    { name = "lerobot-robot-sourccey", extras = ["desktop"], marker = "extra == 'sourccey-desktop'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.3" },
+    { name = "lerobot-robot-sourccey", extras = ["robot"], marker = "extra == 'sourccey-robot'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.3" },
+    { name = "lerobot-robot-sourccey", extras = ["robot", "desktop"], marker = "extra == 'sourccey'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.3" },
+=======
+    { name = "lerobot-robot-sourccey", extras = ["desktop"], marker = "extra == 'sourccey-desktop'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.4.dev2" },
+    { name = "lerobot-robot-sourccey", extras = ["robot"], marker = "extra == 'sourccey-robot'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.4.dev2" },
+>>>>>>> dc159ab1cea701e1d61011125719d06a501f04ac
     { name = "matplotlib", marker = "extra == 'matplotlib-dep'", specifier = ">=3.10.3,<4.0.0" },
     { name = "meshcat", marker = "extra == 'unitree-g1'", specifier = ">=0.3.0,<0.4.0" },
     { name = "metaworld", marker = "extra == 'metaworld'", specifier = "==3.0.0" },
@@ -3093,8 +3102,8 @@ provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "ev
 
 [[package]]
 name = "lerobot-robot-sourccey"
-version = "0.2.3"
-source = { git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.3#d501d2bd683defab4f772d6948d1baba5c255b7b" }
+version = "0.2.4.dev2"
+source = { git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.4.dev2#2625a5dbe2eab37f19918aa7db969b87ba13ce07" }
 dependencies = [
     { name = "lerobot", extra = ["feetech"] },
     { name = "numpy" },
