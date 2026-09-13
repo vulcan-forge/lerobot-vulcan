@@ -97,6 +97,8 @@ from lerobot.cameras.reachy2_camera import Reachy2CameraConfig  # noqa: F401
 from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
 from lerobot.cameras.zmq import ZMQCameraConfig  # noqa: F401
 from lerobot.common.control_utils import (
+    connect_keyboard,
+    connect_teleop,
     init_keyboard_listener,
     is_headless,
     sanity_check_dataset_robot_compatibility,
@@ -192,30 +194,6 @@ class RecordConfig:
                 "Use --teleop.type=... to specify one. "
                 "For policy-based deployment, use lerobot-rollout instead."
             )
-
-
-def connect_keyboard(teleop_keyboard: KeyboardTeleop) -> bool:
-    try:
-        teleop_keyboard.connect()
-        return True
-    except Exception as exc:
-        logging.warning(
-            "Keyboard teleop connect failed (%s). Continuing without keyboard base control.",
-            exc,
-        )
-        return False
-
-
-def connect_teleop(teleop: Teleoperator) -> bool:
-    try:
-        teleop.connect()
-        return True
-    except Exception as exc:
-        logging.warning(
-            "Teleop connect failed (%s). Continuing with disconnected default actions.",
-            exc,
-        )
-        return False
 
 
 def _get_keyboard_base_action(
@@ -454,6 +432,8 @@ def record(
 
     dataset = None
     listener = None
+    teleop_connected = False
+    robot_connected = False
     keyboard_connected = False
 
     try:
@@ -498,10 +478,11 @@ def record(
                 encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
             )
 
-        robot.connect()
         if teleop is not None:
-            connect_teleop(teleop)
+            teleop_connected = connect_teleop(teleop)
         keyboard_connected = connect_keyboard(teleop_keyboard) if teleop_keyboard is not None else False
+        robot.connect()
+        robot_connected = True
 
         uses_focused_keyboard = bool(
             teleop_keyboard is not None and teleop_keyboard.config.input_state_path
@@ -569,9 +550,9 @@ def record(
         if dataset:
             dataset.finalize()
 
-        if robot.is_connected:
+        if robot_connected and robot.is_connected:
             robot.disconnect()
-        if teleop and teleop.is_connected:
+        if teleop_connected and teleop is not None and teleop.is_connected:
             teleop.disconnect()
         if keyboard_connected and teleop_keyboard is not None and teleop_keyboard.is_connected:
             teleop_keyboard.disconnect()

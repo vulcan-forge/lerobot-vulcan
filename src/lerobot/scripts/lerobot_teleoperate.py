@@ -61,6 +61,7 @@ from pprint import pformat
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
 from lerobot.cameras.zmq import ZMQCameraConfig  # noqa: F401
+from lerobot.common.control_utils import connect_keyboard, connect_teleop
 from lerobot.configs import parser
 from lerobot.processor import (
     RobotAction,
@@ -134,47 +135,6 @@ class TeleoperateConfig:
     # the teleoperator can still provide a safe default action while disconnected.
     allow_default_action_fallback_on_teleop_connect_error: bool = True
 
-
-"""
-Teleoperator and Keyboard connection Helpers
-"""
-def connect_teleop(
-    teleop: Teleoperator,
-) -> bool:
-    """
-    Try connecting the teleoperator.
-
-    Returns:
-        bool: True if teleop connected, False if we intentionally fall back to
-        disconnected default actions.
-    """
-    try:
-        teleop.connect()
-        return True
-    except Exception as exc:
-        logging.warning(
-            "Teleop connect failed (%s). Continuing with disconnected default actions.",
-            exc,
-        )
-        return False
-
-def connect_keyboard(teleop_keyboard: KeyboardTeleop) -> bool:
-    """
-    Try connecting the keyboard teleoperator.
-
-    Returns:
-        bool: True if keyboard teleop connected, False if we intentionally fall back to
-        disconnected default actions.
-    """
-    try:
-        teleop_keyboard.connect()
-        return True
-    except Exception as exc:
-        logging.warning(
-            "Keyboard teleop connect failed (%s). Continuing without keyboard base control.",
-            exc,
-        )
-        return False
 
 def _get_keyboard_base_action(
     robot: Robot, obs: RobotObservation, teleop_keyboard: KeyboardTeleop | None
@@ -332,8 +292,12 @@ def teleoperate(cfg: TeleoperateConfig):
     finally:
         if cfg.display_data:
             shutdown_rerun()
-        teleop.disconnect()
-        robot.disconnect()
+        if teleop_connected and teleop.is_connected:
+            teleop.disconnect()
+        if keyboard_connected and teleop_keyboard is not None and teleop_keyboard.is_connected:
+            teleop_keyboard.disconnect()
+        if robot_connected and robot.is_connected:
+            robot.disconnect()
 
 
 def main():
