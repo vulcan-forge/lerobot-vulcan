@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from lerobot.scripts.lerobot_record import connect_teleop
+from lerobot.common.control_utils import connect_teleop
 
 
 class _DummyTeleop:

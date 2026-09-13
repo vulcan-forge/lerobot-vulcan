@@ -38,9 +38,37 @@ else:
 
 if TYPE_CHECKING:
     from lerobot.datasets import LeRobotDataset
+    from lerobot.teleoperators.keyboard import KeyboardTeleop
+    from lerobot.teleoperators.teleoperator import Teleoperator
 from lerobot.processor import PolicyProcessorPipeline
 from lerobot.robots import Robot
 from lerobot.types import PolicyAction
+
+
+def connect_teleop(teleop: Teleoperator) -> bool:
+    """Connect a teleoperator, falling back to its disconnected default actions."""
+    try:
+        teleop.connect()
+        return True
+    except Exception as exc:
+        logging.warning(
+            "Teleop connect failed (%s). Continuing with disconnected default actions.",
+            exc,
+        )
+        return False
+
+
+def connect_keyboard(teleop_keyboard: KeyboardTeleop) -> bool:
+    """Connect a keyboard teleoperator, or continue without keyboard control."""
+    try:
+        teleop_keyboard.connect()
+        return True
+    except Exception as exc:
+        logging.warning(
+            "Keyboard teleop connect failed (%s). Continuing without keyboard base control.",
+            exc,
+        )
+        return False
 
 
 @cache
