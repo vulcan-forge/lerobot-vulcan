@@ -86,6 +86,33 @@ def get_safe_dtype(dtype: torch.dtype, device: str | torch.device):
         return dtype
 
 
+def is_native_bfloat16_supported(device: str | torch.device) -> bool:
+    """Return whether a CUDA device has native BF16 tensor-core support.
+
+    ``torch.cuda.is_bf16_supported`` may return true when BF16 operations are
+    emulated on older GPUs. Policies need native support here because vision
+    backbones rely on cuDNN kernels that are not consistently available through
+    that emulation path. Native CUDA BF16 starts with compute capability 8.0.
+    """
+    device = torch.device(device)
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return False
+
+    try:
+        major, _minor = torch.cuda.get_device_capability(device)
+        runtime_supports_bfloat16 = torch.cuda.is_bf16_supported()
+    except (AssertionError, RuntimeError):
+        return False
+    return major >= 8 and runtime_supports_bfloat16
+
+
+def get_compatible_policy_dtype(requested_dtype: str, device: str | torch.device) -> str:
+    """Keep the requested policy dtype unless BF16 needs an FP32 fallback."""
+    if requested_dtype != "bfloat16":
+        return requested_dtype
+    return "bfloat16" if is_native_bfloat16_supported(device) else "float32"
+
+
 def is_torch_device_available(try_device: str) -> bool:
     try_device = str(try_device)  # Ensure try_device is a string
     if try_device.startswith("cuda"):
