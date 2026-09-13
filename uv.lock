@@ -3093,8 +3093,8 @@ provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "ev
 
 [[package]]
 name = "lerobot-robot-sourccey"
-version = "0.2.4.dev2"
-source = { git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.4.dev2#2625a5dbe2eab37f19918aa7db969b87ba13ce07" }
+version = "0.2.4.dev4"
+source = { git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.4.dev5#a3665173b5da28d53af567fb794b7cc457a635bd" }
 dependencies = [
     { name = "lerobot", extra = ["feetech"] },
     { name = "numpy" },
