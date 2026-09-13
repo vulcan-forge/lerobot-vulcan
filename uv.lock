@@ -3027,8 +3027,8 @@ requires-dist = [
     { name = "lerobot", extras = ["vla-jepa"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["wallx"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["xvla"], marker = "extra == 'all'" },
-    { name = "lerobot-robot-sourccey", extras = ["desktop"], marker = "extra == 'sourccey-desktop'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.4.dev7" },
-    { name = "lerobot-robot-sourccey", extras = ["robot"], marker = "extra == 'sourccey-robot'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.4.dev7" },
+    { name = "lerobot-robot-sourccey", extras = ["desktop"], marker = "extra == 'sourccey-desktop'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?tag=0.2.4.dev8" },
+    { name = "lerobot-robot-sourccey", extras = ["robot"], marker = "extra == 'sourccey-robot'", git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?tag=0.2.4.dev8" },
     { name = "matplotlib", marker = "extra == 'matplotlib-dep'", specifier = ">=3.10.3,<4.0.0" },
     { name = "meshcat", marker = "extra == 'unitree-g1'", specifier = ">=0.3.0,<0.4.0" },
     { name = "metaworld", marker = "extra == 'metaworld'", specifier = "==3.0.0" },
@@ -3093,8 +3093,8 @@ provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "ev
 
 [[package]]
 name = "lerobot-robot-sourccey"
-version = "0.2.4.dev7"
-source = { git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?rev=0.2.4.dev7#9bf2d834566210f8b62c2dcefe8b86eba50fd65f" }
+version = "0.2.4.dev8"
+source = { git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git?tag=0.2.4.dev8#f1cce5069e8fbc6333a37274ab259c3b76b1fb06" }
 dependencies = [
     { name = "lerobot", extra = ["feetech"] },
     { name = "numpy" },
