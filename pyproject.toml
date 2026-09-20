@@ -355,7 +355,7 @@ torchvision = [
 # Local development: use the editable sibling checkout.
 # lerobot-robot-sourccey = { path = "../packages/lerobot-robot-sourccey", editable = true }
 # Tagged release alternative (comment the local source above before enabling):
-lerobot-robot-sourccey = { git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git", tag = "0.2.4.dev8" }
+lerobot-robot-sourccey = { git = "https://github.com/vulcan-forge/lerobot-robot-sourccey.git", tag = "0.2.4.dev10" }
 
 [tool.setuptools.package-data]
 lerobot = ["envs/*.json"]
