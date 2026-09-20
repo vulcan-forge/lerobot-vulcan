@@ -46,6 +46,7 @@ from lerobot.processor import (
 from lerobot.processor.relative_action_processor import RelativeActionsProcessorStep
 from lerobot.robots import make_robot_from_config
 from lerobot.teleoperators import Teleoperator, make_teleoperator_from_config
+from lerobot.utils.device_utils import get_compatible_policy_dtype
 from lerobot.utils.feature_utils import combine_feature_dicts, hw_to_dataset_features
 
 from .configs import BaseStrategyConfig, DAggerStrategyConfig, RolloutConfig
@@ -176,6 +177,18 @@ def build_rollout_context(
     # --- 1. Policy (heavy I/O, but no hardware yet) -------------------
     logger.info("Loading policy from '%s'...", cfg.policy.pretrained_path)
     policy_config = cfg.policy
+    if hasattr(policy_config, "dtype"):
+        requested_dtype = policy_config.dtype
+        compatible_dtype = get_compatible_policy_dtype(requested_dtype, cfg.device)
+        if compatible_dtype != requested_dtype:
+            logger.warning(
+                "Policy requested %s on %s, but the active device does not provide native BF16 support. "
+                "Falling back to %s for this run.",
+                requested_dtype,
+                cfg.device,
+                compatible_dtype,
+            )
+            policy_config.dtype = compatible_dtype
     policy_class = get_policy_class(policy_config.type)
 
     if hasattr(policy_config, "compile_model"):

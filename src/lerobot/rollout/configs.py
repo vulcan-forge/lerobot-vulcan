@@ -235,6 +235,9 @@ class RolloutConfig:
     # Use vocal synthesis to read events
     play_sounds: bool = True
     resume: bool = False
+    # Optional cross-platform sentinel watched by the rollout process. Creating
+    # this file requests an orderly shutdown so datasets can be saved/finalized.
+    shutdown_event_path: str | None = None
     # Rename map for mapping robot/dataset observation keys to policy keys
     rename_map: dict[str, str] = field(default_factory=dict)
 

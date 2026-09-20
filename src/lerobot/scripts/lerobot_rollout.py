@@ -148,6 +148,8 @@ Usage examples
 """
 
 import logging
+from pathlib import Path
+from threading import Thread
 
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
@@ -194,6 +196,16 @@ from lerobot.utils.visualization_utils import init_rerun
 logger = logging.getLogger(__name__)
 
 
+def _watch_shutdown_file(path: str, shutdown_event) -> None:
+    """Translate a cross-platform stop-file request into the normal shutdown event."""
+    stop_path = Path(path)
+    while not shutdown_event.wait(0.1):
+        if stop_path.is_file():
+            logger.info("External rollout stop requested; finishing the active episode and finalizing data.")
+            shutdown_event.set()
+            return
+
+
 @parser.wrap()
 def rollout(cfg: RolloutConfig):
     """Main entry point for policy deployment."""
@@ -205,6 +217,13 @@ def rollout(cfg: RolloutConfig):
 
     signal_handler = ProcessSignalHandler(use_threads=True, display_pid=False)
     shutdown_event = signal_handler.shutdown_event
+    if cfg.shutdown_event_path:
+        Thread(
+            target=_watch_shutdown_file,
+            args=(cfg.shutdown_event_path, shutdown_event),
+            name="rollout-stop-file-watcher",
+            daemon=True,
+        ).start()
 
     logger.info("Building rollout context...")
     ctx = build_rollout_context(cfg, shutdown_event)
