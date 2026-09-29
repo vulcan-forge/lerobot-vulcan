@@ -429,6 +429,15 @@ def test_set_half_turn_homings(mock_motors, dummy_motors):
     assert all(mock_motors.stubs[stub].wait_called() for stub in write_homing_stubs)
 
 
+def test_get_half_turn_homings_handles_encoder_wrap_boundary(mock_motors, dummy_motors):
+    bus = FeetechMotorsBus(port=mock_motors.port, motors=dummy_motors)
+
+    homings = bus._get_half_turn_homings({"dummy_1": 4095})
+
+    assert homings == {"dummy_1": 2047}
+    assert encode_sign_magnitude(homings["dummy_1"], 11) == 2047
+
+
 @pytest.mark.parametrize(
     "initial_phase, expected_phase",
     [

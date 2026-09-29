@@ -286,8 +286,20 @@ class FeetechMotorsBus(SerialMotorsBus):
         for motor, pos in positions.items():
             model = self._get_motor_model(motor)
             max_res = self.model_resolution_table[model] - 1
-            mid = int(max_res / 2)
-            half_turn_homings[motor] = pos - mid
+            encoder_range = max_res + 1
+            mid = max_res // 2
+            offset = (pos - mid) % encoder_range
+
+            # Feetech stores Homing_Offset as sign-magnitude. For a 12-bit
+            # encoder that makes +/-2048 unrepresentable even though 4095 is a
+            # valid encoder position. Choose the nearest representable offset
+            # at that single wrap boundary (one encoder count from ideal).
+            if offset > mid:
+                offset -= encoder_range
+            if offset == -(mid + 1):
+                offset = mid
+
+            half_turn_homings[motor] = offset
 
         return half_turn_homings
 
