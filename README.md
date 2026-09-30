@@ -17,6 +17,11 @@
 
 **LeRobot** aims to provide models, datasets, and tools for real-world robotics in PyTorch. The goal is to lower the barrier to entry so that everyone can contribute to and benefit from shared datasets and pretrained models.
 
+> [!TIP]
+> **Using `lerobot-vulcan` with Sourccey?** Start with the
+> [Sourccey getting-started guide](./docs/sourccey/README.md). It covers setup,
+> teleoperation, recording, training, and policy rollout in one ordered path.
+
 🤗 A hardware-agnostic, Python-native interface that standardizes control across diverse platforms, from low-cost arms (SO-100) to humanoids.
 
 🤗 A standardized, scalable LeRobotDataset format (Parquet + MP4 or images) hosted on the Hugging Face Hub, enabling efficient storage, streaming and visualization of massive robotic datasets.

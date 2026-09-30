@@ -130,7 +130,7 @@ Shared plumbing lives in `scripts/sourccey_check_common.py` (PC-side, ZMQ + prot
 ### Which checks need the Sourccey package
 
 The robot code now ships as the separate **`lerobot-robot-sourccey`** package (installed by
-`uv sync --extra sourccey`; it registers itself through LeRobot's `lerobot_robot_*` plugin
+`uv sync --locked --extra sourccey-robot`; it registers itself through LeRobot's `lerobot_robot_*` plugin
 discovery). Imports live under `lerobot_robot_sourccey.robots.*` — the old
 `lerobot.robots.sourccey.sourccey.*` paths are gone.
 
@@ -528,7 +528,7 @@ Any non-zero exit code means something on that list is not working.
 | `--z-stroke`: moved, but not in both directions | One direction is blocked, at an end stop, or miswired at the H-bridge. |
 | `no such serial device: /dev/ttyUSB0` | Run `ls -l /dev/ttyUSB* /dev/ttyACM*` and pass the right `--lidar-port`. |
 | LiDAR `spin rate 0.0 rpm` | The rotor is not turning — check LiDAR power; some hubs cannot supply it from the data line alone. |
-| IMU `could not connect` | Run `i2cdetect -y 1`; expect `0x6a` (LSM6DSOX) and `0x1c` (LIS3MDL). Enable I2C in `raspi-config`, and install extras with `uv sync --extra sourccey`. |
+| IMU `could not connect` | Run `i2cdetect -y 1`; expect `0x6a` (LSM6DSOX) and `0x1c` (LIS3MDL). Enable I2C in `raspi-config`, and install extras with `uv sync --locked --extra sourccey-robot`. |
 | IMU `every sample is identical` | The I2C read is wedged. Power-cycle the Pi; if it persists, check the IMU wiring and pull-ups. |
 
 Related: [`sourccey-camera.mdx`](sourccey-camera.mdx) for device-name and v4l2-level camera
