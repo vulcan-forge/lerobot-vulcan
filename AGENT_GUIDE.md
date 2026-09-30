@@ -1,5 +1,9 @@
 # AGENT_GUIDE.md — LeRobot Helper for AI Agents & Users
 
+> Working with Sourccey? Use the dedicated
+> [Sourccey getting-started guide](./docs/sourccey/README.md) instead of the
+> SO-101 paths below.
+
 This file is a practical, copy-paste-friendly companion for any AI agent (Cursor, Claude, ChatGPT, Codex, etc.) helping a user work with LeRobot. It complements [`AGENTS.md`](./AGENTS.md) (dev/contributor context) with **user-facing guidance**: how to start, what to train, how long, how to record, and how to calibrate an SO-101.
 
 ---

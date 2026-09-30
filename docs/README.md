@@ -16,6 +16,9 @@ limitations under the License.
 
 # Generating the documentation
 
+Looking for the Vulcan/Sourccey workflow rather than the upstream LeRobot
+website docs? Start at the [Sourccey getting-started guide](sourccey/README.md).
+
 To generate the documentation, you first have to build it. Several packages are necessary to build the doc,
 you can install them with the following command, at the root of the code repository:
 
