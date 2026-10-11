@@ -33,11 +33,16 @@ uv run lerobot-find-port
 Record both results. Windows ports look like `COM5`; stable Linux aliases are
 normally `/dev/robotLeftArm` and `/dev/robotRightArm`.
 
-Calibrate both leader arms after replacing the example ports:
+Apply the packaged calibration to both leader arms after replacing the example
+ports:
 
 ```bash
 uv run sourccey-teleop-calibrate --left-arm-port=COM5 --right-arm-port=COM6
 ```
+
+The leader arms do not need to be placed in a calibration pose or stand. This
+command applies packaged homing positions and motion ranges; it does not ask
+you to move every joint through its range.
 
 The controller is ready when calibration completes without a serial-port
 error.
@@ -57,8 +62,37 @@ otherwise `uv` may restore the version pinned by this repository.
 
 ## 2. Set up the robot computer
 
-These commands run on Sourccey's Linux computer from its
-`lerobot-vulcan` checkout.
+Connect the controller and Sourccey to the same trusted local network. Find the
+robot's IP address and SSH credential in its Developer Access or onboarding
+screen.
+
+<details>
+<summary>Connect to Sourccey over SSH</summary>
+
+Replace `ROBOT_IP` with the address shown on Sourccey, then connect from
+Terminal, PowerShell, or another SSH client:
+
+```bash
+ssh sourccey@ROBOT_IP
+```
+
+On the first connection, compare the host-key fingerprint with the fingerprint
+shown by Sourccey before accepting it. Enter the unique password created during
+onboarding when prompted. Password input is not shown in the terminal.
+
+After signing in, open the installed LeRobot fork:
+
+```bash
+cd ~/Desktop/Projects/sourccey-desktop/modules/lerobot-vulcan
+```
+
+Use SSH only on a trusted local network. Do not expose port 22 directly to the
+internet. Replace any temporary setup password during onboarding.
+
+</details>
+
+From the `lerobot-vulcan` directory on the robot, install the locked robot-side
+dependencies:
 
 Install the pinned robot profile:
 
@@ -66,31 +100,8 @@ Install the pinned robot profile:
 uv sync --locked --extra sourccey-robot
 ```
 
-Preview udev and battery checks without changing the computer:
-
-```bash
-uv run sourccey-setup robot --dry-run
-```
-
-Apply the robot setup. This can request `sudo` to install packaged udev rules;
-battery writes are never performed unless explicitly requested:
-
-```bash
-uv run sourccey-setup robot
-```
-
-Apply the packaged arm ranges and save the current lift sensor limits:
-
-```bash
-uv run sourccey-calibrate
-```
-
-Only use a full reset when physical arm and lift limits must be redetected.
-This command moves hardware, so clear the entire workspace first:
-
-```bash
-uv run sourccey-calibrate --full-reset --yes
-```
+This installs the locked robot-side dependencies. It does not change Linux
+device rules, battery configuration, or hardware calibration.
 
 Find the robot computer's IP address:
 
@@ -99,6 +110,41 @@ hostname -I
 ```
 
 Record the address on the same network as the controller.
+
+### Fresh Linux installation or hardware recovery
+
+Skip this section for a working, factory-prepared Sourccey. If the robot
+computer was replaced or stable device aliases are missing, preview and apply
+the packaged Linux device rules:
+
+```bash
+uv run sourccey-setup robot --dry-run
+```
+
+```bash
+uv run sourccey-setup robot
+```
+
+The setup command installs udev rules and performs read-only battery checks. It
+never writes battery configuration unless `--configure-battery` or
+`--flash-battery` is explicitly supplied.
+
+Robot calibration is also a recovery procedure, not a normal installation
+step. With `sourccey-host` stopped, soft calibration applies the packaged
+follower-arm ranges and preserves the current Z limits. No special arm pose is
+required:
+
+```bash
+uv run sourccey-calibrate
+```
+
+Only use a full reset after hardware service when physical arm and Z limits
+must be redetected. This command moves hardware, so clear the entire workspace
+and keep the emergency stop within reach:
+
+```bash
+uv run sourccey-calibrate --full-reset --yes
+```
 
 ## 3. Start the robot host
 

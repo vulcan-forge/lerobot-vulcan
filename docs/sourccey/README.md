@@ -21,8 +21,8 @@ the root of the `lerobot-vulcan` checkout unless a guide says otherwise.
 Follow these guides in order. Do not move to the next guide until its check
 passes.
 
-1. [Set up both computers](01-setup.md) — install the correct package profile,
-   configure hardware, and start the host.
+1. [Set up both computers](01-setup.md) — install the correct package profiles,
+   prepare the leader arms, and start the host.
 2. [Teleoperate](02-teleoperate.md) — prove that the network, leader arms, robot,
    keyboard, and cameras work together.
 3. [Record](03-record.md) — collect a small demonstration dataset.
@@ -55,7 +55,7 @@ do not type placeholder brackets such as `<ROBOT_IP>` into a shell.
 - Keep the robot's full workspace clear before any command that can move it.
 - Keep an emergency stop within reach.
 - Start with short recordings and rollouts.
-- Stop `sourccey-host` before calibration or direct hardware checks.
+- Stop `sourccey-host` before robot calibration or direct hardware checks.
 - Run `sourccey-host` only on the robot computer.
 
 For package development, device internals, and battery maintenance, use the
