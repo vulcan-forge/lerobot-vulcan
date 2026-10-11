@@ -17,7 +17,7 @@ On the controller computer, run:
 uv run lerobot-teleoperate \
     --robot.type=sourccey_client \
     --robot.id=sourccey \
-    --robot.remote_ip=192.168.1.12 \
+    --robot.remote_ip=192.168.1.99 \
     --teleop.type=bi_sourccey_leader \
     --teleop.id=sourccey_leader \
     --teleop.left_arm_port=COM5 \
