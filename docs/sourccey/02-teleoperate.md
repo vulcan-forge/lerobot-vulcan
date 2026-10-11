@@ -14,17 +14,17 @@ Teleoperation is the end-to-end readiness check. Before starting:
 On the controller computer, run:
 
 ```bash
-uv run lerobot-teleoperate
-    --robot.type=sourccey_client
-    --robot.id=sourccey
-    --robot.remote_ip=192.168.1.12
-    --teleop.type=bi_sourccey_leader
-    --teleop.id=sourccey_leader
-    --teleop.left_arm_port=COM5
-    --teleop.right_arm_port=COM6
-    --teleop_keyboard.type=keyboard
-    --teleop_keyboard.id=sourccey_keyboard
-    --fps=30
+uv run lerobot-teleoperate \
+    --robot.type=sourccey_client \
+    --robot.id=sourccey \
+    --robot.remote_ip=192.168.1.12 \
+    --teleop.type=bi_sourccey_leader \
+    --teleop.id=sourccey_leader \
+    --teleop.left_arm_port=COM5 \
+    --teleop.right_arm_port=COM6 \
+    --teleop_keyboard.type=keyboard \
+    --teleop_keyboard.id=sourccey_keyboard \
+    --fps=30 \
     --display_data=true
 ```
 
