@@ -20,7 +20,7 @@ Example:
 ```shell
 lerobot-setup-motors \
     --teleop.type=so100_leader \
-    --teleop.port=/dev/ttyUSB0
+    --teleop.port=/dev/tty.usbmodem575E0031751
 ```
 """
 

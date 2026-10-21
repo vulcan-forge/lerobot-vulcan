@@ -39,7 +39,6 @@ else:
     send_bytes_in_chunks = None
     _ServicerBase = object
 
-
 MAX_WORKERS = 3  # Stream parameters, send transitions and interactions
 SHUTDOWN_TIMEOUT = 10
 
