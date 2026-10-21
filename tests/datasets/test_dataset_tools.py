@@ -1383,7 +1383,11 @@ def test_convert_image_to_video_dataset(tmp_path):
         assert "observation.image" in item
         assert "action" in item
 
-        # tmp_path owns cleanup; cached video decoders can still hold open files on Windows.
+        # Cleanup
+        import shutil
+
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
 
 
 def test_convert_image_to_video_dataset_subset_episodes(tmp_path):

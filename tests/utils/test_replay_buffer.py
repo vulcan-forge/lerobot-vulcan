@@ -644,18 +644,6 @@ def _populate_buffer_for_async_test(capacity: int = 10) -> ReplayBuffer:
     return buffer
 
 
-def test_async_iterator_propagates_sampling_errors(monkeypatch):
-    buffer = _populate_buffer_for_async_test()
-
-    def fail_sample(*args, **kwargs):
-        raise ValueError("sampling failed")
-
-    monkeypatch.setattr(buffer, "sample", fail_sample)
-    iterator = buffer.get_iterator(batch_size=2, async_prefetch=True, queue_size=1)
-    with pytest.raises(ValueError, match="sampling failed"):
-        next(iterator)
-
-
 def test_async_iterator_shapes_basic():
     buffer = _populate_buffer_for_async_test()
     batch_size = 2

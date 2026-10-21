@@ -771,8 +771,7 @@ def _hub_parent(model_cfg: PreTrainedConfig | RewardModelConfig) -> tuple[str | 
     if pretrained_path is None or os.path.isdir(pretrained_path) or is_offline_mode():
         return None, None
     try:
-        repo_id = pretrained_path.as_posix() if isinstance(pretrained_path, Path) else pretrained_path
-        info = model_info(repo_id)
+        info = model_info(str(pretrained_path))
     except (httpx.HTTPError, HFValidationError, OfflineModeIsEnabled):
         return None, None
     license_tag = next(

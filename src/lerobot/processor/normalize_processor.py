@@ -358,9 +358,6 @@ class _NormalizationMixin:
                 )
 
             mean, std = stats["mean"], stats["std"]
-            # Slice to stat dim when inverse: model may output padded actions (e.g. 20) while stats are for real dims (e.g. 16).
-            if inverse and tensor.shape[-1] > mean.shape[-1]:
-                tensor = tensor[..., : mean.shape[-1]]
             # Avoid division by zero by adding a small epsilon.
             denom = std + self.eps
             if inverse:
@@ -376,8 +373,6 @@ class _NormalizationMixin:
                 )
 
             min_val, max_val = stats["min"], stats["max"]
-            if inverse and tensor.shape[-1] > min_val.shape[-1]:
-                tensor = tensor[..., : min_val.shape[-1]]
             denom = max_val - min_val
             # When min_val == max_val, substitute the denominator with a small epsilon
             # to prevent division by zero. This consistently maps an input equal to
@@ -399,9 +394,6 @@ class _NormalizationMixin:
                     "QUANTILES normalization mode requires q01 and q99 stats, please update the dataset with the correct stats using the `augment_dataset_quantile_stats.py` script"
                 )
 
-            q01, q99 = stats["q01"], stats["q99"]
-            if inverse and tensor.shape[-1] > q01.shape[-1]:
-                tensor = tensor[..., : q01.shape[-1]]
             denom = q99 - q01
             # Avoid division by zero by adding epsilon when quantiles are identical
             denom = torch.where(
@@ -419,9 +411,6 @@ class _NormalizationMixin:
                     "QUANTILE10 normalization mode requires q10 and q90 stats, please update the dataset with the correct stats using the `augment_dataset_quantile_stats.py` script"
                 )
 
-            q10, q90 = stats["q10"], stats["q90"]
-            if inverse and tensor.shape[-1] > q10.shape[-1]:
-                tensor = tensor[..., : q10.shape[-1]]
             denom = q90 - q10
             # Avoid division by zero by adding epsilon when quantiles are identical
             denom = torch.where(

@@ -72,32 +72,6 @@ def _record(path: str = "videos/camera/chunk-000/file-000.mp4", size: int = 128)
     return VideoFileRecord(path, size, index)
 
 
-def test_install_sidecar_closes_source_before_rename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    source, destination = tmp_path / "source.npz", tmp_path / "installed.npz"
-    EpisodeVideoManifest.save_file_sidecar(source, [_record()], spec=_spec())
-    original_open, original_replace = Path.open, os.replace
-    handles = []
-
-    def tracked_open(path, *args, **kwargs):
-        handle = original_open(path, *args, **kwargs)
-        if path == source:
-            handles.append(handle)
-        return handle
-
-    def replace_closed_source(src, dst):
-        if Path(src) == source:
-            assert handles and all(handle.closed for handle in handles)
-        return original_replace(src, dst)
-
-    monkeypatch.setattr(Path, "open", tracked_open)
-    monkeypatch.setattr(os, "replace", replace_closed_source)
-
-    sidecar_utils.install_sidecar(source, destination)
-
-    assert not source.exists()
-    assert EpisodeVideoManifest.validate_file_sidecar(destination, _spec())
-
-
 def _spec(revision: str = "rev-a", size: int = 128) -> SidecarSpec:
     return SidecarSpec(
         repo_id="owner/dataset",

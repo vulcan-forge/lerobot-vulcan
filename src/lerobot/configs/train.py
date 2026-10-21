@@ -200,15 +200,13 @@ class TrainPipelineConfig(HubMixin):
         The pretrained paths (`--policy.path`, `--reward_model.path`) and
         `--config_path` are only recoverable by re-reading the CLI args: draccus
         has already consumed them by the time `validate()` runs, so they are not
-        reflected on `self`. Resume takes precedence over pretrained paths so a
-        checkpoint keeps its saved configuration and original model provenance.
+        reflected on `self`. Exactly one source applies, in priority order:
+        reward-model path, policy path, then resume.
         """
         reward_model_path = parser.get_path_arg("reward_model")
         policy_path = parser.get_path_arg("policy")
 
-        if self.resume:
-            self._resolve_resume_checkpoint()
-        elif reward_model_path:
+        if reward_model_path:
             cli_overrides = parser.get_cli_overrides("reward_model")
             self.reward_model = RewardModelConfig.from_pretrained(
                 reward_model_path, cli_overrides=cli_overrides
@@ -218,6 +216,8 @@ class TrainPipelineConfig(HubMixin):
             overrides = parser.get_yaml_overrides("policy") + (parser.get_cli_overrides("policy") or [])
             self.policy = PreTrainedConfig.from_pretrained(policy_path, cli_overrides=overrides)
             self.policy.pretrained_path = Path(policy_path)
+        elif self.resume:
+            self._resolve_resume_checkpoint()
 
     def _resolve_resume_checkpoint(self) -> None:
         """Resolve the checkpoint named by `--config_path` into `checkpoint_path`.

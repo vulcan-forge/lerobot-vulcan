@@ -23,15 +23,11 @@ on:
   push:
     branches:
       - main
-      - vulcan-main
-      - vulcan-main-test
 
   # Triggers the workflow on pull request events targeting main
   pull_request:
     branches:
       - main
-      - vulcan-main
-      - vulcan-main-test
 
 # Ensures that only the latest commit for a PR or branch is built, canceling older runs.
 concurrency:

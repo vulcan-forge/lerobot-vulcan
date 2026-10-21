@@ -128,10 +128,7 @@ class ReplayBuffer:
 
         if image_augmentation_function is None:
             base_function = functools.partial(random_shift, pad=4)
-            # CPU replay does not require a native compiler toolchain.
-            self.image_augmentation_function = (
-                torch.compile(base_function) if torch.device(device).type == "cuda" else base_function
-            )
+            self.image_augmentation_function = torch.compile(base_function)
         self.use_drq = use_drq
 
     def _initialize_storage(
@@ -348,7 +345,7 @@ class ReplayBuffer:
         import queue
         import threading
 
-        data_queue: queue.Queue[BatchTransition | Exception] = queue.Queue(maxsize=queue_size)
+        data_queue: queue.Queue = queue.Queue(maxsize=queue_size)
         shutdown_event = threading.Event()
 
         def producer() -> None:
@@ -362,14 +359,9 @@ class ReplayBuffer:
                 except queue.Full:
                     # Queue is full – loop again (will re-check shutdown_event)
                     continue
-                except Exception as exc:
-                    # Deliver the error to the consumer instead of leaving it blocked on an empty queue.
-                    while not shutdown_event.is_set():
-                        try:
-                            data_queue.put(exc, timeout=0.5)
-                            return
-                        except queue.Full:
-                            continue
+                except Exception:
+                    # Surface any unexpected error and terminate the producer.
+                    shutdown_event.set()
 
         producer_thread = threading.Thread(target=producer, daemon=True)
         producer_thread.start()
@@ -377,14 +369,11 @@ class ReplayBuffer:
         try:
             while not shutdown_event.is_set():
                 try:
-                    result = data_queue.get(timeout=0.5)
-                except queue.Empty:
-                    if not producer_thread.is_alive():
-                        raise RuntimeError("Replay-buffer prefetch stopped without a batch.") from None
-                    continue
-                if isinstance(result, Exception):
-                    raise result
-                yield result
+                    yield data_queue.get(block=True)
+                except Exception:
+                    # If the producer already set the shutdown flag we exit.
+                    if shutdown_event.is_set():
+                        break
         finally:
             shutdown_event.set()
             # Drain the queue quickly to help the thread exit if it's blocked on `put`.

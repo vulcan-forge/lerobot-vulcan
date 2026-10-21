@@ -25,7 +25,6 @@ pytest.importorskip("diffusers")  # the model code lives in modeling_lingbot_va,
 
 from lerobot.policies.lingbot_va.modeling_lingbot_va import FlowMatchScheduler
 from lerobot.policies.lingbot_va.utils import data_seq_to_patch, get_mesh_id
-from tests.utils import require_cuda
 
 
 def test_flow_match_scheduler_timesteps_monotone_decreasing() -> None:
@@ -73,12 +72,16 @@ def test_data_seq_to_patch_roundtrip_shape() -> None:
     assert out.shape == (b, c, f, h, w)
 
 
-@require_cuda
 def test_training_step_reduces_loss_tiny_flex() -> None:
     """End-to-end single training step (flow-matching loss -> backward -> AdamW) on a tiny config.
 
     Exercises the flex-attention training path; requires a CUDA GPU with flex-attention support.
     """
+    if not torch.cuda.is_available():
+        import pytest
+
+        pytest.skip("training step test requires a CUDA GPU (flex-attention)")
+
     from lerobot.configs.types import FeatureType, PolicyFeature
     from lerobot.policies.lingbot_va.configuration_lingbot_va import LingBotVAConfig
     from lerobot.policies.lingbot_va.modeling_lingbot_va import LingBotVAPolicy

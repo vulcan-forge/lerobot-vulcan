@@ -91,8 +91,8 @@ def require_cuda(func):
 
     @wraps(func)
     def wrapper(*args, **kwargs):
-        if torch.device(DEVICE).type != "cuda" or not torch.cuda.is_available():
-            pytest.skip("requires a CUDA test device")
+        if not torch.cuda.is_available():
+            pytest.skip("requires cuda")
         return func(*args, **kwargs)
 
     return wrapper

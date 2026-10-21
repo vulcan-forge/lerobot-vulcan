@@ -29,7 +29,6 @@ import torch
 from torch import Tensor
 
 pytest.importorskip("transformers")
-pytest.importorskip("diffusers", reason="MultiTaskDiT tests require lerobot[multi_task_dit]")
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true",
@@ -636,21 +635,8 @@ def test_multi_task_dit_policy_get_optim_params():
     assert param_groups[1]["lr"] == expected_lr
 
 
-@pytest.fixture
-def eager_compile_backend(monkeypatch):
-    """Test graph capture, hooks and serialization without requiring native compiler tools."""
-    compile_model = torch.compile
-
-    def compile_for_test(*args, **kwargs):
-        kwargs["backend"] = "aot_eager"
-        kwargs.pop("mode", None)
-        return compile_model(*args, **kwargs)
-
-    monkeypatch.setattr(torch, "compile", compile_for_test)
-
-
 @pytest.mark.parametrize("compile_model", [False, True])
-def test_multi_task_dit_vision_encoder_hooks_fire(compile_model: bool, eager_compile_backend):
+def test_multi_task_dit_vision_encoder_hooks_fire(compile_model: bool):
     """Hooks on the CLIP model (e.g. FSDP2's unshard/reshard) must fire, compiled or not."""
     config = create_config(compile_model=compile_model)
     policy = MultiTaskDiTPolicy(config=config)
@@ -671,7 +657,7 @@ def test_multi_task_dit_compile_keeps_state_dict_keys():
     assert eager_policy.state_dict().keys() == compiled_policy.state_dict().keys()
 
 
-def test_multi_task_dit_compiled_policy_save_and_load(tmp_path, eager_compile_backend):
+def test_multi_task_dit_compiled_policy_save_and_load(tmp_path):
     """A compiled policy saves and reloads, compiled or eager, and all three compute the same loss."""
     config = create_config(compile_model=True)
     policy = MultiTaskDiTPolicy(config=config)

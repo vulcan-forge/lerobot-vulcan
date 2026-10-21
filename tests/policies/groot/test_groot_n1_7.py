@@ -2957,7 +2957,6 @@ def test_gr00t_n1_7_action_head_samples_time_after_meta_init():
 def test_gr00t_n1_7_model_forward_with_mocked_backbone():
     pytest.importorskip("diffusers")
     pytest.importorskip("transformers")
-    pytest.importorskip("tree", reason="GR00T input conversion requires lerobot[groot]")
 
     from transformers.feature_extraction_utils import BatchFeature
 

@@ -39,12 +39,9 @@ from tests.policies.pi0_pi05.utils.openpi_parity import (  # noqa: E402
     make_openpi_observation_from_raw,
     openpi_model_actions_from_raw,
 )
-from tests.utils import DEVICE as TEST_DEVICE  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("CI") == "true"
-    or os.environ.get("GITHUB_ACTIONS") == "true"
-    or torch.device(TEST_DEVICE).type != "cuda",
+    os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true",
     reason="OpenPI parity and torch.compile checks are too slow for CI; run manually on GPU nodes",
 )
 
@@ -52,7 +49,7 @@ DUMMY_ACTION_DIM = 32
 DUMMY_STATE_DIM = 32
 DUMMY_ACTION_HORIZON = 50
 DUMMY_MAX_TOKEN_LEN = 200
-DEVICE = torch.device(TEST_DEVICE)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 COMPILE_MODE = "default"
 FORWARD_RTOL = 1e-4
 FORWARD_ATOL = 1e-4

@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -173,6 +172,6 @@ def test_make_policy_loads_resume_weights_and_keeps_the_parent(monkeypatch):
         pretrained_path="run/checkpoints/000002/pretrained_model",
     )
 
-    assert [Path(path) for path in seen_while_building] == [Path("run/checkpoints/000002/pretrained_model")]
+    assert [str(path) for path in seen_while_building] == ["run/checkpoints/000002/pretrained_model"]
     assert cfg.pretrained_path == "user/base-policy"
     assert policy.config.pretrained_path == "user/base-policy"

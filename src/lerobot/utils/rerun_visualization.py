@@ -19,10 +19,8 @@ backend at runtime through the dispatch in :mod:`lerobot.utils.visualization_uti
 importing from here directly. Requires the ``viz`` extra (``pip install 'lerobot[viz]'``).
 """
 
-import logging
 import numbers
 import os
-import shutil
 
 import numpy as np
 
@@ -64,15 +62,7 @@ def init_rerun(
     if ip and port:
         rr.connect_grpc(url=f"rerun+http://{ip}:{port}/proxy")
     else:
-        if os.getenv("LEROBOT_SKIP_RERUN", "").lower() in ("1", "true", "yes"):
-            return
-        if shutil.which("rerun") is None:
-            logging.warning("Rerun viewer not found in PATH; continuing without viewer.")
-            return
-        try:
-            rr.spawn(memory_limit=memory_limit)
-        except Exception as exc:
-            logging.warning("Failed to spawn Rerun viewer: %s", exc)
+        rr.spawn(memory_limit=memory_limit)
 
 
 def shutdown_rerun() -> None:

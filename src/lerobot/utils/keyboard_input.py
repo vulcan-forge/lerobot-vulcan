@@ -53,18 +53,20 @@ from .import_utils import _pynput_available
 logger = logging.getLogger(__name__)
 
 # POSIX-only terminal modules (absent on Windows, where the pynput backend is used).
-# Keep the optional module handles dynamic so Windows type stubs need not expose POSIX APIs.
-termios: Any
-tty: Any
-try:
-    import termios as _termios
-    import tty as _tty
+if TYPE_CHECKING:
+    import termios
+    import tty
 
-    termios, tty = _termios, _tty
     _TERMIOS_AVAILABLE = True
-except ImportError:
-    termios = tty = None
-    _TERMIOS_AVAILABLE = False
+else:
+    try:
+        import termios
+        import tty
+
+        _TERMIOS_AVAILABLE = True
+    except ImportError:  # POSIX-only modules; unavailable on Windows
+        termios = tty = None
+        _TERMIOS_AVAILABLE = False
 
 if TYPE_CHECKING:
     from pynput import keyboard

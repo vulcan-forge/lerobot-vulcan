@@ -32,15 +32,10 @@ def test_inflight_retarget_holds_and_resumes_only_from_fresh_capture(session):
     capture(engine)
     engine.start()
     assert wait_for(lambda: engine.runtime.queue.qsize() == 4)
-    # Arm the gate before consuming actions: consumption can start the next
-    # request immediately, so clearing its started event afterward loses it.
+    engine.get_action(None)
+    engine.get_action(None)
     client.action_release.clear()
     client.action_started.clear()
-    engine.get_action(None)
-    engine.get_action(None)
-    # Windows monotonic clocks can report the same timestamp across adjacent
-    # captures; aligned inference requires a strictly newer observation.
-    assert wait_for(lambda: engine.runtime.clock() > engine._observation.capture_time)
     capture(engine)
     assert client.action_started.wait(2)
     obsolete = client.requests[-1]

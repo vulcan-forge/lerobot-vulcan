@@ -2554,7 +2554,7 @@ def test_text_rope_computes_in_float32_and_restores_activation_dtype(monkeypatch
 
     assert seen_dtypes == [torch.float32, torch.float32]
     assert rotated_query.dtype == torch.bfloat16
-    assert rotated_key.dtype == torch.bfloat16  # gitleaks:allow (tensor dtype, not a credential)
+    assert rotated_key.dtype == torch.bfloat16
 
 
 def test_text_eager_attention_uses_fp32_qk_scores(monkeypatch):

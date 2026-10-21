@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import multiprocessing
+import os
 import signal
 import threading
 from unittest.mock import patch
@@ -30,11 +31,11 @@ from lerobot.utils.process import ProcessSignalHandler  # noqa: E402
 @pytest.fixture(autouse=True)
 def reset_globals_and_handlers():
     # Store original signal handlers
-    original_handlers = {}
-    for sig_name in ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]:
-        if hasattr(signal, sig_name):
-            sig = getattr(signal, sig_name)
-            original_handlers[sig] = signal.getsignal(sig)
+    original_handlers = {
+        sig: signal.getsignal(sig)
+        for sig in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT]
+        if hasattr(signal, sig.name)
+    }
 
     yield
 
@@ -67,27 +68,23 @@ def test_setup_process_handlers_event_with_processes():
         signal.SIGTERM,
         # SIGHUP and SIGQUIT are not reliably available on all platforms (e.g. Windows)
         pytest.param(
-            "SIGHUP",
+            signal.SIGHUP,
             marks=pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="SIGHUP not available"),
         ),
         pytest.param(
-            "SIGQUIT",
+            signal.SIGQUIT,
             marks=pytest.mark.skipif(not hasattr(signal, "SIGQUIT"), reason="SIGQUIT not available"),
         ),
     ],
 )
 def test_signal_handler_sets_event(use_threads, sig):
     """Test that the signal handler sets the event on receiving a signal."""
-    # Convert string signal name to actual signal if needed
-    if isinstance(sig, str):
-        sig = getattr(signal, sig)
-
     handler = ProcessSignalHandler(use_threads=use_threads)
     shutdown_event = handler.shutdown_event
 
     assert handler.counter == 0
 
-    signal.raise_signal(sig)
+    os.kill(os.getpid(), sig)
 
     # In some environments, the signal might take a moment to be handled.
     shutdown_event.wait(timeout=1.0)
@@ -104,8 +101,14 @@ def test_force_shutdown_on_second_signal(mock_sys_exit, use_threads):
     """Test that a second signal triggers a force shutdown."""
     handler = ProcessSignalHandler(use_threads=use_threads)
 
-    signal.raise_signal(signal.SIGINT)
-    signal.raise_signal(signal.SIGINT)
+    os.kill(os.getpid(), signal.SIGINT)
+    # Give a moment for the first signal to be processed
+    import time
+
+    time.sleep(0.1)
+    os.kill(os.getpid(), signal.SIGINT)
+
+    time.sleep(0.1)
 
     assert handler.counter == 2
     mock_sys_exit.assert_called_once_with(1)

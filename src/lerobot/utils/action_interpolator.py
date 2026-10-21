@@ -65,12 +65,6 @@ class ActionInterpolator:
         self._idx = 0
         self._emitted_policy_action = False
 
-    def get_control_interval(self, fps: float) -> float:
-        """Return the interval for the interpolated control rate."""
-        if fps <= 0:
-            raise ValueError("fps must be positive")
-        return 1.0 / (fps * self.multiplier)
-
     @property
     def enabled(self) -> bool:
         """Whether interpolation is active (multiplier > 1)."""

@@ -50,10 +50,6 @@ class MockLoopingVideoCapture:
         ret, frame = self._real_vc.read()
 
         if ret:
-            # Some Windows FFmpeg builds preserve PNG alpha. Model the
-            # three-channel camera stream these image fixtures stand in for.
-            if frame.ndim == 3 and frame.shape[2] == 4:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             self._cached_frame = frame
             return ret, frame
 

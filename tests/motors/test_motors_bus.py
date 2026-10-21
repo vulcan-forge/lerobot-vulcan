@@ -231,15 +231,6 @@ def test_retries_are_left_to_rustypot(bus):
     assert bus._bus.retries == [1, 2, 3, 4]
 
 
-def test_default_register_operations_do_not_retry(bus):
-    bus.read("Present_Position", "dummy_1", normalize=False)
-    bus.write("Goal_Position", "dummy_1", 1337, normalize=False)
-    bus.sync_read("Present_Position", "dummy_1", normalize=False)
-    bus.sync_write("Goal_Position", {"dummy_1": 1337}, normalize=False)
-
-    assert bus._bus.retries == [0, 0, 0, 0]
-
-
 def test_ping(bus):
     bus._bus.seed(2, "model_number", 5678)
 

@@ -87,7 +87,7 @@ class EpisodeParquetReader:
         if expected_rows <= 0:
             raise ValueError(f"Episode {episode_index} must contain at least one row")
 
-        path = posixpath.join(self._root_path.rstrip("/"), Path(relative_path).as_posix().lstrip("/"))
+        path = posixpath.join(self._root_path.rstrip("/"), str(relative_path).lstrip("/"))
         with self._open_with_retry(path) as source:
             parquet = pq.ParquetFile(source)
             available = set(parquet.schema_arrow.names)

@@ -397,14 +397,6 @@ class VideoDecoderCache:
                     file_handle.close()
             self._cache.clear()
 
-    def invalidate(self, video_path: str) -> None:
-        """Remove one cached decoder entry and close its file handle."""
-        video_path = str(video_path)
-        with self._lock:
-            if video_path in self._cache:
-                _, file_handle = self._cache.pop(video_path)
-                file_handle.close()
-
     def size(self) -> int:
         """Return the number of cached decoders."""
         with self._lock:
@@ -448,9 +440,8 @@ def decode_video_frames_torchcodec(
     if decoder_cache is None:
         decoder_cache = _default_decoder_cache
 
-    video_path = str(video_path)
     # Use cached decoder instead of creating new one each time
-    decoder = decoder_cache.get_decoder(video_path)
+    decoder = decoder_cache.get_decoder(str(video_path))
 
     # get metadata for frame information
     metadata = decoder.metadata
@@ -460,41 +451,7 @@ def decode_video_frames_torchcodec(
     # retrieve frames based on indices: get_frames_at returns exactly one frame per
     # requested index, in order, so frame i already corresponds to timestamps[i] --
     # no nearest-match/re-stack needed (that redundant copy dominates decode overhead).
-    # retrieve frames based on indices
-    try:
-        frames_batch = decoder.get_frames_at(indices=frame_indices)
-    except RuntimeError as e:
-        # TorchCodec can occasionally fail on long-running random seeks in worker processes.
-        # Retry once with a fresh decoder instance for this video path.
-        msg = str(e).lower()
-        is_decoder_packet_error = (
-            "could not push packet to decoder" in msg or "invalid data found when processing input" in msg
-        )
-        if not is_decoder_packet_error:
-            raise
-
-        logger.warning(
-            "torchcodec decode failed for %s (%s). Retrying with a fresh decoder.",
-            video_path,
-            e,
-        )
-        decoder_cache.invalidate(video_path)
-        decoder = decoder_cache.get_decoder(video_path)
-        try:
-            frames_batch = decoder.get_frames_at(indices=frame_indices)
-        except RuntimeError as retry_err:
-            logger.warning(
-                "torchcodec retry failed for %s (%s). Falling back to PyAV for this read.",
-                video_path,
-                retry_err,
-            )
-            return decode_video_frames_pyav(
-                video_path,
-                timestamps,
-                tolerance_s,
-                return_uint8=return_uint8,
-            )
-
+    frames_batch = decoder.get_frames_at(indices=frame_indices)
     closest_frames = frames_batch.data
 
     # float64: hour-scale timestamps quantize past tolerance_s in float32.

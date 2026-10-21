@@ -91,7 +91,7 @@ def video_file_groups(
             chunks = batch[f"videos/{key}/chunk_index"]
             files = batch[f"videos/{key}/file_index"]
             for position, (chunk, file) in enumerate(zip(chunks, files, strict=True)):
-                path = Path(video_path.format(video_key=key, chunk_index=chunk, file_index=file)).as_posix()
+                path = str(Path(video_path.format(video_key=key, chunk_index=chunk, file_index=file)))
                 groups[path].append((int(indices[offset + position]), camera))
         offset += count
     return dict(groups)

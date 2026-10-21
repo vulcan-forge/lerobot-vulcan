@@ -66,7 +66,6 @@ from lerobot.remote_inference import RemoteClient, RemoteInferenceEngine
 from lerobot.robots import Robot, make_robot_from_config
 from lerobot.teleoperators import Teleoperator, make_teleoperator_from_config
 from lerobot.utils.constants import OBS_STATE
-from lerobot.utils.device_utils import get_compatible_policy_dtype
 from lerobot.utils.feature_utils import combine_feature_dicts, hw_to_dataset_features
 from lerobot.utils.import_utils import _peft_available, require_package
 
@@ -273,8 +272,6 @@ class RolloutContext:
 
 def _load_pretrained_policy(policy_config: PreTrainedConfig) -> PreTrainedPolicy:
     """Load policy weights, keeping adapter and base-model revisions independent."""
-    if hasattr(policy_config, "dtype"):
-        policy_config.dtype = get_compatible_policy_dtype(policy_config.dtype, policy_config.device)
     pretrained_path = policy_config.pretrained_path
     if pretrained_path is None:
         raise ValueError("--policy.path is required for rollout")
