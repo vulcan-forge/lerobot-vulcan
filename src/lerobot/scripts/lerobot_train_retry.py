@@ -97,7 +97,7 @@ def _build_resume_args(train_args: list[str], config_path: Path) -> list[str]:
 def _run_training_module(train_args: list[str], training_module: str) -> int:
     # Run as a module so relative imports inside lerobot_train.py resolve correctly.
     cmd = [sys.executable, "-m", training_module, *train_args]
-    logging.info("Launching command: %s", " ".join(shlex.quote(part) for part in cmd))
+    logging.info("Launching command: %s", shlex.join(cmd))
     return subprocess.run(cmd, check=False).returncode
 
 

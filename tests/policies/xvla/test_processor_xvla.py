@@ -4,13 +4,13 @@ import pytest
 import torch
 
 from lerobot.datasets.factory import IMAGENET_STATS
+from lerobot.lerobot_types import TransitionKey
 from lerobot.policies.xvla.configuration_xvla import XVLAConfig
 from lerobot.policies.xvla.processor_xvla import (
     XVLAImageNetNormalizeProcessorStep,
     XVLAImageToFloatProcessorStep,
     make_xvla_pre_post_processors,
 )
-from lerobot.types import TransitionKey
 from lerobot.utils.constants import OBS_IMAGES
 
 OBS_KEY = f"{OBS_IMAGES}.front_left"
@@ -137,6 +137,6 @@ def test_end_to_end_preprocessor_accepts_regression_case(monkeypatch: pytest.Mon
     # Validate that clamped-to-zero path is reflected after ImageNet normalization.
     mean, std = _imagenet_stats_like(processed_img)
     expected_clamped_zero = (torch.zeros_like(mean) - mean) / std
-    assert processed_img[0, 0, 0, 0].item() == pytest.approx(expected_clamped_zero[0, 0, 0, 0].item(), abs=1e-5)
-
-
+    assert processed_img[0, 0, 0, 0].item() == pytest.approx(
+        expected_clamped_zero[0, 0, 0, 0].item(), abs=1e-5
+    )

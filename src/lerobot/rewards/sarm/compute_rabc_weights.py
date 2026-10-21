@@ -59,6 +59,7 @@ import logging
 import re
 import shutil
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
@@ -67,6 +68,7 @@ import torch
 from tqdm import tqdm
 
 from lerobot.datasets import LeRobotDataset
+from lerobot.processor import PolicyProcessorPipeline
 
 from .modeling_sarm import SARMRewardModel
 from .processor_sarm import make_sarm_pre_post_processors
@@ -90,7 +92,7 @@ def load_sarm_resources(
     dataset_repo_id: str,
     reward_model_path: str,
     device: str = "cuda",
-) -> tuple[LeRobotDataset, SARMRewardModel, any]:
+) -> tuple[LeRobotDataset, SARMRewardModel, PolicyProcessorPipeline[dict[str, Any], dict[str, Any]]]:
     """
     Load SARM model, dataset, and preprocessor.
 
@@ -223,13 +225,13 @@ def visualize_episode(
 def visualize_sarm_predictions(
     dataset: LeRobotDataset,
     reward_model: SARMRewardModel,
-    preprocess,
+    preprocess: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     episode_indices: list[int],
     head_mode: str,
     output_dir: Path,
     num_display_frames: int = 5,
     stride: int = 1,
-):
+) -> None:
     """
     Visualize SARM predictions for multiple episodes.
 
@@ -492,7 +494,9 @@ def _write_parts_manifest(
         except Exception:  # nosec B110
             existing = None
         if existing != expected:
-            logging.warning("Existing SARM parts manifest differs from current run. Resetting parts directory.")
+            logging.warning(
+                "Existing SARM parts manifest differs from current run. Resetting parts directory."
+            )
             shutil.rmtree(parts_dir)
             parts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -616,8 +620,7 @@ def parse_visualization_episode_indices(
 
             if num_episodes is not None and episode_idx >= num_episodes:
                 raise ValueError(
-                    f"Episode index {episode_idx} is out of range. "
-                    f"Valid range is [0, {num_episodes - 1}]"
+                    f"Episode index {episode_idx} is out of range. Valid range is [0, {num_episodes - 1}]"
                 )
 
             if episode_idx not in seen:
@@ -663,9 +666,7 @@ def parse_visualization_ranking_groups(
     """Parse top/bottom episode-index groups from a ranking CSV."""
     if not ranking_csv:
         if top_k > 0 or bottom_k > 0:
-            raise ValueError(
-                "--visualize-top-k/--visualize-bottom-k require --visualize-ranking-csv."
-            )
+            raise ValueError("--visualize-top-k/--visualize-bottom-k require --visualize-ranking-csv.")
         return [], []
 
     if top_k < 0 or bottom_k < 0:
@@ -685,9 +686,7 @@ def parse_visualization_ranking_groups(
     with ranking_path.open(newline="") as f:
         reader = csv.DictReader(f)
         if reader.fieldnames is None or "episode_index" not in reader.fieldnames:
-            raise ValueError(
-                f"Ranking CSV must contain an 'episode_index' column: {ranking_path}"
-            )
+            raise ValueError(f"Ranking CSV must contain an 'episode_index' column: {ranking_path}")
 
         for line_no, row in enumerate(reader, start=2):
             raw_ep = (row.get("episode_index") or "").strip()
@@ -729,12 +728,15 @@ def resolve_visualization_episode_selection(
 ) -> list[int] | None:
     """Resolve final visualization episode list from explicit and ranking-derived sources."""
     explicit = parse_visualization_episode_indices(explicit_episode_indices_raw, num_episodes) or []
-    ranked = parse_visualization_ranking_indices(
-        ranking_csv=ranking_csv,
-        top_k=ranking_top_k,
-        bottom_k=ranking_bottom_k,
-        num_episodes=num_episodes,
-    ) or []
+    ranked = (
+        parse_visualization_ranking_indices(
+            ranking_csv=ranking_csv,
+            top_k=ranking_top_k,
+            bottom_k=ranking_bottom_k,
+            num_episodes=num_episodes,
+        )
+        or []
+    )
 
     if not explicit and not ranked:
         return None
@@ -806,8 +808,10 @@ def compute_sarm_progress(
     compute_dense = head_mode in ("dense", "both") and dual_mode
 
     # Determine output path and setup resumable episode parts.
-    output_path = Path(dataset.root) / "sarm_progress.parquet" if output_path is None else Path(output_path)
-    parts_dir = _get_parts_dir(output_path)
+    resolved_output_path = (
+        Path(dataset.root) / "sarm_progress.parquet" if output_path is None else Path(output_path)
+    )
+    parts_dir = _get_parts_dir(resolved_output_path)
     _write_parts_manifest(
         parts_dir,
         dataset_repo_id=dataset_repo_id,
@@ -993,11 +997,11 @@ def compute_sarm_progress(
     # Merge all episode parts into final output parquet.
     final_table = _merge_parts_to_output(
         parts_dir=parts_dir,
-        output_path=output_path,
+        output_path=resolved_output_path,
         reward_model_path=reward_model_path,
         expected_num_episodes=num_episodes,
     )
-    logging.info("Saved %d frame progress values to %s", len(final_table), output_path)
+    logging.info("Saved %d frame progress values to %s", len(final_table), resolved_output_path)
 
     # Print statistics
     if "progress_sparse" in final_table.column_names:
@@ -1050,7 +1054,7 @@ def compute_sarm_progress(
             stride=stride,
         )
 
-    return output_path
+    return resolved_output_path
 
 
 def main():
@@ -1205,9 +1209,9 @@ Examples:
         dataset, reward_model, preprocess = load_sarm_resources(
             args.dataset_repo_id, reward_model_path, args.device
         )
-        explicit_viz_episodes = parse_visualization_episode_indices(
-            args.visualize_episode_indices, dataset.num_episodes
-        ) or []
+        explicit_viz_episodes = (
+            parse_visualization_episode_indices(args.visualize_episode_indices, dataset.num_episodes) or []
+        )
         ranking_top_episodes, ranking_bottom_episodes = parse_visualization_ranking_groups(
             ranking_csv=args.visualize_ranking_csv,
             top_k=args.visualize_top_k,

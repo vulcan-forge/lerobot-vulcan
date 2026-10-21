@@ -37,8 +37,8 @@ def _parse_iso8601_utc(value: str) -> dt.datetime:
     # uv.lock stores times like "2026-03-04T19:34:12.359Z".
     parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed.astimezone(dt.timezone.utc)
+        parsed = parsed.replace(tzinfo=dt.UTC)
+    return parsed.astimezone(dt.UTC)
 
 
 def _collect_upload_times(package: dict[str, Any]) -> list[dt.datetime]:
@@ -67,7 +67,9 @@ def _source_info(package: dict[str, Any]) -> SourceInfo:
             return SourceInfo(raw=str(source_info), is_editable_local=True, is_pypi=False)
         registry = source_info.get("registry")
         if isinstance(registry, str):
-            return SourceInfo(raw=registry, is_editable_local=False, is_pypi=registry.startswith("https://pypi.org/"))
+            return SourceInfo(
+                raw=registry, is_editable_local=False, is_pypi=registry.startswith("https://pypi.org/")
+            )
         return SourceInfo(raw=str(source_info), is_editable_local=False, is_pypi=False)
     return SourceInfo(raw=str(source_info or ""), is_editable_local=False, is_pypi=False)
 
@@ -101,7 +103,7 @@ def main() -> int:
         print("ERROR: invalid uv.lock format: 'package' must be a list", file=sys.stderr)
         return 2
 
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     min_age = dt.timedelta(days=max(0.0, args.min_age_days))
 
     violations: list[Violation] = []
@@ -140,8 +142,8 @@ def main() -> int:
 
     if missing_times_pypi and not args.allow_missing_upload_time:
         print("ERROR: found packages in uv.lock without upload-time metadata:", file=sys.stderr)
-        for name, version, source in sorted(missing_times_pypi):
-            src = source or "<unknown source>"
+        for name, version, source_url in sorted(missing_times_pypi):
+            src = source_url or "<unknown source>"
             print(f"  - {name}=={version} (source: {src})", file=sys.stderr)
         print(
             "Refusing to continue. Re-run with --allow-missing-upload-time to bypass.",
@@ -164,10 +166,7 @@ def main() -> int:
         return 1
 
     checked = len([p for p in packages if isinstance(p, dict)])
-    print(
-        f"OK: checked {checked} packages in {lock_path} "
-        f"with minimum age {args.min_age_days:.2f} day(s)."
-    )
+    print(f"OK: checked {checked} packages in {lock_path} with minimum age {args.min_age_days:.2f} day(s).")
     if skipped_missing_times_non_pypi:
         print(
             f"WARNING: skipped {len(skipped_missing_times_non_pypi)} non-PyPI package(s) "

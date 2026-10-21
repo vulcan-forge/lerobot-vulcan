@@ -25,12 +25,12 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any
 
-from numpy.typing import NDArray  # type: ignore  # TODO: add type stubs for numpy.typing
+from numpy.typing import NDArray
 
 # Fix MSMF hardware transform compatibility for Windows before importing cv2
 if platform.system() == "Windows" and "OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS" not in os.environ:
     os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
-import cv2  # type: ignore  # TODO: add type stubs for OpenCV
+import cv2
 
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 from lerobot.utils.errors import DeviceNotConnectedError
@@ -119,19 +119,22 @@ class OpenCVCamera(Camera):
 
         self.rotation: int | None = get_cv2_rotation(config.rotation)
         self.backend: int = config.backend
-        self.auto_reconnect = config.auto_reconnect
-        self.max_consecutive_read_failures = config.max_consecutive_read_failures
-        self.fast_reconnect_interval_s = config.fast_reconnect_interval_s
-        self.fast_reconnect_window_s = config.fast_reconnect_window_s
-        self.reconnect_interval_s = config.reconnect_interval_s
 
-        if self.height and self.width:
-            self.capture_width, self.capture_height = self.width, self.height
-            if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE]:
-                self.capture_width, self.capture_height = self.height, self.width
+        self.capture_width: int | None = None
+        self.capture_height: int | None = None
+        self._reset_connection_settings()
 
     def __str__(self) -> str:
         return f"{self.__class__.__name__}({self.index_or_path})"
+
+    def _reset_connection_settings(self) -> None:
+        """Restore settings that may have been auto-detected during a failed connection."""
+        self.fps = self.config.fps
+        self.width = self.config.width
+        self.height = self.config.height
+        self.capture_width, self.capture_height = self.width, self.height
+        if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE]:
+            self.capture_width, self.capture_height = self.height, self.width
 
     @property
     def is_connected(self) -> bool:
@@ -160,70 +163,36 @@ class OpenCVCamera(Camera):
         # blocking in multi-threaded applications, especially during data collection.
         cv2.setNumThreads(1)
 
-        self._open_videocapture()
-        self._start_read_thread()
+        self.videocapture = cv2.VideoCapture(self.index_or_path, self.backend)
 
-        if warmup and self.warmup_s > 0:
-            start_time = time.time()
-            while time.time() - start_time < self.warmup_s:
-                self.async_read(timeout_ms=self.warmup_s * 1000)
-                time.sleep(0.1)
-            with self.frame_lock:
-                if self.latest_frame is None:
-                    raise ConnectionError(f"{self} failed to capture frames during warmup.")
-
-        logger.info(f"{self} connected.")
-
-    def _open_videocapture(self) -> None:
-        videocapture = cv2.VideoCapture(self.index_or_path, self.backend)
-
-        if not videocapture.isOpened():
-            videocapture.release()
+        if not self.videocapture.isOpened():
+            self.videocapture.release()
+            self.videocapture = None
             raise ConnectionError(
                 f"Failed to open {self}.Run `lerobot-find-cameras opencv` to find available cameras."
             )
 
-        self.videocapture = videocapture
         try:
             self._configure_capture_settings()
-        except Exception:
-            self._release_videocapture()
+            self._start_read_thread()
+
+            if warmup and self.warmup_s > 0:
+                start_time = time.time()
+                while time.time() - start_time < self.warmup_s:
+                    self.async_read(timeout_ms=self.warmup_s * 1000)
+                    time.sleep(0.1)
+                with self.frame_lock:
+                    if self.latest_frame is None:
+                        raise ConnectionError(f"{self} failed to capture frames during warmup.")
+        except BaseException:
+            try:
+                self._cleanup_resources()
+            except Exception:
+                logger.exception(f"Failed to fully clean up {self} after connect() failed.")
+            self._reset_connection_settings()
             raise
 
-    def _release_videocapture(self) -> None:
-        if self.videocapture is None:
-            return
-
-        self.videocapture.release()
-        self.videocapture = None
-
-    def _reconnect_videocapture(self, reason: Exception) -> bool:
-        if not self.auto_reconnect:
-            return False
-
-        logger.warning(f"{self} reconnecting after read failure: {reason}")
-        self._release_videocapture()
-        reconnect_start_time = time.monotonic()
-
-        while self.stop_event is not None and not self.stop_event.is_set():
-            try:
-                self._open_videocapture()
-                with self.frame_lock:
-                    self.new_frame_event.clear()
-                logger.info(f"{self} reconnected.")
-                return True
-            except Exception as reconnect_error:
-                logger.warning(f"{self} reconnect attempt failed: {reconnect_error}")
-                reconnect_elapsed_s = time.monotonic() - reconnect_start_time
-                if reconnect_elapsed_s < self.fast_reconnect_window_s:
-                    reconnect_interval_s = self.fast_reconnect_interval_s
-                else:
-                    reconnect_interval_s = self.reconnect_interval_s
-
-                if self.stop_event.wait(reconnect_interval_s):
-                    break
-
-        return False
+        logger.info(f"{self} connected.")
 
     @check_if_not_connected
     def _configure_capture_settings(self) -> None:
@@ -293,7 +262,10 @@ class OpenCVCamera(Camera):
     def _validate_fourcc(self) -> None:
         """Validates and sets the camera's FOURCC code."""
 
-        fourcc_code = cv2.VideoWriter_fourcc(*self.config.fourcc)
+        fourcc = self.config.fourcc
+        if fourcc is None:
+            raise ValueError(f"{self} has no fourcc configured to validate.")
+        fourcc_code = cv2.VideoWriter_fourcc(*fourcc)
 
         if self.videocapture is None:
             raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
@@ -359,32 +331,36 @@ class OpenCVCamera(Camera):
 
         for target in targets_to_scan:
             camera = cv2.VideoCapture(target)
-            if camera.isOpened():
-                default_width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
-                default_height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                default_fps = camera.get(cv2.CAP_PROP_FPS)
-                default_format = camera.get(cv2.CAP_PROP_FORMAT)
+            try:
+                if camera.isOpened():
+                    default_width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    default_height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    default_fps = camera.get(cv2.CAP_PROP_FPS)
+                    default_format = camera.get(cv2.CAP_PROP_FORMAT)
 
-                # Get FOURCC code and convert to string
-                default_fourcc_code = camera.get(cv2.CAP_PROP_FOURCC)
-                default_fourcc_code_int = int(default_fourcc_code)
-                default_fourcc = "".join([chr((default_fourcc_code_int >> 8 * i) & 0xFF) for i in range(4)])
+                    # Get FOURCC code and convert to string
+                    default_fourcc_code = camera.get(cv2.CAP_PROP_FOURCC)
+                    default_fourcc_code_int = int(default_fourcc_code)
+                    default_fourcc = "".join(
+                        [chr((default_fourcc_code_int >> 8 * i) & 0xFF) for i in range(4)]
+                    )
 
-                camera_info = {
-                    "name": f"OpenCV Camera @ {target}",
-                    "type": "OpenCV",
-                    "id": target,
-                    "backend_api": camera.getBackendName(),
-                    "default_stream_profile": {
-                        "format": default_format,
-                        "fourcc": default_fourcc,
-                        "width": default_width,
-                        "height": default_height,
-                        "fps": default_fps,
-                    },
-                }
+                    camera_info = {
+                        "name": f"OpenCV Camera @ {target}",
+                        "type": "OpenCV",
+                        "id": target,
+                        "backend_api": camera.getBackendName(),
+                        "default_stream_profile": {
+                            "format": default_format,
+                            "fourcc": default_fourcc,
+                            "width": default_width,
+                            "height": default_height,
+                            "fps": default_fps,
+                        },
+                    }
 
-                found_cameras_info.append(camera_info)
+                    found_cameras_info.append(camera_info)
+            finally:
                 camera.release()
 
         return found_cameras_info
@@ -483,17 +459,18 @@ class OpenCVCamera(Camera):
         Internal loop run by the background thread for asynchronous reading.
 
         On each iteration:
-        1. Reads a color frame
+        1. Reads a color frame (blocking call)
         2. Stores result in latest_frame and updates timestamp (thread-safe)
         3. Sets new_frame_event to notify listeners
 
         Stops on DeviceNotConnectedError, logs other errors and continues.
         """
-        if self.stop_event is None:
+        stop_event = self.stop_event
+        if stop_event is None:
             raise RuntimeError(f"{self}: stop_event is not initialized before starting read loop.")
 
         failure_count = 0
-        while not self.stop_event.is_set():
+        while not stop_event.is_set():
             try:
                 raw_frame = self._read_from_hardware()
                 processed_frame = self._postprocess_image(raw_frame)
@@ -505,20 +482,14 @@ class OpenCVCamera(Camera):
                 self.new_frame_event.set()
                 failure_count = 0
 
-            except DeviceNotConnectedError as e:
-                if not self._reconnect_videocapture(e):
-                    break
-                failure_count = 0
+            except DeviceNotConnectedError:
+                break
             except Exception as e:
-                failure_count += 1
-                if failure_count < self.max_consecutive_read_failures:
+                if failure_count <= 10:
+                    failure_count += 1
                     logger.warning(f"Error reading frame in background thread for {self}: {e}")
-                    continue
-
-                if not self._reconnect_videocapture(e):
+                else:
                     raise RuntimeError(f"{self} exceeded maximum consecutive read failures.") from e
-
-                failure_count = 0
 
     def _start_read_thread(self) -> None:
         """Starts or restarts the background read thread if it's not running."""
@@ -537,6 +508,8 @@ class OpenCVCamera(Camera):
 
         if self.thread is not None and self.thread.is_alive():
             self.thread.join(timeout=2.0)
+            if self.thread.is_alive():
+                logger.warning(f"{self} read thread did not terminate within timeout.")
 
         self.thread = None
         self.stop_event = None
@@ -545,6 +518,26 @@ class OpenCVCamera(Camera):
             self.latest_frame = None
             self.latest_timestamp = None
             self.new_frame_event.clear()
+
+    def _cleanup_resources(self) -> None:
+        """Stop background reads and release the capture, including after partial setup."""
+        read_thread = self.thread
+        videocapture = self.videocapture
+
+        try:
+            self._stop_read_thread()
+        finally:
+            self.videocapture = None
+            try:
+                if videocapture is not None:
+                    videocapture.release()
+            finally:
+                # Releasing the device may unblock a hardware read that outlived
+                # the first bounded join in _stop_read_thread().
+                if read_thread is not None and read_thread.is_alive():
+                    read_thread.join(timeout=2.0)
+                    if read_thread.is_alive():  # pragma: no cover
+                        logger.warning(f"{self} read thread remained alive after releasing the capture.")
 
     @check_if_not_connected
     def async_read(self, timeout_ms: float = 200) -> NDArray[Any]:
@@ -636,14 +629,6 @@ class OpenCVCamera(Camera):
         if not self.is_connected and self.thread is None:
             raise DeviceNotConnectedError(f"{self} not connected.")
 
-        if self.thread is not None:
-            self._stop_read_thread()
-
-        self._release_videocapture()
-
-        with self.frame_lock:
-            self.latest_frame = None
-            self.latest_timestamp = None
-            self.new_frame_event.clear()
+        self._cleanup_resources()
 
         logger.info(f"{self} disconnected.")

@@ -57,7 +57,7 @@ def test_require_package_error_message_includes_uv():
         _require_package_cache.clear()
         try:
             with pytest.raises(ImportError, match=r"uv pip install"):
-                require_package("grpcio", extra="async", import_name="grpc")
+                require_package("grpcio", extra="grpcio-dep", import_name="grpc")
         finally:
             _require_package_cache.clear()
 
@@ -84,5 +84,6 @@ def test_default_video_backend_falls_back_when_torchcodec_cannot_load(caplog):
     ):
         assert get_safe_default_video_backend() == "pyav"
 
-    assert "could not be loaded" in caplog.text
+    assert "native library unavailable" in caplog.text
+    assert "Falling back to 'pyav'" in caplog.text
     get_safe_default_video_backend.cache_clear()

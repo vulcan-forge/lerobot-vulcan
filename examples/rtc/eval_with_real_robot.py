@@ -116,8 +116,6 @@ from lerobot.processor import (
     make_default_robot_observation_processor,
     to_relative_actions,
 )
-from lerobot.processor.relative_action_processor import to_relative_actions
-from lerobot.rl.process import ProcessSignalHandler
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
@@ -131,6 +129,7 @@ from lerobot.robots.utils import make_robot_from_config
 from lerobot.utils.constants import OBS_IMAGES, OBS_STATE
 from lerobot.utils.feature_utils import build_dataset_frame, hw_to_dataset_features
 from lerobot.utils.hub import HubMixin
+from lerobot.utils.process import ProcessSignalHandler
 from lerobot.utils.utils import init_logging
 
 logging.basicConfig(level=logging.INFO)

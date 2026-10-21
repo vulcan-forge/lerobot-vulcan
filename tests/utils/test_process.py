@@ -15,7 +15,6 @@
 # limitations under the License.
 
 import multiprocessing
-import os
 import signal
 import threading
 from unittest.mock import patch
@@ -88,7 +87,7 @@ def test_signal_handler_sets_event(use_threads, sig):
 
     assert handler.counter == 0
 
-    os.kill(os.getpid(), sig)
+    signal.raise_signal(sig)
 
     # In some environments, the signal might take a moment to be handled.
     shutdown_event.wait(timeout=1.0)
@@ -105,14 +104,8 @@ def test_force_shutdown_on_second_signal(mock_sys_exit, use_threads):
     """Test that a second signal triggers a force shutdown."""
     handler = ProcessSignalHandler(use_threads=use_threads)
 
-    os.kill(os.getpid(), signal.SIGINT)
-    # Give a moment for the first signal to be processed
-    import time
-
-    time.sleep(0.1)
-    os.kill(os.getpid(), signal.SIGINT)
-
-    time.sleep(0.1)
+    signal.raise_signal(signal.SIGINT)
+    signal.raise_signal(signal.SIGINT)
 
     assert handler.counter == 2
     mock_sys_exit.assert_called_once_with(1)

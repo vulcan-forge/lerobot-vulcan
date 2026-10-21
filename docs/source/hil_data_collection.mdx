@@ -57,23 +57,25 @@ The `examples/hil` HIL scripts require **teleoperators with active motors** that
 
 **Compatible teleoperators in the current `examples/hil` scripts:**
 
-- `openarm_mini` - OpenArm Mini
+- `bi_openarm_mini` - Bimanual OpenArm Mini
 - `so_leader` - SO100 / SO101 leader arm
+- `bi_so_leader` - Bimanual SO100 / SO101 leader arms
 
 > [!IMPORTANT]
-> The provided `examples/hil` commands default to `bi_openarm_follower` + `openarm_mini`.
+> The provided commands default to `bi_openarm_follower` + `bi_openarm_mini`.
 > `so_follower` + `so_leader` configs are also registered and can be used via CLI flags.
 
 ---
 
 ## Script
 
-A single script handles both synchronous and RTC-based inference. Toggle RTC with `--rtc.enabled=true`:
+Use `lerobot-rollout` with `--strategy.type=dagger` for HIL data collection. Select the inference backend with `--inference.type=sync|rtc|remote`:
 
-| Mode                     | Flag                 | Models                |
-| ------------------------ | -------------------- | --------------------- |
-| Standard (default)       | _(no flag needed)_   | ACT, Diffusion Policy |
-| Real-Time Chunking (RTC) | `--rtc.enabled=true` | Pi0, Pi0.5, SmolVLA   |
+| Mode                     | Flag                      | Models                                                                                                 |
+| ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Standard (default)       | _(no flag needed)_        | ACT, Diffusion Policy                                                                                  |
+| Real-Time Chunking (RTC) | `--inference.type=rtc`    | Pi0, Pi0.5, SmolVLA                                                                                    |
+| Remote                   | `--inference.type=remote` | Checkpoint served by `lerobot-policy-server`; see [remote deployment requirements](./remote_inference) |
 
 ---
 
@@ -104,9 +106,9 @@ python examples/hil/hil_data_collection.py \
     --robot.right_arm_config.port=can0 \
     --robot.right_arm_config.side=right \
     --robot.cameras='{left_wrist: {type: opencv, index_or_path: "/dev/video0", width: 1280, height: 720, fps: 30}, right_wrist: {type: opencv, index_or_path: "/dev/video4", width: 1280, height: 720, fps: 30}, base: {type: opencv, index_or_path: "/dev/video2", width: 640, height: 480, fps: 30}}' \
-    --teleop.type=openarm_mini \
-    --teleop.port_left=/dev/ttyACM0 \
-    --teleop.port_right=/dev/ttyACM1 \
+    --teleop.type=bi_openarm_mini \
+    --teleop.left_arm_config.port=/dev/ttyACM0 \
+    --teleop.right_arm_config.port=/dev/ttyACM1 \
     --policy.path=outputs/pretrain/checkpoints/last/pretrained_model \
     --dataset.repo_id=your-username/hil-dataset \
     --dataset.single_task="Fold the T-shirt properly" \
@@ -115,6 +117,8 @@ python examples/hil/hil_data_collection.py \
     --dataset.num_episodes=50 \
     --interpolation_multiplier=2
 ```
+
+With `--interpolation_multiplier=N`, the robot receives `N` interpolated commands per policy action (control runs at `fps × N` Hz) while policy inference and dataset recording stay at `--fps`, so the recorded dataset matches its declared FPS.
 
 **With RTC for large models (Pi0, Pi0.5, SmolVLA):**
 
@@ -132,9 +136,9 @@ python examples/hil/hil_data_collection.py \
     --robot.right_arm_config.port=can0 \
     --robot.right_arm_config.side=right \
     --robot.cameras='{left_wrist: {type: opencv, index_or_path: "/dev/video0", width: 1280, height: 720, fps: 30}, right_wrist: {type: opencv, index_or_path: "/dev/video4", width: 1280, height: 720, fps: 30}, base: {type: opencv, index_or_path: "/dev/video2", width: 640, height: 480, fps: 30}}' \
-    --teleop.type=openarm_mini \
-    --teleop.port_left=/dev/ttyACM0 \
-    --teleop.port_right=/dev/ttyACM1 \
+    --teleop.type=bi_openarm_mini \
+    --teleop.left_arm_config.port=/dev/ttyACM0 \
+    --teleop.right_arm_config.port=/dev/ttyACM1 \
     --policy.path=outputs/pretrain/checkpoints/last/pretrained_model \
     --dataset.repo_id=your-username/hil-rtc-dataset \
     --dataset.single_task="Fold the T-shirt properly" \
@@ -159,17 +163,17 @@ Exact key/pedal bindings can differ across scripts and hardware integrations. Us
 
 1. Watch the policy run autonomously (teleop is idle/free)
 2. When you see imminent failure, trigger the **pause input**
-    - Policy stops
-    - Teleoperator moves to match robot position (torque enabled)
-    - No frames recorded during pause
+   - Policy stops
+   - Teleoperator moves to match robot position (torque enabled)
+   - No frames recorded during pause
 3. Trigger the **takeover input** to take control
-    - Teleoperator torque disabled, free to move
-    - **Recovery**: Teleoperate the robot back to a good state
-    - **Correction**: Correct the behavior
-    - All movements are recorded
+   - Teleoperator torque disabled, free to move
+   - **Recovery**: Teleoperate the robot back to a good state
+   - **Correction**: Correct the behavior
+   - All movements are recorded
 4. Trigger the **return-to-policy input**
-    - Policy resumes autonomous execution from the current state
-    - You can intervene again at any time (repeat steps 2–4)
+   - Policy resumes autonomous execution from the current state
+   - You can intervene again at any time (repeat steps 2–4)
 5. End and save the episode when the task is complete (or episode time limit is reached)
 6. **Reset**: Teleop moves to robot position, you can move the robot to the starting position
 7. Start the next episode

@@ -15,16 +15,14 @@
 # limitations under the License.
 
 import logging
-import json
-import os
-import sys
 import time
 from queue import Queue
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
-from lerobot.types import RobotAction
+from lerobot.lerobot_types import RobotAction
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 from lerobot.utils.import_utils import _pynput_available, require_package
+from lerobot.utils.keyboard_input import pynput_can_capture
 
 from ..teleoperator import Teleoperator
 from ..utils import TeleopEvents
@@ -35,7 +33,16 @@ from .configuration_keyboard import (
 )
 
 PYNPUT_AVAILABLE = _pynput_available
-keyboard = None
+if TYPE_CHECKING:
+    from pynput import keyboard
+else:
+    keyboard = None
+    if PYNPUT_AVAILABLE:
+        try:
+            from pynput import keyboard
+        except Exception as e:  # installed but not importable here, e.g. no reachable X display
+            PYNPUT_AVAILABLE = False
+            logging.info("Could not import pynput keyboard backend: %s", e)
 
 
 class KeyboardTeleop(Teleoperator):
@@ -52,20 +59,16 @@ class KeyboardTeleop(Teleoperator):
         self.config = config
         self.robot_type = config.type
 
-        self.event_queue = Queue()
-        self.current_pressed = {}
-        self.key_down_edges = []
-        self.listener = None
-        self._file_connected = False
-        self.logs = {}
+        # Key events are `(key, is_pressed)`; `key` is a character, a `keyboard.Key` member or `None` if unmapped.
+        self.event_queue: Queue[tuple[str | keyboard.Key | None, bool]] = Queue()
+        self.current_pressed: dict[str | keyboard.Key | None, bool] = {}
+        self.listener: keyboard.Listener | None = None
+        self.logs: dict[str, float] = {}
 
     @property
     def action_features(self) -> dict:
-        return {
-            "dtype": "float32",
-            "shape": (len(self.arm),),
-            "names": {"motors": list(self.arm.motors)},
-        }
+        # Pressed keys have no static feature layout; subclasses with a fixed action space override this.
+        raise NotImplementedError(f"{self.__class__.__name__} exposes no static action features.")
 
     @property
     def feedback_features(self) -> dict:
@@ -73,33 +76,16 @@ class KeyboardTeleop(Teleoperator):
 
     @property
     def is_connected(self) -> bool:
-        if self.config.input_state_path:
-            return self._file_connected
-        return PYNPUT_AVAILABLE and keyboard is not None and isinstance(self.listener, keyboard.Listener) and self.listener.is_alive()
+        return PYNPUT_AVAILABLE and isinstance(self.listener, keyboard.Listener) and self.listener.is_alive()
 
     @property
     def is_calibrated(self) -> bool:
-        pass
+        # Keyboard input needs no calibration.
+        return True
 
     @check_if_already_connected
-    def connect(self) -> None:
-        global keyboard, PYNPUT_AVAILABLE
-        if self.config.input_state_path:
-            self._file_connected = True
-            logging.info("Using focused desktop keyboard input bridge.")
-            return
-
-        try:
-            if ("DISPLAY" not in os.environ) and ("linux" in sys.platform):
-                raise RuntimeError("No DISPLAY set")
-            from pynput import keyboard as pynput_keyboard
-
-            keyboard = pynput_keyboard
-        except Exception as e:
-            PYNPUT_AVAILABLE = False
-            logging.info(f"Could not import pynput: {e}")
-
-        if PYNPUT_AVAILABLE:
+    def connect(self, calibrate: bool = True) -> None:
+        if PYNPUT_AVAILABLE and pynput_can_capture():
             logging.info("pynput is available - enabling local keyboard listener.")
             self.listener = keyboard.Listener(
                 on_press=self._on_press,
@@ -107,7 +93,13 @@ class KeyboardTeleop(Teleoperator):
             )
             self.listener.start()
         else:
-            logging.info("pynput not available - skipping local keyboard listener.")
+            logging.warning(
+                "Keyboard teleoperation is unavailable in this environment. pynput can only "
+                "capture key events on an X11 session (Linux), a Windows desktop, or macOS with "
+                "Accessibility / Input Monitoring granted - not on Wayland or headless machines. "
+                "This keyboard teleoperator will produce no actions; use an X11 session, a "
+                "gamepad, or a leader-arm teleoperator instead."
+            )
             self.listener = None
 
     def calibrate(self) -> None:
@@ -128,29 +120,9 @@ class KeyboardTeleop(Teleoperator):
             self.disconnect()
 
     def _drain_pressed_keys(self):
-        if self.config.input_state_path:
-            try:
-                with open(self.config.input_state_path, encoding="utf-8") as state_file:
-                    pressed_keys = set(json.load(state_file))
-            except (OSError, ValueError, TypeError):
-                pressed_keys = set()
-            previous_keys = {key for key, pressed in self.current_pressed.items() if pressed}
-            self.key_down_edges.extend(sorted(pressed_keys - previous_keys))
-            self.current_pressed = {key: True for key in pressed_keys}
-            return
-
         while not self.event_queue.empty():
             key_char, is_pressed = self.event_queue.get_nowait()
-            was_pressed = bool(self.current_pressed.get(key_char, False))
             self.current_pressed[key_char] = is_pressed
-            if is_pressed and not was_pressed:
-                self.key_down_edges.append(key_char)
-
-    def pop_key_down_edges(self) -> list:
-        self._drain_pressed_keys()
-        key_down_edges = list(self.key_down_edges)
-        self.key_down_edges.clear()
-        return key_down_edges
 
     def configure(self):
         pass
@@ -159,23 +131,19 @@ class KeyboardTeleop(Teleoperator):
     def get_action(self) -> RobotAction:
         before_read_t = time.perf_counter()
 
-        if not self.is_connected:
-            return {}
-
         self._drain_pressed_keys()
 
         # Generate action based on current key states
         action = {key for key, val in self.current_pressed.items() if val}
         self.logs["read_pos_dt_s"] = time.perf_counter() - before_read_t
 
-        return dict.fromkeys(action, None)
+        return cast(RobotAction, dict.fromkeys(action, None))
 
     def send_feedback(self, feedback: dict[str, Any]) -> None:
         pass
 
     @check_if_not_connected
     def disconnect(self) -> None:
-        self._file_connected = False
         if self.listener is not None:
             self.listener.stop()
 
@@ -192,7 +160,7 @@ class KeyboardEndEffectorTeleop(KeyboardTeleop):
     def __init__(self, config: KeyboardEndEffectorTeleopConfig):
         super().__init__(config)
         self.config = config
-        self.misc_keys_queue = Queue()
+        self.misc_keys_queue: Queue[str | keyboard.Key | None] = Queue()
 
     @property
     def action_features(self) -> dict:
@@ -253,7 +221,7 @@ class KeyboardEndEffectorTeleop(KeyboardTeleop):
 
         return action_dict
 
-    def get_teleop_events(self) -> dict[str, Any]:
+    def get_teleop_events(self) -> dict[TeleopEvents, bool]:
         """
         Get extra control events from the keyboard such as intervention status,
         episode termination, success indicators, etc.

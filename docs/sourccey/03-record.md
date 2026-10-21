@@ -7,11 +7,11 @@ On the controller computer, replace the IP address, leader-arm ports, dataset
 ID, and task, then run:
 
 ```bash
-uv run lerobot-record --robot.type=sourccey_client --robot.id=sourccey --robot.remote_ip=192.168.1.243 --teleop.type=bi_sourccey_leader --teleop.id=sourccey_leader --teleop.left_arm_port=COM5 --teleop.right_arm_port=COM6 --teleop_keyboard.type=keyboard --teleop_keyboard.id=sourccey_keyboard --dataset.repo_id=vulcan-studio/sourccey-demo-1 --dataset.num_episodes=5 --dataset.episode_time_s=60 --dataset.reset_time_s=15 --dataset.single_task="Fold the shirt" --dataset.fps=30 --dataset.push_to_hub=false --display_data=true
+uv run sourccey-record --robot.type=sourccey_client --robot.id=sourccey --robot.remote_ip=192.168.1.243 --teleop.type=sourccey_teleoperator --teleop.id=sourccey_leader --teleop.left_arm_port=COM5 --teleop.right_arm_port=COM6 --dataset.repo_id=vulcan-studio/sourccey-demo-1 --dataset.num_episodes=5 --dataset.episode_time_s=60 --dataset.reset_time_s=15 --dataset.single_task="Fold the shirt" --dataset.fps=30 --dataset.push_to_hub=false --display_data=true
 ```
 
 If you installed the Sourccey plugin as an editable checkout, change the
-beginning to `uv run --no-sync lerobot-record`.
+beginning to `uv run --no-sync sourccey-record`.
 
 ## Recording controls
 

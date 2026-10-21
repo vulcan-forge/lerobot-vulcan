@@ -48,18 +48,18 @@ process already has the serial port open. Repeat with the other arm.
 With `sourccey-host` running, check the eye cameras from the controller:
 
 ```bash
-uv run python scripts/sourccey_check_eye_cameras.py --remote-ip 192.168.1.243
+uv run --no-sync sourccey-check-eye-cameras --remote-ip 192.168.1.243 --skip-bottom
 ```
 
 Check the wrist cameras:
 
 ```bash
-uv run python scripts/sourccey_check_arm_cameras.py --remote-ip 192.168.1.243
+uv run --no-sync sourccey-check-arm-cameras --remote-ip 192.168.1.243
 ```
 
 Stop `sourccey-host` before direct device checks on the robot computer. The
 complete camera, motor, lift, LiDAR, IMU, and battery procedures are in the
-[Sourccey hardware checks](../../src/lerobot/robots/sourccey/runbooks/hardware/sourccey-checks.mdx).
+[Sourccey hardware checks](./hardware-checks.mdx).
 
 ## A dataset will not train
 
