@@ -1,38 +1,38 @@
 - sections:
-      - local: index
-        title: LeRobot
-      - local: installation
-        title: Installation
-      - local: cheat-sheet
-        title: Cheat sheet
+  - local: index
+    title: LeRobot
+  - local: installation
+    title: Installation
+  - local: cheat-sheet
+    title: Cheat sheet
   title: Get started
 - sections:
-      - local: il_robots
-        title: Imitation Learning for Robots
-      - local: lelab
-        title: LeLab - Lerobot GUI
-      - local: bring_your_own_policies
-        title: Adding a Policy
-      - local: integrate_hardware
-        title: Bring Your Own Hardware
-      - local: hilserl
-        title: Train a Robot with RL
-      - local: hilserl_sim
-        title: Train RL in Simulation
-      - local: multi_gpu_training
-        title: Multi GPU training
-      - local: hil_data_collection
-        title: Human In the Loop Data Collection
-      - local: peft_training
-        title: Training with PEFT (e.g., LoRA)
-      - local: rename_map
-        title: Using Rename Map and Empty Cameras
+  - local: il_robots
+    title: Imitation Learning for Robots
+  - local: lelab
+    title: LeLab - Lerobot GUI
+  - local: bring_your_own_policies
+    title: Adding a Policy
+  - local: integrate_hardware
+    title: Bring Your Own Hardware
+  - local: hilserl
+    title: Train a Robot with RL
+  - local: hilserl_sim
+    title: Train RL in Simulation
+  - local: multi_gpu_training
+    title: Multi GPU training
+  - local: hil_data_collection
+    title: Human In the Loop Data Collection
+  - local: peft_training
+    title: Training with PEFT (e.g., LoRA)
+  - local: rename_map
+    title: Using Rename Map and Empty Cameras
   title: "Tutorials"
 - sections:
-      - local: hardware_guide
-        title: Compute Hardware Guide
-      - local: torch_accelerators
-        title: PyTorch accelerators
+  - local: hardware_guide
+    title: Compute Hardware Guide
+  - local: torch_accelerators
+    title: PyTorch accelerators
   title: "Compute & Hardware"
 - sections:
   - local: lerobot-dataset-v3
@@ -95,12 +95,12 @@
     title: DM05
   title: "Policies"
 - sections:
-      - local: sarm
-        title: SARM
-      - local: robometer
-        title: ROBOMETER
-      - local: topreward
-        title: TOPReward
+  - local: sarm
+    title: SARM
+  - local: robometer
+    title: ROBOMETER
+  - local: topreward
+    title: TOPReward
   title: "Reward Models"
 - sections:
   - local: inference
@@ -111,46 +111,46 @@
     title: Real-Time Chunking (RTC)
   title: "Inference"
 - sections:
-      - local: envhub
-        title: Environments from the Hub
-      - local: envhub_leisaac
-        title: Control & Train Robots in Sim (LeIsaac)
+  - local: envhub
+    title: Environments from the Hub
+  - local: envhub_leisaac
+    title: Control & Train Robots in Sim (LeIsaac)
   title: "Simulation"
 - sections:
-      - local: adding_benchmarks
-        title: Adding a New Benchmark
-      - local: libero
-        title: LIBERO
-      - local: libero_plus
-        title: LIBERO-plus
-      - local: metaworld
-        title: Meta-World
-      - local: robotwin
-        title: RoboTwin 2.0
-      - local: robocasa
-        title: RoboCasa365
-      - local: robocerebra
-        title: RoboCerebra
-      - local: robomme
-        title: RoboMME
-      - local: envhub_isaaclab_arena
-        title: NVIDIA IsaacLab Arena Environments
-      - local: vlabench
-        title: VLABench
+  - local: adding_benchmarks
+    title: Adding a New Benchmark
+  - local: libero
+    title: LIBERO
+  - local: libero_plus
+    title: LIBERO-plus
+  - local: metaworld
+    title: Meta-World
+  - local: robotwin
+    title: RoboTwin 2.0
+  - local: robocasa
+    title: RoboCasa365
+  - local: robocerebra
+    title: RoboCerebra
+  - local: robomme
+    title: RoboMME
+  - local: envhub_isaaclab_arena
+    title: NVIDIA IsaacLab Arena Environments
+  - local: vlabench
+    title: VLABench
   title: "Benchmarks"
 - sections:
-      - local: introduction_processors
-        title: Introduction to Robot Processors
-      - local: debug_processor_pipeline
-        title: Debug your processor pipeline
-      - local: implement_your_own_processor
-        title: Implement your own processor
-      - local: processors_robots_teleop
-        title: Processors for Robots and Teleoperators
-      - local: env_processor
-        title: Environment Processors
-      - local: action_representations
-        title: Action Representations
+  - local: introduction_processors
+    title: Introduction to Robot Processors
+  - local: debug_processor_pipeline
+    title: Debug your processor pipeline
+  - local: implement_your_own_processor
+    title: Implement your own processor
+  - local: processors_robots_teleop
+    title: Processors for Robots and Teleoperators
+  - local: env_processor
+    title: Environment Processors
+  - local: action_representations
+    title: Action Representations
   title: "Robot Processors"
 - sections:
   - local: so101
@@ -191,12 +191,12 @@
     title: Third-Party Cameras & Sensors
   title: "Sensors"
 - sections:
-      - local: notebooks
-        title: Notebooks
-      - local: feetech
-        title: Updating Feetech Firmware
-      - local: damiao
-        title: Damiao Motors and CAN Bus
+  - local: notebooks
+    title: Notebooks
+  - local: feetech
+    title: Updating Feetech Firmware
+  - local: damiao
+    title: Damiao Motors and CAN Bus
   title: "Resources"
 - sections:
   - local: contributing

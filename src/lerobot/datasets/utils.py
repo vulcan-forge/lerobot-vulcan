@@ -172,7 +172,6 @@ def task_name(tasks: "pd.DataFrame", task_index: int | torch.Tensor) -> str:
 
 DEPTH_FILE_PATTERN = "frame-{frame_index:06d}.tiff"
 DEFAULT_TASKS_PATH = "meta/tasks.parquet"
-DEFAULT_SUBTASKS_PATH = "meta/subtasks.parquet"
 DEFAULT_EPISODES_PATH = EPISODES_DIR + "/" + CHUNK_FILE_PATTERN + ".parquet"
 DEFAULT_DATA_PATH = DATA_DIR + "/" + CHUNK_FILE_PATTERN + ".parquet"
 DEFAULT_VIDEO_PATH = VIDEO_DIR + "/{video_key}/" + CHUNK_FILE_PATTERN + ".mp4"

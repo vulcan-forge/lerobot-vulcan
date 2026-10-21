@@ -51,3 +51,9 @@
 *.igs filter=lfs diff=lfs merge=lfs -text
 *.dwg filter=lfs diff=lfs merge=lfs -text
 *.dxf filter=lfs diff=lfs merge=lfs -text
+
+# Keep upstream README media as ordinary Git blobs rather than converting them to LFS pointers.
+media/readme/VLA_architecture.jpg -filter
+media/readme/lerobot-logo-thumbnail.png -filter
+media/readme/robots_control_video.webp -filter
+media/readme/so100_video.webp -filter
