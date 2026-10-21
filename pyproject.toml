@@ -439,7 +439,7 @@ lerobot-robot-sourccey = { path = "../packages/lerobot-robot-sourccey", editable
 torchcodec = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')" }]
 
 [tool.setuptools.package-data]
-lerobot = ["envs/*.json", "annotations/steerable_pipeline/prompts/*.txt", "configs/recipes/*.yaml", "robots/so_follower/*.json", "teleoperators/so_leader/*.json"]
+lerobot = ["envs/*.json", "annotations/steerable_pipeline/prompts/*.txt", "configs/recipes/*.yaml"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -587,8 +587,6 @@ paths = ["src/lerobot"]
 exclude = ["src/lerobot/policies/molmoact2/molmoact2_hf_model"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-norecursedirs = [".*", "__pycache__", "outputs", "build", "dist", "*.egg", "venv"]
 markers = [
     "multigpu: distributed tests needing 2-4 GPUs (CI: docker_publish.yml lane)",
     "multigpu_heavy: 8-GPU sweeps and soak tests; never run in CI",

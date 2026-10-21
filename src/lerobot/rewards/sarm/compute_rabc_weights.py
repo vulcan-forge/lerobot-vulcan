@@ -762,7 +762,7 @@ def compute_sarm_progress(
     stride: int = 1,
     reset_parts: bool = False,
     visualize_episode_indices: list[int] | None = None,
-):
+) -> Path:
     """
     Compute SARM progress predictions for all frames in a dataset.
 

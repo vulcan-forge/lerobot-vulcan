@@ -5020,10 +5020,10 @@ name = "pyobjc-framework-applicationservices"
 version = "12.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
-    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
-    { name = "pyobjc-framework-coretext", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
-    { name = "pyobjc-framework-quartz", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "pyobjc-core", marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-coretext", marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-quartz", marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/29/40/b792ecc88a9fa639318509c127f0b153cd334bd27b47df373f4b7362a36d/pyobjc_framework_applicationservices-12.2.2.tar.gz", hash = "sha256:0bcc09531d5854598fd74706d999e4ae3b7c503204d318910d02eba30e8eecef", size = 109668, upload-time = "2026-08-11T19:43:45.347Z" }
 wheels = [
@@ -5037,7 +5037,7 @@ name = "pyobjc-framework-cocoa"
 version = "12.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "pyobjc-core", marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/75/76/49c6da2c6a831020b4854ba20079d5a1030474bffc776b7b73c2eeff8c15/pyobjc_framework_cocoa-12.2.2.tar.gz", hash = "sha256:c96c0ef69a71afbbb0e6a7d594b455c5fe47d62e0db376ee7a2b4b828c16ace9", size = 3132831, upload-time = "2026-08-11T19:44:02.288Z" }
 wheels = [
@@ -5051,9 +5051,9 @@ name = "pyobjc-framework-coretext"
 version = "12.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
-    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
-    { name = "pyobjc-framework-quartz", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "pyobjc-core", marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-quartz", marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6d/66/405006d3502ffcd3bc69e0b7249ab7c05a5b43a07fa3959ce6b2a84f3278/pyobjc_framework_coretext-12.2.2.tar.gz", hash = "sha256:64ddc02303217028e32e22c7cc00b5112d84e9d9a67c37d00c2e54f9172284ab", size = 97658, upload-time = "2026-08-11T19:44:17.207Z" }
 wheels = [
@@ -5067,8 +5067,8 @@ name = "pyobjc-framework-quartz"
 version = "12.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
-    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "pyobjc-core", marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/35/b1/426a37c7ae37280b3ffca2571fb48f211946aee2f4ca31a603ed1943c4a7/pyobjc_framework_quartz-12.2.2.tar.gz", hash = "sha256:810f97b210cfd93704d240860286dfd6df09f9f1c52525fc5c2166723aea3f9e", size = 3218295, upload-time = "2026-08-11T19:45:15.189Z" }
 wheels = [

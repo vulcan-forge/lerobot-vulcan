@@ -86,9 +86,9 @@ class SARMEncodingProcessorStep(ProcessorStep):
         config: SARMConfig,
         image_key: str | None = None,
         image_keys: list[str] | None = None,
-        dataset_meta=None,
-        dataset_stats: dict | None = None,
-    ):
+        dataset_meta: LeRobotDatasetMetadata | None = None,
+        dataset_stats: dict[str, dict[str, torch.Tensor]] | None = None,
+    ) -> None:
         require_package("transformers", extra="sarm")
         require_package("faker", extra="sarm")
         require_package("pandas", extra="dataset")

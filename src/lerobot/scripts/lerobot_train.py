@@ -920,19 +920,98 @@ def train(cfg: TrainPipelineConfig) -> None:
             f"Start offline training on a fixed dataset, with effective batch size: {effective_batch_size}"
         )
 
-    def save_emergency_checkpoint(reason: str) -> None:
-        if not cfg.save_checkpoint or step <= 0 or not is_main_process():
-            return
-        if accelerator.num_processes != 1:
-            logging.warning(
-                "Emergency checkpoint skipped: a failed rank cannot enter checkpoint collectives alone."
-            )
-            return
-        try:
-            if cfg.output_dir is None:
-                raise ValueError("Emergency checkpoint requires an output directory.")
+    for _ in range(step, cfg.steps):
+        step_start = time.perf_counter()
+        batch = next(dl_iter)
+        if cfg.dataset.streaming:
+            batch = send_to_device(batch, device, non_blocking=device.type == "cuda")
+        preprocessing_start = time.perf_counter()
+        train_tracker.dataloading_s = preprocessing_start - step_start
+        if image_augmentation is not None:
+            batch = image_augmentation.observation(batch)
+        batch = _preprocess_dataset_batch(batch, dataset.meta.camera_keys, cfg.rename_map, preprocessor)
+        train_tracker.preprocessing_s = time.perf_counter() - preprocessing_start
+
+        train_tracker, _ = update_policy(
+            train_tracker,
+            policy,
+            batch,
+            optimizer,
+            cfg.optimizer.grad_clip_norm,
+            accelerator=accelerator,
+            lr_scheduler=lr_scheduler,
+            sample_weighter=sample_weighter,
+        )
+        train_tracker.step_s = time.perf_counter() - step_start
+
+        # Pull one optimizer step of the live weights into the EMA shadow (main process only).
+        # The shadow tracks optimizer updates, not micro-batches: gate on the sync step under
+        # gradient accumulation, and skip the fp16 steps the scaler discarded (the weights are
+        # unchanged there, so stepping the shadow would decay it against a stale target).
+        if ema is not None and accelerator.sync_gradients and not accelerator.optimizer_step_was_skipped:
+            ema.step(_ema_parameters(accelerator.unwrap_model(policy)))
+
+        # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
+        # increment `step` here.
+        step += 1
+        if is_main_process():
+            progbar.update(1)
+        train_tracker.step()
+        is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0
+        is_saving_step = should_save_checkpoint(step, cfg.save_freq, cfg.steps)
+        is_env_eval_step = cfg.env_eval_freq > 0 and step % cfg.env_eval_freq == 0
+        is_eval_step = cfg.eval_steps > 0 and step % cfg.eval_steps == 0
+
+        if is_log_step:
+            # Collective reduce must run on every rank, before the main-process gate below.
+            train_tracker.reduce_across_ranks()
+            if is_main_process():
+                if train_tracker.step_s.avg > 0:
+                    train_tracker.samples_per_s = samples_per_step / train_tracker.step_s.avg
+                logging.info(train_tracker)
+                if wandb_logger:
+                    # Policy sub-losses (latent_loss, action_loss, ...) are aggregated into the
+                    # tracker by update_policy, so to_dict() already carries their windowed,
+                    # rank-reduced averages — no per-step output_dict passthrough needed.
+                    wandb_log_dict = train_tracker.to_dict()
+                    # Log sample weighting statistics if enabled
+                    if sample_weighter is not None:
+                        weighter_stats = sample_weighter.get_stats()
+                        wandb_log_dict.update({f"sample_weighting/{k}": v for k, v in weighter_stats.items()})
+                    if ema is not None and ema.cur_decay_value is not None:
+                        wandb_log_dict["ema/decay"] = ema.cur_decay_value
+                        wandb_log_dict["ema/step"] = ema.optimization_step
+                    wandb_logger.log_dict(wandb_log_dict, step)
+            train_tracker.reset_averages()
+
+        if is_eval_step and eval_dataloader is not None:
+            policy.eval()
+            eval_loss_sum = 0.0
+            n_eval_batches = 0
+            with torch.no_grad(), accelerator.autocast():
+                for eval_batch in eval_dataloader:
+                    eval_batch = _preprocess_dataset_batch(
+                        eval_batch, dataset.meta.camera_keys, cfg.rename_map, preprocessor
+                    )
+                    loss, _ = policy(eval_batch)  # __call__, so FSDP2 forward hooks run
+                    eval_loss_sum += loss.item()
+                    n_eval_batches += 1
+            eval_loss = eval_loss_sum / max(n_eval_batches, 1)
+            eval_loss = torch.tensor(eval_loss, device=device)
+            eval_loss = accelerator.reduce(eval_loss, reduction="mean").item()
+            policy.train()
+
+            if is_main_process():
+                logging.info(f"step {step}: eval_loss={eval_loss:.4f}")
+                if wandb_logger:
+                    wandb_logger.log_dict({"eval_loss": eval_loss}, step=step, mode="eval")
+
+        if cfg.save_checkpoint and is_saving_step:
+            # Collective: every rank participates (gathers / DCP shard writes); rank-0-only file
+            # writes are gated inside save_checkpoint — no rank branches at the call site.
+            if is_main_process():
+                logging.info(f"Checkpoint policy after step {step}")
             checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
-            logging.warning("Saving emergency checkpoint at step %d after %s", step, reason)
             save_checkpoint(
                 checkpoint_dir=checkpoint_dir,
                 step=step,
@@ -944,210 +1023,94 @@ def train(cfg: TrainPipelineConfig) -> None:
                 postprocessor=postprocessor,
                 accelerator=accelerator,
             )
-            update_last_checkpoint(checkpoint_dir)
-        except Exception:
-            logging.exception("Emergency checkpoint save failed.")
-
-    try:
-        for _ in range(step, cfg.steps):
-            step_start = time.perf_counter()
-            batch = next(dl_iter)
-            if cfg.dataset.streaming:
-                batch = send_to_device(batch, device, non_blocking=device.type == "cuda")
-            preprocessing_start = time.perf_counter()
-            train_tracker.dataloading_s = preprocessing_start - step_start
-            if image_augmentation is not None:
-                batch = image_augmentation.observation(batch)
-            batch = _preprocess_dataset_batch(batch, dataset.meta.camera_keys, cfg.rename_map, preprocessor)
-            train_tracker.preprocessing_s = time.perf_counter() - preprocessing_start
-
-            train_tracker, _ = update_policy(
-                train_tracker,
-                policy,
-                batch,
-                optimizer,
-                cfg.optimizer.grad_clip_norm,
-                accelerator=accelerator,
-                lr_scheduler=lr_scheduler,
-                sample_weighter=sample_weighter,
-            )
-            train_tracker.step_s = time.perf_counter() - step_start
-
-            # Pull one optimizer step of the live weights into the EMA shadow (main process only).
-            # The shadow tracks optimizer updates, not micro-batches: gate on the sync step under
-            # gradient accumulation, and skip the fp16 steps the scaler discarded (the weights are
-            # unchanged there, so stepping the shadow would decay it against a stale target).
-            if ema is not None and accelerator.sync_gradients and not accelerator.optimizer_step_was_skipped:
-                ema.step(_ema_parameters(accelerator.unwrap_model(policy)))
-
-            # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
-            # increment `step` here.
-            step += 1
             if is_main_process():
-                progbar.update(1)
-            train_tracker.step()
-            is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0
-            is_saving_step = should_save_checkpoint(step, cfg.save_freq, cfg.steps)
-            is_env_eval_step = cfg.env_eval_freq > 0 and step % cfg.env_eval_freq == 0
-            is_eval_step = cfg.eval_steps > 0 and step % cfg.eval_steps == 0
-
-            if is_log_step:
-                # Collective reduce must run on every rank, before the main-process gate below.
-                train_tracker.reduce_across_ranks()
-                if is_main_process():
-                    if train_tracker.step_s.avg > 0:
-                        train_tracker.samples_per_s = samples_per_step / train_tracker.step_s.avg
-                    logging.info(train_tracker)
-                    if wandb_logger:
-                        # Policy sub-losses (latent_loss, action_loss, ...) are aggregated into the
-                        # tracker by update_policy, so to_dict() already carries their windowed,
-                        # rank-reduced averages — no per-step output_dict passthrough needed.
-                        wandb_log_dict = train_tracker.to_dict()
-                        # Log sample weighting statistics if enabled
-                        if sample_weighter is not None:
-                            weighter_stats = sample_weighter.get_stats()
-                            wandb_log_dict.update(
-                                {f"sample_weighting/{k}": v for k, v in weighter_stats.items()}
-                            )
-                        if ema is not None and ema.cur_decay_value is not None:
-                            wandb_log_dict["ema/decay"] = ema.cur_decay_value
-                            wandb_log_dict["ema/step"] = ema.optimization_step
-                        wandb_logger.log_dict(wandb_log_dict, step)
-                train_tracker.reset_averages()
-
-            if is_eval_step and eval_dataloader is not None:
-                policy.eval()
-                eval_loss_sum = 0.0
-                n_eval_batches = 0
-                with torch.no_grad(), accelerator.autocast():
-                    for eval_batch in eval_dataloader:
-                        eval_batch = _preprocess_dataset_batch(
-                            eval_batch, dataset.meta.camera_keys, cfg.rename_map, preprocessor
-                        )
-                        loss, _ = policy(eval_batch)  # __call__, so FSDP2 forward hooks run
-                        eval_loss_sum += loss.item()
-                        n_eval_batches += 1
-                eval_loss = eval_loss_sum / max(n_eval_batches, 1)
-                eval_loss = torch.tensor(eval_loss, device=device)
-                eval_loss = accelerator.reduce(eval_loss, reduction="mean").item()
-                policy.train()
-
-                if is_main_process():
-                    logging.info(f"step {step}: eval_loss={eval_loss:.4f}")
-                    if wandb_logger:
-                        wandb_logger.log_dict({"eval_loss": eval_loss}, step=step, mode="eval")
-
-            if cfg.save_checkpoint and is_saving_step:
-                # Collective: every rank participates (gathers / DCP shard writes); rank-0-only file
-                # writes are gated inside save_checkpoint — no rank branches at the call site.
-                if is_main_process():
-                    logging.info(f"Checkpoint policy after step {step}")
-                checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
-                save_checkpoint(
-                    checkpoint_dir=checkpoint_dir,
-                    step=step,
-                    cfg=cfg,
-                    policy=policy,
-                    optimizer=optimizer,
-                    scheduler=lr_scheduler,
-                    preprocessor=preprocessor,
-                    postprocessor=postprocessor,
-                    accelerator=accelerator,
-                )
-                if is_main_process():
-                    if ema is not None:
-                        # Save the shadow for exact resume, plus a directly loadable copy of the EMA
-                        # weights (lerobot-eval --policy.path=<checkpoint>/pretrained_model_ema).
-                        torch.save(ema.state_dict(), checkpoint_dir / TRAINING_STATE_DIR / EMA_STATE_FILENAME)
-                        unwrapped_policy = accelerator.unwrap_model(policy)
-                        ema_dir = checkpoint_dir / f"{PRETRAINED_MODEL_DIR}_ema"
-                        with _ema_weights(ema, unwrapped_policy):
-                            unwrapped_policy.save_pretrained(ema_dir)
-                            unwrapped_policy.config.save_pretrained(ema_dir)
-                            cfg.save_pretrained(ema_dir)
-                            preprocessor.save_pretrained(ema_dir)
-                            postprocessor.save_pretrained(ema_dir)
-                    update_last_checkpoint(checkpoint_dir)
-                    if cfg.save_checkpoint_to_hub:
-                        if cfg.policy is None or not cfg.policy.repo_id:
-                            # Already rejected by cfg.validate().
-                            raise ValueError("save_checkpoint_to_hub requires --policy.repo_id.")
-                        push_checkpoint_to_hub(
-                            checkpoint_dir,
-                            cfg.policy.repo_id,
-                            private=cfg.policy.private,
-                        )
-                    if wandb_logger:
-                        wandb_logger.log_policy(checkpoint_dir)
-                accelerator.wait_for_everyone()
-
-            if cfg.env and is_env_eval_step:
-                if is_main_process():
-                    step_id = get_step_identifier(step, cfg.steps)
-                    logging.info(f"Eval policy at step {step}")
-                    eval_policy_model = accelerator.unwrap_model(policy)
-                    # Evaluate the EMA weights when enabled: the swap happens only on the main
-                    # process (the other ranks wait at the barrier below) and is exactly undone
-                    # afterwards, so the live weights stay in sync across ranks.
-                    use_ema_for_eval = ema is not None and cfg.ema.use_for_eval
-                    if use_ema_for_eval:
-                        logging.info("Evaluating the EMA weights")
-                    weights_cm = _ema_weights(ema, eval_policy_model) if use_ema_for_eval else nullcontext()
-                    with (
-                        weights_cm,
-                        _make_eval_envs(cfg.env, cfg.eval) as eval_env,
-                        torch.no_grad(),
-                        accelerator.autocast(),
-                    ):
-                        eval_info = eval_policy_all(
-                            envs=eval_env,  # dict[suite][task_id] -> vec_env
-                            policy=eval_policy_model,
-                            env_preprocessor=env_preprocessor,
-                            env_postprocessor=env_postprocessor,
-                            preprocessor=preprocessor,
-                            postprocessor=postprocessor,
-                            n_episodes=cfg.eval.n_episodes,
-                            videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
-                            max_episodes_rendered=4,
-                            start_seed=cfg.seed,
-                            max_parallel_tasks=cfg.env.max_parallel_tasks,
-                        )
-                    # overall metrics (suite-agnostic)
-                    aggregated = eval_info["overall"]
-
-                    # optional: per-suite logging
-                    for suite, suite_info in eval_info.items():
-                        logging.info("Suite %s aggregated: %s", suite, suite_info)
-
-                    # meters/tracker
-                    eval_metrics = {
-                        "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
-                        "pc_success": AverageMeter("success", ":.1f"),
-                        "eval_s": AverageMeter("eval_s", ":.3f"),
-                    }
-                    eval_tracker = MetricsTracker(
-                        cfg.batch_size,
-                        dataset.num_frames,
-                        dataset.num_episodes,
-                        eval_metrics,
-                        initial_step=step,
-                        dp_world_size=parallel_dims.dp_world_size,
+                if ema is not None:
+                    # Save the shadow for exact resume, plus a directly loadable copy of the EMA
+                    # weights (lerobot-eval --policy.path=<checkpoint>/pretrained_model_ema).
+                    torch.save(ema.state_dict(), checkpoint_dir / TRAINING_STATE_DIR / EMA_STATE_FILENAME)
+                    unwrapped_policy = accelerator.unwrap_model(policy)
+                    ema_dir = checkpoint_dir / f"{PRETRAINED_MODEL_DIR}_ema"
+                    with _ema_weights(ema, unwrapped_policy):
+                        unwrapped_policy.save_pretrained(ema_dir)
+                        unwrapped_policy.config.save_pretrained(ema_dir)
+                        cfg.save_pretrained(ema_dir)
+                        preprocessor.save_pretrained(ema_dir)
+                        postprocessor.save_pretrained(ema_dir)
+                update_last_checkpoint(checkpoint_dir)
+                if cfg.save_checkpoint_to_hub:
+                    if cfg.policy is None or not cfg.policy.repo_id:
+                        # Already rejected by cfg.validate().
+                        raise ValueError("save_checkpoint_to_hub requires --policy.repo_id.")
+                    push_checkpoint_to_hub(
+                        checkpoint_dir,
+                        cfg.policy.repo_id,
+                        private=cfg.policy.private,
                     )
-                    eval_tracker.eval_s = aggregated.pop("eval_s")
-                    eval_tracker.avg_sum_reward = aggregated.pop("avg_sum_reward")
-                    eval_tracker.pc_success = aggregated.pop("pc_success")
-                    if wandb_logger:
-                        wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
-                        wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
-                        wandb_logger.log_video(eval_info["overall"]["video_paths"][0], step, mode="eval")
+                if wandb_logger:
+                    wandb_logger.log_policy(checkpoint_dir)
+            accelerator.wait_for_everyone()
 
-                accelerator.wait_for_everyone()
-    except KeyboardInterrupt:
-        save_emergency_checkpoint("KeyboardInterrupt")
-        raise
-    except Exception:
-        save_emergency_checkpoint("an uncaught exception")
-        raise
+        if cfg.env and is_env_eval_step:
+            if is_main_process():
+                step_id = get_step_identifier(step, cfg.steps)
+                logging.info(f"Eval policy at step {step}")
+                eval_policy_model = accelerator.unwrap_model(policy)
+                # Evaluate the EMA weights when enabled: the swap happens only on the main
+                # process (the other ranks wait at the barrier below) and is exactly undone
+                # afterwards, so the live weights stay in sync across ranks.
+                use_ema_for_eval = ema is not None and cfg.ema.use_for_eval
+                if use_ema_for_eval:
+                    logging.info("Evaluating the EMA weights")
+                weights_cm = _ema_weights(ema, eval_policy_model) if use_ema_for_eval else nullcontext()
+                with (
+                    weights_cm,
+                    _make_eval_envs(cfg.env, cfg.eval) as eval_env,
+                    torch.no_grad(),
+                    accelerator.autocast(),
+                ):
+                    eval_info = eval_policy_all(
+                        envs=eval_env,  # dict[suite][task_id] -> vec_env
+                        policy=eval_policy_model,
+                        env_preprocessor=env_preprocessor,
+                        env_postprocessor=env_postprocessor,
+                        preprocessor=preprocessor,
+                        postprocessor=postprocessor,
+                        n_episodes=cfg.eval.n_episodes,
+                        videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
+                        max_episodes_rendered=4,
+                        start_seed=cfg.seed,
+                        max_parallel_tasks=cfg.env.max_parallel_tasks,
+                    )
+                # overall metrics (suite-agnostic)
+                aggregated = eval_info["overall"]
+
+                # optional: per-suite logging
+                for suite, suite_info in eval_info.items():
+                    logging.info("Suite %s aggregated: %s", suite, suite_info)
+
+                # meters/tracker
+                eval_metrics = {
+                    "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
+                    "pc_success": AverageMeter("success", ":.1f"),
+                    "eval_s": AverageMeter("eval_s", ":.3f"),
+                }
+                eval_tracker = MetricsTracker(
+                    cfg.batch_size,
+                    dataset.num_frames,
+                    dataset.num_episodes,
+                    eval_metrics,
+                    initial_step=step,
+                    dp_world_size=parallel_dims.dp_world_size,
+                )
+                eval_tracker.eval_s = aggregated.pop("eval_s")
+                eval_tracker.avg_sum_reward = aggregated.pop("avg_sum_reward")
+                eval_tracker.pc_success = aggregated.pop("pc_success")
+                if wandb_logger:
+                    wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
+                    wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
+                    wandb_logger.log_video(eval_info["overall"]["video_paths"][0], step, mode="eval")
+
+            accelerator.wait_for_everyone()
 
     if is_main_process():
         progbar.close()
