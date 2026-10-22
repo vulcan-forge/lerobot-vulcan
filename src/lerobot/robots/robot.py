@@ -19,8 +19,8 @@ from pathlib import Path
 
 import draccus
 
-from lerobot.motors import MotorCalibration
-from lerobot.types import RobotAction, RobotObservation
+from lerobot.lerobot_types import RobotAction, RobotObservation
+from lerobot.motors.motors_bus import MotorCalibration, MotorsBusBase
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 
 from .config import RobotConfig
@@ -45,6 +45,10 @@ class Robot(abc.ABC):
     # Set these in ALL subclasses
     config_class: builtins.type[RobotConfig]
     name: str
+    # Opt-in for retaining the last applied position targets (including gripper).
+    # Before the first command, a finite measured pose establishes the targets.
+    # Mixed velocity/torque robots require their own stop implementation.
+    supports_position_hold: bool = False
 
     def __init__(self, config: RobotConfig):
         self.robot_type = self.name
@@ -159,13 +163,8 @@ class Robot(abc.ABC):
             fpath (Path | None): Optional path to the calibration file. Defaults to `self.calibration_fpath`.
         """
         fpath = self.calibration_fpath if fpath is None else fpath
-        try:
-            with open(fpath) as f, draccus.config_type("json"):
-                self.calibration = draccus.load(dict[str, MotorCalibration], f)
-        except Exception as e:
-            # Treat malformed/empty calibration as "not calibrated" so callers can recalibrate.
-            logger.warning(f"Failed to load calibration file at {fpath}: {e}. Starting with empty calibration.")
-            self.calibration = {}
+        with open(fpath) as f, draccus.config_type("json"):
+            self.calibration = draccus.load(dict[str, MotorCalibration], f)
 
     def _save_calibration(self, fpath: Path | None = None) -> None:
         """
@@ -178,14 +177,21 @@ class Robot(abc.ABC):
         with open(fpath, "w") as f, draccus.config_type("json"):
             draccus.dump(self.calibration, f, indent=4)
 
-    def auto_calibrate(self, reverse: bool = False, full_reset: bool = False) -> None:
-        """
-        Automatically calibrate the robot.
+    def _keep_calibration_file(self, bus: MotorsBusBase) -> bool:
+        """Offer the calibration file of this id instead of a new calibration. When the user keeps it, write
+        it to `bus` with the torque off, so that the motors store it, and return True."""
+        if self.calibration:
+            user_input = input(
+                f"Press ENTER to use provided calibration file associated with the id {self.id}, or type 'c' and press ENTER to run calibration: "
+            )
+            if user_input.strip().lower() != "c":
+                logger.info(f"Writing calibration file associated with the id {self.id} to the motors")
+                bus.disable_torque()
+                bus.write_calibration(self.calibration)
+                return True
 
-        This method should collect any necessary data (e.g., motor offsets) and update the
-        :pyattr:`calibration` dictionary accordingly. This method should be used when the robot is not connected.
-        """
-        pass
+        logger.info(f"\nRunning calibration of {self}")
+        return False
 
     @abc.abstractmethod
     def configure(self) -> None:

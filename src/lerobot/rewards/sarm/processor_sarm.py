@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import logging
 import random
 from typing import TYPE_CHECKING, Any
 
@@ -47,6 +48,7 @@ else:
     Faker = None  # type: ignore[assignment, misc]
 
 from lerobot.configs import FeatureType, PipelineFeatureType, PolicyFeature
+from lerobot.lerobot_types import EnvTransition, PolicyAction, TransitionKey
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
     DeviceProcessorStep,
@@ -58,16 +60,22 @@ from lerobot.processor import (
     policy_action_to_transition,
     transition_to_policy_action,
 )
-from lerobot.types import EnvTransition, PolicyAction, TransitionKey
 from lerobot.utils.constants import POLICY_POSTPROCESSOR_DEFAULT_NAME, POLICY_PREPROCESSOR_DEFAULT_NAME
 
 from .configuration_sarm import SARMConfig
 from .sarm_utils import (
+    SubtaskFrames,
+    SubtaskNames,
     apply_rewind_augmentation,
     compute_absolute_indices,
     find_stage_and_tau,
     pad_state_to_max_dim,
 )
+
+if TYPE_CHECKING:
+    from lerobot.datasets import LeRobotDatasetMetadata
+
+logger = logging.getLogger(__name__)
 
 
 class SARMEncodingProcessorStep(ProcessorStep):
@@ -77,31 +85,21 @@ class SARMEncodingProcessorStep(ProcessorStep):
         self,
         config: SARMConfig,
         image_key: str | None = None,
-        image_keys: list[str] | None = None,
-        dataset_meta=None,
-        dataset_stats: dict | None = None,
-    ):
+        dataset_meta: LeRobotDatasetMetadata | None = None,
+        dataset_stats: dict[str, dict[str, torch.Tensor]] | None = None,
+    ) -> None:
         require_package("transformers", extra="sarm")
         require_package("faker", extra="sarm")
         require_package("pandas", extra="dataset")
         super().__init__()
         self.config = config
-        if image_keys is not None and len(image_keys) > 0:
-            self.image_keys = list(image_keys)
-        elif image_key is not None:
-            self.image_keys = [image_key]
-        else:
-            self.image_keys = list(config.camera_keys)
-        if len(self.image_keys) == 0:
-            raise ValueError("SARMEncodingProcessorStep requires at least one image key.")
-        # Kept for compatibility with helper scripts that expect a single key.
-        self.image_key = self.image_keys[0]
+        self.image_key = image_key or config.image_key
         self.dataset_meta = dataset_meta
         self.dataset_stats = dataset_stats
         self.annotation_mode = config.annotation_mode
 
         # Helper to create temporal proportions dict
-        def make_props_dict(names, props):
+        def make_props_dict(names: list[str] | None, props: list[float] | None) -> dict[str, float] | None:
             return dict(zip(names, props, strict=True)) if names and props else None
 
         # Sparse annotations (always needed)
@@ -118,6 +116,8 @@ class SARMEncodingProcessorStep(ProcessorStep):
             else None
         )
 
+        self._validate_annotation_columns()
+
         self.device = torch.device(
             self.config.device if self.config.device else "cuda" if torch.cuda.is_available() else "cpu"
         )
@@ -130,8 +130,82 @@ class SARMEncodingProcessorStep(ProcessorStep):
         self.verbs = ["move", "grasp", "rotate", "push", "pull", "slide", "lift", "place"]
         self.fake = Faker()
 
+    @staticmethod
+    def _resolve_annotation_column(episodes_df: pd.DataFrame, annotation_type: str, suffix: str) -> str:
+        """Resolve a mode-specific annotation column, falling back to the legacy unprefixed name."""
+        prefixed = f"{annotation_type}_{suffix}"
+        return prefixed if prefixed in episodes_df.columns else suffix
+
+    @staticmethod
+    def _annotations_are_usable(names: Any, starts: Any, ends: Any) -> bool:
+        """Return whether an episode has non-empty, aligned annotation arrays."""
+        values = (names, starts, ends)
+        if not all(isinstance(value, (list, tuple, np.ndarray)) for value in values):
+            return False
+
+        lengths = {len(value) for value in values}
+        return len(lengths) == 1 and next(iter(lengths)) > 0
+
+    def _validate_annotation_columns(self) -> None:
+        """Validate annotation coverage before loading models or generating training targets.
+
+        A multi-stage head with no usable episode annotations would otherwise train entirely
+        against all-zero targets. Reject that configuration and warn when only part of the
+        dataset is usable.
+        """
+        if self.dataset_meta is None:
+            return
+        episodes_df = self.dataset_meta.episodes.to_pandas()
+        num_episodes = len(episodes_df)
+
+        modes = []
+        if self.dense_subtask_names and len(self.dense_subtask_names) > 1:
+            modes.append(("dense", self.dense_subtask_names))
+        if self.sparse_subtask_names and len(self.sparse_subtask_names) > 1:
+            modes.append(("sparse", self.sparse_subtask_names))
+
+        for annotation_type, names in modes:
+            columns = [
+                self._resolve_annotation_column(episodes_df, annotation_type, suffix)
+                for suffix in ("subtask_names", "subtask_start_frames", "subtask_end_frames")
+            ]
+            missing_columns = [column for column in columns if column not in episodes_df.columns]
+            if missing_columns:
+                num_usable = 0
+            else:
+                num_usable = sum(
+                    self._annotations_are_usable(*(episodes_df.loc[ep_idx, column] for column in columns))
+                    for ep_idx in episodes_df.index
+                )
+
+            if num_usable == 0:
+                missing_columns_message = (
+                    f" Missing required columns: {', '.join(missing_columns)}." if missing_columns else ""
+                )
+                raise ValueError(
+                    f"SARM {annotation_type} head is configured with {len(names)} stages, but none of "
+                    f"the {num_episodes} episodes have usable annotations in meta/episodes/*.parquet. "
+                    f"Required columns: {', '.join(columns)}.{missing_columns_message} "
+                    "Training would produce all-zero "
+                    "targets. Materialize the annotations into the episodes metadata before training."
+                )
+
+            num_unusable = num_episodes - num_usable
+            if num_unusable:
+                logger.warning(
+                    "SARM %s head: %d/%d episodes have unusable annotations in columns %s; "
+                    "their targets will be 0 and only the %d annotated episodes will train the head.",
+                    annotation_type,
+                    num_unusable,
+                    num_episodes,
+                    ", ".join(columns),
+                    num_usable,
+                )
+
     def _find_episode_for_frame(self, frame_idx: int) -> int:
         """Find the episode index for a given frame index."""
+        if self.dataset_meta is None:
+            raise ValueError("dataset_meta is required to resolve the episode of a frame index")
         for ep_idx in range(len(self.dataset_meta.episodes)):
             ep_start = self.dataset_meta.episodes[ep_idx]["dataset_from_index"]
             ep_end = self.dataset_meta.episodes[ep_idx]["dataset_to_index"]
@@ -162,8 +236,12 @@ class SARMEncodingProcessorStep(ProcessorStep):
     def _get_annotation_config(self, annotation_type: str) -> tuple[list[str], dict[str, float] | None]:
         """Get global subtask names and temporal proportions for an annotation type."""
         if annotation_type == "dense":
-            return self.dense_subtask_names, self.dense_temporal_proportions
-        return self.sparse_subtask_names, self.sparse_temporal_proportions
+            names, proportions = self.dense_subtask_names, self.dense_temporal_proportions
+        else:
+            names, proportions = self.sparse_subtask_names, self.sparse_temporal_proportions
+        if names is None:
+            raise ValueError(f"SARM {annotation_type} subtask names are not configured")
+        return names, proportions
 
     def _load_episode_annotations(
         self,
@@ -171,30 +249,24 @@ class SARMEncodingProcessorStep(ProcessorStep):
         episodes_df: pd.DataFrame | None,
         annotation_type: str,
         global_names: list[str],
-    ) -> tuple[list | None, list | None, list | None]:
+    ) -> tuple[SubtaskNames | None, SubtaskFrames | None, SubtaskFrames | None]:
         """Load subtask annotations for an episode from DataFrame."""
         # Single-stage mode: (linear progress 0→1)
         if episodes_df is None or len(global_names) == 1:
             return None, None, None
 
-        # Resolve column name with fallback
-        def col(suffix):
-            prefixed = f"{annotation_type}_{suffix}"
-            return prefixed if prefixed in episodes_df.columns else suffix
-
-        col_names = col("subtask_names")
-        if col_names not in episodes_df.columns or ep_idx >= len(episodes_df):
+        columns = [
+            self._resolve_annotation_column(episodes_df, annotation_type, suffix)
+            for suffix in ("subtask_names", "subtask_start_frames", "subtask_end_frames")
+        ]
+        if any(column not in episodes_df.columns for column in columns) or ep_idx >= len(episodes_df):
             return None, None, None
 
-        subtask_names = episodes_df.loc[ep_idx, col_names]
-        if subtask_names is None or (isinstance(subtask_names, float) and pd.isna(subtask_names)):
+        annotations = tuple(episodes_df.loc[ep_idx, column] for column in columns)
+        if not self._annotations_are_usable(*annotations):
             return None, None, None
 
-        return (
-            subtask_names,
-            episodes_df.loc[ep_idx, col("subtask_start_frames")],
-            episodes_df.loc[ep_idx, col("subtask_end_frames")],
-        )
+        return annotations
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         """
@@ -206,9 +278,11 @@ class SARMEncodingProcessorStep(ProcessorStep):
         - Generates stage+tau targets for all frames
         - Outputs lengths tensor for valid sequence masking
         """
-        new_transition = transition.copy() if hasattr(transition, "copy") else dict(transition)
+        new_transition = transition.copy()
         observation = new_transition.get(TransitionKey.OBSERVATION)
-        comp_data = new_transition.get(TransitionKey.COMPLEMENTARY_DATA, {})
+        if observation is None:
+            raise ValueError("SARMEncodingProcessorStep requires an observation in the transition")
+        comp_data = new_transition.get(TransitionKey.COMPLEMENTARY_DATA) or {}
 
         frame_index = comp_data.get("index")
         episode_index = comp_data.get("episode_index")
@@ -221,34 +295,21 @@ class SARMEncodingProcessorStep(ProcessorStep):
         frame_indices = np.atleast_1d(np.asarray(from_tensor_to_numpy(frame_index)))
         episode_indices = self._get_episode_indices(frame_indices, episode_index)
 
-        camera_images = []
-        for key in self.image_keys:
-            image = observation.get(key)
-            if image is None:
-                raise ValueError(f"Image key '{key}' not found in observation")
-            if isinstance(image, torch.Tensor):
-                image = image.cpu().numpy()
+        image = observation.get(self.image_key)
+        if image is None:
+            raise KeyError(f"SARM expected image key {self.image_key!r} in observation")
+        if isinstance(image, torch.Tensor):
+            image = image.cpu().numpy()
 
-            # If 4D (T, C, H, W) from delta_timestamps, add batch dim.
-            # If 3D (C, H, W) single frame, add batch and time dims.
-            if image.ndim == 4:
-                image = image[np.newaxis, ...]  # (T, C, H, W) -> (1, T, C, H, W)
-            elif image.ndim == 3:
-                image = image[np.newaxis, np.newaxis, ...]  # (C, H, W) -> (1, 1, C, H, W)
-            elif image.ndim != 5:
-                raise ValueError(
-                    f"Unexpected image shape for key '{key}': {image.shape}. Expected 3D/4D/5D image tensor."
-                )
-            camera_images.append(image)
+        # If 4D (T, C, H, W) from delta_timestamps, add batch dim
+        # If 3D (C, H, W) single frame, add batch and time dims
+        if image.ndim == 4:
+            image = image[np.newaxis, ...]  # (T, C, H, W) -> (1, T, C, H, W)
+        elif image.ndim == 3:
+            image = image[np.newaxis, np.newaxis, ...]  # (C, H, W) -> (1, 1, C, H, W)
 
-        batch_size = camera_images[0].shape[0]
-        total_frames = camera_images[0].shape[1]  # Should be 13: 9 obs + 4 rewind placeholders
-        for key, image in zip(self.image_keys, camera_images, strict=True):
-            if image.shape[0] != batch_size or image.shape[1] != total_frames:
-                raise ValueError(
-                    f"All cameras must share batch/time dimensions. "
-                    f"Key '{key}' has shape {image.shape}, expected B={batch_size}, T={total_frames}."
-                )
+        batch_size = image.shape[0]
+        total_frames = image.shape[1]  # Should be 13: 9 obs + 4 rewind placeholders
         n_obs_steps = self.config.n_obs_steps
         max_rewind_steps = self.config.max_rewind_steps
         n_obs_frames = 1 + n_obs_steps  # 9 observation frames (including current)
@@ -272,17 +333,15 @@ class SARMEncodingProcessorStep(ProcessorStep):
         # Compute valid lengths: n_obs_frames + rewind_steps
         lengths = n_obs_frames + rewind_steps  # (B,)
 
-        # Apply rewind masking to images for each camera.
-        # For frames beyond valid length, mask with zeros.
-        for image in camera_images:
-            for b_idx in range(batch_size):
-                valid_len = lengths[b_idx].item()
-                if valid_len < total_frames:
-                    image[b_idx, valid_len:] = 0
+        # Apply rewind masking to images
+        # For frames beyond valid length, we mask with zeros (or copy last valid frame)
+        for b_idx in range(batch_size):
+            valid_len = lengths[b_idx].item()
+            if valid_len < total_frames:
+                image[b_idx, valid_len:] = 0  # Zero out frames beyond valid length
 
-        # Encode images with CLIP per camera then stack.
-        # Output: (B, N, T, 512), where N=num_cameras.
-        video_features = torch.stack([self._encode_images_batch(image) for image in camera_images], dim=1)
+        # Encode images with CLIP
+        video_features = self._encode_images_batch(image)
         observation["video_features"] = video_features
 
         state_key = self.config.state_key
@@ -367,6 +426,8 @@ class SARMEncodingProcessorStep(ProcessorStep):
         total_frames = 1 + n_obs_steps + max_rewind_steps
         frame_gap = self.config.frame_gap
 
+        if self.dataset_meta is None:
+            raise ValueError("dataset_meta is required to compute SARM stage targets")
         global_names, temporal_props = self._get_annotation_config(annotation_type)
         targets = torch.zeros(batch_size, total_frames, dtype=torch.float32)
 
@@ -441,25 +502,6 @@ class SARMEncodingProcessorStep(ProcessorStep):
     def eval(self):
         """Set evaluation mode (disable augmentations)."""
         return self.train(False)
-
-    @staticmethod
-    def _clip_output_to_tensor(output: Any) -> torch.Tensor:
-        """Convert CLIPModel feature outputs to a tensor across transformers versions."""
-        if isinstance(output, torch.Tensor):
-            return output
-
-        # transformers>=5 may return BaseModelOutputWithPooling with projected features
-        pooler = getattr(output, "pooler_output", None)
-        if isinstance(pooler, torch.Tensor):
-            return pooler
-
-        if isinstance(output, tuple):
-            # Prefer pooled features when present, otherwise fall back to first tensor entry.
-            for idx in (1, 0):
-                if idx < len(output) and isinstance(output[idx], torch.Tensor):
-                    return output[idx]
-
-        raise TypeError(f"Unsupported CLIP feature output type: {type(output)}")
 
     @torch.no_grad()
     def _encode_images_batch(self, images: np.ndarray) -> torch.Tensor:
@@ -548,8 +590,7 @@ class SARMEncodingProcessorStep(ProcessorStep):
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         """Add encoded features to the observation features."""
         features[PipelineFeatureType.OBSERVATION]["video_features"] = PolicyFeature(
-            type=FeatureType.VISUAL,
-            shape=(self.config.num_cameras, self.config.num_frames, self.config.image_dim),
+            type=FeatureType.VISUAL, shape=(self.config.num_frames, self.config.image_dim)
         )
         features[PipelineFeatureType.OBSERVATION]["text_features"] = PolicyFeature(
             type=FeatureType.LANGUAGE, shape=(self.config.text_dim,)
@@ -563,12 +604,20 @@ class SARMEncodingProcessorStep(ProcessorStep):
 def make_sarm_pre_post_processors(
     config: SARMConfig,
     dataset_stats: dict[str, dict[str, torch.Tensor]] | None = None,
-    dataset_meta=None,
+    dataset_meta: LeRobotDatasetMetadata | None = None,
 ) -> tuple[
     PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
 ]:
     """Create pre-processor and post-processor pipelines for SARM."""
+    if config.device is None:
+        raise ValueError(
+            "SARMConfig.device is unresolved; RewardModelConfig.__post_init__ should have set it"
+        )
+    # The config keys the mapping by `FeatureType` value strings; the normalizer expects enum keys.
+    norm_map = {
+        FeatureType(feature_type): mode for feature_type, mode in config.normalization_mapping.items()
+    }
     return (
         PolicyProcessorPipeline[dict[str, Any], dict[str, Any]](
             steps=[
@@ -576,7 +625,7 @@ def make_sarm_pre_post_processors(
                 RenameObservationsProcessorStep(rename_map={}),
                 NormalizerProcessorStep(
                     features={**config.input_features, **config.output_features},
-                    norm_map=config.normalization_mapping,
+                    norm_map=norm_map,
                     stats=dataset_stats,
                 ),
                 SARMEncodingProcessorStep(

@@ -19,15 +19,14 @@
 # pytest tests/cameras/test_opencv.py::test_connect
 # ```
 
-import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
 import pytest
 
-from lerobot.cameras.configs import Cv2Rotation
+from lerobot.cameras.configs import ColorMode, Cv2Rotation
 from lerobot.cameras.opencv import OpenCVCamera, OpenCVCameraConfig
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
@@ -81,56 +80,6 @@ DEFAULT_PNG_FILE_PATH = TEST_ARTIFACTS_DIR / "image_160x120.png"
 TEST_IMAGE_SIZES = ["128x128", "160x120", "320x180", "480x270"]
 TEST_IMAGE_PATHS = [TEST_ARTIFACTS_DIR / f"image_{size}.png" for size in TEST_IMAGE_SIZES]
 
-def _check_opencv_backends_available():
-    """Check if OpenCV has working backends for image files."""
-    try:
-        if not DEFAULT_PNG_FILE_PATH.exists():
-            return False
-
-        # Check if FFmpeg backend works
-        cap = cv2.VideoCapture(str(DEFAULT_PNG_FILE_PATH), cv2.CAP_FFMPEG)
-        ffmpeg_works = cap.isOpened()
-        cap.release()
-
-        if ffmpeg_works:
-            return True
-
-        # Try DirectShow backend (Windows)
-        cap = cv2.VideoCapture(str(DEFAULT_PNG_FILE_PATH), cv2.CAP_DSHOW)
-        dshow_works = cap.isOpened()
-        cap.release()
-
-        return dshow_works
-    except Exception:
-        return False
-
-
-def _check_opencv_image_support():
-    """Check if OpenCV can handle image files on this platform."""
-    if sys.platform == "win32":
-        # On Windows, VideoCapture with DirectShow backend doesn't support image files
-        # This is a known limitation - DirectShow can't open static image files as video sources
-        return False
-    else:
-        # On Linux/macOS, assume it works (usually does)
-        return True
-
-
-# Reusable skip conditions
-SKIP_NO_OPENCV_IMAGE_SUPPORT = pytest.mark.skipif(
-    not _check_opencv_image_support(),
-    reason="OpenCV cannot open image files as video sources. "
-           "This is common on Windows without proper codecs. "
-           "To fix: Install FFmpeg or use a different OpenCV build with image support. "
-           "Run: conda install ffmpeg or pip install opencv-python-headless"
-)
-
-SKIP_NO_OPENCV_BACKENDS = pytest.mark.skipif(
-    not _check_opencv_backends_available(),
-    reason="OpenCV backends (FFmpeg/DirectShow) not available for image files. "
-           "Install FFmpeg or use OpenCV with proper codec support."
-)
-
 
 def test_abc_implementation():
     """Instantiation should raise an error if the class doesn't implement abstract methods/properties."""
@@ -139,7 +88,6 @@ def test_abc_implementation():
     _ = OpenCVCamera(config)
 
 
-@SKIP_NO_OPENCV_IMAGE_SUPPORT
 def test_connect():
     config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH, warmup_s=0)
 
@@ -147,7 +95,6 @@ def test_connect():
         assert camera.is_connected
 
 
-@SKIP_NO_OPENCV_IMAGE_SUPPORT
 def test_connect_already_connected():
     config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH, warmup_s=0)
 
@@ -164,7 +111,6 @@ def test_connect_invalid_camera_path():
         camera.connect(warmup=False)
 
 
-@SKIP_NO_OPENCV_IMAGE_SUPPORT
 def test_invalid_width_connect():
     config = OpenCVCameraConfig(
         index_or_path=DEFAULT_PNG_FILE_PATH,
@@ -177,7 +123,73 @@ def test_invalid_width_connect():
         camera.connect(warmup=False)
 
 
-@SKIP_NO_OPENCV_IMAGE_SUPPORT
+def test_connect_cleans_up_after_settings_failure_and_allows_retry():
+    config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH, warmup_s=0)
+    camera = OpenCVCamera(config)
+    opened_captures = []
+
+    def fail_settings():
+        opened_captures.append(camera.videocapture)
+        raise RuntimeError("settings failed")
+
+    with (
+        patch.object(camera, "_configure_capture_settings", side_effect=fail_settings),
+        pytest.raises(RuntimeError, match="settings failed"),
+    ):
+        camera.connect(warmup=False)
+
+    assert camera.videocapture is None
+    assert camera.thread is None
+    assert not camera.is_connected
+    assert opened_captures[0] is not None
+    assert not opened_captures[0].isOpened()
+
+    camera.connect(warmup=False)
+    assert camera.is_connected
+    camera.disconnect()
+
+
+def test_connect_cleans_up_after_warmup_failure_and_allows_retry():
+    config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH, warmup_s=1)
+    camera = OpenCVCamera(config)
+    read_threads = []
+
+    def fail_warmup(*_args, **_kwargs):
+        read_threads.append(camera.thread)
+        raise TimeoutError("no frame")
+
+    with (
+        patch.object(camera, "async_read", side_effect=fail_warmup),
+        pytest.raises(TimeoutError, match="no frame"),
+    ):
+        camera.connect()
+
+    assert camera.videocapture is None
+    assert camera.thread is None
+    assert not camera.is_connected
+    assert read_threads[0] is not None
+    assert not read_threads[0].is_alive()
+
+    camera.connect(warmup=False)
+    assert camera.is_connected
+    camera.disconnect()
+
+
+def test_find_cameras_releases_unopened_handles():
+    module_path = OpenCVCamera.__module__
+    unopened_capture = MagicMock()
+    unopened_capture.isOpened.return_value = False
+
+    with (
+        patch(f"{module_path}.platform.system", return_value="Darwin"),
+        patch(f"{module_path}.MAX_OPENCV_INDEX", 1),
+        patch(f"{module_path}.cv2.VideoCapture", return_value=unopened_capture),
+    ):
+        assert OpenCVCamera.find_cameras() == []
+
+    unopened_capture.release.assert_called_once_with()
+
+
 @pytest.mark.parametrize("index_or_path", TEST_IMAGE_PATHS, ids=TEST_IMAGE_SIZES)
 def test_read(index_or_path):
     config = OpenCVCameraConfig(index_or_path=index_or_path, warmup_s=0)
@@ -187,7 +199,28 @@ def test_read(index_or_path):
         assert isinstance(img, np.ndarray)
 
 
-@SKIP_NO_OPENCV_IMAGE_SUPPORT
+@pytest.mark.parametrize("index_or_path", TEST_IMAGE_PATHS, ids=TEST_IMAGE_SIZES)
+def test_color_mode_conversion(index_or_path):
+    """RGB and BGR reads of the same frame must differ only by a channel-axis reversal."""
+    rgb_config = OpenCVCameraConfig(index_or_path=index_or_path, color_mode=ColorMode.RGB, warmup_s=0)
+    bgr_config = OpenCVCameraConfig(index_or_path=index_or_path, color_mode=ColorMode.BGR, warmup_s=0)
+    with OpenCVCamera(rgb_config) as rgb_cam:
+        rgb = rgb_cam.read()
+    with OpenCVCamera(bgr_config) as bgr_cam:
+        bgr = bgr_cam.read()
+
+    assert rgb.shape == bgr.shape
+    np.testing.assert_array_equal(rgb, bgr[..., ::-1])
+
+
+def test_postprocess_invalid_color_mode():
+    config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH)
+    camera = OpenCVCamera(config)
+    camera.color_mode = "invalid"
+    with pytest.raises(ValueError):
+        camera._postprocess_image(np.zeros((120, 160, 3), dtype=np.uint8))
+
+
 def test_read_before_connect():
     config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH)
 
@@ -196,7 +229,6 @@ def test_read_before_connect():
         _ = camera.read()
 
 
-@SKIP_NO_OPENCV_IMAGE_SUPPORT
 def test_disconnect():
     config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH)
     camera = OpenCVCamera(config)
@@ -207,7 +239,6 @@ def test_disconnect():
     assert not camera.is_connected
 
 
-@SKIP_NO_OPENCV_IMAGE_SUPPORT
 def test_disconnect_before_connect():
     config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH)
     camera = OpenCVCamera(config)
@@ -216,7 +247,6 @@ def test_disconnect_before_connect():
         _ = camera.disconnect()
 
 
-@SKIP_NO_OPENCV_IMAGE_SUPPORT
 @pytest.mark.parametrize("index_or_path", TEST_IMAGE_PATHS, ids=TEST_IMAGE_SIZES)
 def test_async_read(index_or_path):
     config = OpenCVCameraConfig(index_or_path=index_or_path, warmup_s=0)
@@ -238,34 +268,6 @@ def test_async_read_timeout():
         camera.async_read(timeout_ms=0)  # request immediately another one
 
 
-def test_async_read_reconnects_after_consecutive_failures():
-    module_path = OpenCVCamera.__module__
-    target = f"{module_path}.cv2.VideoCapture"
-    MockReconnectVideoCapture.instance_count = 0
-
-    config = OpenCVCameraConfig(
-        index_or_path=0,
-        fps=30,
-        width=160,
-        height=120,
-        warmup_s=0,
-        auto_reconnect=True,
-        max_consecutive_read_failures=2,
-        reconnect_interval_s=0.01,
-    )
-
-    with patch(target, new=MockReconnectVideoCapture):
-        with OpenCVCamera(config) as camera:
-            img = camera.async_read(timeout_ms=500)
-
-            assert isinstance(img, np.ndarray)
-            assert img.shape == (120, 160, 3)
-            assert MockReconnectVideoCapture.instance_count >= 2
-            assert camera.thread is not None
-            assert camera.thread.is_alive()
-
-
-@SKIP_NO_OPENCV_IMAGE_SUPPORT
 def test_async_read_before_connect():
     config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH)
     camera = OpenCVCamera(config)
@@ -342,7 +344,6 @@ def test_fourcc_configuration():
             OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH, fourcc=fourcc)
 
 
-@SKIP_NO_OPENCV_IMAGE_SUPPORT
 def test_fourcc_with_camera():
     """Test FourCC functionality with actual camera connection."""
     config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH, fourcc="MJPG", warmup_s=0)
@@ -356,7 +357,6 @@ def test_fourcc_with_camera():
         assert isinstance(img, np.ndarray)
 
 
-@SKIP_NO_OPENCV_IMAGE_SUPPORT
 @pytest.mark.parametrize("index_or_path", TEST_IMAGE_PATHS, ids=TEST_IMAGE_SIZES)
 @pytest.mark.parametrize(
     "rotation",

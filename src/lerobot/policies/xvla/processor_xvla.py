@@ -14,103 +14,33 @@
 # limitations under the License.
 # ------------------------------------------------------------------------------
 
-import logging
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import torch
 
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
-from lerobot.datasets.factory import IMAGENET_STATS
-from lerobot.policies.xvla.configuration_xvla import XVLAConfig
-from lerobot.policies.xvla.utils import rotate6d_to_axis_angle
+from lerobot.configs import FeatureType, PipelineFeatureType, PolicyFeature
+from lerobot.lerobot_types import EnvTransition, TransitionKey
 from lerobot.processor import (
-    AddBatchDimensionProcessorStep,
-    DeviceProcessorStep,
-    NormalizerProcessorStep,
     ObservationProcessorStep,
     PolicyAction,
     PolicyProcessorPipeline,
     ProcessorStep,
     ProcessorStepRegistry,
-    RenameObservationsProcessorStep,
     TokenizerProcessorStep,
-    UnnormalizerProcessorStep,
+    make_default_policy_processor_steps,
+    make_policy_processor_pipelines,
 )
-from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
-from lerobot.types import EnvTransition, TransitionKey
 from lerobot.utils.constants import (
+    IMAGENET_STATS,
     OBS_IMAGES,
     OBS_PREFIX,
     OBS_STATE,
-    POLICY_POSTPROCESSOR_DEFAULT_NAME,
-    POLICY_PREPROCESSOR_DEFAULT_NAME,
 )
 
-_RANGE_CLAMP_WARNED_KEYS: set[str] = set()
-
-
-def _warn_clamp_once(
-    *,
-    step_name: str,
-    key: str,
-    min_val: float,
-    max_val: float,
-    soft_eps: float,
-    hard_eps: float,
-) -> None:
-    """Log one clamp warning per step/key per process to avoid spam during training."""
-    warning_key = f"{step_name}:{key}"
-    if warning_key in _RANGE_CLAMP_WARNED_KEYS:
-        return
-
-    _RANGE_CLAMP_WARNED_KEYS.add(warning_key)
-    logging.warning(
-        (
-            "[%s] Clamping image '%s' to [0, 1] due to out-of-range values "
-            "(min=%.4f, max=%.4f, soft_eps=%.4f, hard_eps=%.4f)."
-        ),
-        step_name,
-        key,
-        min_val,
-        max_val,
-        soft_eps,
-        hard_eps,
-    )
-
-
-def _clamp_unit_range_or_raise(
-    *,
-    tensor: torch.Tensor,
-    key: str,
-    step_name: str,
-    soft_eps: float,
-    hard_eps: float,
-) -> torch.Tensor:
-    """Clamp minor/moderate range drift into [0, 1], fail fast for major violations."""
-    min_val = tensor.min().item()
-    max_val = tensor.max().item()
-
-    if min_val >= 0.0 and max_val <= 1.0:
-        return tensor
-
-    if min_val < -hard_eps or max_val > 1.0 + hard_eps:
-        raise ValueError(
-            f"Image '{key}' has values outside hard clamp range around [0, 1]: "
-            f"min={min_val:.4f}, max={max_val:.4f}, hard_eps={hard_eps:.4f}. "
-            "This indicates materially invalid image values."
-        )
-
-    _warn_clamp_once(
-        step_name=step_name,
-        key=key,
-        min_val=min_val,
-        max_val=max_val,
-        soft_eps=soft_eps,
-        hard_eps=hard_eps,
-    )
-    return tensor.clamp(0.0, 1.0)
+from .configuration_xvla import XVLAConfig
+from .utils import rotate6d_to_axis_angle
 
 
 def make_xvla_pre_post_processors(
@@ -124,10 +54,11 @@ def make_xvla_pre_post_processors(
     Build the LeRobot processor pipelines for XVLA.
     """
 
-    features = {**config.input_features, **config.output_features}
+    steps = make_default_policy_processor_steps(config, dataset_stats)
+
     input_steps = [
-        RenameObservationsProcessorStep(rename_map={}),
-        AddBatchDimensionProcessorStep(),
+        steps.rename_observations,
+        steps.add_batch_dim,
         TokenizerProcessorStep(
             tokenizer_name=config.tokenizer_name,
             max_length=config.tokenizer_max_length,
@@ -137,33 +68,15 @@ def make_xvla_pre_post_processors(
         XVLAImageToFloatProcessorStep(),
         XVLAImageNetNormalizeProcessorStep(),
         XVLAAddDomainIdProcessorStep(),
-        DeviceProcessorStep(device=config.device),
-        NormalizerProcessorStep(
-            features=features, norm_map=config.normalization_mapping, stats=dataset_stats
-        ),
+        steps.to_device,
+        steps.normalize,
     ]
     output_steps = [
-        # XVLA postprocessing handles action-space transforms only; images are not postprocessed here.
-        UnnormalizerProcessorStep(
-            features=config.output_features,
-            norm_map=config.normalization_mapping,
-            stats=dataset_stats,
-        ),
-        DeviceProcessorStep(device="cpu"),
+        steps.unnormalize,
+        steps.to_cpu,
     ]
 
-    return (
-        PolicyProcessorPipeline[dict[str, Any], dict[str, Any]](
-            steps=input_steps,
-            name=POLICY_PREPROCESSOR_DEFAULT_NAME,
-        ),
-        PolicyProcessorPipeline[PolicyAction, PolicyAction](
-            steps=output_steps,
-            name=POLICY_POSTPROCESSOR_DEFAULT_NAME,
-            to_transition=policy_action_to_transition,
-            to_output=transition_to_policy_action,
-        ),
-    )
+    return make_policy_processor_pipelines(input_steps=input_steps, output_steps=output_steps)
 
 
 # Custom XVLA processor steps
@@ -231,24 +144,16 @@ class LiberoProcessorStep(ObservationProcessorStep):
         """
         Transforms feature keys from the LIBERO format to the LeRobot standard.
         """
-        new_features: dict[PipelineFeatureType, dict[str, PolicyFeature]] = {}
+        new_features = {ft: feats.copy() for ft, feats in features.items()}
 
-        # copy over non-STATE features
-        for ft, feats in features.items():
-            if ft != PipelineFeatureType.STATE:
-                new_features[ft] = feats.copy()
-
-        # rebuild STATE features
-        state_feats = {}
-
-        # add our new flattened state
-        state_feats[OBS_STATE] = PolicyFeature(
-            key=OBS_STATE,
-            shape=(20,),
-            dtype="float32",
-        )
-
-        new_features[PipelineFeatureType.STATE] = state_feats
+        # rebuild the observation STATE features around our new flattened state
+        observation_features = {
+            key: feature
+            for key, feature in new_features.get(PipelineFeatureType.OBSERVATION, {}).items()
+            if feature.type is not FeatureType.STATE
+        }
+        observation_features[OBS_STATE] = PolicyFeature(type=FeatureType.STATE, shape=(20,))
+        new_features[PipelineFeatureType.OBSERVATION] = observation_features
 
         return new_features
 
@@ -356,8 +261,6 @@ class XVLAImageToFloatProcessorStep(ProcessorStep):
 
     image_keys: list[str] | None = None
     validate_range: bool = True
-    soft_eps: float = 0.002
-    hard_eps: float = 0.05
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         """Convert image observations from [0, 255] to [0, 1]."""
@@ -382,28 +285,20 @@ class XVLAImageToFloatProcessorStep(ProcessorStep):
 
                 min_val = tensor.min().item()
                 max_val = tensor.max().item()
-                uses_uint8_scale = (not tensor.is_floating_point()) or (tensor.is_floating_point() and max_val > 2.0)
 
-                if uses_uint8_scale:
-                    # Validate that values are in [0, 255] range if requested
-                    if self.validate_range and (min_val < 0.0 or max_val > 255.0):
-                        raise ValueError(
-                            f"Image '{key}' has values outside [0, 255] range: "
-                            f"min={min_val:.4f}, max={max_val:.4f}. "
-                            f"Cannot convert to [0, 1] range."
-                        )
-                    converted = tensor.float() / 255.0
-                else:
-                    # Float tensors with max<=2 are treated as already in unit range.
-                    converted = tensor.float()
+                if max_val <= 1.0:
+                    obs[key] = tensor.float()  # ensure float dtype, but no division
+                    continue
+                # Validate that values are in [0, 255] range if requested
+                if self.validate_range and (min_val < 0.0 or max_val > 255.0):
+                    raise ValueError(
+                        f"Image '{key}' has values outside [0, 255] range: "
+                        f"min={min_val:.4f}, max={max_val:.4f}. "
+                        f"Cannot convert to [0, 1] range."
+                    )
 
-                obs[key] = _clamp_unit_range_or_raise(
-                    tensor=converted,
-                    key=key,
-                    step_name="xvla_image_to_float",
-                    soft_eps=self.soft_eps,
-                    hard_eps=self.hard_eps,
-                )
+                # Convert to float and divide by 255
+                obs[key] = tensor.float() / 255.0
 
         new_transition[TransitionKey.OBSERVATION] = obs
         return new_transition
@@ -417,8 +312,6 @@ class XVLAImageToFloatProcessorStep(ProcessorStep):
         return {
             "image_keys": self.image_keys,
             "validate_range": self.validate_range,
-            "soft_eps": self.soft_eps,
-            "hard_eps": self.hard_eps,
         }
 
 
@@ -441,8 +334,6 @@ class XVLAImageNetNormalizeProcessorStep(ProcessorStep):
     """
 
     image_keys: list[str] | None = None
-    soft_eps: float = 0.002
-    hard_eps: float = 0.05
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         """Normalize image observations using ImageNet statistics."""
@@ -464,13 +355,16 @@ class XVLAImageNetNormalizeProcessorStep(ProcessorStep):
         for key in keys_to_normalize:
             if key in obs and isinstance(obs[key], torch.Tensor):
                 tensor = obs[key]
-                tensor = _clamp_unit_range_or_raise(
-                    tensor=tensor,
-                    key=key,
-                    step_name="xvla_imagenet_normalize",
-                    soft_eps=self.soft_eps,
-                    hard_eps=self.hard_eps,
-                )
+
+                # Validate that values are in [0, 1] range
+                min_val = tensor.min().item()
+                max_val = tensor.max().item()
+                if min_val < 0.0 or max_val > 1.0:
+                    raise ValueError(
+                        f"Image '{key}' has values outside [0, 1] range: "
+                        f"min={min_val:.4f}, max={max_val:.4f}. "
+                        f"ImageNet normalization requires input values in [0, 1]."
+                    )
 
                 # Apply ImageNet normalization
                 mean = torch.tensor(IMAGENET_STATS["mean"], device=tensor.device, dtype=tensor.dtype)
@@ -495,8 +389,6 @@ class XVLAImageNetNormalizeProcessorStep(ProcessorStep):
         """Return serializable configuration."""
         return {
             "image_keys": self.image_keys,
-            "soft_eps": self.soft_eps,
-            "hard_eps": self.hard_eps,
         }
 
 
